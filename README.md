@@ -40,3 +40,8 @@ The Mods menu enables local packs. Servers can load custom tanks, maps, rules, t
 See [hosting](docs/hosting.md), [modding](docs/modding.md), [Linux builds](docs/linux-builds.md), [checks](docs/status.md), and the [release checklist](docs/release-checklist.md).
 
 Source is licensed under MIT or Apache-2.0. Font and dependency licenses are in [NOTICE](NOTICE.md). Tank Yard is independent and is not affiliated with Diep.io or Arras.io.
+
+# Tank you!
+
+This is my **magnum opus**, beloved game that i have been working on and getting ideas from diep for ***AGES***.
+it wouldnt have been possible without the support i had by my side. i will be setting up donations in the far future, and soon hosting a central backend server. **patience is a virtue!**
