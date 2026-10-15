@@ -1,0 +1,24 @@
+[Unit]
+Description=Tank Yard server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tankyard
+Group=tankyard
+WorkingDirectory=/opt/tankyard
+ExecStart=/opt/tankyard/target/release/tankyard-server --config /opt/tankyard/configs/server.toml --no-console
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/tankyard/configs
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

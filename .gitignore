@@ -1,0 +1,8 @@
+/target/
+/artifacts/
+*.log
+configs/*bans.json
+configs/access.json
+configs/*.jsonl*
+*.token
+configs/private*.toml

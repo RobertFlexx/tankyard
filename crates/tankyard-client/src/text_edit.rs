@@ -1,0 +1,258 @@
+use std::ops::Range;
+
+#[derive(Clone, Copy)]
+pub enum Edit {
+    Left,
+    Right,
+    Home,
+    End,
+    Backspace,
+    Delete,
+    SelectAll,
+}
+
+#[derive(Default)]
+pub struct Editor {
+    pub cursor: usize,
+    anchor: Option<usize>,
+}
+
+fn previous(text: &str, at: usize) -> usize {
+    text[..at].char_indices().next_back().map_or(0, |(i, _)| i)
+}
+fn next(text: &str, at: usize) -> usize {
+    text[at..].chars().next().map_or(at, |c| at + c.len_utf8())
+}
+pub fn text_character(c: char) -> bool {
+    !c.is_control()
+        && !matches!(c as u32, 0xe000..=0xf8ff | 0xf0000..=0xffffd | 0x100000..=0x10fffd | 0xfdd0..=0xfdef)
+        && c as u32 & 0xffff < 0xfffe
+}
+
+impl Editor {
+    pub fn sync(&mut self, text: &str) {
+        self.cursor = boundary(text, self.cursor);
+        self.anchor = self.anchor.map(|i| boundary(text, i));
+    }
+    pub fn selection(&self) -> Range<usize> {
+        let anchor = self.anchor.unwrap_or(self.cursor);
+        anchor.min(self.cursor)..anchor.max(self.cursor)
+    }
+    pub fn selected<'a>(&self, text: &'a str) -> &'a str {
+        &text[self.selection()]
+    }
+    pub fn place(&mut self, text: &str, cursor: usize, extend: bool) {
+        if extend {
+            self.anchor.get_or_insert(self.cursor);
+        } else {
+            self.anchor = None;
+        }
+        self.cursor = boundary(text, cursor);
+    }
+    pub fn select_word(&mut self, text: &str) {
+        self.sync(text);
+        let mut left = self.cursor;
+        let mut right = self.cursor;
+        while left > 0 && word(text[previous(text, left)..].chars().next().unwrap()) {
+            left = previous(text, left);
+        }
+        while right < text.len() && word(text[right..].chars().next().unwrap()) {
+            right = next(text, right);
+        }
+        self.anchor = Some(left);
+        self.cursor = right;
+    }
+    pub fn replace(&mut self, text: &mut String, inserted: &str, max: usize) -> bool {
+        self.sync(text);
+        let range = self.selection();
+        let remaining = text.chars().count() - text[range.clone()].chars().count();
+        let added: String = inserted
+            .chars()
+            .filter(|&c| text_character(c))
+            .take(max.saturating_sub(remaining))
+            .collect();
+        if added.is_empty() {
+            return false;
+        }
+        text.replace_range(range.clone(), &added);
+        self.cursor = range.start + added.len();
+        self.anchor = None;
+        true
+    }
+    pub fn edit(&mut self, text: &mut String, action: Edit, extend: bool, whole_word: bool) {
+        self.sync(text);
+        if matches!(action, Edit::SelectAll) {
+            self.anchor = Some(0);
+            self.cursor = text.len();
+            return;
+        }
+        let range = self.selection();
+        if matches!(action, Edit::Backspace | Edit::Delete) {
+            let range = if range.is_empty() {
+                match action {
+                    Edit::Backspace => self.left(text, whole_word)..self.cursor,
+                    _ => self.cursor..self.right(text, whole_word),
+                }
+            } else {
+                range
+            };
+            text.replace_range(range.clone(), "");
+            self.cursor = range.start;
+            self.anchor = None;
+            return;
+        }
+        let to = match action {
+            Edit::Left if !extend && !range.is_empty() => range.start,
+            Edit::Right if !extend && !range.is_empty() => range.end,
+            Edit::Left => self.left(text, whole_word),
+            Edit::Right => self.right(text, whole_word),
+            Edit::Home => 0,
+            Edit::End => text.len(),
+            _ => self.cursor,
+        };
+        self.place(text, to, extend);
+    }
+    fn left(&self, text: &str, whole_word: bool) -> usize {
+        let mut at = previous(text, self.cursor);
+        if whole_word {
+            while at > 0 && text[at..].chars().next().unwrap().is_whitespace() {
+                at = previous(text, at);
+            }
+            let in_word = text[at..].chars().next().is_some_and(word);
+            while at > 0
+                && word(text[previous(text, at)..].chars().next().unwrap()) == in_word
+                && !text[previous(text, at)..]
+                    .chars()
+                    .next()
+                    .unwrap()
+                    .is_whitespace()
+            {
+                at = previous(text, at);
+            }
+        }
+        at
+    }
+    fn right(&self, text: &str, whole_word: bool) -> usize {
+        let mut at = self.cursor;
+        if !whole_word {
+            return next(text, at);
+        }
+        let in_word = text[at..].chars().next().is_some_and(word);
+        while at < text.len()
+            && word(text[at..].chars().next().unwrap()) == in_word
+            && !text[at..].chars().next().unwrap().is_whitespace()
+        {
+            at = next(text, at);
+        }
+        while at < text.len() && text[at..].chars().next().unwrap().is_whitespace() {
+            at = next(text, at);
+        }
+        at
+    }
+}
+fn word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+fn boundary(text: &str, at: usize) -> usize {
+    let mut at = at.min(text.len());
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
+#[derive(Default, Clone, Copy)]
+struct Held {
+    down: bool,
+    next: f64,
+}
+#[derive(Default)]
+pub struct KeyRepeat {
+    keys: [Held; 4],
+}
+impl KeyRepeat {
+    pub fn pulses(&mut self, key: usize, down: bool, pressed: bool, now: f64) -> usize {
+        let held = &mut self.keys[key];
+        if !down {
+            held.down = false;
+            return usize::from(pressed);
+        }
+        if !held.down {
+            held.down = true;
+            held.next = now + 0.38;
+            return 1;
+        }
+        if now < held.next {
+            return 0;
+        }
+        let pulses = (1 + ((now - held.next) / 0.028) as usize).min(8);
+        held.next += pulses as f64 * 0.028;
+        if now - held.next > 0.25 {
+            held.next = now + 0.028;
+        }
+        pulses
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn insert_delete_and_selection_work_in_the_middle_of_unicode_text() {
+        let mut text = "Hi 世界!".to_owned();
+        let mut editor = Editor::default();
+        editor.place(&text, text.len(), false);
+        editor.edit(&mut text, Edit::Left, false, false);
+        editor.edit(&mut text, Edit::Left, true, false);
+        assert_eq!(editor.selected(&text), "界");
+        assert!(editor.replace(&mut text, "友", 24));
+        assert_eq!(text, "Hi 世友!");
+        editor.edit(&mut text, Edit::Delete, false, false);
+        editor.edit(&mut text, Edit::Backspace, false, false);
+        assert_eq!(text, "Hi 世");
+    }
+    #[test]
+    fn function_key_glyphs_and_control_input_cannot_replace_a_selection() {
+        let mut text = "Pilot".to_owned();
+        let mut editor = Editor::default();
+        editor.edit(&mut text, Edit::SelectAll, false, false);
+        assert!(!editor.replace(&mut text, "\u{f702}\u{f703}\u{7f}\n", 24));
+        assert_eq!(text, "Pilot");
+        assert_eq!(editor.selected(&text), "Pilot");
+        assert!(editor.replace(&mut text, "New\n pilot", 9));
+        assert_eq!(text, "New pilot");
+    }
+    #[test]
+    fn word_navigation_and_backspace_preserve_utf8_and_limits() {
+        let mut text = "one 世界 three".to_owned();
+        let mut editor = Editor::default();
+        editor.place(&text, text.len(), false);
+        editor.edit(&mut text, Edit::Backspace, false, true);
+        assert_eq!(text, "one 世界 ");
+        editor.edit(&mut text, Edit::Left, true, true);
+        assert_eq!(editor.selected(&text), "世界 ");
+        editor.replace(&mut text, "two more characters", 8);
+        assert_eq!(text, "one two ");
+        editor.edit(&mut text, Edit::Home, false, false);
+        editor.edit(&mut text, Edit::End, true, false);
+        assert_eq!(editor.selected(&text), text);
+    }
+    #[test]
+    fn key_repeat_has_a_delay_then_repeats_independently_of_frame_rate() {
+        let count = |fps: u32| {
+            let mut repeat = KeyRepeat::default();
+            (0..fps)
+                .map(|frame| {
+                    repeat.pulses(0, true, frame.is_multiple_of(3), frame as f64 / fps as f64)
+                })
+                .sum::<usize>()
+        };
+        assert!((count(30) as isize - count(240) as isize).abs() <= 1);
+        let mut repeat = KeyRepeat::default();
+        assert_eq!(repeat.pulses(0, true, true, 0.), 1);
+        assert_eq!(repeat.pulses(0, true, true, 0.2), 0);
+        assert_eq!(repeat.pulses(0, true, false, 0.4), 1);
+        assert_eq!(repeat.pulses(0, false, false, 0.5), 0);
+        assert_eq!(repeat.pulses(0, true, true, 0.6), 1);
+    }
+}

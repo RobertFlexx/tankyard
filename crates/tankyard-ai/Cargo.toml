@@ -1,0 +1,10 @@
+[package]
+name = "tankyard-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+tankyard-core.workspace = true
+tankyard-content.workspace = true

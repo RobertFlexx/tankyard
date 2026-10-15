@@ -1,0 +1,31 @@
+[package]
+name = "tankyard-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "tankyard-server"
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+log.workspace = true
+env_logger.workspace = true
+renet.workspace = true
+renet_netcode.workspace = true
+tankyard-content.workspace = true
+tankyard-mods.workspace = true
+tankyard-core.workspace = true
+tankyard-ai.workspace = true
+tankyard-protocol.workspace = true
+ctrlc = { version = "3.5", features = ["termination"] }
+
+[[bin]]
+name = "tankyard-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "tankyard-load"
+path = "src/bin/load.rs"
+

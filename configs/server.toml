@@ -1,0 +1,37 @@
+# Community server. Command-line options override this file.
+kind = "Community"
+server_id = "tankyard-local"
+chat_enabled = true
+access_file = "configs/access.json"
+audit_file = "configs/audit.jsonl"
+require_accounts = false
+mods = []
+name = "Tank Yard Community Arena"
+bind = "0.0.0.0:5000"
+public_addresses = []
+max_players = 64
+bot_count = 12
+difficulty = "Normal"
+password = ""
+allow_sandbox = false
+snapshot_rate = 20
+interest_radius = 1350.0
+handshake_timeout = 8.0
+input_timeout = 0.5
+ban_file = "configs/bans.json"
+round_restart_seconds = 10.0
+
+[world]
+width = 3600.0
+height = 2600.0
+mode = "Ffa"
+seed = 42
+target_count = 180
+max_projectiles = 6000
+friendly_fire = false
+spawn_protection = 3.0
+score_limit = 100
+time_limit = 600.0
+lives = 1
+map = "open"
+

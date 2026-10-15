@@ -1,0 +1,11 @@
+[package]
+name = "tankyard-mods"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tankyard-content.workspace = true
+image = { version="0.24.9",default-features=false,features=["png"] }

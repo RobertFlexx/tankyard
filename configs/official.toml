@@ -1,0 +1,26 @@
+# Policy example for an official FFA server. Accounts are configured by the backend host.
+kind = "Official"
+server_id = "official-ffa"
+name = "Tank Yard FFA"
+bind = "0.0.0.0:5000"
+chat_enabled = false
+require_accounts = false
+bot_count = 12
+max_players = 64
+ban_file = "configs/official-bans.json"
+global_audit_file = "configs/global-audit.jsonl"
+
+[world]
+width = 3600.0
+height = 2600.0
+mode = "Ffa"
+seed = 42
+target_count = 180
+max_projectiles = 6000
+friendly_fire = false
+spawn_protection = 3.0
+score_limit = 100
+time_limit = 600.0
+lives = 1
+map = "open"
+

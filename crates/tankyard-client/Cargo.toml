@@ -1,0 +1,29 @@
+[package]
+name = "tankyard-client"
+default-run = "tankyard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tankyard"
+path = "src/main.rs"
+
+[[bin]]
+name = "tankyard-models"
+path = "src/models.rs"
+test = false
+
+[dependencies]
+macroquad.workspace = true
+tankyard-core.workspace = true
+tankyard-content.workspace = true
+tankyard-mods.workspace = true
+tankyard-server.workspace = true
+tankyard-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+directories.workspace = true
+clap.workspace = true
+log.workspace = true
+env_logger.workspace = true

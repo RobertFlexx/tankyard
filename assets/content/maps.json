@@ -1,0 +1,938 @@
+{
+  "maps": [
+    {
+      "id": "open",
+      "name": "Signal Plain",
+      "description": "Open lanes and a spacious geometric target field emphasize movement, aim and evolving builds.",
+      "width": 3600,
+      "height": 2600,
+      "capacity": 64,
+      "recommended_modes": [
+        "ffa",
+        "two_teams",
+        "four_teams",
+        "tag",
+        "sandbox"
+      ],
+      "walls": [],
+      "procedural": "None",
+      "objective_positions": [],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.04,
+            0.04,
+            0.92,
+            0.92
+          ]
+        },
+        {
+          "team": 1,
+          "rect": [
+            0.02,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 2,
+          "rect": [
+            0.88,
+            0.83,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 3,
+          "rect": [
+            0.88,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 4,
+          "rect": [
+            0.02,
+            0.83,
+            0.1,
+            0.15
+          ]
+        }
+      ],
+      "team_bases": [
+        {
+          "team": 1,
+          "position": [
+            0.065,
+            0.085
+          ]
+        },
+        {
+          "team": 2,
+          "position": [
+            0.935,
+            0.915
+          ]
+        },
+        {
+          "team": 3,
+          "position": [
+            0.935,
+            0.085
+          ]
+        },
+        {
+          "team": 4,
+          "position": [
+            0.065,
+            0.915
+          ]
+        }
+      ],
+      "background": "slate"
+    },
+    {
+      "id": "dense",
+      "name": "Shard Garden",
+      "description": "A seeded dense target field with scattered original geometric obstacles creates frequent farming skirmishes.",
+      "width": 3600,
+      "height": 2600,
+      "capacity": 64,
+      "recommended_modes": [
+        "ffa",
+        "two_teams",
+        "four_teams",
+        "sandbox"
+      ],
+      "walls": [],
+      "procedural": "Dense",
+      "objective_positions": [],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.04,
+            0.04,
+            0.92,
+            0.92
+          ]
+        },
+        {
+          "team": 1,
+          "rect": [
+            0.02,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 2,
+          "rect": [
+            0.88,
+            0.83,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 3,
+          "rect": [
+            0.88,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 4,
+          "rect": [
+            0.02,
+            0.83,
+            0.1,
+            0.15
+          ]
+        }
+      ],
+      "team_bases": [
+        {
+          "team": 1,
+          "position": [
+            0.065,
+            0.085
+          ]
+        },
+        {
+          "team": 2,
+          "position": [
+            0.935,
+            0.915
+          ]
+        },
+        {
+          "team": 3,
+          "position": [
+            0.935,
+            0.085
+          ]
+        },
+        {
+          "team": 4,
+          "position": [
+            0.065,
+            0.915
+          ]
+        }
+      ],
+      "background": "teal"
+    },
+    {
+      "id": "maze",
+      "name": "Circuit Maze",
+      "description": "A seeded connected passage network rewards cover, ricochets, traps and tactical navigation.",
+      "width": 3600,
+      "height": 2600,
+      "capacity": 64,
+      "recommended_modes": [
+        "maze",
+        "ffa",
+        "two_teams",
+        "tag",
+        "sandbox"
+      ],
+      "walls": [],
+      "procedural": "Maze",
+      "objective_positions": [],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.04,
+            0.04,
+            0.92,
+            0.92
+          ]
+        },
+        {
+          "team": 1,
+          "rect": [
+            0.02,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 2,
+          "rect": [
+            0.88,
+            0.83,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 3,
+          "rect": [
+            0.88,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 4,
+          "rect": [
+            0.02,
+            0.83,
+            0.1,
+            0.15
+          ]
+        }
+      ],
+      "team_bases": [
+        {
+          "team": 1,
+          "position": [
+            0.065,
+            0.085
+          ]
+        },
+        {
+          "team": 2,
+          "position": [
+            0.935,
+            0.915
+          ]
+        },
+        {
+          "team": 3,
+          "position": [
+            0.935,
+            0.085
+          ]
+        },
+        {
+          "team": 4,
+          "position": [
+            0.065,
+            0.915
+          ]
+        }
+      ],
+      "background": "violet"
+    },
+    {
+      "id": "fortress",
+      "name": "Corner Bastions",
+      "description": "Opposing broken bastions provide defendable cover while wide entrances keep every firing lane accessible.",
+      "width": 3600,
+      "height": 2600,
+      "capacity": 64,
+      "recommended_modes": [
+        "two_teams",
+        "four_teams",
+        "mothership",
+        "capture_core",
+        "deathmatch"
+      ],
+      "walls": [
+        [
+          0.18111111,
+          0.15,
+          0.07777778,
+          0.01346154
+        ],
+        [
+          0.18111111,
+          0.25,
+          0.07777778,
+          0.01346154
+        ],
+        [
+          0.18111111,
+          0.15,
+          0.00972222,
+          0.03846154
+        ],
+        [
+          0.24916667,
+          0.225,
+          0.00972222,
+          0.03846154
+        ],
+        [
+          0.74111111,
+          0.75,
+          0.07777778,
+          0.01346154
+        ],
+        [
+          0.74111111,
+          0.85,
+          0.07777778,
+          0.01346154
+        ],
+        [
+          0.74111111,
+          0.75,
+          0.00972222,
+          0.03846154
+        ],
+        [
+          0.80916667,
+          0.825,
+          0.00972222,
+          0.03846154
+        ]
+      ],
+      "procedural": "None",
+      "objective_positions": [],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.04,
+            0.04,
+            0.92,
+            0.92
+          ]
+        },
+        {
+          "team": 1,
+          "rect": [
+            0.02,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 2,
+          "rect": [
+            0.88,
+            0.83,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 3,
+          "rect": [
+            0.88,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 4,
+          "rect": [
+            0.02,
+            0.83,
+            0.1,
+            0.15
+          ]
+        }
+      ],
+      "team_bases": [
+        {
+          "team": 1,
+          "position": [
+            0.065,
+            0.085
+          ]
+        },
+        {
+          "team": 2,
+          "position": [
+            0.935,
+            0.915
+          ]
+        },
+        {
+          "team": 3,
+          "position": [
+            0.935,
+            0.085
+          ]
+        },
+        {
+          "team": 4,
+          "position": [
+            0.065,
+            0.915
+          ]
+        }
+      ],
+      "background": "sand"
+    },
+    {
+      "id": "domination",
+      "name": "Triad Relay",
+      "description": "Three clear relay zones lie between narrow symmetrical dividers, requiring control of both open and covered approaches.",
+      "width": 3600,
+      "height": 2600,
+      "capacity": 64,
+      "recommended_modes": [
+        "domination",
+        "two_teams",
+        "deathmatch"
+      ],
+      "walls": [
+        [
+          0.36944444,
+          0.4,
+          0.01111111,
+          0.2
+        ],
+        [
+          0.61944444,
+          0.4,
+          0.01111111,
+          0.2
+        ]
+      ],
+      "procedural": "None",
+      "objective_positions": [
+        [
+          0.25,
+          0.5
+        ],
+        [
+          0.5,
+          0.5
+        ],
+        [
+          0.75,
+          0.5
+        ]
+      ],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.04,
+            0.04,
+            0.92,
+            0.92
+          ]
+        },
+        {
+          "team": 1,
+          "rect": [
+            0.02,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 2,
+          "rect": [
+            0.88,
+            0.83,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 3,
+          "rect": [
+            0.88,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 4,
+          "rect": [
+            0.02,
+            0.83,
+            0.1,
+            0.15
+          ]
+        }
+      ],
+      "team_bases": [
+        {
+          "team": 1,
+          "position": [
+            0.065,
+            0.085
+          ]
+        },
+        {
+          "team": 2,
+          "position": [
+            0.935,
+            0.915
+          ]
+        },
+        {
+          "team": 3,
+          "position": [
+            0.935,
+            0.085
+          ]
+        },
+        {
+          "team": 4,
+          "position": [
+            0.065,
+            0.915
+          ]
+        }
+      ],
+      "background": "teal"
+    },
+    {
+      "id": "competitive",
+      "name": "Mirrored Circuit",
+      "description": "Four mirrored cover blocks create fair attack lanes and equally accessible flanks on a compact competitive field.",
+      "width": 2800,
+      "height": 2200,
+      "capacity": 32,
+      "recommended_modes": [
+        "deathmatch",
+        "two_teams",
+        "capture_core",
+        "ffa"
+      ],
+      "walls": [
+        [
+          0.27,
+          0.225,
+          0.06,
+          0.11
+        ],
+        [
+          0.27,
+          0.665,
+          0.06,
+          0.11
+        ],
+        [
+          0.67,
+          0.225,
+          0.06,
+          0.11
+        ],
+        [
+          0.67,
+          0.665,
+          0.06,
+          0.11
+        ]
+      ],
+      "procedural": "None",
+      "objective_positions": [],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.04,
+            0.04,
+            0.92,
+            0.92
+          ]
+        },
+        {
+          "team": 1,
+          "rect": [
+            0.02,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 2,
+          "rect": [
+            0.88,
+            0.83,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 3,
+          "rect": [
+            0.88,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 4,
+          "rect": [
+            0.02,
+            0.83,
+            0.1,
+            0.15
+          ]
+        }
+      ],
+      "team_bases": [
+        {
+          "team": 1,
+          "position": [
+            0.065,
+            0.085
+          ]
+        },
+        {
+          "team": 2,
+          "position": [
+            0.935,
+            0.915
+          ]
+        },
+        {
+          "team": 3,
+          "position": [
+            0.935,
+            0.085
+          ]
+        },
+        {
+          "team": 4,
+          "position": [
+            0.065,
+            0.915
+          ]
+        }
+      ],
+      "background": "slate"
+    },
+    {
+      "id": "boss",
+      "name": "Orrery Chamber",
+      "description": "A broad central boss chamber and four small cover islands leave room to read telegraphs and regroup between attacks.",
+      "width": 3200,
+      "height": 2400,
+      "capacity": 24,
+      "recommended_modes": [
+        "boss_rush",
+        "sandbox"
+      ],
+      "walls": [
+        [
+          0.234375,
+          0.22916667,
+          0.03125,
+          0.04166667
+        ],
+        [
+          0.234375,
+          0.72916667,
+          0.03125,
+          0.04166667
+        ],
+        [
+          0.734375,
+          0.22916667,
+          0.03125,
+          0.04166667
+        ],
+        [
+          0.734375,
+          0.72916667,
+          0.03125,
+          0.04166667
+        ]
+      ],
+      "procedural": "None",
+      "objective_positions": [
+        [
+          0.5,
+          0.5
+        ]
+      ],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.07,
+            0.08,
+            0.18,
+            0.13
+          ]
+        },
+        {
+          "team": 0,
+          "rect": [
+            0.07,
+            0.79,
+            0.18,
+            0.13
+          ]
+        },
+        {
+          "team": 0,
+          "rect": [
+            0.75,
+            0.08,
+            0.18,
+            0.13
+          ]
+        },
+        {
+          "team": 0,
+          "rect": [
+            0.75,
+            0.79,
+            0.18,
+            0.13
+          ]
+        },
+        {
+          "team": 1,
+          "rect": [
+            0.02,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 2,
+          "rect": [
+            0.88,
+            0.83,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 3,
+          "rect": [
+            0.88,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 4,
+          "rect": [
+            0.02,
+            0.83,
+            0.1,
+            0.15
+          ]
+        }
+      ],
+      "team_bases": [
+        {
+          "team": 1,
+          "position": [
+            0.065,
+            0.085
+          ]
+        },
+        {
+          "team": 2,
+          "position": [
+            0.935,
+            0.915
+          ]
+        },
+        {
+          "team": 3,
+          "position": [
+            0.935,
+            0.085
+          ]
+        },
+        {
+          "team": 4,
+          "position": [
+            0.065,
+            0.915
+          ]
+        }
+      ],
+      "background": "violet"
+    },
+    {
+      "id": "survival",
+      "name": "Closing Ring",
+      "description": "Sparse symmetrical obstacles interrupt long firing lanes inside a shrinking safe-zone arena.",
+      "width": 3000,
+      "height": 2400,
+      "capacity": 64,
+      "recommended_modes": [
+        "survival",
+        "ffa",
+        "sandbox"
+      ],
+      "walls": [
+        [
+          0.33333333,
+          0.47916667,
+          0.03333333,
+          0.04166667
+        ],
+        [
+          0.63333333,
+          0.47916667,
+          0.03333333,
+          0.04166667
+        ]
+      ],
+      "procedural": "None",
+      "objective_positions": [
+        [
+          0.5,
+          0.5
+        ]
+      ],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.2,
+            0.2,
+            0.6,
+            0.6
+          ]
+        },
+        {
+          "team": 1,
+          "rect": [
+            0.02,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 2,
+          "rect": [
+            0.88,
+            0.83,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 3,
+          "rect": [
+            0.88,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 4,
+          "rect": [
+            0.02,
+            0.83,
+            0.1,
+            0.15
+          ]
+        }
+      ],
+      "team_bases": [
+        {
+          "team": 1,
+          "position": [
+            0.065,
+            0.085
+          ]
+        },
+        {
+          "team": 2,
+          "position": [
+            0.935,
+            0.915
+          ]
+        },
+        {
+          "team": 3,
+          "position": [
+            0.935,
+            0.085
+          ]
+        },
+        {
+          "team": 4,
+          "position": [
+            0.065,
+            0.915
+          ]
+        }
+      ],
+      "background": "sand"
+    }
+  ]
+}

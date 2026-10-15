@@ -1,0 +1,25 @@
+{
+  "api_version": 1,
+  "id": "fast_arena",
+  "name": "Fast Arena",
+  "version": "1.0",
+  "rules": {
+    "movement_multiplier": 1.15,
+    "acceleration": 10.0,
+    "coast": 7.0,
+    "xp_multiplier": 1.25,
+    "respawn_seconds": 2.0
+  },
+  "hooks": [
+    {
+      "id": "welcome",
+      "event": "round_start",
+      "actions": [
+        {
+          "type": "announce",
+          "message": "Fast Arena"
+        }
+      ]
+    }
+  ]
+}
