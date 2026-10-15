@@ -1,7 +1,11 @@
 # Checks
 
-**New UI / server release-candidate changes:** The fixes after 0.2.6 have not been compiled or played in this environment (Cargo and graphical runtime are unavailable here). The earlier test counts and benchmarks below describe older builds, **not** this candidate. Follow [the pre-release checklist](release-checklist.md) on a machine with Rust, graphics, and UDP networking before tagging a release.
+> # what to account for as a maintainer.
 
+**New UI / server release-candidate changes:** The fixes after 0.2.6 have not been compiled or played/tested in this environment (Cargo and graphical runtime were unavailable here). The earlier test counts and benchmarks below describe older builds, **not** this candidate. Follow [the pre-release checklist](release-checklist.md) on a machine with Rust, graphics, and UDP networking before tagging a release.
+
+
+# Below is if i released before but i didnt so ignore it, but take it for account for future stuff (for maintainers)
 
 Version 0.2.5 is checked on Linux with Rust 1.99.0. Use these commands after editing:
 
