@@ -1,4 +1,5 @@
 # Pre-release checks
+# for maintainers
 
 This is a checklist, not a statement that the release has passed. The recent UI and networking changes still need a Rust build and an actual graphical/multiplayer test on the target machines.
 
