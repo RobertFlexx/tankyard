@@ -491,6 +491,7 @@ impl Hud {
             return actions;
         };
         let modal = self.sandbox || !tank.alive || snapshot.match_state.finished;
+        let sandbox_controls = snapshot.config.mode == Mode::Sandbox && !self.practice;
         if !tank.alive {
             self.evolution = false;
             self.offered_class.clear();
@@ -540,11 +541,20 @@ impl Hud {
         }
         if small_button(
             Rect::new(m + 116.0 * s, m + 32.0 * s, 110.0 * s, 24.0 * s),
-            "Help [F1]",
+            if sandbox_controls {
+                "Sandbox [T]"
+            } else {
+                "Help [F1]"
+            },
             s * 0.72,
-        ) && !modal
+        ) && tank.alive
+            && !snapshot.match_state.finished
         {
-            actions.push(HudAction::Controls);
+            if sandbox_controls {
+                self.sandbox = !self.sandbox;
+            } else if !modal {
+                actions.push(HudAction::Controls);
+            }
         }
         arcade_center(
             snapshot
@@ -708,7 +718,7 @@ impl Hud {
                 muted_color(),
             );
         }
-        self.leaderboard(snapshot, local, settings, s);
+        let leader_score = self.leaderboard(snapshot, local, settings, s);
         self.minimap(snapshot, local, settings, s, view);
         let xp_width = (w * 0.36).min(430.0 * s);
         let xp_x = (w - xp_width) * 0.5;
@@ -720,14 +730,12 @@ impl Hud {
             tank.xp.saturating_sub(prev) as f32 / (next - prev).max(1) as f32
         };
         let xp_y = h - 33.0 * s;
-        arcade_center(&tank.name, w * 0.5, xp_y - 45.0 * s, 27.0 * s);
-        let leader_score = snapshot
-            .tanks
-            .iter()
-            .map(|tank| tank.score)
-            .max()
-            .unwrap_or(1)
-            .max(1);
+        arcade_center(
+            &fitted_label(&tank.name, 27.0 * s, xp_width - 12.0 * s),
+            w * 0.5,
+            xp_y - 45.0 * s,
+            27.0 * s,
+        );
         arcade_track(
             Rect::new(
                 xp_x + 18.0 * s,
@@ -746,34 +754,25 @@ impl Hud {
         );
         arcade_track(Rect::new(xp_x, xp_y, xp_width, 24.0 * s), fraction, AMBER);
         arcade_center(
-            &format!(
-                "Lvl {} {}",
-                tank.level,
-                class.map(|c| c.name.as_str()).unwrap_or("Tank")
+            &fitted_label(
+                &format!(
+                    "Lvl {} {}",
+                    tank.level,
+                    class.map(|c| c.name.as_str()).unwrap_or("Tank")
+                ),
+                16.0 * s,
+                xp_width - 16.0 * s,
             ),
             w * 0.5,
             xp_y + 17.0 * s,
             16.0 * s,
         );
-        let controls = if settings.auto_fire {
-            format!("AUTO FIRE ON  ·  {} TO TOGGLE", settings.bindings[5])
-        } else {
-            format!(
-                "{}{}{}{}  ·  MOUSE  ·  1–8 STATS  ·  TAB EVOLVE",
-                settings.bindings[0],
-                settings.bindings[2],
-                settings.bindings[1],
-                settings.bindings[3]
-            )
-        };
-        if settings.show_fps {
-            center_label(&controls, w * 0.5, h - 54.0 * s, 10.0 * s, muted_color());
-        }
+        // Stack status lines above the name, clear of both progress bars.
+        let mut status_y = xp_y - 74.0 * s;
         if let Some(class) = class
             && class.ability != Ability::None
         {
             let ready = tank.ability_cooldown <= 0.0;
-            let by = h - 107.0 * s;
             center_label(
                 &format!(
                     "[{}] {:?}  {}",
@@ -786,34 +785,42 @@ impl Hud {
                     }
                 ),
                 w * 0.5,
-                by,
+                status_y,
                 15.0 * s,
                 if ready { CYAN } else { muted_color() },
             );
+            status_y -= 24.0 * s;
         }
         if let Some(class) = class.filter(|class| class.has_drones()) {
-            let (name, controls) = if class
+            let name = if class
                 .barrels
                 .iter()
                 .any(|barrel| barrel.projectile == tankyard_content::ProjectileKind::Minion)
             {
-                ("MINIONS", "LEFT CLICK DIRECT · RIGHT CLICK RECALL")
+                "Minions"
             } else {
-                ("DRONES", "RIGHT CLICK RECALL")
+                "Drones"
             };
             center_label(
-                &format!(
-                    "{name}  {} / {}  ·  {controls}",
-                    tank.deployed_drones, class.drone_limit
-                ),
+                &format!("{name}: {} / {}", tank.deployed_drones, class.drone_limit),
                 w * 0.5,
-                h - 131.0 * s,
+                status_y,
                 12.0 * s,
                 if tank.deployed_drones == class.drone_limit {
                     CYAN
                 } else {
                     muted_color()
                 },
+            );
+            status_y -= 21.0 * s;
+        }
+        if settings.auto_fire {
+            center_label(
+                &format!("Auto-fire [{}]", settings.bindings[5]),
+                w * 0.5,
+                status_y,
+                12.0 * s,
+                muted_color(),
             );
         }
         if settings.show_fps {
@@ -850,17 +857,8 @@ impl Hud {
         if self.evolution && tank.alive && !snapshot.match_state.finished && !self.sandbox {
             self.evolution_overlay(tank, content, &mut actions, s);
         }
-        if snapshot.config.mode == Mode::Sandbox && !self.practice {
-            if small_button(
-                Rect::new(m + 116.0 * s, m + 32.0 * s, 110.0 * s, 24.0 * s),
-                "Sandbox [T]",
-                s * 0.72,
-            ) {
-                self.sandbox = !self.sandbox;
-            }
-            if self.sandbox {
-                self.sandbox_overlay(content, &mut actions, s);
-            }
+        if sandbox_controls && self.sandbox {
+            self.sandbox_overlay(content, &mut actions, s);
         }
         if !tank.alive && !snapshot.match_state.finished {
             self.death(
@@ -891,7 +889,13 @@ impl Hud {
         }
         actions
     }
-    fn leaderboard(&mut self, snapshot: &Snapshot, local: EntityId, settings: &Settings, s: f32) {
+    fn leaderboard(
+        &mut self,
+        snapshot: &Snapshot,
+        local: EntityId,
+        settings: &Settings,
+        s: f32,
+    ) -> u32 {
         let x = screen_width() - 242.0 * s;
         let y = 22.0 * s;
         let width = 220.0 * s;
@@ -920,14 +924,20 @@ impl Hud {
                 tank.score as f32 / leading as f32,
                 color,
             );
-            let name: String = tank.name.chars().take(13).collect();
+            let score = format!(" - {}", tank.score);
+            let name = fitted_label(
+                &tank.name,
+                12.0 * s,
+                width - 12.0 * s - label_width(&score, 12.0 * s),
+            );
             arcade_center(
-                &format!("{} - {}", name, tank.score),
+                &format!("{name}{score}"),
                 x + width * 0.5,
                 by + 14.0 * s,
                 12.0 * s,
             );
         }
+        leading
     }
     fn minimap(
         &self,
@@ -1393,7 +1403,8 @@ mod tests {
         let factory = names("foundry");
         assert_eq!(factory[3].name, "Minion Speed");
         assert_eq!(factory[4].name, "Minion Health");
-        assert!(factory[6].description.contains("shoot"));
+        assert!(factory[6].description.contains("Spawn"));
+        assert!(factory[6].description.contains("fire"));
         let trap = names("anchor");
         assert_eq!(trap[4].name, "Trap Health");
         assert_eq!(names("monolith")[4].name, "Barrier Health");

@@ -68,11 +68,11 @@ impl UdpServer {
             "help" => Ok("Commands: status, players, maps, owner-client <client>, role <entity> <player|moderator|admin|owner>, kick <entity>, ban <entity> [minutes], unban <ip>, bans, bots <count>, difficulty <name>, mode <name>, map <id>, restart, reload-mods, save [path], shutdown".into()),
             "status" => {
                 let timing = self.metrics.tick_timing();
-                Ok(format!("{} | {} on {} | round {} | {} humans + {} bots | {} AI | tick {} | tick average/p95/p99/max {:.1} / {} / {} / {} us | snapshot last/max {} / {} us | {} projectiles, {} targets | {} snapshots, {} KiB payload | {} dropped catch-up ticks",
+                Ok(format!("{} | {} on {} | round {} | {} humans + {} bots | {} AI | tick {} | tick average/p95/p99/max {:.1} / {} / {} / {} us | snapshot last/max {} / {} us | {} projectiles, {} targets | {} snapshots, {} KiB payload | {} skipped snapshots | {} dropped catch-up ticks",
                 self.settings.name, self.session.world.config.mode.name(), self.session.world.map.name, self.session.world.match_state.round, self.player_count(), self.session.world.tanks.iter().filter(|t| t.bot).count(), self.settings.difficulty.name(), self.session.world.tick,
                 timing.average_micros, timing.p95_micros, timing.p99_micros, self.metrics.max_tick_micros,
                 self.metrics.last_snapshot_micros, self.metrics.max_snapshot_micros, self.session.world.projectiles.len(), self.session.world.targets.len(),
-                self.metrics.snapshots_sent, self.metrics.snapshot_bytes / 1024, self.metrics.dropped_catchup_ticks))
+                self.metrics.snapshots_sent, self.metrics.snapshot_bytes / 1024, self.metrics.snapshots_skipped, self.metrics.dropped_catchup_ticks))
             }
             "players" => {
                 let mut rows: Vec<_> = self.peers.iter().filter_map(|(&client, peer)| {

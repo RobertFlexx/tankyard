@@ -12,7 +12,7 @@ use navigation::{Navigation, clear_line};
 use perception::{Perception, Seen};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use tankyard_content::{Ability, ClassDef, ProjectileKind};
+use tankyard_content::{Ability, ClassDef};
 use tankyard_core::{EntityId, Mode, PlayerInput, Tank, V2, World, physics};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -989,7 +989,7 @@ fn intercept(origin: V2, position: V2, velocity: V2, speed: f32) -> V2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tankyard_content::Content;
+    use tankyard_content::{Content, ProjectileKind};
     use tankyard_core::{BossKind, WorldConfig};
 
     #[test]

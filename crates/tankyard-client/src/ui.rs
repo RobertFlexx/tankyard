@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use std::borrow::Cow;
 
 // Shared colors for the light arcade theme.
 pub const BG: Color = Color::new(0.804, 0.804, 0.804, 1.0);
@@ -177,28 +178,28 @@ pub(crate) fn label_width(value: &str, size: f32) -> f32 {
     })
 }
 // Keep long names, paths and server addresses out of their neighbors.
-// A smaller font alone isn't enough if a damn URL is 100 characters long.
-fn fitted_label(value: &str, size: f32, width: f32) -> String {
+pub(crate) fn fitted_label(value: &str, size: f32, width: f32) -> Cow<'_, str> {
     if width <= 0.0 {
-        return String::new();
+        return Cow::Borrowed("");
     }
     if label_width(value, size) <= width {
-        return value.to_owned();
+        return Cow::Borrowed(value);
     }
     const DOTS: &str = "…";
-    if label_width(DOTS, size) > width {
-        return String::new();
+    let dots_width = label_width(DOTS, size);
+    if dots_width > width {
+        return Cow::Borrowed("");
     }
     let mut fitted = String::new();
     for c in value.chars() {
         fitted.push(c);
-        if label_width(&fitted, size) + label_width(DOTS, size) > width {
+        if label_width(&fitted, size) + dots_width > width {
             fitted.pop();
             break;
         }
     }
     fitted.push_str(DOTS);
-    fitted
+    Cow::Owned(fitted)
 }
 
 pub fn label(value: &str, x: f32, y: f32, size: f32, color: Color) {

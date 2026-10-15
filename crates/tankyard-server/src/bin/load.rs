@@ -94,6 +94,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut peak_connected = 0;
     let mut received_snapshots = 0u64;
     let mut ticks = vec![0u64; clients.len()];
+    let mut last_snapshot_at = vec![start; clients.len()];
     while start.elapsed().as_secs_f64() < args.seconds {
         let now = Instant::now();
         let elapsed = now.duration_since(previous);
@@ -125,6 +126,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 && snapshot.tick > ticks[i]
             {
                 ticks[i] = snapshot.tick;
+                last_snapshot_at[i] = Instant::now();
                 received_snapshots += 1;
             }
         }
@@ -133,6 +135,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         thread::sleep(Duration::from_millis(2));
     }
     let elapsed = start.elapsed().as_secs_f64();
+    let ready_at_end = clients.iter().filter(|client| client.is_ready()).count();
+    let stale_at_end = last_snapshot_at
+        .iter()
+        .filter(|received_at| received_at.elapsed() > Duration::from_secs(2))
+        .count();
     let average = update_times.iter().sum::<f64>() / update_times.len().max(1) as f64;
     update_times.sort_by(f64::total_cmp);
     let percentile =
@@ -149,8 +156,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         ping += d.ping_ms;
     }
     println!(
-        "Real UDP workload: {} clients, {} seconds, peak {} ready clients, {} received snapshots",
-        args.clients, elapsed, peak_connected, received_snapshots
+        "Real UDP workload: {} clients, {} seconds, peak {} ready, {} ready at finish, {} stale, {} received snapshots",
+        args.clients, elapsed, peak_connected, ready_at_end, stale_at_end, received_snapshots
     );
     println!(
         "Combined client update time: average {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms",
@@ -194,6 +201,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if peak_connected != args.clients {
         return Err("not all workload clients completed their handshake".into());
+    }
+    if ready_at_end != args.clients || stale_at_end > 0 || ticks.contains(&0) {
+        return Err("workload clients disconnected or stopped receiving snapshots".into());
     }
     Ok(())
 }

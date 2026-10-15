@@ -166,6 +166,30 @@ impl Menu {
     pub fn difficulty_name(&self) -> &'static str {
         ["Beginner", "Normal", "Advanced", "Expert"][self.difficulty.min(3)]
     }
+    pub fn select_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+        let map = match mode {
+            Mode::Maze => "maze",
+            Mode::Domination => "domination",
+            Mode::Survival => "survival",
+            Mode::BossRush => "boss",
+            Mode::TwoTeams | Mode::FourTeams | Mode::Mothership | Mode::CaptureCore | Mode::Tag => {
+                "fortress"
+            }
+            _ => "open",
+        };
+        self.map = self
+            .maps
+            .iter()
+            .position(|candidate| candidate.id == map)
+            .or_else(|| {
+                self.maps
+                    .iter()
+                    .position(|candidate| candidate.id == "open")
+            })
+            .unwrap_or(0);
+        self.map_page = self.map / 8;
+    }
     pub fn config(&self) -> WorldConfig {
         WorldConfig {
             mode: self.mode,
@@ -195,7 +219,6 @@ impl Menu {
         let margin = 40.0 * s;
         if self.page == Page::Main {
             center_label("Tank Yard", w * 0.5, 78.0 * s, 53.0 * s, text_color());
-            center_label("Tank arena", w * 0.5, 106.0 * s, 14.0 * s, muted_color());
         } else {
             label("TANK YARD", margin, 80.0 * s, 48.0 * s, text_color());
             draw_line(margin, 126.0 * s, w - margin, 126.0 * s, 1.0, line_color());
@@ -274,7 +297,7 @@ impl Menu {
                 true,
                 s * 0.88,
             ) {
-                self.mode = mode;
+                self.select_mode(mode);
             }
         }
         let play_y = y + 229.0 * s;
@@ -390,7 +413,11 @@ impl Menu {
             let _ = settings.save();
         }
         right_label(
-            &format!("{} tanks  ·  {} bots", content.classes.len(), self.bots),
+            &format!(
+                "{} tanks  ·  {} bots in offline mode",
+                content.classes.len(),
+                self.bots
+            ),
             x + pane_w,
             t_y + 20.0 * s,
             13.0 * s,
@@ -411,19 +438,7 @@ impl Menu {
             let r = Rect::new(bx, by, width, height);
             let selected = self.mode == mode;
             if button(r, mode.name(), selected, true, s) {
-                self.mode = mode;
-                self.map = match mode {
-                    Mode::Maze => 2,
-                    Mode::Domination => 4,
-                    Mode::Survival => 7,
-                    Mode::BossRush => 6,
-                    Mode::TwoTeams
-                    | Mode::FourTeams
-                    | Mode::Mothership
-                    | Mode::CaptureCore
-                    | Mode::Tag => 3,
-                    _ => 0,
-                };
+                self.select_mode(mode);
             }
             label(
                 mode_blurb(mode),
@@ -567,7 +582,7 @@ impl Menu {
         let margin = 40.0 * s;
         label("Practice", margin, 164.0 * s, 26.0 * s, text_color());
         label(
-            "Four short challenges with fixed loadouts and Normal bots. Records are saved locally.",
+            "Four challenges. Personal bests are saved on this device.",
             margin,
             190.0 * s,
             15.0 * s,
@@ -694,7 +709,7 @@ impl Menu {
             text_color(),
         );
         label(
-            "Your current bindings. Offline menus pause the game; shared servers keep running.",
+            "Offline games pause in menus. Online games keep running.",
             margin,
             192.0 * s,
             15.0 * s,
@@ -812,7 +827,7 @@ impl Menu {
             label(self.mode.name(), x, y + 219.0 * s, 24.0 * s, CYAN);
             label(
                 &format!(
-                    "{} AI tanks  ·  {}  ·  UDP port 5000",
+                    "{} bots  ·  {}  ·  UDP port 5000",
                     self.bots,
                     self.difficulty_name()
                 ),
@@ -829,7 +844,7 @@ impl Menu {
                 return Action::Page(Page::Modes);
             }
             wrap(
-                "Share your local IP for LAN play. Internet guests use your public IP and a forwarded UDP port 5000.",
+                "For LAN games, share your local IP. For internet games, share your public IP and forward UDP port 5000.",
                 x,
                 y + 341.0 * s,
                 width,
@@ -871,7 +886,7 @@ impl Menu {
                 let _ = settings.save();
             }
             wrap(
-                "Connect directly to a friend or community server. No account, central service, or registration is required.",
+                "Enter the server's IP address and port, then connect.",
                 x,
                 y + 370.0 * s,
                 width,
@@ -895,7 +910,7 @@ impl Menu {
         );
         if host {
             wrap(
-                "The host runs the same authoritative dedicated server used by community operators. Your client connects over real UDP.",
+                "Your friends can join using your IP address and port 5000.",
                 rx + 22.0 * s,
                 y + 65.0 * s,
                 rw - 44.0 * s,
@@ -917,7 +932,7 @@ impl Menu {
                 text_color(),
             );
             wrap(
-                "Keep the game open while friends are connected. Returning to the menu closes this hosted match.",
+                "Returning to the menu closes the server.",
                 rx + 22.0 * s,
                 y + 304.0 * s,
                 rw - 44.0 * s,
@@ -934,7 +949,7 @@ impl Menu {
                 .collect();
             if servers.is_empty() {
                 wrap(
-                    "Add an address to your favorites or join a server. Recent connections appear here.",
+                    "Favorites and recent servers appear here.",
                     rx + 22.0 * s,
                     y + 77.0 * s,
                     rw - 44.0 * s,
@@ -1136,11 +1151,7 @@ impl Menu {
                 text_color(),
             );
             label(
-                &format!(
-                    "TIER {}  ·  EVOLVES AT LEVEL {}",
-                    class.tier + 1,
-                    class.min_level
-                ),
+                &format!("TIER {}  ·  LEVEL {}", class.tier + 1, class.min_level),
                 rx + 22.0 * s,
                 y + 48.0 * s,
                 13.0 * s,
@@ -1503,7 +1514,7 @@ impl Menu {
                     text_color(),
                 );
                 wrap(
-                    "Choose letters, arrows, Space, LeftShift, or LeftControl. Press the row and then the desired key.",
+                    "Click a control, then press a letter, arrow key, Space, LeftShift, or LeftControl.",
                     rx,
                     by + 256.0 * s,
                     col,
@@ -1553,14 +1564,6 @@ impl Menu {
                     col,
                     21.0 * s,
                     text_color(),
-                );
-                wrap(
-                    "Settings are stored locally. A damaged or older configuration falls back to safe defaults.",
-                    rx,
-                    by + 190.0 * s,
-                    col,
-                    19.0 * s,
-                    muted_color(),
                 );
                 label("LOCAL PROFILE", rx, by + 310.0 * s, 13.0 * s, CYAN);
                 label(
@@ -1629,7 +1632,7 @@ impl Menu {
                 }
                 if favorites.is_empty() {
                     wrap(
-                        "Save a server from the Join Server menu. Favorites and connection history stay on this device.",
+                        "No favorites yet. Add one from Join server.",
                         rx,
                         by + 65.0 * s,
                         col,
@@ -1638,7 +1641,7 @@ impl Menu {
                     );
                 }
                 wrap(
-                    "Your profile and settings are stored on this device.",
+                    "Settings file",
                     x,
                     by + 304.0 * s,
                     col,
@@ -1648,7 +1651,7 @@ impl Menu {
                 wrap(
                     &Settings::path().display().to_string(),
                     x,
-                    by + 411.0 * s,
+                    by + 337.0 * s,
                     col,
                     13.0 * s,
                     muted_color(),
@@ -1675,37 +1678,52 @@ impl Menu {
         let x = 40.0 * s;
         let y = 177.0 * s;
         let width = screen_width() - 80.0 * s;
-        label("About Tank Yard", x, y, 32.0 * s, text_color());
-        wrap(
-            "Tank Yard is a tank arena inspired by Diep.io and Arras.io. Farm shapes, build your tank, and fight players or bots. It runs natively and supports offline play and player-hosted servers.",
+        label("Credits", x, y, 32.0 * s, text_color());
+        label(
+            "Made by RobertFlexx.",
             x,
-            y + 60.0 * s,
+            y + 52.0 * s,
+            26.0 * s,
+            text_color(),
+        );
+        wrap(
+            "Inspired by Diep.io and Arras.io.",
+            x,
+            y + 94.0 * s,
             width.min(860.0 * s),
-            25.0 * s,
+            20.0 * s,
             muted_color(),
         );
-        label("ENGINE", x, y + 195.0 * s, 13.0 * s, CYAN);
+        label("BUILT WITH", x, y + 168.0 * s, 13.0 * s, CYAN);
         label(
-            "Rust 2024  /  Macroquad  /  Renet + Netcode",
+            "Rust  /  Macroquad  /  Renet + Netcode",
             x,
-            y + 231.0 * s,
+            y + 204.0 * s,
             23.0 * s,
             text_color(),
         );
-        label("LICENSE", x, y + 291.0 * s, 13.0 * s, CYAN);
+        label("LICENSE", x, y + 264.0 * s, 13.0 * s, CYAN);
         label(
-            "MIT OR Apache-2.0 source  ·  no audio assets",
+            "MIT or Apache-2.0",
             x,
-            y + 328.0 * s,
+            y + 300.0 * s,
             23.0 * s,
             text_color(),
         );
         wrap(
-            "Created with Rust and Macroquad. Tank Yard is an independent project and is not affiliated with Diep.io or Arras.io.",
+            "DejaVu Sans Bold font. Third-party licenses are in NOTICE.md.",
             x,
-            y + 393.0 * s,
+            y + 355.0 * s,
             width.min(900.0 * s),
-            22.0 * s,
+            18.0 * s,
+            muted_color(),
+        );
+        wrap(
+            "Tank Yard is not affiliated with Diep.io or Arras.io.",
+            x,
+            y + 411.0 * s,
+            width.min(900.0 * s),
+            18.0 * s,
             muted_color(),
         );
         Action::None

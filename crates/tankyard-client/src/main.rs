@@ -30,11 +30,7 @@ use tankyard_core::{DT, Mode, PlayerInput, V2};
 use ui::*;
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "tankyard",
-    version,
-    about = "Tank Yard - independent geometric tank arenas"
-)]
+#[command(name = "tankyard", version, about = "Tank Yard - tank arena")]
 struct Cli {
     /// Start windowed with multisampling and anisotropic filtering disabled.
     #[arg(long)]
@@ -167,19 +163,12 @@ impl App {
             }
             Err(error) => menu.error = error,
         }
-        menu.mode = parse_mode(&cli.mode);
+        menu.select_mode(parse_mode(&cli.mode));
         menu.bots = cli.bots.min(64);
         menu.password = cli.password;
         menu.width = cli.width;
         menu.height = cli.height;
         menu.seed = cli.seed;
-        menu.map = match menu.mode {
-            Mode::Maze => 2,
-            Mode::Domination => 4,
-            Mode::Survival => 7,
-            Mode::BossRush => 6,
-            _ => 0,
-        };
         if let Some(map) = cli.map {
             menu.map = menu
                 .maps
@@ -400,7 +389,7 @@ impl App {
                 self.quit = true;
             }
             Action::Save => match self.settings.save() {
-                Ok(()) => self.menu.error = "Settings saved locally.".into(),
+                Ok(()) => self.menu.error = "Settings saved.".into(),
                 Err(error) => self.menu.error = format!("Could not save: {error}"),
             },
         }
@@ -1141,23 +1130,21 @@ impl App {
         let y = screen_height() * 0.5 - 225.0 * s;
         center_label("PAUSED", screen_width() * 0.5, y, 38.0 * s, text_color());
         let offline = self.session.as_ref().is_some_and(|s| s.offline_mode());
-        center_label(
-            if offline {
-                "Offline simulation is suspended"
-            } else {
-                "The shared arena continues"
-            },
-            screen_width() * 0.5,
-            y + 30.0 * s,
-            16.0 * s,
-            muted_color(),
-        );
+        if !offline {
+            center_label(
+                "Online game is still running",
+                screen_width() * 0.5,
+                y + 30.0 * s,
+                16.0 * s,
+                muted_color(),
+            );
+        }
         let mut items = vec![
             "Resume",
             "Settings [F10]",
             "Controls [F1]",
             "Practice [F6]",
-            "Tank archive",
+            "Tank tree",
         ];
         if offline {
             items.push("Restart [F5]");
@@ -1181,7 +1168,7 @@ impl App {
                     "Settings [F10]" => self.open_menu(Page::Settings),
                     "Controls [F1]" => self.open_menu(Page::Controls),
                     "Practice [F6]" => self.open_menu(Page::Practice),
-                    "Tank archive" => self.open_menu(Page::Encyclopedia),
+                    "Tank tree" => self.open_menu(Page::Encyclopedia),
                     "Restart [F5]" => self.restart_offline(),
                     "Return to menu" => self.finish_session(),
                     _ => self.quit = true,

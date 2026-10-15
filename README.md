@@ -1,6 +1,6 @@
 # Tank Yard
 
-Tank Yard is a native tank arena inspired by Diep.io and Arras.io. Shoot shapes, earn skill points, upgrade your tank, and fight for score. It has 91 tank classes, twelve modes, four practice challenges with personal records, local achievements, and player-hosted multiplayer.
+Tank Yard is a tank arena made by RobertFlexx, inspired by Diep.io and Arras.io. It has 91 tanks, twelve modes, offline play, practice challenges, and player-hosted multiplayer.
 
 Build with Rust 1.88 or newer:
 

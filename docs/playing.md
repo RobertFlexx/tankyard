@@ -48,7 +48,7 @@ You can also launch a challenge directly, for example `./tankyard --practice dro
 | Skirmish | Destroy three tanks within three minutes | Level 30 Twin against four bots on Mirrored Circuit |
 | Last stand | Survive two minutes or become the last living tank | Level 1 Basic against seven bots in Closing Ring |
 
-Shoot shapes to grow before taking a risky fight. At levels 15, 30, and 45, look for a tank upgrade. Bullet builds benefit from damage, penetration, and reload; fast movement helps you choose when to fight. Low health is a reason to find cover and recover. In Skirmish, spend your starting points before engaging.
+Shoot shapes to earn points before fighting other tanks. Tank upgrades unlock at levels 15, 30, and 45. For bullet builds, spend points on damage, penetration, and reload. Find cover when your health is low. In Skirmish, spend your starting points before the first fight.
 
 ## Bots and multiplayer
 

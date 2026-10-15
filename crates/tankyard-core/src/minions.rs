@@ -103,9 +103,7 @@ impl World {
         });
         let previous = gun.cooldown;
         gun.cooldown = (previous - DT).max(0.0);
-        let Some(goal) = goal else {
-            return None;
-        };
+        let goal = goal?;
         let desired = (goal - p.pos).angle();
         gun.aim = wrap(gun.aim + wrap(desired - gun.aim) * (1.0 - (-12.0 * DT).exp()));
         if gun.cooldown > 0.0 || p.age < 0.3 || wrap(desired - gun.aim).abs() > 0.25 || full {

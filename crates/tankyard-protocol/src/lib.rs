@@ -257,7 +257,31 @@ pub fn decode_input(bytes: &[u8]) -> Result<PlayerInput, DecodeError> {
 /// unbounded decompression is performed: the original size is checked first.
 pub fn encode_snapshot(snapshot: &Snapshot) -> Result<Vec<u8>, DecodeError> {
     let raw = encode(snapshot, MAX_STATE_BYTES)?;
-    let compressed = lz4_flex::compress_prepend_size(&raw);
+    compress_snapshot(&raw)
+}
+
+/// Reuse a bounded serialization buffer across a server's viewers and ticks.
+/// Compressed messages remain independent blocks with the same wire format.
+pub struct SnapshotEncoder {
+    raw: Box<[u8]>,
+}
+impl Default for SnapshotEncoder {
+    fn default() -> Self {
+        Self {
+            raw: vec![0; MAX_STATE_BYTES].into_boxed_slice(),
+        }
+    }
+}
+impl SnapshotEncoder {
+    pub fn encode(&mut self, snapshot: &Snapshot) -> Result<Vec<u8>, DecodeError> {
+        let raw = postcard::to_slice(snapshot, &mut self.raw)
+            .map_err(|_| DecodeError("state serialization exceeds buffer or failed"))?;
+        compress_snapshot(raw)
+    }
+}
+
+fn compress_snapshot(raw: &[u8]) -> Result<Vec<u8>, DecodeError> {
+    let compressed = lz4_flex::compress_prepend_size(raw);
     if compressed.len() > MAX_STATE_BYTES {
         return Err(DecodeError("compressed state exceeds limit"));
     }
@@ -453,6 +477,34 @@ mod name_hardening_tests {
 mod tests {
     use super::*;
     use tankyard_core::V2;
+    #[test]
+    fn reused_snapshot_encoder_preserves_wire_format_and_recovers_after_overflow() {
+        let mut world =
+            tankyard_core::World::new(tankyard_core::WorldConfig::default(), Content::builtin());
+        world.add_player("世界 Mira", false);
+        let mut encoder = SnapshotEncoder::default();
+        let mut previous: Option<(u64, Vec<u8>)> = None;
+        for _ in 0..6 {
+            world.step();
+            let state = world.snapshot();
+            let bytes = encoder.encode(&state).unwrap();
+            assert_eq!(bytes, encode_snapshot(&state).unwrap());
+            assert_eq!(decode_snapshot(&bytes).unwrap().tick, state.tick);
+            if let Some((tick, bytes)) = previous {
+                assert_eq!(decode_snapshot(&bytes).unwrap().tick, tick);
+            }
+            previous = Some((state.tick, bytes));
+        }
+        let mut state = world.snapshot();
+        state.tanks[0].name = "x".repeat(MAX_STATE_BYTES);
+        assert!(encoder.encode(&state).is_err());
+        state.tanks[0].name = "Mira".into();
+        assert_eq!(
+            encoder.encode(&state).unwrap(),
+            encode_snapshot(&state).unwrap()
+        );
+    }
+
     #[test]
     fn match_controls_and_current_settings_roundtrip_with_bounded_values() {
         let command = ClientControl::Admin {

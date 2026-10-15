@@ -1621,18 +1621,6 @@ pub fn sanitize_name(name: &str) -> String {
         clean.into()
     }
 }
-#[cfg(test)]
-mod name_hardening_tests {
-    use super::*;
-
-    #[test]
-    fn offline_names_strip_unicode_direction_overrides() {
-        assert_eq!(sanitize_name("\u{2066}Pilot\u{2069}"), "Pilot");
-        assert_eq!(sanitize_name("bob\u{202e}txt"), "bobtxt");
-        assert_eq!(sanitize_name("世界 艾"), "世界 艾");
-    }
-}
-
 pub fn target_sides(kind: TargetKind) -> u8 {
     match kind {
         TargetKind::Square | TargetKind::Reinforced => 4,
@@ -1674,4 +1662,16 @@ fn boundary_hits(start: V2, end: V2, r: f32, config: &WorldConfig) -> [Option<(f
         }
     }
     hits
+}
+
+#[cfg(test)]
+mod name_hardening_tests {
+    use super::*;
+
+    #[test]
+    fn offline_names_strip_unicode_direction_overrides() {
+        assert_eq!(sanitize_name("\u{2066}Pilot\u{2069}"), "Pilot");
+        assert_eq!(sanitize_name("bob\u{202e}txt"), "bobtxt");
+        assert_eq!(sanitize_name("世界 艾"), "世界 艾");
+    }
 }

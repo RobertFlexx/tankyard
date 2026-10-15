@@ -862,11 +862,13 @@ mod geometry_tests {
     #[test]
     fn shared_muzzles_draw_once_and_use_all_emitter_recoil() {
         let catalog = Content::builtin();
-        let factory = catalog.class("foundry").unwrap();
+        let mut factory = catalog.class("foundry").unwrap().clone();
+        // Exercise shared emitters even when the stock Factory has only one.
+        factory.barrels = vec![factory.barrels[0].clone(); 3];
         let render = |recoils: &[f32]| {
             let mut quads = Vec::new();
             class_model_geometry(
-                factory,
+                &factory,
                 Vec2::ZERO,
                 22.0,
                 0.0,

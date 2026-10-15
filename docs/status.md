@@ -2,6 +2,14 @@
 
 > # what to account for as a maintainer.
 
+Checked on 2026-10-15 with Rust 1.99.0 on Linux: 222 tests pass, including UDP integration tests. Formatting, Clippy with warnings denied, the workspace release build, all 91 tank classes, and both bundled mods also pass.
+
+Graphical checks under Xvfb cover the HUD, menu, credits, mode switching, long player names, and the Sandbox button at 800×600, 1280×800, and 1920×1080, with interface scales from 80% to 140%. Captures are in `artifacts/ui-review`. The latest server work and 64/128-client load results are in [server measurements](server-performance.md).
+
+## Previous runs
+
+The notes below predate the current development checks.
+
 **New UI / server release-candidate changes:** The fixes after 0.2.6 have not been compiled or played/tested in this environment (Cargo and graphical runtime were unavailable here). The earlier test counts and benchmarks below describe older builds, **not** this candidate. Follow [the pre-release checklist](release-checklist.md) on a machine with Rust, graphics, and UDP networking before tagging a release.
 
 

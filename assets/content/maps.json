@@ -3,7 +3,7 @@
     {
       "id": "open",
       "name": "Signal Plain",
-      "description": "Open lanes and a spacious geometric target field emphasize movement, aim and evolving builds.",
+      "description": "An open arena with no walls.",
       "width": 3600,
       "height": 2600,
       "capacity": 64,
@@ -99,7 +99,7 @@
     {
       "id": "dense",
       "name": "Shard Garden",
-      "description": "A seeded dense target field with scattered original geometric obstacles creates frequent farming skirmishes.",
+      "description": "Plenty of shapes and scattered obstacles.",
       "width": 3600,
       "height": 2600,
       "capacity": 64,
@@ -194,7 +194,7 @@
     {
       "id": "maze",
       "name": "Circuit Maze",
-      "description": "A seeded connected passage network rewards cover, ricochets, traps and tactical navigation.",
+      "description": "Narrow passages with walls for cover.",
       "width": 3600,
       "height": 2600,
       "capacity": 64,
@@ -290,7 +290,7 @@
     {
       "id": "fortress",
       "name": "Corner Bastions",
-      "description": "Opposing broken bastions provide defendable cover while wide entrances keep every firing lane accessible.",
+      "description": "Corner bases with wide entrances.",
       "width": 3600,
       "height": 2600,
       "capacity": 64,
@@ -435,7 +435,7 @@
     {
       "id": "domination",
       "name": "Triad Relay",
-      "description": "Three clear relay zones lie between narrow symmetrical dividers, requiring control of both open and covered approaches.",
+      "description": "Three control points separated by walls.",
       "width": 3600,
       "height": 2600,
       "capacity": 64,
@@ -555,7 +555,7 @@
     {
       "id": "competitive",
       "name": "Mirrored Circuit",
-      "description": "Four mirrored cover blocks create fair attack lanes and equally accessible flanks on a compact competitive field.",
+      "description": "A compact arena with four matching cover blocks.",
       "width": 2800,
       "height": 2200,
       "capacity": 32,
@@ -675,7 +675,7 @@
     {
       "id": "boss",
       "name": "Orrery Chamber",
-      "description": "A broad central boss chamber and four small cover islands leave room to read telegraphs and regroup between attacks.",
+      "description": "An open center with four small cover blocks.",
       "width": 3200,
       "height": 2400,
       "capacity": 24,
@@ -825,7 +825,7 @@
     {
       "id": "survival",
       "name": "Closing Ring",
-      "description": "Sparse symmetrical obstacles interrupt long firing lanes inside a shrinking safe-zone arena.",
+      "description": "Scattered cover inside a shrinking safe zone.",
       "width": 3000,
       "height": 2400,
       "capacity": 64,

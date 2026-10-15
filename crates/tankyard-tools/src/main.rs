@@ -205,6 +205,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             world.config.mode = Mode::Ffa;
             let mut snapshot_buffer = world.snapshot();
+            let mut snapshot_encoder = tankyard_protocol::SnapshotEncoder::default();
             let mut ai = BotController::new(Difficulty::Advanced);
             let mut rng = seed;
             let mut tick_times = Vec::with_capacity(ticks);
@@ -244,7 +245,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         let allocations_before = allocations::count();
                         let start = Instant::now();
                         world.snapshot_for_into(&mut snapshot_buffer, world.tanks[0].pos, 1400.);
-                        let bytes = tankyard_protocol::encode_snapshot(&snapshot_buffer)?;
+                        let bytes = snapshot_encoder.encode(&snapshot_buffer)?;
                         snapshot_allocations += allocations::count() - allocations_before;
                         snapshot_times.push(start.elapsed().as_secs_f64() * 1000.);
                         sizes += bytes.len();
@@ -255,9 +256,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if snapshot_times.is_empty() {
                 let allocations_before = allocations::count();
                 let start = Instant::now();
-                let bytes = tankyard_protocol::encode_snapshot(
-                    &world.snapshot_for(world.tanks[0].pos, 1400.),
-                )?;
+                let bytes =
+                    snapshot_encoder.encode(&world.snapshot_for(world.tanks[0].pos, 1400.))?;
                 snapshot_allocations += allocations::count() - allocations_before;
                 snapshot_times.push(start.elapsed().as_secs_f64() * 1000.);
                 sizes += bytes.len();

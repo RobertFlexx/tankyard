@@ -61,4 +61,22 @@ Check a running server on a machine with UDP access:
 cargo run --locked --release -p tankyard-server --bin tankyard-load -- --local --clients 8 --seconds 15
 ```
 
-The load tool also supports `--latency-ms 100 --jitter-ms 20 --loss-percent 5`. Population limits are configurable limits, not a measured hosting capacity.
+The load tool also supports `--latency-ms 100 --jitter-ms 20 --loss-percent 5`. It fails if clients cannot join, disconnect before the finish, or stop receiving snapshots for more than two seconds.
+
+## Scaling arenas
+
+Run each arena in its own server process. That lets separate CPU cores and machines handle additional rooms. The central lobby should send players to an arena's UDP address and issue its connection token before they join. Account, database, and matchmaking requests belong outside the simulation thread; account verifiers should read cached claims and revocations.
+
+Start with the current 64-player room limit and measure on the hosting hardware before increasing it. At 60 ticks per second, each tick has 16.7 ms; snapshot batches and network work need CPU time too. Monitor `status` for tick percentiles, snapshot time, skipped snapshots, and dropped catch-up ticks. Add rooms while there is still CPU and network headroom. The configured player limit alone does not establish capacity.
+
+`configs/tankyard@.service` runs named arenas under systemd. For example, `tankyard@ffa-1` reads `/opt/tankyard/configs/ffa-1.toml`. Give each arena its own `server_id`, bind port, moderation files, and audit files. Set `public_addresses` and token issuance to match that arena. Install the template and prepare the `tankyard` user and paths as for the single-server unit, then start the required instances.
+
+Repeat these local workloads after server changes:
+
+```sh
+./target/release/tankyard-load --local --clients 64 --bots 24 --seconds 30
+./target/release/tankyard-load --local --clients 128 --bots 24 --seconds 30
+./target/release/tankyard-load --local --clients 8 --seconds 30 --latency-ms 100 --jitter-ms 20 --loss-percent 5
+```
+
+The load process also simulates every client, so its CPU use and loopback packet loss differ from a deployed fleet. Check [measured results](status.md), then test the intended map, classes, and projectile population on the actual host. The central lobby and provisioning service remain separate integrations.

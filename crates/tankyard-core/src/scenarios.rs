@@ -1329,7 +1329,8 @@ fn multi_drone_volley_obeys_the_owner_limit() {
     let mut world = empty(Mode::Sandbox);
     let player = world.add_player("Drones", false);
     world.sandbox_class(player, "flock");
-    for n in 0..15 {
+    let limit = usize::from(world.content.class("flock").unwrap().drone_limit);
+    for n in 0..limit - 1 {
         let drone = world.simple_projectile(
             player,
             0,
@@ -1347,7 +1348,7 @@ fn multi_drone_volley_obeys_the_owner_limit() {
     world.fire_weapons();
     assert_eq!(
         world.projectiles.len(),
-        16,
+        limit,
         "pending pellets count toward the limit"
     );
 }

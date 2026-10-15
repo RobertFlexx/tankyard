@@ -1,5 +1,5 @@
 use crate::{LocalSession, NetError, ServerSettings, unix_time};
-use renet::{RenetServer, ServerEvent};
+use renet::{Bytes, RenetServer, ServerEvent};
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use std::{
     collections::HashMap,
@@ -24,6 +24,7 @@ pub struct ServerMetrics {
     pub ticks: u64,
     pub dropped_catchup_ticks: u64,
     pub snapshots_sent: u64,
+    pub snapshots_skipped: u64,
     pub snapshot_bytes: u64,
     pub rejected_packets: u64,
     pub last_tick_micros: u64,
@@ -84,12 +85,15 @@ pub struct UdpServer {
     accumulator: Duration,
     snapshot_accumulator: Duration,
     pending_effects: Vec<GameEvent>,
+    important_events: Vec<GameEvent>,
+    client_ids: Vec<u64>,
     snapshot_buffer: tankyard_core::Snapshot,
+    snapshot_encoder: SnapshotEncoder,
     finished_for: f32,
     pub(crate) shutting_down: bool,
     content_hash: u64,
     loaded_mods: tankyard_mods::LoadedMods,
-    game_data: ServerControl,
+    game_data: Bytes,
     native_plugins: Vec<fn() -> Box<dyn tankyard_core::modding::ServerPlugin>>,
     pub(crate) access: crate::access::Access,
     pub(crate) account_verifier: Option<std::sync::Arc<dyn crate::access::AccountVerifier>>,
@@ -126,7 +130,7 @@ impl UdpServer {
         .map_err(NetError)?;
         session.bots.difficulty = settings.difficulty;
         let content_hash = session.bundle.fingerprint();
-        let game_data = game_data(&session.bundle).map_err(|e| NetError(e.to_string()))?;
+        let game_data = encode_game_data_message(&session.bundle)?;
         let socket = UdpSocket::bind(&settings.bind)?;
         let address = socket.local_addr()?;
         if settings.netcode_private_key.is_none() && !address.ip().is_loopback() {
@@ -155,6 +159,7 @@ impl UdpServer {
         )?;
         let bans = crate::admin::load_bans(&settings.ban_file)?;
         let snapshot_buffer = session.world.snapshot();
+        let client_ids = Vec::with_capacity(settings.max_players);
         Ok(Self {
             session,
             settings,
@@ -171,7 +176,10 @@ impl UdpServer {
             accumulator: Duration::ZERO,
             snapshot_accumulator: Duration::ZERO,
             pending_effects: Vec::with_capacity(1024),
+            important_events: Vec::with_capacity(128),
+            client_ids,
             snapshot_buffer,
+            snapshot_encoder: SnapshotEncoder::default(),
             finished_for: 0.,
             shutting_down: false,
             content_hash,
@@ -199,8 +207,10 @@ impl UdpServer {
             .update(elapsed, &mut self.server)
             .map_err(|e| NetError(e.to_string()))?;
         self.handle_connections();
-        let ids: Vec<_> = self.peers.keys().copied().collect();
-        for client in ids {
+        self.client_ids.clear();
+        self.client_ids.extend(self.peers.keys().copied());
+        for index in 0..self.client_ids.len() {
+            let client = self.client_ids[index];
             if let Some(peer) = self.peers.get_mut(&client) {
                 peer.control_tokens = (peer.control_tokens + elapsed.as_secs_f32() * 12.).min(24.);
                 peer.input_tokens = (peer.input_tokens + elapsed.as_secs_f32() * 120.).min(32.);
@@ -633,7 +643,7 @@ impl UdpServer {
     }
 
     fn welcome(&mut self, client: u64, player: EntityId) {
-        self.send_control(client, &self.game_data.clone());
+        self.send_control_bytes(client, self.game_data.clone());
         self.send_control(
             client,
             &ServerControl::Welcome {
@@ -680,7 +690,7 @@ impl UdpServer {
         for factory in &self.native_plugins {
             candidate.install_plugin(factory()).map_err(NetError)?;
         }
-        let data = game_data(&candidate.bundle).map_err(|e| NetError(e.to_string()))?;
+        let data = encode_game_data_message(&candidate.bundle)?;
         self.loaded_mods = loaded;
         self.game_data = data;
         self.restart_round();
@@ -696,17 +706,17 @@ impl UdpServer {
             return Err(NetError("register plugins before players connect".into()));
         }
         self.session.install_plugin(factory()).map_err(NetError)?;
-        self.game_data = game_data(&self.session.bundle).map_err(|e| NetError(e.to_string()))?;
+        self.game_data = encode_game_data_message(&self.session.bundle)?;
         self.content_hash = self.session.bundle.fingerprint();
         self.native_plugins.push(factory);
         Ok(())
     }
 
     fn expire_clients(&mut self) {
+        let now = unix_time().as_secs();
         if self.elapsed.as_secs() != self.accounts_checked_at {
             self.accounts_checked_at = self.elapsed.as_secs();
             if let Some(verifier) = &self.account_verifier {
-                let now = unix_time().as_secs();
                 let revoked: Vec<_> = self
                     .access
                     .accounts()
@@ -731,13 +741,13 @@ impl UdpServer {
                 }
             }
         }
-        for client in self.access.expire(unix_time().as_secs()) {
+        for client in self.access.expire(now) {
             self.chat.refresh_role(client, ServerRole::Player);
             self.send_access(client);
             self.send_rooms(client);
         }
-        let ids: Vec<_> = self.peers.keys().copied().collect();
-        for client in ids {
+        for index in 0..self.client_ids.len() {
+            let client = self.client_ids[index];
             let Some(peer) = self.peers.get(&client) else {
                 continue;
             };
@@ -747,7 +757,7 @@ impl UdpServer {
                 }
             } else if peer.entity.is_some()
                 && self.settings.require_accounts
-                && !self.access.account_valid(client, unix_time().as_secs())
+                && !self.access.account_valid(client, now)
             {
                 self.reject(client, "Account authorization expired.");
             } else if peer.entity.is_none()
@@ -773,25 +783,29 @@ impl UdpServer {
 
     fn replicate_snapshots(&mut self) {
         let started = std::time::Instant::now();
-        let viewers: Vec<_> = self
-            .peers
-            .iter()
-            .filter_map(|(&id, peer)| {
-                let entity = peer.entity?;
-                if peer.disconnect_at.is_some() {
-                    return None;
-                }
-                let tank = self.session.world.tanks.iter().find(|t| t.id == entity)?;
-                Some((id, tank.pos))
-            })
-            .collect();
-        for (client, center) in viewers {
+        let effect_radius = (self.settings.interest_radius + 300.).powi(2);
+        for (&client, peer) in &self.peers {
+            if peer.disconnect_at.is_some() {
+                continue;
+            }
+            let Some(entity) = peer.entity else {
+                continue;
+            };
+            let Some(tank) = self
+                .session
+                .world
+                .tanks
+                .iter()
+                .find(|tank| tank.id == entity)
+            else {
+                continue;
+            };
+            let center = tank.pos;
             let snapshot = &mut self.snapshot_buffer;
             self.session
                 .world
                 .snapshot_for_into(snapshot, center, self.settings.interest_radius);
             snapshot.events.clear();
-            let effect_radius = (self.settings.interest_radius + 300.).powi(2);
             snapshot.events.extend(
                 self.pending_effects
                     .iter()
@@ -799,9 +813,10 @@ impl UdpServer {
                     .take(2048)
                     .cloned(),
             );
-            let bytes = match bounded_snapshot(snapshot, center) {
+            let bytes = match bounded_snapshot(snapshot, center, &mut self.snapshot_encoder) {
                 Ok(bytes) => bytes,
                 Err(e) => {
+                    self.metrics.snapshots_skipped += 1;
                     log::warn!("snapshot omitted for client {client}: {e}");
                     continue;
                 }
@@ -813,6 +828,8 @@ impl UdpServer {
                 self.metrics.snapshots_sent += 1;
                 self.metrics.snapshot_bytes += bytes.len() as u64;
                 self.server.send_message(client, REALTIME_CHANNEL, bytes);
+            } else {
+                self.metrics.snapshots_skipped += 1;
             }
         }
         self.metrics.last_snapshot_micros =
@@ -824,7 +841,7 @@ impl UdpServer {
     }
 
     fn replicate_events(&mut self) {
-        let mut important = Vec::new();
+        self.important_events.clear();
         for event in self.session.world.events.drain(..) {
             match event.kind {
                 EventKind::LevelUp
@@ -832,15 +849,18 @@ impl UdpServer {
                 | EventKind::Capture
                 | EventKind::Victory
                 | EventKind::BossSpawn
-                | EventKind::Kill => important.push(event),
+                | EventKind::Kill => self.important_events.push(event),
                 _ if self.pending_effects.len() < 4096 => self.pending_effects.push(event),
                 _ => {}
             }
         }
-        if important.is_empty() {
+        if self.important_events.is_empty() {
             return;
         }
-        let packets = match encode_event_batches(self.session.world.match_state.round, &important) {
+        let packets = match encode_event_batches(
+            self.session.world.match_state.round,
+            &self.important_events,
+        ) {
             Ok(packets) => packets,
             Err(_) => {
                 log::error!("Unable to serialize a reliable event batch");
@@ -853,6 +873,7 @@ impl UdpServer {
             .filter_map(|(&id, p)| (p.entity.is_some() && p.disconnect_at.is_none()).then_some(id))
             .collect();
         for bytes in packets {
+            let bytes = Bytes::from(bytes);
             for &client in &clients {
                 if self
                     .peers
@@ -876,24 +897,36 @@ impl UdpServer {
 
     pub(crate) fn send_control(&mut self, client: u64, message: &ServerControl) {
         if let Ok(bytes) = encode(message, MAX_SERVER_CONTROL_BYTES) {
-            if self
-                .server
-                .can_send_message(client, CONTROL_CHANNEL, bytes.len())
-            {
-                self.server.send_message(client, CONTROL_CHANNEL, bytes);
-            } else {
-                self.server.disconnect(client);
-            }
+            self.send_control_bytes(client, bytes.into());
+        }
+    }
+    fn send_control_bytes(&mut self, client: u64, bytes: Bytes) {
+        if self
+            .server
+            .can_send_message(client, CONTROL_CHANNEL, bytes.len())
+        {
+            self.server.send_message(client, CONTROL_CHANNEL, bytes);
+        } else {
+            self.server.disconnect(client);
         }
     }
     pub(crate) fn broadcast_control(&mut self, message: &ServerControl) {
-        let clients: Vec<_> = self
-            .peers
-            .iter()
-            .filter_map(|(&id, p)| p.entity.map(|_| id))
-            .collect();
-        for client in clients {
-            self.send_control(client, message);
+        let Ok(bytes) = encode(message, MAX_SERVER_CONTROL_BYTES) else {
+            return;
+        };
+        let bytes = Bytes::from(bytes);
+        for (&client, peer) in &self.peers {
+            if peer.entity.is_some() {
+                if self
+                    .server
+                    .can_send_message(client, CONTROL_CHANNEL, bytes.len())
+                {
+                    self.server
+                        .send_message(client, CONTROL_CHANNEL, bytes.clone());
+                } else {
+                    self.server.disconnect(client);
+                }
+            }
         }
     }
     pub(crate) fn reject(&mut self, client: u64, reason: &str) {
@@ -943,7 +976,8 @@ impl UdpServer {
                 .expect("previously registered native plugin");
         }
         self.content_hash = self.session.bundle.fingerprint();
-        self.game_data = game_data(&self.session.bundle).expect("validated game data");
+        self.game_data =
+            encode_game_data_message(&self.session.bundle).expect("validated game data");
         self.session.world.tick = tick.saturating_add(1);
         self.session.world.match_state.round = round;
         self.finished_for = 0.;
@@ -994,8 +1028,9 @@ fn encode_event_batches(round: u32, events: &[GameEvent]) -> Result<Vec<Vec<u8>>
 fn bounded_snapshot(
     snapshot: &mut tankyard_core::Snapshot,
     center: V2,
+    encoder: &mut SnapshotEncoder,
 ) -> Result<Vec<u8>, DecodeError> {
-    if let Ok(bytes) = encode_snapshot(snapshot) {
+    if let Ok(bytes) = encoder.encode(snapshot) {
         return Ok(bytes);
     }
     snapshot.projectiles.sort_unstable_by(|a, b| {
@@ -1017,13 +1052,20 @@ fn bounded_snapshot(
             .projectiles
             .truncate(snapshot.projectiles.len() / 2);
         snapshot.targets.truncate(snapshot.targets.len() / 2);
-        if let Ok(bytes) = encode_snapshot(snapshot) {
+        if let Ok(bytes) = encoder.encode(snapshot) {
             return Ok(bytes);
         }
         if previous == 0 {
             return Err(DecodeError("essential state exceeds snapshot size limit"));
         }
     }
+}
+
+fn encode_game_data_message(bundle: &tankyard_mods::GameBundle) -> Result<Bytes, NetError> {
+    let message = game_data(bundle).map_err(|e| NetError(e.to_string()))?;
+    encode(&message, MAX_SERVER_CONTROL_BYTES)
+        .map(Bytes::from)
+        .map_err(|e| NetError(e.to_string()))
 }
 impl Drop for UdpServer {
     fn drop(&mut self) {
@@ -1121,10 +1163,12 @@ mod snapshot_regressions {
                 ricochets: 0,
                 age: 0.,
                 hit: (0..24).map(|n| u64::MAX - n).collect(),
+                gun: None,
             });
         }
         assert!(encode_snapshot(&snapshot).is_err());
-        let bytes = bounded_snapshot(&mut snapshot, center).unwrap();
+        let bytes =
+            bounded_snapshot(&mut snapshot, center, &mut SnapshotEncoder::default()).unwrap();
         let decoded = decode_snapshot(&bytes).unwrap();
         assert_eq!(decoded.tanks[0].id, player);
         assert!(!decoded.projectiles.is_empty() && decoded.projectiles.len() < 6000);
