@@ -95,7 +95,7 @@ pub fn validate_maps(maps: &[MapDef]) -> Result<(), String> {
         {
             return Err(format!("{}: invalid dimensions or capacity", map.id));
         }
-        if map.recommended_modes.is_empty() || map.recommended_modes.len() > 12 {
+        if map.recommended_modes.is_empty() || map.recommended_modes.len() > 14 {
             return Err(format!(
                 "{}: missing or oversized mode recommendations",
                 map.id
@@ -118,6 +118,8 @@ pub fn validate_maps(maps: &[MapDef]) -> Result<(), String> {
                     | "boss_rush"
                     | "deathmatch"
                     | "sandbox"
+                    | "random_events"
+                    | "coop_pve"
             ) || !modes.insert(canonical)
             {
                 return Err(format!(

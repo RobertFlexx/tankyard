@@ -67,6 +67,7 @@ pub fn bench(
                 age: 0.0,
                 hit: Vec::new(),
                 gun: None,
+                homing_target: 0,
             });
         }
     }

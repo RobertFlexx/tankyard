@@ -354,6 +354,7 @@ fn movement_ability_prediction_matches_the_server_in_open_space_and_near_walls()
         Ability::Overdrive,
         Ability::Blink,
         Ability::Fortify,
+        Ability::Parry,
     ] {
         for obstacle in [false, true] {
             let mut world = empty(Mode::Sandbox);

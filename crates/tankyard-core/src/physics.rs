@@ -302,7 +302,7 @@ pub fn predict_tank(
     tank.boost = (tank.boost - dt).max(0.0);
     tank.ability_cooldown = (tank.ability_cooldown - dt).max(0.0);
     tank.shield = (tank.shield - dt).max(0.0);
-    tank.protection = (tank.protection - dt).max(0.0);
+    update_protection(tank, dt);
     move_tank(tank, content, config, walls, dt);
     let Some(class) = content.class(&tank.class) else {
         return;
@@ -389,12 +389,17 @@ pub(crate) fn apply_personal_ability(
     walls: &[Rect],
 ) {
     use tankyard_content::Ability;
+    if ability != Ability::None {
+        tank.spawn_immunity = false;
+        tank.protection = 0.0;
+    }
     match ability {
         Ability::Dash => {
             tank.vel += V2::from_angle(tank.aim) * 680.;
             tank.boost = 0.6;
         }
         Ability::Shield => tank.shield = 3.5,
+        Ability::Parry => tank.shield = 0.45,
         Ability::Recall => tank.shield = 1.,
         Ability::Cloak => {
             tank.protection = 2.;
@@ -424,6 +429,19 @@ pub(crate) fn apply_personal_ability(
         }
         Ability::None | Ability::Heal | Ability::Nova | Ability::Magnet => {}
     }
+}
+
+pub(crate) fn update_protection(tank: &mut Tank, dt: f32) {
+    let moving = tank.input.movement.length_squared() > 0.0;
+    if tank.input.fire
+        || (tank.spawn_immunity && (moving || tank.input.ability))
+        || tank.protection <= dt + 0.0001
+    {
+        tank.protection = 0.0;
+    } else {
+        tank.protection -= dt;
+    }
+    tank.spawn_immunity &= tank.protection > 0.0;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -499,6 +517,97 @@ impl<T: Copy> SpatialGrid<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spawn_immunity_lasts_fifteen_idle_seconds_and_prediction_agrees() {
+        let content = Content::builtin();
+        let config = WorldConfig {
+            target_count: 0,
+            ..Default::default()
+        };
+        let mut world = crate::World::new(config, content);
+        world.add_player("Idle", false);
+        let mut predicted = world.tanks[0].clone();
+        assert_eq!(predicted.protection, 15.0);
+        for tick in 1..=900 {
+            predicted.aim = tick as f32 * 0.01;
+            predict_tank(
+                &mut predicted,
+                &world.content,
+                &world.config,
+                &world.walls,
+                tick,
+                crate::DT,
+            );
+            world.step();
+            let actual = &world.tanks[0];
+            assert_eq!(predicted.protection, actual.protection);
+            assert_eq!(predicted.spawn_immunity, actual.spawn_immunity);
+            if tick < 900 {
+                assert!(actual.protection > 0.0);
+            }
+        }
+        assert_eq!(world.tanks[0].protection, 0.0);
+        assert!(!world.tanks[0].spawn_immunity);
+    }
+
+    #[test]
+    fn moving_or_attacking_ends_spawn_immunity_immediately_but_moving_keeps_cloak() {
+        for input in [
+            crate::PlayerInput {
+                movement: V2::new(1.0, 0.0),
+                ..Default::default()
+            },
+            crate::PlayerInput {
+                movement: V2::new(0.001, 0.0),
+                ..Default::default()
+            },
+            crate::PlayerInput {
+                fire: true,
+                ..Default::default()
+            },
+            crate::PlayerInput {
+                ability: true,
+                ..Default::default()
+            },
+        ] {
+            let mut world = crate::World::new(
+                WorldConfig {
+                    target_count: 0,
+                    ..Default::default()
+                },
+                Content::builtin(),
+            );
+            world.add_player("Moving", false);
+            world.tanks[0].input = input;
+            let mut predicted = world.tanks[0].clone();
+            predict_tank(
+                &mut predicted,
+                &world.content,
+                &world.config,
+                &world.walls,
+                1,
+                crate::DT,
+            );
+            world.step();
+            assert_eq!(world.tanks[0].protection, 0.0);
+            assert!(!world.tanks[0].spawn_immunity);
+            assert_eq!(predicted.protection, 0.0);
+        }
+        let mut world = crate::World::new(WorldConfig::default(), Content::builtin());
+        world.add_player("Cloak", false);
+        let tank = &mut world.tanks[0];
+        apply_personal_ability(
+            tank,
+            tankyard_content::Ability::Cloak,
+            &world.config,
+            &world.walls,
+        );
+        tank.input.movement = V2::new(1.0, 0.0);
+        update_protection(tank, crate::DT);
+        assert!(!tank.spawn_immunity);
+        assert!(tank.protection > 1.9);
+    }
+
     #[test]
     fn clearing_the_spatial_grid_removes_only_previous_entries() {
         let mut grid = SpatialGrid::new(4000.0, 4000.0);

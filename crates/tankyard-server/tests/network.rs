@@ -44,6 +44,81 @@ fn ready(server: &mut UdpServer, clients: &mut [&mut NetworkClient]) {
 }
 
 #[test]
+fn coop_wave_snapshots_and_bot_settings_keep_raiders_separate_from_teammates() {
+    let mut config = settings();
+    config.world.mode = Mode::CoopPve;
+    config.world.spawn_protection = 15.0;
+    config.bot_count = 2;
+    let mut server = UdpServer::bind(config).unwrap();
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Pilot", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    let player = client.player_id.unwrap();
+    assert!(
+        client
+            .player_snapshot()
+            .unwrap()
+            .tanks
+            .iter()
+            .find(|tank| tank.id == player)
+            .unwrap()
+            .spawn_immunity
+    );
+    assert!(client.send_input(PlayerInput {
+        sequence: 1,
+        movement: V2::new(1.0, 0.0),
+        ..Default::default()
+    }));
+    pump(&mut server, &mut [&mut client], 8);
+    assert!(
+        !server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|tank| tank.id == player)
+            .unwrap()
+            .spawn_immunity
+    );
+    assert!(client.send_input(PlayerInput {
+        sequence: 2,
+        ..Default::default()
+    }));
+    pump(&mut server, &mut [&mut client], 480);
+    let snapshot = client.player_snapshot().unwrap();
+    assert_eq!(snapshot.config.mode, Mode::CoopPve);
+    assert_eq!(snapshot.match_state.arena.wave, 1);
+    assert!(!snapshot.match_state.arena.intermission);
+    assert!(snapshot.match_state.arena.enemies > 0);
+    let raiders: Vec<_> = server
+        .session
+        .world
+        .tanks
+        .iter()
+        .filter(|tank| tank.team == 2)
+        .map(|tank| tank.id)
+        .collect();
+    assert!(!raiders.is_empty());
+    let reply = server.admin_command("bots 0");
+    assert!(!reply.message.starts_with("Error:"), "{}", reply.message);
+    assert_eq!(server.settings.bot_count, 0);
+    assert_eq!(
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .filter(|tank| tank.bot && tank.team == 1)
+            .count(),
+        0
+    );
+    assert!(
+        raiders
+            .iter()
+            .all(|id| server.session.world.tanks.iter().any(|tank| tank.id == *id))
+    );
+}
+
+#[test]
 fn round_restarts_keep_each_client_bound_to_its_own_human_tank() {
     let mut config = settings();
     config.bot_count = 3;
@@ -52,7 +127,7 @@ fn round_restarts_keep_each_client_bound_to_its_own_human_tank() {
     let mut a = NetworkClient::connect(&address, "Alpha", "").unwrap();
     let mut b = NetworkClient::connect(&address, "Beta", "").unwrap();
     ready(&mut server, &mut [&mut a, &mut b]);
-    for mode in ["ffa", "deathmatch", "sandbox"] {
+    for mode in ["ffa", "deathmatch", "random-events", "coop-pve", "sandbox"] {
         let reply = server.admin_command(&format!("mode {mode}"));
         assert!(!reply.message.starts_with("Error:"), "{}", reply.message);
         let round = server.session.world.match_state.round;

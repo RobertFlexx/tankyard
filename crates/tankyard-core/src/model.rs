@@ -18,9 +18,11 @@ pub enum Mode {
     BossRush,
     Deathmatch,
     Sandbox,
+    RandomEvents,
+    CoopPve,
 }
 impl Mode {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
         Self::Ffa,
         Self::TwoTeams,
         Self::FourTeams,
@@ -33,6 +35,8 @@ impl Mode {
         Self::BossRush,
         Self::Deathmatch,
         Self::Sandbox,
+        Self::RandomEvents,
+        Self::CoopPve,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -48,6 +52,8 @@ impl Mode {
             Self::BossRush => "Boss Rush",
             Self::Deathmatch => "Team Deathmatch",
             Self::Sandbox => "Sandbox",
+            Self::RandomEvents => "Random Events",
+            Self::CoopPve => "Co-op PvE",
         }
     }
     pub fn teams(self) -> u8 {
@@ -59,7 +65,7 @@ impl Mode {
             | Self::Mothership
             | Self::CaptureCore
             | Self::Deathmatch => 2,
-            Self::BossRush => 1,
+            Self::BossRush | Self::CoopPve => 1,
             _ => 0,
         }
     }
@@ -98,7 +104,7 @@ impl Default for WorldConfig {
             target_count: 180,
             max_projectiles: 6000,
             friendly_fire: false,
-            spawn_protection: 3.,
+            spawn_protection: 15.,
             score_limit: 100,
             time_limit: 600.,
             lives: 1,
@@ -181,6 +187,8 @@ pub struct Tank {
     pub carrying: bool,
     #[serde(default)]
     pub deployed_drones: u8,
+    #[serde(default)]
+    pub spawn_immunity: bool,
 }
 // Reuse owned buffers when refreshing native client snapshots.
 impl Clone for Tank {
@@ -222,6 +230,7 @@ impl Clone for Tank {
             barrel_aims: self.barrel_aims.clone(),
             carrying: self.carrying,
             deployed_drones: self.deployed_drones,
+            spawn_immunity: self.spawn_immunity,
         }
     }
     fn clone_from(&mut self, source: &Self) {
@@ -261,6 +270,7 @@ impl Clone for Tank {
         self.barrel_aims.clone_from(&source.barrel_aims);
         self.carrying.clone_from(&source.carrying);
         self.deployed_drones.clone_from(&source.deployed_drones);
+        self.spawn_immunity.clone_from(&source.spawn_immunity);
     }
 }
 
@@ -293,6 +303,8 @@ pub struct Projectile {
     pub hit: Vec<EntityId>,
     #[serde(default)]
     pub gun: Option<MinionGun>,
+    #[serde(default)]
+    pub homing_target: EntityId,
 }
 // Reuse owned buffers when refreshing native client snapshots.
 impl Clone for Projectile {
@@ -314,6 +326,7 @@ impl Clone for Projectile {
             age: self.age,
             hit: self.hit.clone(),
             gun: self.gun,
+            homing_target: self.homing_target,
         }
     }
     fn clone_from(&mut self, source: &Self) {
@@ -333,6 +346,7 @@ impl Clone for Projectile {
         self.age.clone_from(&source.age);
         self.hit.clone_from(&source.hit);
         self.gun.clone_from(&source.gun);
+        self.homing_target.clone_from(&source.homing_target);
     }
 }
 
@@ -395,6 +409,42 @@ pub struct Objective {
     pub home: V2,
     pub return_timer: f32,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArenaEvent {
+    #[default]
+    None,
+    Overdrive,
+    DoublePoints,
+    Regeneration,
+    ShapeRush,
+}
+impl ArenaEvent {
+    pub const ALL: [Self; 4] = [
+        Self::Overdrive,
+        Self::DoublePoints,
+        Self::Regeneration,
+        Self::ShapeRush,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "Next event",
+            Self::Overdrive => "Overdrive",
+            Self::DoublePoints => "Double points",
+            Self::Regeneration => "Regeneration",
+            Self::ShapeRush => "Shape rush",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ArenaStatus {
+    pub event: ArenaEvent,
+    pub remaining: f32,
+    pub wave: u8,
+    pub enemies: u16,
+    pub intermission: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MatchState {
     pub elapsed: f32,
@@ -405,6 +455,8 @@ pub struct MatchState {
     pub boss_wave: u8,
     pub safe_radius: f32,
     pub announcement: String,
+    #[serde(default)]
+    pub arena: ArenaStatus,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum EventKind {
@@ -418,6 +470,7 @@ pub enum EventKind {
     Victory,
     BossSpawn,
     Kill,
+    Parry,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GameEvent {

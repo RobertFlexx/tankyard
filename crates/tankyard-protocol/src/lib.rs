@@ -9,8 +9,8 @@ use tankyard_core::{BossKind, EntityId, GameEvent, PlayerInput, Snapshot};
 mod community;
 pub use community::*;
 
-pub const PROTOCOL_VERSION: u32 = 8;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0008;
+pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0009;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -457,6 +457,10 @@ fn snapshot_valid(s: &Snapshot) -> bool {
         && s.match_state.winner.is_none_or(|team| team <= 4)
         && s.match_state.boss_wave <= 6
         && s.match_state.announcement.len() <= 256
+        && scalar(s.match_state.arena.remaining)
+        && (0.0..=60.0).contains(&s.match_state.arena.remaining)
+        && s.match_state.arena.wave <= tankyard_core::PVE_WAVES
+        && s.match_state.arena.enemies <= 512
         && s.events.iter().all(|e| vector(e.pos) && e.team <= 4)
 }
 
@@ -477,6 +481,56 @@ mod name_hardening_tests {
 mod tests {
     use super::*;
     use tankyard_core::V2;
+    #[test]
+    fn arena_status_spawn_immunity_and_reflected_shots_survive_the_wire() {
+        use tankyard_core::{ArenaEvent, Mode, World, WorldConfig};
+        for mode in [Mode::RandomEvents, Mode::CoopPve] {
+            let mut world = World::new(
+                WorldConfig {
+                    mode,
+                    target_count: 0,
+                    ..Default::default()
+                },
+                Content::builtin(),
+            );
+            world.add_player("Pilot", false);
+            let mut snapshot = world.snapshot();
+            snapshot.match_state.arena.wave = 8;
+            snapshot.match_state.arena.enemies = 24;
+            snapshot.match_state.arena.remaining = 12.5;
+            snapshot.match_state.arena.event = ArenaEvent::Regeneration;
+            let decoded = decode_snapshot(&encode_snapshot(&snapshot).unwrap()).unwrap();
+            assert_eq!(decoded.config.mode, mode);
+            assert!(decoded.tanks[0].spawn_immunity);
+            assert_eq!(decoded.match_state.arena.wave, 8);
+            assert_eq!(decoded.match_state.arena.enemies, 24);
+            assert_eq!(decoded.match_state.arena.remaining, 12.5);
+            assert_eq!(decoded.match_state.arena.event, ArenaEvent::Regeneration);
+            for value in [f32::NAN, -1.0, 61.0] {
+                snapshot.match_state.arena.remaining = value;
+                assert!(decode_snapshot(&encode_snapshot(&snapshot).unwrap()).is_err());
+            }
+        }
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::Sandbox,
+                target_count: 0,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        let id = world.add_player("Riposte", false);
+        assert!(world.sandbox_class(id, "riposte"));
+        world.tanks[0].input.fire = true;
+        world.step();
+        world.projectiles[0].kind = tankyard_content::ProjectileKind::Homing;
+        world.projectiles[0].homing_target = 123;
+        let decoded = decode_snapshot(&encode_snapshot(&world.snapshot()).unwrap()).unwrap();
+        assert_eq!(decoded.projectiles[0].homing_target, 123);
+        assert_eq!(decoded.projectiles[0].owner, id);
+        assert!(!decoded.tanks[0].spawn_immunity);
+    }
+
     #[test]
     fn reused_snapshot_encoder_preserves_wire_format_and_recovers_after_overflow() {
         let mut world =

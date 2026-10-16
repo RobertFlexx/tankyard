@@ -29,6 +29,7 @@ pub struct World {
     body_padding: f32,
     pub(crate) contributions: BTreeMap<EntityId, Vec<(EntityId, f32, u64)>>,
     pub(crate) mode_timer: f32,
+    pub(crate) last_arena_event: ArenaEvent,
     pub(crate) score_fraction: [f32; 4],
     pub(crate) sandbox_god: Vec<EntityId>,
 }
@@ -71,7 +72,7 @@ impl World {
         config.spawn_protection = if config.spawn_protection.is_finite() {
             config.spawn_protection.clamp(0., 15.)
         } else {
-            3.
+            15.
         };
         config.time_limit = if config.time_limit.is_finite() {
             config.time_limit.clamp(10., 86400.)
@@ -123,6 +124,7 @@ impl World {
                     .mode_name
                     .clone()
                     .unwrap_or_else(|| config.mode.name().into()),
+                arena: ArenaStatus::default(),
             },
             config,
             content,
@@ -133,6 +135,7 @@ impl World {
             body_padding: 0.0,
             contributions: BTreeMap::new(),
             mode_timer: 0.,
+            last_arena_event: ArenaEvent::None,
             score_fraction: [0.; 4],
             sandbox_god: vec![],
         };
@@ -228,9 +231,12 @@ impl World {
             barrel_aims: vec![],
             carrying: false,
             deployed_drones: 0,
+            spawn_immunity: protection > 0.0,
         });
         if matches!(self.config.mode, Mode::Deathmatch | Mode::Sandbox) {
             self.set_level_unchecked(id, 30);
+        } else if self.config.mode == Mode::CoopPve {
+            self.set_level_unchecked(id, (12 + self.match_state.arena.wave * 3).clamp(15, 45));
         }
         self.refresh_stats(id, true);
         id
@@ -299,7 +305,7 @@ impl World {
         self.set_class(id, class);
         true
     }
-    fn set_class(&mut self, id: EntityId, class: &str) {
+    pub(crate) fn set_class(&mut self, id: EntityId, class: &str) {
         if let Some(t) = self.tanks.iter_mut().find(|t| t.id == id) {
             t.class = class.into();
             t.cooldowns.clear();
@@ -364,7 +370,7 @@ impl World {
         }
         true
     }
-    fn set_level_unchecked(&mut self, id: EntityId, level: u8) {
+    pub(crate) fn set_level_unchecked(&mut self, id: EntityId, level: u8) {
         let Some(t) = self.tanks.iter_mut().find(|t| t.id == id) else {
             return;
         };
@@ -398,6 +404,13 @@ impl World {
         };
     }
     pub(crate) fn award(&mut self, id: EntityId, xp: u32, score: u32) {
+        let (xp, score) = if self.config.mode == Mode::RandomEvents
+            && self.match_state.arena.event == ArenaEvent::DoublePoints
+        {
+            (xp.saturating_mul(2), score.saturating_mul(2))
+        } else {
+            (xp, score)
+        };
         let xp = (xp as f64 * f64::from(self.config.rules.xp_multiplier)).min(f64::from(u32::MAX))
             as u32;
         let score = (score as f64 * f64::from(self.config.rules.score_multiplier))
@@ -482,12 +495,13 @@ impl World {
                 if tank.respawn_timer <= 0.
                     && (tank.bot || tank.input.ability)
                     && !(self.config.mode == Mode::Survival && tank.lives == 0)
+                    && self.config.mode != Mode::CoopPve
                 {
                     respawns.push(tank.id);
                 }
                 continue;
             }
-            tank.protection = (tank.protection - DT).max(0.);
+            crate::physics::update_protection(tank, DT);
             tank.shield = (tank.shield - DT).max(0.);
             tank.boost = (tank.boost - DT).max(0.);
             tank.ability_cooldown = (tank.ability_cooldown - DT).max(0.);
@@ -509,6 +523,7 @@ impl World {
                 t.vel = V2::ZERO;
                 t.input = PlayerInput::default();
                 t.protection = self.config.spawn_protection;
+                t.spawn_immunity = t.protection > 0.0;
                 t.health = t.max_health;
                 t.cooldowns.clear();
             }
@@ -877,14 +892,16 @@ impl World {
             // percentage of XP (which barely changes level on a curved scale).
             // Re-enter at the beginning of the recovered level, with its normal
             // stat budget, and pick a new class path as you level again.
-            let recovered_level = respawn_level(self.tanks[i].level);
-            let recovered_score = xp_for_level(recovered_level);
-            self.tanks[i].xp = recovered_score;
-            self.tanks[i].score = recovered_score;
-            self.tanks[i].level = recovered_level;
-            self.tanks[i].class = "vector".into();
-            self.tanks[i].stats = [0; 8];
-            self.tanks[i].points = points_for_level(recovered_level);
+            if self.config.mode != Mode::CoopPve {
+                let recovered_level = respawn_level(self.tanks[i].level);
+                let recovered_score = xp_for_level(recovered_level);
+                self.tanks[i].xp = recovered_score;
+                self.tanks[i].score = recovered_score;
+                self.tanks[i].level = recovered_level;
+                self.tanks[i].class = "vector".into();
+                self.tanks[i].stats = [0; 8];
+                self.tanks[i].points = points_for_level(recovered_level);
+            }
             self.tanks[i].cooldowns.clear();
             self.tanks[i].barrel_shots.clear();
             self.tanks[i].barrel_aims.clear();
@@ -1308,6 +1325,11 @@ impl World {
                     continue;
                 }
                 let impact = start.lerp(end, time);
+                if let Body::Tank(defender) = body
+                    && self.parry_projectile(i, defender, impact)
+                {
+                    break;
+                }
                 if self.projectiles[i].hit.len() < 24 {
                     self.projectiles[i].hit.push(id);
                 }
@@ -1469,7 +1491,8 @@ impl World {
                     None
                 }
             } else {
-                self.nearest_position(pos, team, owner, 800.)
+                self.homing_position(self.projectiles[i].homing_target, team, owner)
+                    .or_else(|| self.nearest_position(pos, team, owner, 800.))
             };
             if let Some(goal) = desired {
                 let offset = goal - pos;

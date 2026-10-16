@@ -119,6 +119,8 @@ struct App {
     screenshot: Option<String>,
     quit: bool,
     respawn_requested: bool,
+    ability_queued: bool,
+    fire_queued: bool,
     achievement_feed: achievements::Feed,
     bundle_revision: u64,
     community: community_ui::CommunityUi,
@@ -195,6 +197,8 @@ impl App {
             screenshot: cli.screenshot,
             quit: false,
             respawn_requested: false,
+            ability_queued: false,
+            fire_queued: false,
             achievement_feed: achievements::Feed::default(),
             bundle_revision: 0,
             community: community_ui::CommunityUi::default(),
@@ -278,6 +282,8 @@ impl App {
         self.accumulator = 0.0;
         self.sequence = 0;
         self.respawn_requested = false;
+        self.ability_queued = false;
+        self.fire_queued = false;
         self.menu.clear_focus();
         self.effects = effects::Effects::new();
         self.hud = Hud::new();
@@ -581,7 +587,21 @@ impl App {
         let (mx, my) = mouse_position();
         let cursor = self.view.world(vec2(mx, my)) - position;
         let aim = cursor.angle();
-        let over_ui = self.session.as_ref().is_some_and(|session| {
+        let over_ui = self.pointer_over_ui(s);
+        let fire = self.settings.auto_fire
+            || ((is_mouse_button_down(MouseButton::Left) || self.fire_queued) && !over_ui);
+        PlayerInput {
+            sequence: self.sequence,
+            movement: movement.normalized(),
+            aim,
+            aim_distance: cursor.length().min(5000.),
+            fire,
+            alt_fire: is_mouse_button_down(MouseButton::Right),
+            ability: is_key_down(self.settings.key(4)) || self.ability_queued,
+        }
+    }
+    fn pointer_over_ui(&self, s: f32) -> bool {
+        self.session.as_ref().is_some_and(|session| {
             let community = match &session.engine {
                 session::Engine::Online { client, .. } => {
                     self.community.captures_pointer(client, s)
@@ -593,17 +613,7 @@ impl App {
                     self.hud
                         .captures_pointer(snapshot, &self.content, session.player, s)
                 })
-        });
-        let fire = self.settings.auto_fire || (is_mouse_button_down(MouseButton::Left) && !over_ui);
-        PlayerInput {
-            sequence: self.sequence,
-            movement: movement.normalized(),
-            aim,
-            aim_distance: cursor.length().min(5000.),
-            fire,
-            alt_fire: is_mouse_button_down(MouseButton::Right),
-            ability: is_key_down(self.settings.key(4)),
-        }
+        })
     }
     fn update(&mut self, dt: f32, s: f32) {
         if self.session.is_none() && self.catalog_paths != self.settings.enabled_mods {
@@ -692,6 +702,21 @@ impl App {
                 if is_key_pressed(KeyCode::Tab) {
                     self.hud.evolution = !self.hud.evolution;
                 }
+                if (is_key_pressed(KeyCode::PageUp) || is_key_pressed(KeyCode::PageDown))
+                    && let Some(session) = &mut self.session
+                {
+                    let step =
+                        if is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift) {
+                            15
+                        } else {
+                            1
+                        };
+                    session.sandbox_adjust_level(if is_key_pressed(KeyCode::PageUp) {
+                        step
+                    } else {
+                        -step
+                    });
+                }
                 if is_key_pressed(KeyCode::T)
                     && self
                         .session
@@ -752,6 +777,29 @@ impl App {
             self.respawn_requested = true;
         }
         let offline = self.session.as_ref().is_some_and(|s| s.offline_mode());
+        // Keep short taps until a simulation tick consumes them, including at
+        // render rates above 60 Hz and down/up events within one frame.
+        let can_attack = !self.paused
+            && !self.menu_over_game
+            && !self.hud.sandbox
+            && !self.community.focused()
+            && self.session.as_ref().is_some_and(|session| {
+                session.display.as_ref().is_some_and(|snapshot| {
+                    !snapshot.match_state.finished
+                        && snapshot
+                            .tanks
+                            .iter()
+                            .any(|tank| tank.id == session.player && tank.alive)
+                })
+            });
+        if can_attack {
+            self.ability_queued |= is_key_pressed(self.settings.key(4));
+            self.fire_queued |=
+                is_mouse_button_pressed(MouseButton::Left) && !self.pointer_over_ui(s);
+        } else {
+            self.ability_queued = false;
+            self.fire_queued = false;
+        }
         let speed = if offline { self.hud.speed } else { 1.0 };
         if !(offline && (self.paused || self.menu_over_game)) {
             self.accumulator += (dt * speed).min(DT * 8.0);
@@ -768,6 +816,8 @@ impl App {
             if let Some(session) = &mut self.session {
                 session.tick(input, &self.content);
             }
+            self.ability_queued = false;
+            self.fire_queued = false;
             self.accumulator -= DT;
             steps += 1;
         }
@@ -801,7 +851,21 @@ impl App {
             } else {
                 self.effects.shake * self.settings.shake
             };
-            let position = session.position(tank.id, tank.pos, self.accumulator / DT);
+            let followed = if !tank.alive && snapshot.config.mode == Mode::CoopPve {
+                snapshot
+                    .tanks
+                    .iter()
+                    .filter(|ally| ally.alive && ally.team == tank.team)
+                    .min_by(|a, b| {
+                        a.pos
+                            .distance(tank.pos)
+                            .total_cmp(&b.pos.distance(tank.pos))
+                    })
+                    .unwrap_or(tank)
+            } else {
+                tank
+            };
+            let position = session.position(followed.id, followed.pos, self.accumulator / DT);
             self.view.follow(
                 position,
                 dt,
@@ -1287,6 +1351,8 @@ fn parse_mode(value: &str) -> Mode {
         "bossrush" | "boss" => Mode::BossRush,
         "deathmatch" | "teamdeathmatch" | "tdm" => Mode::Deathmatch,
         "sandbox" => Mode::Sandbox,
+        "randomevents" | "events" => Mode::RandomEvents,
+        "cooppve" | "pve" => Mode::CoopPve,
         _ => Mode::Ffa,
     }
 }

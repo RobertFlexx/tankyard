@@ -142,6 +142,7 @@ impl Effects {
                 EventKind::Capture => (AMBER, 6, true),
                 EventKind::BossSpawn => (RED, 10, true),
                 EventKind::Victory => (AMBER, 10, true),
+                EventKind::Parry => (CYAN, 5, true),
             };
             let count = (count as f32 * intensity) as usize;
             for _ in 0..count {
@@ -183,18 +184,22 @@ impl Effects {
                     EventKind::LevelUp => Some(format!("LEVEL {}", event.value)),
                     EventKind::Evolve => Some("Tank upgraded".into()),
                     EventKind::Kill => Some("Kill".into()),
+                    EventKind::Parry => Some("Parried".into()),
                     _ => None,
                 };
                 if let Some(text) = text {
-                    self.notice = text.clone();
-                    self.notice_life = 2.5;
-                    if self.popups.len() < 32 {
-                        self.popups.push(Popup {
-                            pos: event.pos,
-                            text,
-                            life: 1.5,
-                            color,
-                        });
+                    if matches!(event.kind, EventKind::Kill | EventKind::Parry) {
+                        if self.popups.len() < 32 {
+                            self.popups.push(Popup {
+                                pos: event.pos,
+                                text,
+                                life: 1.5,
+                                color,
+                            });
+                        }
+                    } else {
+                        self.notice = text;
+                        self.notice_life = 2.5;
                     }
                 }
             }
@@ -548,6 +553,7 @@ mod tests {
             age: 0.3,
             hit: Vec::new(),
             gun: None,
+            homing_target: 0,
         };
         effects.sync_projectiles(100, &[projectile], 1.0, 1.0 / 60.0, false);
         effects.sync_projectiles(100, &[], 1.0, 1.0 / 60.0, false); // Same tick: no phantom collision.
@@ -580,6 +586,7 @@ mod tests {
             age: 2.0,
             hit: Vec::new(),
             gun: None,
+            homing_target: 0,
         };
         effects.sync_projectiles(
             100,

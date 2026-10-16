@@ -12,7 +12,8 @@
         "two_teams",
         "four_teams",
         "tag",
-        "sandbox"
+        "sandbox",
+        "random_events"
       ],
       "walls": [],
       "procedural": "None",
@@ -107,7 +108,8 @@
         "ffa",
         "two_teams",
         "four_teams",
-        "sandbox"
+        "sandbox",
+        "random_events"
       ],
       "walls": [],
       "procedural": "Dense",
@@ -203,7 +205,8 @@
         "ffa",
         "two_teams",
         "tag",
-        "sandbox"
+        "sandbox",
+        "random_events"
       ],
       "walls": [],
       "procedural": "Maze",
@@ -563,7 +566,8 @@
         "deathmatch",
         "two_teams",
         "capture_core",
-        "ffa"
+        "ffa",
+        "coop_pve"
       ],
       "walls": [
         [
@@ -681,7 +685,8 @@
       "capacity": 24,
       "recommended_modes": [
         "boss_rush",
-        "sandbox"
+        "sandbox",
+        "coop_pve"
       ],
       "walls": [
         [

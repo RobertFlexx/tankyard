@@ -563,15 +563,22 @@ pub fn world(
         let visual = effects.hulls.get(&tank.id);
         let r = visual.map_or(tank.radius, |hull| hull.radius) * z;
         let color = team_color(tank.team, tank.id == local, settings.colorblind);
+        let parrying = class.ability == tankyard_content::Ability::Parry && tank.shield > 0.0;
         if tank.protection > 0.0 || tank.shield > 0.0 {
-            draw_circle(p.x, p.y, r * 1.35, alpha(color, 0.04));
+            let aura = if parrying { AMBER } else { color };
+            draw_circle(
+                p.x,
+                p.y,
+                r * 1.35,
+                alpha(aura, if parrying { 0.16 } else { 0.04 }),
+            );
             draw_circle_lines(
                 p.x,
                 p.y,
                 r * 1.35,
-                1.5 * z,
+                if parrying { 3.5 * z } else { 1.5 * z },
                 alpha(
-                    color,
+                    aura,
                     if settings.reduced_motion {
                         0.45
                     } else {

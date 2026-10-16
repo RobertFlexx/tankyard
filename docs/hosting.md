@@ -21,7 +21,9 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 ./target/release/tankyard-server --config my-server.toml --bind 0.0.0.0:5001 --mode domination --bots 16 --mod mods/vampire
 ```
 
-Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, and `sandbox`. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
+Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
+
+These modes and the new combat state use protocol 9. Update clients and servers together. The sample configs use 15 seconds of spawn protection; existing configs keep their chosen duration.
 
 The process console is the host's administration interface:
 

@@ -5,7 +5,7 @@ use std::{
 use tankyard_client::achievements::Tracker;
 use tankyard_content::Content;
 use tankyard_core::{
-    BossKind, DT, EntityId, GameEvent, PlayerInput, Snapshot, Tank, V2, WorldConfig,
+    BossKind, DT, EntityId, GameEvent, Mode, PlayerInput, Snapshot, Tank, V2, WorldConfig,
     physics::predict_tank,
 };
 use tankyard_server::{HostedServer, LocalSession, NetworkClient, ServerSettings};
@@ -613,6 +613,30 @@ impl Session {
             }
         }
     }
+    pub fn sandbox_adjust_level(&mut self, step: i16) {
+        if self.practice.is_some() {
+            return;
+        }
+        let Some(tank) = self
+            .display
+            .as_ref()
+            .filter(|snapshot| {
+                snapshot.config.mode == Mode::Sandbox && !snapshot.match_state.finished
+            })
+            .and_then(|snapshot| {
+                snapshot
+                    .tanks
+                    .iter()
+                    .find(|tank| tank.id == self.player && tank.alive)
+            })
+        else {
+            return;
+        };
+        let level = i16::from(tank.level).saturating_add(step).clamp(1, 45) as u8;
+        if level != tank.level {
+            self.sandbox_level(level);
+        }
+    }
     pub fn sandbox_class(&mut self, class: &str) {
         if self.practice.is_some() {
             return;
@@ -758,6 +782,44 @@ fn extrapolate_position(
 mod tests {
     use super::*;
     #[test]
+    fn sandbox_level_shortcuts_respect_bounds_and_game_state() {
+        let mut session = Session::offline(
+            WorldConfig {
+                mode: Mode::Sandbox,
+                target_count: 0,
+                ..Default::default()
+            },
+            0,
+            "Pilot",
+        );
+        session.sandbox_adjust_level(1);
+        assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 31);
+        session.sandbox_adjust_level(15);
+        assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 45);
+        session.sandbox_adjust_level(i16::MAX);
+        assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 45);
+        session.sandbox_adjust_level(i16::MIN);
+        assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 1);
+        session.display.as_mut().unwrap().tanks[0].alive = false;
+        session.sandbox_adjust_level(15);
+        assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 1);
+        session.display.as_mut().unwrap().tanks[0].alive = true;
+        session.display.as_mut().unwrap().match_state.finished = true;
+        session.sandbox_adjust_level(15);
+        assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 1);
+        let mut normal = Session::offline(
+            WorldConfig {
+                target_count: 0,
+                ..Default::default()
+            },
+            0,
+            "Pilot",
+        );
+        normal.sandbox_adjust_level(15);
+        assert_eq!(normal.display.as_ref().unwrap().tanks[0].level, 1);
+    }
+
+    #[test]
     fn practice_loadouts_match_the_challenge_and_sandbox_commands_are_blocked() {
         for (index, challenge) in tankyard_client::practice::CHALLENGES.iter().enumerate() {
             let mut session = Session::practice(index, "Pilot", 42).unwrap();
@@ -776,6 +838,7 @@ mod tests {
                 }
             }
             session.sandbox_level(45);
+            session.sandbox_adjust_level(15);
             session.sandbox_class("annihilator");
             session.sandbox_invulnerability(true);
             session.sandbox_boss(BossKind::Sentinel);

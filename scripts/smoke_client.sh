@@ -11,7 +11,7 @@ cargo build --locked -p tankyard-client
 smoke_config="$(mktemp -d "${TMPDIR:-/tmp}/tankyard-smoke.XXXXXX")"
 export XDG_CONFIG_HOME="$smoke_config"
 trap 'rm -rf "$smoke_config"' EXIT
-modes=(ffa twoteams fourteams maze domination survival tag mothership capturecore bossrush deathmatch sandbox)
+modes=(ffa twoteams fourteams maze domination survival tag mothership capturecore bossrush deathmatch sandbox randomevents cooppve)
 if [[ "${1:-}" != "--all" ]]; then modes=("${1:-ffa}"); fi
 for mode in "${modes[@]}"; do
     target/debug/tankyard --offline --mode "$mode" --bots 12 \

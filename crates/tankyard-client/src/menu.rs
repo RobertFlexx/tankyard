@@ -172,7 +172,7 @@ impl Menu {
             Mode::Maze => "maze",
             Mode::Domination => "domination",
             Mode::Survival => "survival",
-            Mode::BossRush => "boss",
+            Mode::BossRush | Mode::CoopPve => "boss",
             Mode::TwoTeams | Mode::FourTeams | Mode::Mothership | Mode::CaptureCore | Mode::Tag => {
                 "fortress"
             }
@@ -429,9 +429,9 @@ impl Menu {
         let x = 40.0 * s;
         let y = 152.0 * s;
         label("Game modes", x, y + 12.0 * s, 25.0 * s, text_color());
-        let gap = 12.0 * s;
+        let gap = 10.0 * s;
         let width = (screen_width() - 80.0 * s - gap * 2.0) / 3.0;
-        let height = 87.0 * s;
+        let height = 72.0 * s;
         for (index, mode) in Mode::ALL.into_iter().enumerate() {
             let bx = x + (index % 3) as f32 * (width + gap);
             let by = y + 35.0 * s + (index / 3) as f32 * (height + gap);
@@ -443,12 +443,12 @@ impl Menu {
             label(
                 mode_blurb(mode),
                 bx + 16.0 * s,
-                by + 70.0 * s,
+                by + 60.0 * s,
                 13.0 * s,
                 muted_color(),
             );
         }
-        let by = y + 35.0 * s + 4.0 * (height + gap) + 14.0 * s;
+        let by = y + 35.0 * s + Mode::ALL.len().div_ceil(3) as f32 * (height + gap) + 6.0 * s;
         label("ARENA", x, by + 18.0 * s, 13.0 * s, muted_color());
         self.map_page = self.map_page.min(self.maps.len().saturating_sub(1) / 8);
         if self.maps.len() > 8 {
@@ -491,7 +491,15 @@ impl Menu {
             }
         }
         label(
-            &format!("AI TANKS  {}", self.bots),
+            &format!(
+                "{}  {}",
+                if self.mode == Mode::CoopPve {
+                    "TEAMMATES"
+                } else {
+                    "AI TANKS"
+                },
+                self.bots
+            ),
             x,
             by + 99.0 * s,
             18.0 * s,
@@ -729,6 +737,7 @@ impl Menu {
             ("Tank upgrades", "Tab"),
             ("Pause / back", "Esc"),
             ("Respawn", "Enter"),
+            ("Sandbox level", "PgUp / PgDn (Shift: 15)"),
         ];
         let shortcuts = [
             ("Controls", "F1"),
@@ -741,11 +750,14 @@ impl Menu {
             ("Next / previous field", "Tab / Shift + Tab"),
             ("Retry a practice result", "R or F5"),
         ];
-        for (column, rows) in [movement, shortcuts].iter().enumerate() {
+        for (column, rows) in [movement.as_slice(), shortcuts.as_slice()]
+            .iter()
+            .enumerate()
+        {
             let x = margin + column as f32 * (width + gap);
-            panel(Rect::new(x, 222.0 * s, width, 397.0 * s));
+            panel(Rect::new(x, 222.0 * s, width, 425.0 * s));
             for (index, (action, key)) in rows.iter().enumerate() {
-                let y = (252.0 + index as f32 * 42.0) * s;
+                let y = (252.0 + index as f32 * 39.0) * s;
                 label(action, x + 18.0 * s, y, 15.0 * s, text_color());
                 right_label(
                     key,
@@ -763,7 +775,7 @@ impl Menu {
         label(
             "Text: arrows move the caret, Shift selects, Ctrl+A/C/X/V edits, and held Backspace repeats.",
             margin,
-            660.0 * s,
+            677.0 * s,
             14.0 * s,
             muted_color(),
         );
@@ -2001,6 +2013,8 @@ pub fn mode_blurb(mode: Mode) -> &'static str {
         Mode::BossRush => "Cooperate through six boss waves.",
         Mode::Deathmatch => "Get the most kills before time runs out.",
         Mode::Sandbox => "Choose classes and test your build.",
+        Mode::RandomEvents => "Fight through rotating arena events.",
+        Mode::CoopPve => "Clear ten enemy waves with your team.",
     }
 }
 

@@ -31,6 +31,8 @@ The 128-client combined workload still shows substantial transport loss. It does
 
 Logs and benchmark JSON are written under `artifacts/bench/`: `before-central-{open,maze}.json`, `after-central-{open,maze}.json`, `before-central-udp{64,128}.txt`, `after-central-udp{64,128}.txt`, and `after-central-impaired.txt`. Generated artifacts are gitignored.
 
+A protocol 9 follow-up on 2026-10-16 ran 64 clients and 24 bots for 15 seconds. All clients stayed ready with none stale, 0 skipped snapshots, 0 dropped catch-up ticks, and 0.94% reported packet loss. The server reported average/p95/p99 ticks of 80.5/100/119 µs and a maximum snapshot batch of 3.925 ms. This repeat used ordinary FFA combat; it does not measure a full 64-player co-op wave.
+
 Reproduce a snapshot workload with:
 
 ```sh

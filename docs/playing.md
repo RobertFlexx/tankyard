@@ -23,9 +23,14 @@ Start with Play offline for a normal arena, or the Practice button beside it for
 | Restart an offline game from pause | F5 |
 | Practice | F6, then 1 through 4 to start a challenge |
 | Settings | F10 |
+| Sandbox level up / down | PgUp / PgDn; hold Shift for 15 levels |
 | Next / previous text field | Tab / Shift+Tab |
 
 F1 shows your current bindings. Controls can be rebound in Settings, with a button to restore their defaults. Esc cancels a pending rebind; Back and Esc return to the previous menu. Settings save when you leave their screen. F1, F6, and F10 also close their screen when pressed again. Chat input and Sandbox controls take priority over these shortcuts.
+
+You spawn protected for up to 15 seconds. Moving, firing, or using an ability ends that protection immediately. The HUD shows the time left.
+
+Riposte upgrades from Destroyer at level 30. Press Space just before a shot hits to parry it. The window lasts 0.45 seconds, with a 4.5-second cooldown. Returned shots home toward the shooter and count as your damage and kills. Drones, mines, and other placed weapons cannot be parried.
 
 Drone tanks guide their drones toward the cursor while firing. Recall them before moving through a dangerous lane. Factory is a bit different: its six minions have actual cannons, circle your cursor when commanded, and shoot nearby enemies or shapes on their own when you let go. The Factory keeps making replacements until it has six again, never more. Right-click still recalls the group, same as Tank Yard’s other drone classes. Watch where you park them: walls block their bullets, and they need room to get a clean shot.
 
@@ -34,6 +39,12 @@ Twin, Gunner, and other alternating guns use slightly independent firing phases:
 Friendly drones press into a compact swarm at the cursor. They collide and slide around each other, with room for each drone's outline. They also slide along walls and arena edges. Right-click recall keeps the swarm around your tank; redirecting it restores cruising speed. Small movements inside a resting swarm keep their previous visual heading.
 
 In a text field, use arrows or Home/End to place the caret. Hold Shift to select, double click a word to select it, or drag across text. Ctrl+A selects all; Ctrl+C/X/V copies, cuts, and pastes. Password fields allow paste but keep their text out of the clipboard. Backspace and Delete repeat when held. Ctrl with an arrow, Backspace, or Delete works by word.
+
+## Modes
+
+Random Events plays like Free For All, with a 20-second event followed by an eight-second break. Overdrive speeds up movement and reloads; Double points doubles XP and score; Regeneration restores health; Shape rush adds bonus shapes.
+
+Co-op PvE has ten waves of raiders, with bosses on waves 3, 6, 9, and 10. Everyone starts on the same team at level 15. The bot setting adds friendly teammates. Clear a wave to heal the squad and revive fallen players with their builds intact. A squad wipe ends the match. Dead players follow a living teammate until the next wave.
 
 ## Practice
 

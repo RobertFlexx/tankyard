@@ -170,6 +170,17 @@ impl World {
             Mode::Survival => {
                 self.match_state.safe_radius = self.config.width.min(self.config.height) * 0.55;
             }
+            Mode::RandomEvents => {
+                self.mode_timer = 10.0;
+                self.match_state.arena.remaining = self.mode_timer;
+                self.match_state.announcement = "Next event in 10s".into();
+            }
+            Mode::CoopPve => {
+                self.mode_timer = 8.0;
+                self.match_state.arena.intermission = true;
+                self.match_state.arena.remaining = self.mode_timer;
+                self.match_state.announcement = "First wave in 8s".into();
+            }
             _ => {}
         }
     }
@@ -196,6 +207,8 @@ impl World {
         match self.config.mode {
             Mode::Domination => self.domination(),
             Mode::CaptureCore => self.capture_core(),
+            Mode::RandomEvents => self.update_arena_events(),
+            Mode::CoopPve => self.update_coop_pve(),
             Mode::Survival => {
                 let elapsed = (self.match_state.elapsed - 10.).max(0.);
                 self.match_state.safe_radius = (self.config.width.min(self.config.height)

@@ -502,6 +502,9 @@ fn decide(
                 (sample, utility, BotState::Attacking)
             }
             Seen::Target(index) => {
+                if world.config.mode == Mode::CoopPve && tank.team == 2 {
+                    continue;
+                }
                 let target = &world.targets[index];
                 if target.health <= 0. {
                     continue;
@@ -544,7 +547,10 @@ fn decide(
                 if distance > difficulty.perception_radius() {
                     continue;
                 }
-                let priority = if matches!(world.config.mode, Mode::BossRush | Mode::Mothership) {
+                let priority = if matches!(
+                    world.config.mode,
+                    Mode::BossRush | Mode::Mothership | Mode::CoopPve
+                ) {
                     2.0
                 } else {
                     0.75
@@ -668,6 +674,39 @@ fn decide(
 
 fn objective_goal(world: &World, tank: &Tank) -> Option<(f32, V2, BotState)> {
     match world.config.mode {
+        Mode::CoopPve => {
+            let enemy = world
+                .tanks
+                .iter()
+                .filter(|other| other.alive && other.health > 0.0 && hostile(tank.team, other.team))
+                .map(|other| other.pos)
+                .chain(
+                    world
+                        .bosses
+                        .iter()
+                        .filter(|boss| boss.health > 0.0 && hostile(tank.team, boss.team))
+                        .map(|boss| boss.pos),
+                )
+                .min_by(|a, b| tank.pos.distance(*a).total_cmp(&tank.pos.distance(*b)));
+            if let Some(enemy) = enemy {
+                return (tank.pos.distance(enemy) > 650.0).then_some((
+                    1.1,
+                    enemy,
+                    BotState::Attacking,
+                ));
+            }
+            world
+                .tanks
+                .iter()
+                .filter(|other| other.alive && !other.bot && other.team == tank.team)
+                .min_by(|a, b| {
+                    tank.pos
+                        .distance(a.pos)
+                        .total_cmp(&tank.pos.distance(b.pos))
+                })
+                .filter(|human| tank.pos.distance(human.pos) > 260.0)
+                .map(|human| (0.7, human.pos, BotState::Escorting))
+        }
         Mode::Domination => world
             .objectives
             .iter()
@@ -935,6 +974,7 @@ fn use_ability(ability: Ability, tank: &Tank, brain: &Brain, distance: f32) -> b
             brain.state == BotState::Retreating || (distance > 100. && distance < 420.)
         }
         Ability::Shield => brain.danger > 0.3 || (distance < 350. && health < 0.75),
+        Ability::Parry => brain.danger > 0.35,
         Ability::Heal => health < 0.72 || (brain.state == BotState::Escorting && distance < 500.),
         Ability::Nova => distance < 190. || brain.danger > 0.6,
         Ability::Recall => brain.state == BotState::Retreating || (health < 0.5 && distance < 200.),
@@ -991,6 +1031,60 @@ mod tests {
     use super::*;
     use tankyard_content::{Content, ProjectileKind};
     use tankyard_core::{BossKind, WorldConfig};
+
+    #[test]
+    fn coop_raiders_seek_the_squad_beyond_sight_and_teammates_seek_enemies() {
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::CoopPve,
+                target_count: 0,
+                spawn_protection: 0.0,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        world.add_player("Pilot", false);
+        let ally = world.add_player("Ally", true);
+        for _ in 0..481 {
+            world.step();
+        }
+        let raider = world.tanks.iter().find(|tank| tank.team == 2).unwrap().id;
+        world.tanks[0].pos = V2::new(400.0, 400.0);
+        world.tanks[1].pos = V2::new(600.0, 400.0);
+        world
+            .tanks
+            .iter_mut()
+            .find(|tank| tank.id == raider)
+            .unwrap()
+            .pos = V2::new(2200.0, 1900.0);
+        let mut controller = BotController::new(Difficulty::Normal);
+        controller.update(&mut world);
+        assert_eq!(controller.state(raider), Some(BotState::Attacking));
+        assert_eq!(controller.state(ally), Some(BotState::Attacking));
+        let start = world
+            .tanks
+            .iter()
+            .find(|tank| tank.id == raider)
+            .unwrap()
+            .pos
+            .distance(world.tanks[0].pos);
+        for _ in 0..120 {
+            controller.update(&mut world);
+            world.step();
+        }
+        let end = world
+            .tanks
+            .iter()
+            .find(|tank| tank.id == raider)
+            .unwrap()
+            .pos
+            .distance(world.tanks[0].pos);
+        assert!(
+            end < start - 200.0,
+            "raiders must approach instead of wandering"
+        );
+        assert_ne!(controller.target(ally), Some(world.tanks[0].id));
+    }
 
     #[test]
     fn bots_do_not_read_motion_through_walls_and_keep_experience_after_death() {
@@ -1384,6 +1478,7 @@ mod tests {
             age: 0.,
             hit: vec![],
             gun: None,
+            homing_target: 0,
         });
         let (dodge, danger) = projectile_avoidance(&world, &world.tanks[0], &[Seen::Projectile(0)]);
         assert!(danger > 0.5);

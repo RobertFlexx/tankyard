@@ -54,6 +54,7 @@ pub enum Ability {
     Blink,
     Fortify,
     Magnet,
+    Parry,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -546,7 +547,7 @@ mod tests {
                     .contains(&id.to_owned())
             );
         }
-        assert_eq!(content.classes.len(), 91);
+        assert_eq!(content.classes.len(), 92);
         content.validate().unwrap();
     }
 
@@ -662,6 +663,7 @@ mod tests {
             Ability::Blink,
             Ability::Fortify,
             Ability::Magnet,
+            Ability::Parry,
         ] {
             assert!(content.classes.iter().any(|c| c.ability == ability));
         }

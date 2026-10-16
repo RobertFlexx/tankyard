@@ -512,7 +512,8 @@
       "upgrades": [
         "breach",
         "mortar",
-        "twinforge"
+        "twinforge",
+        "riposte"
       ],
       "multipliers": [
         1.1,
@@ -9180,6 +9181,59 @@
       "weaknesses": "A destroyed formation takes time to rebuild.",
       "ai_range": 390,
       "drone_limit": 8
+    },
+    {
+      "id": "riposte",
+      "name": "Riposte",
+      "description": "Time your parry to return enemy shots as homing bullets.",
+      "tier": 2,
+      "min_level": 30,
+      "parents": [
+        "hammer"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        1.15,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "hull_sides": 6,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 34,
+          "width": 20,
+          "cooldown": 0.65,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Bullet",
+          "speed": 370,
+          "damage": 18,
+          "radius": 6,
+          "lifetime": 2.0,
+          "penetration": 1.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Parry",
+      "ability_cooldown": 4.5,
+      "passive_regen": 0,
+      "strengths": "Returns heavy shots and volleys.",
+      "weaknesses": "Short parry window; modest cannon damage.",
+      "ai_range": 360
     }
   ]
 }

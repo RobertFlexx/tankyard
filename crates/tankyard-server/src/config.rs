@@ -271,6 +271,8 @@ pub fn mode_from_name(name: &str) -> Result<Mode, String> {
         "boss-rush" => Ok(Mode::BossRush),
         "deathmatch" | "tdm" => Ok(Mode::Deathmatch),
         "sandbox" => Ok(Mode::Sandbox),
+        "random-events" | "events" | "random_events" => Ok(Mode::RandomEvents),
+        "coop-pve" | "co-op-pve" | "pve" | "coop_pve" => Ok(Mode::CoopPve),
         _ => Err(format!("unknown mode {name}")),
     }
 }

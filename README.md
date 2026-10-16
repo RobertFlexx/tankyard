@@ -1,6 +1,6 @@
 # Tank Yard
 
-Tank Yard is a tank arena made by RobertFlexx, inspired by Diep.io and Arras.io. It has 91 tanks, twelve modes, offline play, practice challenges, and player-hosted multiplayer.
+Tank Yard is a tank arena made by RobertFlexx, inspired by Diep.io and Arras.io. It has 92 tanks, fourteen modes, offline play, practice challenges, and player-hosted multiplayer.
 
 Build with Rust 1.88 or newer:
 
@@ -16,6 +16,8 @@ For a Linux binary to share across distributions, use `scripts/build_linux_compa
 Use WASD to move, the mouse to aim, left click to fire, E for auto-fire, Space for your ability, and 1–8 for skills. Tab opens tank upgrades; Esc pauses. After death, press Enter or click Respawn. Controls can be rebound in Settings.
 
 Hold Shift with a skill key or click to fill that stat. While firing, drones follow the cursor; right click recalls them. Friendly drones bunch together with physical contact, slide along walls, and keep their individual shapes and headings when resting.
+
+Random Events adds timed arena modifiers. Co-op PvE pits your squad against ten waves of raiders and bosses, with revives between waves. Riposte, a level 30 Destroyer upgrade, parries shots into homing returns with Space. Spawn protection lasts up to 15 seconds and ends when you move or attack. In Sandbox, PgUp/PgDn changes your level; hold Shift for 15 levels.
 
 The Factory is the fun oddball: it builds up to six tiny tanks with their own cannons. Hold left click and they'll circle your cursor while firing. Let go and they'll pick fights with nearby visible targets, then hang back around your tank when it's quiet. Kill a minion and the launcher will replace it when reloaded. The Assembly upgrade keeps the same six-unit cap.
 

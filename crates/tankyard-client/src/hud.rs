@@ -384,7 +384,7 @@ pub struct Hud {
     pub speed: f32,
     stat_visibility: f32,
     offered_class: String,
-    ranking_tick: Option<u64>,
+    ranking_tick: Option<(u64, usize)>,
     ranking: Vec<usize>,
 }
 impl Hud {
@@ -566,7 +566,7 @@ impl Hud {
             m + 16.0 * s,
             19.0 * s,
         );
-        if snapshot.config.mode.teams() > 0 {
+        if snapshot.config.mode.teams() > 1 {
             for i in 0..snapshot.config.mode.teams() {
                 label(
                     &format!("{}", snapshot.match_state.scores[i as usize]),
@@ -773,12 +773,15 @@ impl Hud {
             && class.ability != Ability::None
         {
             let ready = tank.ability_cooldown <= 0.0;
+            let parrying = class.ability == Ability::Parry && tank.shield > 0.0;
             center_label(
                 &format!(
                     "[{}] {:?}  {}",
                     settings.bindings[4],
                     class.ability,
-                    if ready {
+                    if parrying {
+                        "ACTIVE".into()
+                    } else if ready {
                         "READY".into()
                     } else {
                         format!("{:.1}s", tank.ability_cooldown)
@@ -787,7 +790,13 @@ impl Hud {
                 w * 0.5,
                 status_y,
                 15.0 * s,
-                if ready { CYAN } else { muted_color() },
+                if parrying {
+                    AMBER
+                } else if ready {
+                    CYAN
+                } else {
+                    muted_color()
+                },
             );
             status_y -= 24.0 * s;
         }
@@ -821,6 +830,16 @@ impl Hud {
                 status_y,
                 12.0 * s,
                 muted_color(),
+            );
+            status_y -= 21.0 * s;
+        }
+        if tank.spawn_immunity && tank.protection > 0.0 {
+            center_label(
+                &format!("Spawn protection · {}s", tank.protection.ceil() as u32),
+                w * 0.5,
+                status_y,
+                12.0 * s,
+                CYAN,
             );
         }
         if settings.show_fps {
@@ -861,20 +880,17 @@ impl Hud {
             self.sandbox_overlay(content, &mut actions, s);
         }
         if !tank.alive && !snapshot.match_state.finished {
-            self.death(
-                tank,
-                snapshot.config.mode == Mode::Survival,
-                &mut actions,
-                s,
-            );
+            self.death(tank, snapshot.config.mode, &mut actions, s);
         }
         if snapshot.match_state.finished {
             draw_rectangle(0.0, 0.0, w, h, alpha(bg_color(), 0.77));
             center_label("Game over", w * 0.5, h * 0.4, 44.0 * s, AMBER);
-            let result = match snapshot.match_state.winner {
-                Some(0) => "The arena has a champion".into(),
-                Some(team) => format!("Team {team} wins"),
-                None => "Match finished".into(),
+            let result = match (snapshot.config.mode, snapshot.match_state.winner) {
+                (Mode::CoopPve, Some(1)) => "All ten waves cleared".into(),
+                (Mode::CoopPve, _) => "Squad eliminated".into(),
+                (_, Some(0)) => "The arena has a champion".into(),
+                (_, Some(team)) => format!("Team {team} wins"),
+                (_, None) => "Match finished".into(),
             };
             center_label(&result, w * 0.5, h * 0.4 + 44.0 * s, 22.0 * s, text_color());
             if button(
@@ -899,17 +915,31 @@ impl Hud {
         let x = screen_width() - 242.0 * s;
         let y = 22.0 * s;
         let width = 220.0 * s;
-        arcade_center("Leaderboard", x + width * 0.5, y + 18.0 * s, 19.0 * s);
-        if self.ranking_tick != Some(snapshot.tick) || self.ranking.len() != snapshot.tanks.len() {
+        let coop = snapshot.config.mode == Mode::CoopPve;
+        arcade_center(
+            if coop { "Squad" } else { "Leaderboard" },
+            x + width * 0.5,
+            y + 18.0 * s,
+            19.0 * s,
+        );
+        let revision = (snapshot.tick, snapshot.tanks.len());
+        if self.ranking_tick != Some(revision) {
             self.ranking.clear();
-            self.ranking.extend(0..snapshot.tanks.len());
+            self.ranking.extend(
+                snapshot
+                    .tanks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tank)| !coop || tank.team == 1)
+                    .map(|(index, _)| index),
+            );
             self.ranking.sort_unstable_by(|&a, &b| {
                 snapshot.tanks[b]
                     .score
                     .cmp(&snapshot.tanks[a].score)
                     .then_with(|| snapshot.tanks[a].id.cmp(&snapshot.tanks[b].id))
             });
-            self.ranking_tick = Some(snapshot.tick);
+            self.ranking_tick = Some(revision);
         }
         let leading = self
             .ranking
@@ -1153,6 +1183,13 @@ impl Hud {
                 actions.push(HudAction::SandboxLevel(level));
             }
         }
+        label(
+            "PgUp / PgDn · Shift: 15 levels",
+            x + 20.0 * s,
+            y + 87.0 * s,
+            11.0 * s,
+            muted_color(),
+        );
         let page_count = content.classes.len().div_ceil(6);
         self.sandbox_page = self.sandbox_page.min(page_count.saturating_sub(1));
         label(
@@ -1271,13 +1308,14 @@ impl Hud {
             self.sandbox = false;
         }
     }
-    fn death(&self, tank: &Tank, survival: bool, actions: &mut Vec<HudAction>, s: f32) {
+    fn death(&self, tank: &Tank, mode: Mode, actions: &mut Vec<HudAction>, s: f32) {
+        let waiting_wave = mode == Mode::CoopPve;
         draw_rectangle(
             0.0,
             0.0,
             screen_width(),
             screen_height(),
-            alpha(bg_color(), 0.6),
+            alpha(bg_color(), if waiting_wave { 0.25 } else { 0.6 }),
         );
         let x = screen_width() * 0.5;
         let y = screen_height() * 0.42;
@@ -1289,8 +1327,10 @@ impl Hud {
             19.0 * s,
             text_color(),
         );
-        let eliminated = tank.lives == 0 && survival;
-        let status = if eliminated {
+        let eliminated = tank.lives == 0 && mode == Mode::Survival;
+        let status = if waiting_wave {
+            "Reviving after this wave".to_owned()
+        } else if eliminated {
             "Out of lives".to_owned()
         } else if tank.respawn_timer > 0.0 {
             format!("Respawn in {:.1}s", tank.respawn_timer)
@@ -1298,7 +1338,7 @@ impl Hud {
             "Press Enter or click to respawn".to_owned()
         };
         center_label(&status, x, y + 82.0 * s, 18.0 * s, CYAN);
-        if !eliminated {
+        if !eliminated && !waiting_wave {
             center_label(
                 &format!(
                     "Restart at level {}  ·  {} skill points",
@@ -1312,6 +1352,7 @@ impl Hud {
         }
         let action_y = y + 134.0 * s;
         if !eliminated
+            && !waiting_wave
             && tank.respawn_timer <= 0.0
             && button(
                 Rect::new(x - 134.0 * s, action_y, 268.0 * s, 43.0 * s),

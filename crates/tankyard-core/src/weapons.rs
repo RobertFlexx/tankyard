@@ -111,6 +111,7 @@ impl World {
                 cooldown: 0.35,
                 shots: 0,
             }),
+            homing_target: 0,
         }
     }
     pub(crate) fn fire_weapons(&mut self) {
@@ -168,6 +169,7 @@ impl World {
             }
             if tank.input.fire {
                 tank.protection = 0.;
+                tank.spawn_immunity = false;
             }
             let reload = reload_rate(tank, class);
             if tank.cooldowns.len() != class.barrels.len()
@@ -253,6 +255,7 @@ impl World {
                 }
                 tank.barrel_aims[barrel_index] = aim;
                 tank.protection = 0.;
+                tank.spawn_immunity = false;
                 let local = V2::new(barrel.offset[0], barrel.offset[1]).rotate(tank.aim);
                 let mut origin =
                     tank.pos + local + V2::from_angle(aim) * (barrel.length + tank.radius * 0.45);
@@ -420,6 +423,7 @@ impl World {
             | Ability::Cloak
             | Ability::Overdrive
             | Ability::Blink => {}
+            Ability::Parry => {}
             Ability::Heal => {
                 let heal = self.tanks[index].max_health * 0.27;
                 for t in &mut self.tanks {

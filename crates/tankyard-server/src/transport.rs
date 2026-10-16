@@ -1164,6 +1164,7 @@ mod snapshot_regressions {
                 age: 0.,
                 hit: (0..24).map(|n| u64::MAX - n).collect(),
                 gun: None,
+                homing_target: 0,
             });
         }
         assert!(encode_snapshot(&snapshot).is_err());
