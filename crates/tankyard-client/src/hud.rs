@@ -1416,12 +1416,15 @@ mod tests {
         assert_eq!(hud.stat_visibility, 0.0);
         world.sandbox_level(player, 2);
         hud.update_skill_panel(&world.tanks[0], false, 1.0 / 60.0, true);
+        assert_eq!(hud.stat_visibility, 0.0, "level two has no skill point");
+        world.sandbox_level(player, 3);
+        hud.update_skill_panel(&world.tanks[0], false, 1.0 / 60.0, true);
         assert_eq!(hud.stat_visibility, 1.0);
         assert!(world.upgrade_stat(player, STAT_ORDER[0]));
         assert_eq!(world.tanks[0].stats[1], 1, "key 1 upgrades regeneration");
         hud.update_skill_panel(&world.tanks[0], false, 1.0 / 60.0, true);
         assert_eq!(hud.stat_visibility, 0.0);
-        world.sandbox_level(player, 3);
+        world.sandbox_level(player, 4);
         hud.update_skill_panel(&world.tanks[0], false, 1.0 / 60.0, false);
         assert!(hud.stat_visibility > 0.0);
         for _ in 0..60 {

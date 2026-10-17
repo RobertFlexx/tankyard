@@ -30,7 +30,7 @@ F1 shows your current bindings. Controls can be rebound in Settings, with a butt
 
 You spawn protected for up to 15 seconds. Moving, firing, or using an ability ends that protection immediately. The HUD shows the time left.
 
-Riposte upgrades from Destroyer at level 30. Press Space just before a shot hits to parry it. The window lasts 0.45 seconds, with a 4.5-second cooldown. Returned shots home toward the shooter and count as your damage and kills. Drones, mines, and other placed weapons cannot be parried.
+Riposte upgrades from Destroyer at level 30. Press Space just before a shot hits to parry it. The window lasts 0.5 seconds, with a 4.2-second cooldown. Its cannon reloads in 0.62 seconds. Returned shots home toward the shooter and count as your damage and kills. Drones, mines, and other placed weapons cannot be parried.
 
 Drone tanks guide their drones toward the cursor while firing. Recall them before moving through a dangerous lane. Factory is a bit different: its six minions have actual cannons, circle your cursor when commanded, and shoot nearby enemies or shapes on their own when you let go. The Factory keeps making replacements until it has six again, never more. Right-click still recalls the group, same as Tank Yard’s other drone classes. Watch where you park them: walls block their bullets, and they need room to get a clean shot.
 
@@ -41,6 +41,12 @@ Friendly drones press into a compact swarm at the cursor. They collide and slide
 Homing rounds make gradual corrections toward targets ahead. A close sidestep can beat their turn rate, and a shot that passes you cannot turn back. They expire after at most 2.2 seconds or 850 units of travel; automatic homing turrets have a shorter 1.8-second lifetime. Riposte returns follow the same limits.
 
 In a text field, use arrows or Home/End to place the caret. Hold Shift to select, double click a word to select it, or drag across text. Ctrl+A selects all; Ctrl+C/X/V copies, cuts, and pastes. Password fields allow paste but keep their text out of the clipboard. Backspace and Delete repeat when held. Ctrl with an arrow, Backspace, or Delete works by word.
+
+## Progression
+
+Levels 15, 30, and 45 need 1,020, 8,644, and 35,304 XP. Tank upgrades still unlock at those levels. Skills arrive at three points per four levels: 10 points at level 15, 21 at level 30, and 33 at level 45. Each skill still caps at seven points. Sandbox level controls use the same point budget.
+
+Trapper reloads in 1.25 seconds and its traps deal 23 damage with 4.5 penetration. The Trapper branch also has modest damage, penetration, or reload improvements. Trap lifetimes and the 24-trap limit stay the same. Automatic mounts only fire at targets their shots can reach. Auto Smasher bullets last 2.2 seconds.
 
 ## Modes
 
@@ -65,7 +71,9 @@ Shoot shapes to earn points before fighting other tanks. Tank upgrades unlock at
 
 ## Bots and multiplayer
 
-Bots farm, spend points, evolve, use abilities, retreat, and pursue mode objectives. A small neural network learns motion trends from successive visible positions. It adjusts a bounded part of their aim prediction; reaction delays and aim error still apply. Reversals reduce confidence. Damage and deaths make them more cautious, while successful fights reduce caution. Memory survives respawns and resets with the match. Bots use the same combat stats as players.
+Bots farm, evolve, use abilities, and play objectives. Their neural models learn visible movement and human class results, as well as their own fights and skill choices. They remember opponents who hurt or killed them: cautious bots keep more distance, while bolder bots may try to settle a grudge when healthy. Winning eases that tension, and grudges cool down over time. Memory survives respawns and resets each match. Reaction delays, aim error, and normal combat stats still apply.
+
+Sight ranges are 420 / 500 / 560 / 620 units from Beginner through Expert, including automatic mounts. Walls block targeting and threat detection. Bots sidestep incoming shots and pull back from nearby drones or approaching homing rounds. Shots already fired keep their normal flight range.
 
 Online arenas fill to six tanks by default: 1–5 players get 5–1 bots, and 6 or more get none. Bots return as players leave. Co-op wave enemies are counted separately. Empty servers pause the arena until someone joins. Offline games keep your chosen bot count.
 

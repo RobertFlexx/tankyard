@@ -399,7 +399,7 @@ pub(crate) fn apply_personal_ability(
             tank.boost = 0.6;
         }
         Ability::Shield => tank.shield = 3.5,
-        Ability::Parry => tank.shield = 0.45,
+        Ability::Parry => tank.shield = 0.5,
         Ability::Recall => tank.shield = 1.,
         Ability::Cloak => {
             tank.protection = 2.;

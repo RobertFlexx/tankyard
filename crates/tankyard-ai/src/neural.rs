@@ -1,14 +1,15 @@
-//! Small online motion predictor. Training uses successive visible positions,
-//! never the opponent's controls or hidden velocity. No external model/runtime.
-const INPUTS: usize = 6;
+//! Bounded online networks for visible motion and a bot's own build results.
+//! Small fixed arrays; no external model or runtime.
 const HIDDEN: usize = 8;
 
-pub struct MotionNet {
+pub type MotionNet = Network<6, 2>;
+
+pub struct Network<const INPUTS: usize, const OUTPUTS: usize> {
     hidden: [[f32; INPUTS]; HIDDEN],
-    output: [[f32; HIDDEN + 1]; 2],
+    output: [[f32; HIDDEN + 1]; OUTPUTS],
     pub samples: u32,
 }
-impl Default for MotionNet {
+impl<const INPUTS: usize, const OUTPUTS: usize> Default for Network<INPUTS, OUTPUTS> {
     fn default() -> Self {
         let mut seed = 0x7459u32;
         let hidden = std::array::from_fn(|_| {
@@ -21,13 +22,13 @@ impl Default for MotionNet {
         });
         Self {
             hidden,
-            output: [[0.0; HIDDEN + 1]; 2],
+            output: [[0.0; HIDDEN + 1]; OUTPUTS],
             samples: 0,
         }
     }
 }
-impl MotionNet {
-    fn forward(&self, input: [f32; INPUTS]) -> ([f32; HIDDEN], [f32; 2]) {
+impl<const INPUTS: usize, const OUTPUTS: usize> Network<INPUTS, OUTPUTS> {
+    fn forward(&self, input: [f32; INPUTS]) -> ([f32; HIDDEN], [f32; OUTPUTS]) {
         let hidden = self.hidden.map(|weights| {
             weights
                 .into_iter()
@@ -47,21 +48,25 @@ impl MotionNet {
         });
         (hidden, output)
     }
-    pub fn predict(&self, input: [f32; INPUTS]) -> [f32; 2] {
+    pub fn predict(&self, input: [f32; INPUTS]) -> [f32; OUTPUTS] {
         self.forward(input).1
     }
-    pub fn train(&mut self, input: [f32; INPUTS], target: [f32; 2]) {
+    pub fn train(&mut self, input: [f32; INPUTS], target: [f32; OUTPUTS]) {
         if input.iter().chain(target.iter()).any(|v| !v.is_finite()) {
             return;
         }
         let input = input.map(|v| v.clamp(-1.0, 1.0));
         let (hidden, output) = self.forward(input);
-        let delta: [f32; 2] = std::array::from_fn(|i| {
+        let delta: [f32; OUTPUTS] = std::array::from_fn(|i| {
             (target[i].clamp(-1.0, 1.0) - output[i]).clamp(-0.5, 0.5)
                 * (1.0 - output[i] * output[i])
         });
         let hidden_delta: [f32; HIDDEN] = std::array::from_fn(|j| {
-            (delta[0] * self.output[0][j] + delta[1] * self.output[1][j])
+            delta
+                .iter()
+                .zip(&self.output)
+                .map(|(d, weights)| d * weights[j])
+                .sum::<f32>()
                 * (1.0 - hidden[j] * hidden[j])
         });
         let update = |weight: &mut f32, gradient: f32| {
@@ -112,11 +117,11 @@ mod tests {
     #[test]
     fn noisy_or_invalid_training_cannot_create_unbounded_outputs_or_weights() {
         let mut net = MotionNet::default();
-        net.train([f32::NAN; INPUTS], [f32::INFINITY; 2]);
+        net.train([f32::NAN; 6], [f32::INFINITY; 2]);
         assert_eq!(net.samples, 0);
         for i in 0..20_000 {
             net.train(
-                [if i % 2 == 0 { 100.0 } else { -100.0 }; INPUTS],
+                [if i % 2 == 0 { 100.0 } else { -100.0 }; 6],
                 [100.0, -100.0],
             );
         }
@@ -128,7 +133,7 @@ mod tests {
                 .all(|w| w.is_finite() && w.abs() <= 2.0)
         );
         assert!(
-            net.predict([1.0; INPUTS])
+            net.predict([1.0; 6])
                 .iter()
                 .all(|p| p.is_finite() && p.abs() <= 1.0)
         );

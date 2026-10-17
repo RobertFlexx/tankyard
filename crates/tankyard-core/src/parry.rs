@@ -209,7 +209,7 @@ mod tests {
         world.step();
         world.projectiles.clear();
         world.tanks[1].input.ability = false;
-        for _ in 0..30 {
+        for _ in 0..36 {
             world.step();
         }
         assert_eq!(world.tanks[1].shield, 0.0);

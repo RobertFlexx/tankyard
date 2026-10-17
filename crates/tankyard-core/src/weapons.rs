@@ -367,10 +367,28 @@ impl World {
         let minimum_alignment = barrel.target_arc.map(|arc| (arc * 0.5).cos());
         let mut best = f32::MAX;
         let mut result = None;
+        let speed = barrel.speed
+            * stat_scale(tank.stats[3])
+            * self
+                .content
+                .class(&tank.class)
+                .map_or(1., |class| class.multipliers[3]);
+        let lifetime = if barrel.projectile == ProjectileKind::Homing {
+            crate::homing::flight_lifetime(barrel.lifetime, speed)
+        } else {
+            barrel.lifetime
+        };
+        let reach = (speed * lifetime + barrel.length + barrel.radius).min(900.);
+        // Bot controllers put their sight limit in the ordinary cursor range.
+        // Automatic mounts must respect it even when the fire button is up.
+        let bot_sight = tank.input.aim_distance.clamp(150.0, 620.0);
         let mut candidate = |pos: V2, priority: f32| {
+            if tank.bot && tank.pos.distance(pos) > bot_sight {
+                return;
+            }
             let delta = pos - mount;
             let distance_squared = delta.length_squared();
-            if distance_squared > 900.0 * 900.0 {
+            if distance_squared > reach * reach {
                 return;
             }
             let distance = distance_squared.sqrt();

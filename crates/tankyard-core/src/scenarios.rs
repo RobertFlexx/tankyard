@@ -1069,6 +1069,90 @@ fn automatic_cannons_choose_visible_enemies() {
     world.fire_weapons();
     assert!(world.projectiles.iter().all(|p| p.owner != player));
 }
+
+#[test]
+fn automatic_bot_mounts_respect_sight_but_player_mounts_keep_their_range() {
+    for bot in [true, false] {
+        let mut world = empty(Mode::Sandbox);
+        let owner = world.add_player("Auto", bot);
+        world.add_player("Opponent", false);
+        assert!(world.sandbox_class(owner, "triangulator"));
+        world.tanks[0].pos = V2::new(800., 800.);
+        world.tanks[0].input.aim_distance = 500.;
+        world.tanks[1].pos = V2::new(1500., 800.);
+        world.fire_weapons();
+        assert_eq!(world.projectiles.iter().any(|p| p.owner == owner), !bot);
+        world.projectiles.clear();
+        world.tanks[0].cooldowns.fill(0.);
+        world.tanks[1].pos = V2::new(1200., 800.);
+        world.fire_weapons();
+        assert!(world.projectiles.iter().any(|p| p.owner == owner));
+    }
+}
+
+#[test]
+fn trapper_can_set_up_a_defensive_field_without_exceeding_the_deployable_cap() {
+    let mut world = empty(Mode::Sandbox);
+    let owner = world.add_player("Trapper", false);
+    assert!(world.sandbox_class(owner, "anchor"));
+    world.tanks[0].pos = V2::new(1000., 1000.);
+    world.tanks[0].input.fire = true;
+    // Eight traps in ten seconds leaves room to defend a position before the
+    // first traps expire. The old 1.5-second reload could only place seven.
+    for _ in 0..600 {
+        world.step();
+    }
+    let traps: Vec<_> = world
+        .projectiles
+        .iter()
+        .filter(|p| p.owner == owner)
+        .collect();
+    assert_eq!(traps.len(), 8);
+    assert!(
+        traps
+            .iter()
+            .all(|p| p.kind == ProjectileKind::Trap && p.damage >= 23. && p.penetration >= 4.5)
+    );
+    // Reload upgrades can fill the field faster, but never bypass its cap.
+    world.tanks[0].stats[6] = 7;
+    for _ in 0..1800 {
+        world.step();
+        assert!(
+            world
+                .projectiles
+                .iter()
+                .filter(|p| p.owner == owner)
+                .count()
+                <= 24
+        );
+    }
+}
+
+#[test]
+fn automatic_mounts_only_shoot_targets_their_bullets_can_reach() {
+    let mut world = empty(Mode::Sandbox);
+    let owner = world.add_player("Auto Smasher", false);
+    world.add_player("Opponent", false);
+    assert!(world.sandbox_class(owner, "auto_smasher"));
+    world.tanks[0].pos = V2::new(800., 800.);
+    world.tanks[1].pos = V2::new(1400., 800.);
+    world.fire_weapons();
+    assert!(world.projectiles.is_empty());
+    world.tanks[1].pos = V2::new(1040., 800.);
+    world.fire_weapons();
+    assert_eq!(world.projectiles.len(), 2);
+    assert!(world.projectiles.iter().all(|p| p.lifetime <= 2.2));
+    world.projectiles.clear();
+    world.tanks[0].cooldowns.fill(0.);
+    world.tanks[0].stats[3] = 7;
+    world.tanks[1].pos = V2::new(1200., 800.);
+    world.fire_weapons();
+    assert_eq!(
+        world.projectiles.len(),
+        2,
+        "speed upgrades extend useful range"
+    );
+}
 #[test]
 fn boss_contacts_separate_and_allow_ramming_damage() {
     let mut w = empty(Mode::Sandbox);
@@ -1157,7 +1241,7 @@ fn player_death_reduces_both_score_and_level_and_restores_earned_points() {
     world.step();
     assert!(world.tanks[0].alive);
     assert_eq!(world.tanks[0].level, 22);
-    assert_eq!(world.tanks[0].points, 21);
+    assert_eq!(world.tanks[0].points, points_for_level(22));
 }
 
 #[test]

@@ -168,6 +168,13 @@ jobs:
               assert os.environ["RELEASE_TAG"][1:] in result.stdout, result.stdout
               print(result.stdout.strip())
           PY
+      - name: Launch Linux release game
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y xvfb libgl1-mesa-dri
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/tankyard-release-smoke"
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a "$BINARY_DIR/tankyard" --offline --bots 4 --smoke-frames 120 --screenshot "$RUNNER_TEMP/release-smoke.png"
+          test -s "$RUNNER_TEMP/release-smoke.png"
       - name: Check Windows installer syntax
         if: runner.os == 'Windows'
         shell: pwsh

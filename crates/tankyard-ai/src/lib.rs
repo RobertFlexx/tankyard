@@ -3,11 +3,14 @@
 //! All bots send the same input, stat and evolution commands as humans. Their
 //! difficulty changes perception, reaction delay, aim and avoidance. Combat stats
 //! follow the same rules. During a match, bots estimate visible tanks' motion and
-//! adjust spacing after damage, kills, and deaths. That memory lasts across lives.
+//! adjust spacing after damage, kills, and deaths. Outcome networks influence
+//! legal tank and skill choices. That memory lasts across lives, within a match.
 mod learning;
 mod navigation;
 mod neural;
 mod perception;
+mod policy;
+mod relationships;
 
 use navigation::{Navigation, clear_line};
 use perception::{Perception, Seen};
@@ -48,10 +51,10 @@ impl Difficulty {
 
     fn perception_radius(self) -> f32 {
         match self {
-            Self::Beginner => 600.,
-            Self::Normal => 800.,
-            Self::Advanced => 1000.,
-            Self::Expert => 1200.,
+            Self::Beginner => 420.,
+            Self::Normal => 500.,
+            Self::Advanced => 560.,
+            Self::Expert => 620.,
         }
     }
 
@@ -129,6 +132,7 @@ struct Brain {
     last_decision_tick: u64,
     dodge: V2,
     danger: f32,
+    escape: V2,
     steering: V2,
 }
 
@@ -177,6 +181,30 @@ impl BotController {
         }
         self.brains
             .retain(|id, _| world.tanks.iter().any(|tank| tank.id == *id && tank.bot));
+        // Feedback also runs for freshly destroyed bots, while kill notices
+        // still identify the opponent. That memory survives the tactical reset.
+        for tank in world.tanks.iter().filter(|tank| tank.bot) {
+            let brain = self.brains.entry(tank.id).or_default();
+            brain.learning.feedback(tank, world.tick, &world.events);
+            if let Some(class) = world.content.class(&tank.class)
+                && (tank.alive || brain.deaths != tank.deaths)
+            {
+                brain.learning.build.observe(
+                    world.tick,
+                    tank,
+                    class,
+                    brain.target.is_some() || brain.danger > 0.25,
+                );
+            }
+            if brain.deaths != tank.deaths {
+                let learning = std::mem::take(&mut brain.learning);
+                *brain = Brain {
+                    learning,
+                    deaths: tank.deaths,
+                    ..Default::default()
+                };
+            }
+        }
         if !world.tanks.iter().any(|tank| tank.bot && tank.alive) {
             return;
         }
@@ -191,25 +219,12 @@ impl BotController {
                 continue;
             };
             let brain = self.brains.entry(tank.id).or_default();
-            if brain.deaths != tank.deaths {
-                let learning = std::mem::take(&mut brain.learning);
-                *brain = Brain {
-                    learning,
-                    deaths: tank.deaths,
-                    ..Default::default()
-                };
-            }
-            brain.learning.combat(
-                tank.health / tank.max_health.max(1.),
-                tank.kills,
-                tank.deaths,
-            );
-            if brain
-                .target
-                .is_some_and(|target| !self.perception.target_valid(target.id, tank.team))
-            {
-                // Deaths, captures and Tag conversions invalidate a cached
-                // target immediately, without waiting for the reaction timer.
+            if brain.target.is_some_and(|target| {
+                !self.perception.target_valid(target.id, tank.team)
+                    || tank.pos.distance(target.pos) > difficulty.perception_radius()
+            }) {
+                // Invalid or out-of-sight samples stop firing immediately,
+                // without waiting for the next tactical decision.
                 brain.target = None;
                 brain.initialized = false;
             }
@@ -225,7 +240,13 @@ impl BotController {
                     .query(tank.pos, difficulty.perception_radius(), &mut self.seen);
                 decide(world, tank, class, difficulty, &self.seen, brain);
                 brain.last_decision_tick = world.tick;
-                progression_commands(world, tank, class, &mut self.commands);
+                progression_commands(
+                    world,
+                    tank,
+                    class,
+                    &brain.learning.build,
+                    &mut self.commands,
+                );
                 brain.initialized = true;
             }
             let dodge_period = match difficulty {
@@ -240,14 +261,20 @@ impl BotController {
                 .is_multiple_of(dodge_period)
             {
                 self.perception.query(tank.pos, 340., &mut self.seen);
-                let (dodge, danger) = projectile_avoidance(world, tank, &self.seen);
+                let (dodge, danger, escape) = projectile_avoidance(world, tank, &self.seen);
                 let next_dodge = dodge * difficulty.dodge_strength();
                 // High-priority evasion ramps up quickly but does not jerk the
                 // bot across its whole steering envelope in one tick.
                 brain.dodge = brain.dodge.lerp(next_dodge, 0.55);
                 brain.danger = danger;
+                brain.escape = escape;
             }
             let mut movement = navigate(world, tank, brain, &mut self.navigation);
+            // Guided threats can turn after the current collision prediction.
+            // Give visible nearby swarms room instead of driving into them.
+            let retreat_weight = (brain.escape.length() * 0.9).min(0.9);
+            movement =
+                movement * (1. - retreat_weight) + brain.escape.normalized() * retreat_weight;
             self.perception.query(tank.pos, 110., &mut self.seen);
             movement += local_steering(world, tank, class, &self.seen);
             movement += brain.dodge;
@@ -286,7 +313,8 @@ impl BotController {
                 let error = (drift * 2. - 1.) * difficulty.aim_error() * (1.5 - confidence * 0.5);
                 let distance = tank.pos.distance(estimated);
                 let range = class.ai_range.max(100.) * 1.6 + target.radius;
-                let fire = distance < range && clear_line(tank.pos, estimated, 5., &world.walls);
+                let fire = distance < range.min(difficulty.perception_radius())
+                    && clear_line(tank.pos, estimated, 5., &world.walls);
                 ((lead - tank.pos).angle() + error, fire, distance)
             } else {
                 ((brain.goal - tank.pos).angle(), false, f32::MAX)
@@ -335,7 +363,11 @@ impl BotController {
                     sequence: tank.last_input.wrapping_add(1),
                     movement,
                     aim,
-                    aim_distance: target_distance.clamp(150., 900.),
+                    aim_distance: if class.barrels.iter().any(|b| b.projectile.is_drone()) {
+                        target_distance.clamp(150., difficulty.perception_radius())
+                    } else {
+                        difficulty.perception_radius()
+                    },
                     fire: fire || deploy,
                     alt_fire: retreat && class.barrels.iter().any(|b| b.projectile.is_drone()),
                     ability,
@@ -373,7 +405,13 @@ fn wrapped_angle(angle: f32) -> f32 {
     (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
 
-fn progression_commands(world: &World, tank: &Tank, class: &ClassDef, commands: &mut Vec<Command>) {
+fn progression_commands(
+    world: &World,
+    tank: &Tank,
+    class: &ClassDef,
+    learning: &policy::BuildLearning,
+    commands: &mut Vec<Command>,
+) {
     let melee = class.multipliers[2] >= 2.;
     let drones = class
         .barrels
@@ -394,8 +432,10 @@ fn progression_commands(world: &World, tank: &Tank, class: &ClassDef, commands: 
         let next = (0..8)
             .filter(|&index| stats[index] < 7 && stats[index] < desired[index])
             .min_by(|&a, &b| {
-                let ratio_a = f32::from(stats[a]) / f32::from(desired[a].max(1));
-                let ratio_b = f32::from(stats[b]) / f32::from(desired[b].max(1));
+                let ratio_a = f32::from(stats[a]) / f32::from(desired[a].max(1))
+                    - learning.skill_value(class, stats, a);
+                let ratio_b = f32::from(stats[b]) / f32::from(desired[b].max(1))
+                    - learning.skill_value(class, stats, b);
                 ratio_a.total_cmp(&ratio_b).then_with(|| b.cmp(&a))
             })
             .or_else(|| (0..8).find(|&index| stats[index] < 7));
@@ -414,13 +454,15 @@ fn progression_commands(world: &World, tank: &Tank, class: &ClassDef, commands: 
                 .is_some_and(|next| tank.level >= next.min_level)
         })
     };
-    let count = eligible().count();
-    if count > 0 {
-        let roll = noise(tank.id.wrapping_mul(19) ^ u64::from(class.tier));
-        let index = ((roll * count as f32) as usize).min(count - 1);
-        if let Some(next) = eligible().nth(index) {
-            commands.push(Command::Evolve(tank.id, next.clone()));
-        }
+    if let Some(next) = eligible()
+        .filter_map(|id| world.content.class(id))
+        .max_by(|a, b| {
+            learning
+                .class_score(tank, a)
+                .total_cmp(&learning.class_score(tank, b))
+        })
+    {
+        commands.push(Command::Evolve(tank.id, next.id.clone()));
     }
 }
 
@@ -433,7 +475,12 @@ fn decide(
     brain: &mut Brain,
 ) {
     let health = tank.health / tank.max_health.max(1.);
-    let melee = class.multipliers[2] >= 2. && class.ai_range < 120.;
+    let melee = class.multipliers[2] >= 2.
+        && (class.ai_range < 120.
+            || class
+                .barrels
+                .iter()
+                .all(|barrel| barrel.pattern == tankyard_content::FirePattern::Auto));
     let mut best_target: Option<(f32, TargetSample, BotState)> = None;
     let mut nearest_enemy: Option<(f32, TargetSample)> = None;
     let mut enemy_pressure = 0.;
@@ -455,9 +502,15 @@ fn decide(
                     * (other.max_health / tank.max_health.max(1.)).sqrt();
                 let weak = 1. - (other.health / other.max_health.max(1.)).clamp(0., 1.);
                 let visible = clear_line(tank.pos, other.pos, tank.radius * 0.35, &world.walls);
-                let pressure = strength.clamp(0.3, 2.)
+                let mut pressure = strength.clamp(0.3, 2.)
                     * (1. - weak * 0.65)
                     * (1. - distance / 850.).clamp(0., 1.);
+                if visible && !other.bot {
+                    brain
+                        .learning
+                        .build
+                        .observe_player(other, &world.content, world.tick);
+                }
                 if !hostile(tank.team, other.team) {
                     if visible {
                         support += pressure;
@@ -468,6 +521,8 @@ fn decide(
                     continue;
                 }
                 let motion = brain.learning.observe(other.id, other.pos, world.tick);
+                let disposition = brain.learning.relationships.get(other.id, world.tick);
+                pressure *= 1. + disposition.fear * 0.4;
                 let sample = TargetSample {
                     id: other.id,
                     pos: other.pos,
@@ -499,7 +554,17 @@ fn decide(
                 } else {
                     1.0
                 };
-                let utility = (1.15 + weak * 1.2) * caution * persistence / (1. + distance / 420.);
+                // A grudge only encourages a fight the bot can reasonably take.
+                // Fear of a stronger player outweighs that urge; neither can
+                // reveal a hidden opponent or override recovery/objectives.
+                let boldness = noise(tank.id.wrapping_mul(103));
+                let manageable =
+                    ((health - 0.4) / 0.6).clamp(0., 1.) * (1.8 - strength).clamp(0., 1.);
+                let rivalry = 1. + disposition.animosity * manageable * (0.25 + boldness * 0.45);
+                let respect = 1.
+                    / (1. + disposition.fear * strength.clamp(0.5, 2.) * (0.65 - boldness * 0.5));
+                let utility = (1.15 + weak * 1.2) * caution * persistence * rivalry * respect
+                    / (1. + distance / 420.);
                 (sample, utility, BotState::Attacking)
             }
             Seen::Target(index) => {
@@ -545,7 +610,9 @@ fn decide(
                     continue;
                 }
                 let distance = tank.pos.distance(boss.pos);
-                if distance > difficulty.perception_radius() {
+                if distance > difficulty.perception_radius()
+                    || !clear_line(tank.pos, boss.pos, tank.radius * 0.35, &world.walls)
+                {
                     continue;
                 }
                 let priority = if matches!(
@@ -589,14 +656,17 @@ fn decide(
         priority = utility;
         state = action;
         let distance = tank.pos.distance(sample.pos);
+        let disposition = brain.learning.relationships.get(sample.id, world.tick);
         let preferred = if melee {
             0.
         } else {
-            class.ai_range.clamp(100., 600.)
+            (class.ai_range.clamp(100., 600.)
                 * 0.82
                 * (0.9 + noise(tank.id.wrapping_mul(53)) * 0.2)
                 * (1. + (brain.learning.caution - 0.35) * 0.3)
-                + sample.radius
+                * (1. + disposition.fear * 0.22)
+                + sample.radius)
+                .min(difficulty.perception_radius() * 0.82)
         };
         let outward = (tank.pos - sample.pos).normalized();
         let epoch = world.tick / (180 + tank.id % 121);
@@ -614,7 +684,13 @@ fn decide(
             sample.pos + outward * preferred + strafe * (90. + difficulty.prediction() * 90.)
         };
     }
-    let recovering = health < difficulty.retreat_health() + (brain.learning.caution - 0.35) * 0.12
+    let personal_fear = nearest_enemy.map_or(0., |(_, enemy)| {
+        brain.learning.relationships.get(enemy.id, world.tick).fear
+    });
+    let recovering = health
+        < difficulty.retreat_health()
+            + (brain.learning.caution - 0.35) * 0.12
+            + personal_fear * 0.12
         || (brain.state == BotState::Retreating && health < 0.68);
     let pressure_limit = match difficulty {
         Difficulty::Beginner => f32::INFINITY,
@@ -933,9 +1009,10 @@ fn dodge_threat(relative_position: V2, relative_velocity: V2, safety: f32) -> (V
     (tangent * side, strength)
 }
 
-fn projectile_avoidance(world: &World, tank: &Tank, seen: &[Seen]) -> (V2, f32) {
+fn projectile_avoidance(world: &World, tank: &Tank, seen: &[Seen]) -> (V2, f32, V2) {
     let mut dodge = V2::ZERO;
     let mut danger: f32 = 0.;
+    let mut escape = V2::ZERO;
     for &item in seen {
         let Seen::Projectile(index) = item else {
             continue;
@@ -944,11 +1021,15 @@ fn projectile_avoidance(world: &World, tank: &Tank, seen: &[Seen]) -> (V2, f32) 
         if projectile.owner == tank.id
             || !hostile(tank.team, projectile.team)
             || projectile.damage <= 0.
+            || projectile.lifetime <= 0.
+            || projectile.penetration <= 0.
         {
             continue;
         }
         let delta = projectile.pos - tank.pos;
-        if delta.length_squared() > 340.0 * 340.0 {
+        if delta.length_squared() > 340.0 * 340.0
+            || !clear_line(tank.pos, projectile.pos, projectile.radius, &world.walls)
+        {
             continue;
         }
         let (direction, risk) = dodge_threat(
@@ -963,8 +1044,23 @@ fn projectile_avoidance(world: &World, tank: &Tank, seen: &[Seen]) -> (V2, f32) 
             .clamp(1.0, 1.8);
         dodge += direction * risk * severity;
         danger = danger.max((risk * severity).min(1.0));
+        let distance = delta.length();
+        let drone = projectile.kind.is_drone();
+        let approaching_homing = projectile.kind == tankyard_content::ProjectileKind::Homing
+            && projectile.vel.dot(delta) < 0.
+            && distance
+                < projectile.vel.length() * projectile.lifetime + tank.radius + projectile.radius;
+        if drone || approaching_homing {
+            // A drone can change direction even if its current lane misses.
+            // Homing shots already flying away or about to expire are ignored.
+            let pursuit = ((340. - distance) / 260.).clamp(0., 1.);
+            let away = (tank.pos - projectile.pos).normalized();
+            dodge += away * pursuit * severity;
+            escape += away * pursuit * 1.4;
+            danger = danger.max((pursuit * severity).min(1.));
+        }
     }
-    (dodge.clamp_length(2.), danger)
+    (dodge.clamp_length(2.), danger, escape.clamp_length(1.))
 }
 
 fn use_ability(ability: Ability, tank: &Tank, brain: &Brain, distance: f32) -> bool {
@@ -1481,13 +1577,291 @@ mod tests {
             gun: None,
             homing_target: 0,
         });
-        let (dodge, danger) = projectile_avoidance(&world, &world.tanks[0], &[Seen::Projectile(0)]);
+        let (dodge, danger, escape) =
+            projectile_avoidance(&world, &world.tanks[0], &[Seen::Projectile(0)]);
         assert!(danger > 0.5);
         assert!(
             dodge.y.abs() > 0.5,
             "an exact incoming lane requires a sideways dodge"
         );
         assert!(dodge.finite());
+        assert_eq!(escape, V2::ZERO);
+    }
+
+    #[test]
+    fn bots_only_target_and_fire_at_enemies_inside_their_shorter_sight() {
+        for difficulty in Difficulty::ALL {
+            let mut world = World::new(
+                WorldConfig {
+                    target_count: 0,
+                    spawn_protection: 0.,
+                    ..Default::default()
+                },
+                Content::builtin(),
+            );
+            let bot = world.add_player("Bot", true);
+            let enemy = world.add_player("Opponent", false);
+            world.tanks[0].pos = V2::new(1000., 1000.);
+            world.tanks[1].pos = V2::new(1000. + difficulty.perception_radius() + 20., 1000.);
+            let mut controller = BotController::new(difficulty);
+            controller.update(&mut world);
+            assert_eq!(controller.target(bot), None);
+            assert!(!world.tanks[0].input.fire);
+            world.tanks[1].pos = V2::new(1300., 1000.);
+            controller.brains.get_mut(&bot).unwrap().initialized = false;
+            controller.update(&mut world);
+            assert_eq!(controller.target(bot), Some(enemy));
+            assert!(world.tanks[0].input.fire);
+            // Walking away must invalidate the remembered target immediately.
+            world.tanks[0].pos = V2::new(300., 1000.);
+            controller.update(&mut world);
+            assert_eq!(controller.target(bot), None);
+            assert!(!world.tanks[0].input.fire);
+            assert!(world.tanks[0].input.aim_distance <= difficulty.perception_radius());
+        }
+    }
+
+    fn pursuit_world(kind: ProjectileKind) -> World {
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                spawn_protection: 0.,
+                mode: Mode::TwoTeams,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        world.add_player("Bot", true);
+        let owner = world.add_player("Opponent", false);
+        world.tanks[0].pos = V2::new(1000., 1000.);
+        world.tanks[0].team = 1;
+        world.tanks[1].pos = V2::new(1250., 1000.);
+        world.tanks[1].team = 2;
+        world.projectiles.push(tankyard_core::Projectile {
+            id: 10000,
+            owner,
+            team: 2,
+            pos: V2::new(1200., 1000.),
+            previous: V2::new(1203., 1000.),
+            vel: V2::new(-180., 0.),
+            cruise_speed: 180.,
+            radius: 8.,
+            damage: 10.,
+            penetration: 3.,
+            lifetime: 2.,
+            kind,
+            ricochets: 0,
+            age: 0.,
+            hit: vec![],
+            gun: None,
+            homing_target: 0,
+        });
+        world
+    }
+
+    #[test]
+    fn bots_withdraw_from_visible_homing_rounds_and_drones() {
+        for kind in [
+            ProjectileKind::Homing,
+            ProjectileKind::Drone,
+            ProjectileKind::Minion,
+        ] {
+            let mut world = pursuit_world(kind);
+            let mut controller = BotController::new(Difficulty::Normal);
+            for tick in 0..36 {
+                world.tick = tick;
+                controller.update(&mut world);
+            }
+            assert!(
+                world.tanks[0].input.movement.x < -0.15,
+                "must retreat from {kind:?}"
+            );
+            assert!(world.tanks[0].input.valid());
+            let (_, danger, escape) =
+                projectile_avoidance(&world, &world.tanks[0], &[Seen::Projectile(0)]);
+            assert!(danger > 0.5 && escape.x < -0.5);
+        }
+    }
+
+    #[test]
+    fn pursuit_avoidance_ignores_friends_hidden_threats_and_expiring_or_departing_homing() {
+        let mut world = pursuit_world(ProjectileKind::Homing);
+        let seen = [Seen::Projectile(0)];
+        world.projectiles[0].team = 1;
+        assert_eq!(
+            projectile_avoidance(&world, &world.tanks[0], &seen),
+            (V2::ZERO, 0., V2::ZERO)
+        );
+        world.projectiles[0].team = 2;
+        world.walls.push(tankyard_core::Rect {
+            x: 1100.,
+            y: 950.,
+            w: 20.,
+            h: 100.,
+        });
+        assert_eq!(
+            projectile_avoidance(&world, &world.tanks[0], &seen),
+            (V2::ZERO, 0., V2::ZERO)
+        );
+        world.walls.clear();
+        world.projectiles[0].vel.x = 180.;
+        assert_eq!(
+            projectile_avoidance(&world, &world.tanks[0], &seen),
+            (V2::ZERO, 0., V2::ZERO)
+        );
+        world.projectiles[0].vel.x = -180.;
+        world.projectiles[0].lifetime = 0.1;
+        assert_eq!(
+            projectile_avoidance(&world, &world.tanks[0], &seen).2,
+            V2::ZERO
+        );
+        world.projectiles[0].lifetime = 2.;
+        world.projectiles[0].pos.x = 1500.;
+        assert_eq!(
+            projectile_avoidance(&world, &world.tanks[0], &seen),
+            (V2::ZERO, 0., V2::ZERO)
+        );
+    }
+
+    #[test]
+    fn fear_and_animosity_change_visible_choices_without_overriding_sight() {
+        let mut world = pursuit_world(ProjectileKind::Bullet);
+        world.projectiles.clear();
+        world.add_player("Other", false);
+        world.tanks[2].team = 2;
+        world.tanks[1].pos = V2::new(1200., 1000.);
+        world.tanks[2].pos = V2::new(1000., 1200.);
+        // A bold bot sometimes favors the opponent it holds a grudge against.
+        world.tanks[0].id = (100..200).find(|id| noise(id * 103) > 0.95).unwrap();
+        let remembered = world.tanks[2].id;
+        let mut brain = Brain::default();
+        brain
+            .learning
+            .relationships
+            .hurt_by(remembered, 0., true, 0);
+        let class = world.content.class(&world.tanks[0].class).unwrap();
+        decide(
+            &world,
+            &world.tanks[0],
+            class,
+            Difficulty::Expert,
+            &[Seen::Tank(1), Seen::Tank(2)],
+            &mut brain,
+        );
+        assert_eq!(brain.target.unwrap().id, remembered);
+        // Recognition follows identity through a rename, not the display name.
+        world.tanks[2].name = "Renamed".into();
+        assert!(brain.learning.relationships.get(remembered, 1).animosity > 0.2);
+        world.walls.push(tankyard_core::Rect {
+            x: 950.,
+            y: 1100.,
+            w: 100.,
+            h: 20.,
+        });
+        decide(
+            &world,
+            &world.tanks[0],
+            class,
+            Difficulty::Expert,
+            &[Seen::Tank(1), Seen::Tank(2)],
+            &mut brain,
+        );
+        assert_ne!(brain.target.map(|sample| sample.id), Some(remembered));
+        world.walls.clear();
+        world.tanks[2].pos = V2::new(1000., 1800.);
+        decide(
+            &world,
+            &world.tanks[0],
+            class,
+            Difficulty::Expert,
+            &[Seen::Tank(1), Seen::Tank(2)],
+            &mut brain,
+        );
+        assert_ne!(brain.target.map(|sample| sample.id), Some(remembered));
+
+        // Fear of this particular nearby opponent changes when to withdraw.
+        world.tanks[0].health = world.tanks[0].max_health * 0.44;
+        let feared = world.tanks[1].id;
+        let mut neutral = Brain::default();
+        decide(
+            &world,
+            &world.tanks[0],
+            class,
+            Difficulty::Expert,
+            &[Seen::Tank(1)],
+            &mut neutral,
+        );
+        assert_ne!(neutral.state, BotState::Retreating);
+        neutral.learning.relationships.hurt_by(feared, 0.8, true, 0);
+        decide(
+            &world,
+            &world.tanks[0],
+            class,
+            Difficulty::Expert,
+            &[Seen::Tank(1)],
+            &mut neutral,
+        );
+        assert_eq!(neutral.state, BotState::Retreating);
+    }
+
+    #[test]
+    fn a_real_death_records_the_killer_and_recognition_survives_respawn() {
+        let mut world = pursuit_world(ProjectileKind::Bullet);
+        let bot = world.tanks[0].id;
+        let killer = world.tanks[1].id;
+        let mut controller = BotController::new(Difficulty::Normal);
+        controller.update(&mut world);
+        world.tanks[0].health = 1.;
+        world.projectiles[0].pos = V2::new(1010., 1000.);
+        world.projectiles[0].previous = world.projectiles[0].pos;
+        world.step();
+        assert!(!world.tanks[0].alive);
+        controller.update(&mut world);
+        assert!(
+            controller.brains[&bot]
+                .learning
+                .relationships
+                .get(killer, world.tick)
+                .fear
+                > 0.29
+        );
+        for _ in 0..200 {
+            world.step();
+            controller.update(&mut world);
+        }
+        assert!(world.tanks[0].alive);
+        assert!(
+            controller.brains[&bot]
+                .learning
+                .relationships
+                .get(killer, world.tick)
+                .fear
+                > 0.25
+        );
+    }
+
+    #[test]
+    fn auto_smasher_bots_use_their_body_instead_of_circling_with_a_small_gun() {
+        let mut world = pursuit_world(ProjectileKind::Bullet);
+        world.projectiles.clear();
+        world.config.mode = Mode::Sandbox;
+        let bot = world.tanks[0].id;
+        assert!(world.sandbox_class(bot, "auto_smasher"));
+        world.tanks[1].level = 45;
+        world.tanks[1].max_health = world.tanks[0].max_health;
+        world.tanks[1].health = world.tanks[1].max_health;
+        let mut brain = Brain::default();
+        let class = world.content.class("auto_smasher").unwrap();
+        decide(
+            &world,
+            &world.tanks[0],
+            class,
+            Difficulty::Expert,
+            &[Seen::Tank(1)],
+            &mut brain,
+        );
+        assert_eq!(brain.state, BotState::Attacking);
+        assert_eq!(brain.goal, world.tanks[1].pos);
     }
 
     #[test]

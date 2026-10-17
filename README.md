@@ -35,7 +35,7 @@ Skill labels follow your class: an Overseer gets Drone Speed / Health / Damage, 
 
 Practice is below Play on the main menu, in the pause menu, and on F6. It offers a shape sprint, drone drill, tank skirmish, and survival challenge with personal records. Press F1 for the current controls, F3 for diagnostics, F10 for settings, and F5 to restart an offline game from pause. Tab and Shift+Tab move between text fields; Esc goes back. See [playing](docs/playing.md) for goals and shortcuts.
 
-Game modes lets you choose Beginner through Expert bots; your choice also applies when hosting. Bots learn visible movement with a small neural predictor and change their spacing after damage, kills, and deaths. Reaction delays, aim error, and bounded prediction keep them fallible. Their learning lasts for the match.
+Game modes lets you choose Beginner through Expert bots; your choice also applies when hosting. Bots learn visible movement and combat results, remember rivals during a match, and adjust their tank and skill choices. They use the same combat stats as players, with reaction delays and aim error based on difficulty.
 
 Multi-barrel guns use independent firing phases, producing staggered shots and occasional volleys. Double Burst and Overtrapper have centered front and rear mounts; Necromancer has two opposing drone ports. Rendering and simulation use the same mount positions.
 

@@ -1,4 +1,4 @@
-use tankyard_core::{EntityId, V2};
+use tankyard_core::{EntityId, EventKind, GameEvent, Tank, V2};
 
 #[derive(Clone, Copy)]
 pub struct Motion {
@@ -14,26 +14,68 @@ struct Opponent {
     features: Option<[f32; 6]>,
 }
 pub struct Learning {
+    pub build: crate::policy::BuildLearning,
+    pub relationships: crate::relationships::Relationships,
     neural: crate::neural::MotionNet,
     opponents: Vec<Opponent>,
     pub caution: f32,
     health: Option<f32>,
     kills: u32,
     deaths: u32,
+    feedback_tick: Option<u64>,
+    last_hit: Option<(u64, EntityId)>,
 }
 impl Default for Learning {
     fn default() -> Self {
         Self {
+            build: Default::default(),
+            relationships: Default::default(),
             neural: Default::default(),
             opponents: Vec::new(),
             caution: 0.35,
             health: None,
             kills: 0,
             deaths: 0,
+            feedback_tick: None,
+            last_hit: None,
         }
     }
 }
 impl Learning {
+    pub fn feedback(&mut self, tank: &Tank, tick: u64, events: &[GameEvent]) {
+        if self.feedback_tick == Some(tick) {
+            return;
+        }
+        self.feedback_tick = Some(tick);
+        let health = tank.health / tank.max_health.max(1.);
+        let hit = (tank.damaged_at, tank.last_attacker);
+        if tank.alive && tank.last_attacker != 0 && self.last_hit != Some(hit) {
+            let damage = self
+                .health
+                .map_or(0., |previous| (previous - health).max(0.));
+            self.relationships
+                .hurt_by(tank.last_attacker, damage, false, tick);
+            self.last_hit = Some(hit);
+        }
+        // Destroy/Kill pairs are the bot's own death notice or kill credit.
+        // Processing dead bots preserves the real killer before respawn; no
+        // unseen player's location, motion or loadout is read here.
+        for pair in events.windows(2) {
+            if matches!(pair[0].kind, EventKind::Destroy)
+                && matches!(pair[1].kind, EventKind::Kill)
+                && pair[0].tick == pair[1].tick
+                && pair[0].pos == pair[1].pos
+            {
+                if pair[0].subject == tank.id && tank.deaths > self.deaths {
+                    self.relationships.hurt_by(pair[1].subject, 0., true, tick);
+                } else if pair[1].subject == tank.id && tank.kills > self.kills {
+                    self.relationships.defeated(pair[0].subject, tick);
+                }
+            }
+        }
+        self.combat(health, tank.kills, tank.deaths);
+    }
+
     pub fn combat(&mut self, health: f32, kills: u32, deaths: u32) {
         if let Some(previous) = self.health {
             self.caution += (previous - health).max(0.) * 0.20;

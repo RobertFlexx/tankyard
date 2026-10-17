@@ -1,13 +1,12 @@
-//! The normal level curve and upgrade timing follow the familiar 45-level
-//! geometric-arena progression. Kept in the shared simulation so bots, local
-//! games and community servers all apply exactly the same rules.
+//! Shared 45-level progression with a gradual XP ramp and evenly spaced skills.
+//! Bots, local games and community servers all apply exactly the same rules.
 
 /// Cumulative XP at the beginning of each level (1..=45).
-/// The early thresholds deliberately make the first upgrades arrive quickly.
+/// The ramp slows complete builds without making early levels a long grind.
 const LEVEL_XP: [u32; 45] = [
-    0, 4, 13, 28, 50, 78, 113, 157, 211, 275, 350, 437, 538, 655, 787, 948, 1109, 1301, 1516, 1767,
-    2026, 2325, 2647, 3035, 3433, 3883, 4379, 4925, 5525, 6184, 6907, 7698, 8537, 9426, 10368,
-    11367, 12426, 13549, 14739, 16000, 17337, 18754, 20256, 21849, 23536,
+    0, 5, 16, 35, 62, 97, 141, 196, 265, 347, 444, 558, 690, 845, 1020, 1235, 1452, 1712, 2006,
+    2350, 2708, 3123, 3574, 4118, 4682, 5322, 6032, 6817, 7685, 8644, 9702, 10865, 12108, 13433,
+    14846, 16353, 17962, 19677, 21506, 23455, 25533, 27748, 30108, 32625, 35304,
 ];
 
 pub fn xp_for_level(level: u8) -> u32 {
@@ -19,15 +18,10 @@ pub fn level_for_xp(xp: u32) -> u8 {
     LEVEL_XP.partition_point(|&threshold| threshold <= xp) as u8
 }
 
-/// 27 points by level 28; one at 30 and one every three levels thereafter.
-/// Level 45 awards the 33rd point.
+/// Three points per four levels, spread across the entire match.
+/// The final build still has 33 points, with at most seven in any skill.
 pub fn points_for_level(level: u8) -> u8 {
-    let base = level.saturating_sub(1).min(27);
-    if level < 30 {
-        base
-    } else {
-        base + 1 + (level.min(45) - 30) / 3
-    }
+    ((u16::from(level.clamp(1, 45)) - 1) * 3 / 4) as u8
 }
 
 /// Respawn bands preserve some progress. Points can be reassigned after death.
@@ -72,24 +66,35 @@ mod tests {
             previous = xp;
         }
         assert_eq!(level_for_xp(u32::MAX), 45);
-        assert_eq!(xp_for_level(15), 787);
-        assert_eq!(xp_for_level(30), 6184);
-        assert_eq!(xp_for_level(45), 23536);
+        assert_eq!(xp_for_level(15), 1020);
+        assert_eq!(xp_for_level(30), 8644);
+        assert_eq!(xp_for_level(45), 35304);
     }
 
     #[test]
-    fn skill_points_arrive_early_and_finish_at_thirty_three() {
-        assert_eq!(points_for_level(1), 0);
-        for level in 2..=28 {
-            assert_eq!(points_for_level(level), level - 1);
-        }
-        assert_eq!(points_for_level(29), 27);
-        for (level, points) in [(30, 28), (32, 28), (33, 29), (42, 32), (45, 33)] {
+    fn skills_are_spread_across_all_levels_and_finish_at_thirty_three() {
+        for (level, points) in [
+            (0, 0),
+            (1, 0),
+            (2, 0),
+            (3, 1),
+            (5, 3),
+            (15, 10),
+            (28, 20),
+            (30, 21),
+            (44, 32),
+            (45, 33),
+            (255, 33),
+        ] {
             assert_eq!(points_for_level(level), points);
         }
         for level in 2..=45 {
-            assert!(points_for_level(level) >= points_for_level(level - 1));
-            assert!(points_for_level(level) - points_for_level(level - 1) <= 1);
+            let gain = points_for_level(level) - points_for_level(level - 1);
+            assert!(gain <= 1);
+            // Every four levels must contribute three points, including late game.
+            if level >= 5 {
+                assert_eq!(points_for_level(level) - points_for_level(level - 4), 3);
+            }
         }
     }
 
