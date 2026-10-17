@@ -13,7 +13,7 @@ use std::{
     io::{self, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
@@ -32,6 +32,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Netcode keepalives flow several times per second, so silence this long
 /// means the game or the remote side has gone away.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+const PUMP_BATCH: usize = 32;
+const WRITE_BUDGET: usize = 64 * 1024;
 
 /// Returns the WebSocket URL for a join address, or `None` for a plain UDP
 /// `host:port`. A bare hostname without a port means `wss://hostname`.
@@ -48,6 +50,8 @@ pub fn websocket_url(address: &str) -> Option<String> {
 
 fn config() -> WebSocketConfig {
     WebSocketConfig::default()
+        .write_buffer_size(16 * 1024)
+        .max_write_buffer_size(WRITE_BUDGET)
         .max_message_size(Some(MAX_DATAGRAM))
         .max_frame_size(Some(MAX_DATAGRAM))
 }
@@ -166,26 +170,43 @@ fn pump<S: Read + Write>(
 ) -> Result<(), tungstenite::Error> {
     let mut buffer = [0u8; MAX_DATAGRAM];
     let mut last_activity = Instant::now();
-    while !stop.load(Ordering::Relaxed) {
+    let mut pending_ws = None;
+    let mut pending_udp: Option<tungstenite::Bytes> = None;
+    loop {
+        // Dropping a client queues its netcode disconnect immediately before
+        // dropping this bridge. Give that final UDP batch one bounded pass.
+        let finishing = stop.load(Ordering::Relaxed);
         let mut active = false;
-        loop {
-            match udp.recv_from(&mut buffer) {
-                Ok((len, from)) => {
-                    if *peer.get_or_insert(from) != from {
-                        continue;
+        // Bound each direction's work, and stop reading UDP under TCP
+        // backpressure. Retain the one frame tungstenite could not queue.
+        for _ in 0..PUMP_BATCH {
+            let message = if let Some(message) = pending_ws.take() {
+                message
+            } else {
+                match udp.recv_from(&mut buffer) {
+                    Ok((len, from)) => {
+                        if *peer.get_or_insert(from) != from {
+                            continue;
+                        }
+                        active = true;
+                        Message::binary(buffer[..len].to_vec())
                     }
-                    match ws.write(Message::binary(buffer[..len].to_vec())) {
-                        Ok(()) => {}
-                        Err(e) if would_block(&e) => {}
-                        Err(e) => return Err(e),
-                    }
-                    active = true;
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    // Linux reports an earlier send's ICMP unreachable here; the
+                    // netcode layer handles the loss.
+                    Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => break,
+                    Err(e) => return Err(e.into()),
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                // Linux reports an earlier send's ICMP unreachable here; the
-                // netcode layer handles the loss.
-                Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => break,
-                Err(e) => return Err(e.into()),
+            };
+            match ws.write(message) {
+                Ok(()) => {}
+                // WouldBlock means tungstenite has already queued this frame.
+                Err(e) if would_block(&e) => break,
+                Err(tungstenite::Error::WriteBufferFull(message)) => {
+                    pending_ws = Some(*message);
+                    break;
+                }
+                Err(e) => return Err(e),
             }
         }
         match ws.flush() {
@@ -193,25 +214,46 @@ fn pump<S: Read + Write>(
             Err(e) if would_block(&e) => {}
             Err(e) => return Err(e),
         }
-        loop {
-            match ws.read() {
-                Ok(Message::Binary(data)) => {
-                    if let Some(peer) = peer {
-                        let _ = udp.send_to(&data, peer);
+        for _ in 0..PUMP_BATCH {
+            let data = if let Some(data) = pending_udp.take() {
+                data
+            } else {
+                match ws.read() {
+                    Ok(Message::Binary(data)) => {
+                        active = true;
+                        data
                     }
-                    active = true;
+                    Ok(Message::Close(_)) => {
+                        let _ = ws.flush();
+                        return Ok(());
+                    }
+                    Ok(_) => {
+                        active = true;
+                        continue;
+                    }
+                    Err(e) if would_block(&e) => break,
+                    Err(
+                        tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed,
+                    ) => {
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e),
                 }
-                Ok(Message::Close(_)) => {
-                    let _ = ws.flush();
-                    return Ok(());
+            };
+            if let Some(peer) = peer {
+                match udp.send_to(&data, peer) {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        pending_udp = Some(data);
+                        break;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {}
+                    Err(e) => return Err(e.into()),
                 }
-                Ok(_) => {}
-                Err(e) if would_block(&e) => break,
-                Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
-                    return Ok(());
-                }
-                Err(e) => return Err(e),
             }
+        }
+        if finishing {
+            break;
         }
         if active {
             last_activity = Instant::now();
@@ -232,24 +274,43 @@ fn pump<S: Read + Write>(
 pub(crate) struct ClientBridge {
     pub address: SocketAddr,
     stop: Arc<AtomicBool>,
+    failure: Arc<Mutex<Option<String>>>,
 }
 impl ClientBridge {
     pub fn connect(url: &str) -> Result<Self, NetError> {
         let mut ws = open(url)?;
         let udp = UdpSocket::bind("127.0.0.1:0")?;
+        crate::sockets::tune_udp(&udp, 64 * 1024);
         udp.set_nonblocking(true)?;
         let address = udp.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
+        let failure = Arc::new(Mutex::new(None));
+        let ended = failure.clone();
         let url = url.to_owned();
         thread::Builder::new()
             .name("websocket-bridge".into())
             .spawn(move || {
-                if let Err(e) = pump(&mut ws, &udp, None, &flag) {
-                    log::warn!("WebSocket connection to {url} ended: {e}");
+                let result = pump(&mut ws, &udp, None, &flag);
+                if !flag.load(Ordering::Relaxed) {
+                    let message = match result {
+                        Ok(()) => "Server connection closed. Try reconnecting.".to_owned(),
+                        Err(e) => format!("Server connection ended: {e}"),
+                    };
+                    log::debug!("WebSocket connection to {url}: {message}");
+                    if let Ok(mut failure) = ended.lock() {
+                        *failure = Some(message);
+                    }
                 }
             })?;
-        Ok(Self { address, stop })
+        Ok(Self {
+            address,
+            stop,
+            failure,
+        })
+    }
+    pub fn failure(&self) -> Option<String> {
+        self.failure.lock().ok()?.clone()
     }
 }
 impl Drop for ClientBridge {
@@ -340,6 +401,7 @@ fn relay_connection(stream: TcpStream, server: SocketAddr, stop: &AtomicBool) {
         }
     };
     let port = udp.local_addr().map_or(0, |a| a.port());
+    crate::sockets::tune_udp(&udp, 64 * 1024);
     log::info!("{client} connected (relay port {port})");
     match pump(&mut ws, &udp, Some(server), stop) {
         Ok(()) => log::info!("{client} disconnected (relay port {port})"),
@@ -350,6 +412,100 @@ fn relay_connection(stream: TcpStream, server: SocketAddr, stop: &AtomicBool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stalled_websocket_applies_backpressure_and_resumes_without_losing_datagrams() {
+        use tungstenite::protocol::Role;
+        struct Stalled {
+            writable: Arc<AtomicBool>,
+            blocked: Arc<AtomicUsize>,
+            output: Arc<Mutex<Vec<u8>>>,
+        }
+        impl Read for Stalled {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::WouldBlock.into())
+            }
+        }
+        impl Write for Stalled {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if !self.writable.load(Ordering::Relaxed) {
+                    self.blocked.fetch_add(1, Ordering::Relaxed);
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                self.output.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let writable = Arc::new(AtomicBool::new(false));
+        let blocked = Arc::new(AtomicUsize::new(0));
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let mut ws = WebSocket::from_raw_socket(
+            Stalled {
+                writable: writable.clone(),
+                blocked: blocked.clone(),
+                output: output.clone(),
+            },
+            Role::Server,
+            Some(config()),
+        );
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        crate::sockets::tune_udp(&udp, 1024 * 1024);
+        udp.set_nonblocking(true).unwrap();
+        let address = udp.local_addr().unwrap();
+        let peek = udp.try_clone().unwrap();
+        let game = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let peer = game.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let worker = thread::spawn(move || pump(&mut ws, &udp, Some(peer), &flag));
+        for i in 0..96u8 {
+            game.send_to(&[i; 900], address).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while blocked.load(Ordering::Relaxed) < 200 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(blocked.load(Ordering::Relaxed) >= 200);
+        assert!(
+            peek.peek_from(&mut [0u8; MAX_DATAGRAM]).is_ok(),
+            "a stalled TCP writer must stop draining UDP"
+        );
+        writable.store(true, Ordering::Relaxed);
+        while output.lock().unwrap().len() < 96 * 904 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        stop.store(true, Ordering::Relaxed);
+        worker.join().unwrap().unwrap();
+        let mut received = WebSocket::from_raw_socket(
+            io::Cursor::new(output.lock().unwrap().clone()),
+            Role::Client,
+            Some(config()),
+        );
+        for i in 0..96u8 {
+            assert_eq!(received.read().unwrap(), Message::binary(vec![i; 900]));
+        }
+    }
+
+    #[test]
+    fn closed_websocket_is_reported_to_the_client_without_waiting_for_udp_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            ws.close(None).unwrap();
+        });
+        let bridge = ClientBridge::connect(&format!("ws://{address}")).unwrap();
+        let start = Instant::now();
+        while bridge.failure().is_none() && start.elapsed() < Duration::from_secs(2) {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(bridge.failure().is_some());
+        worker.join().unwrap();
+    }
 
     #[test]
     fn join_addresses() {

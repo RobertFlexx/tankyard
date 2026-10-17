@@ -6,7 +6,7 @@ Linux and macOS:
 curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh | sh
 ~~~
 
-The installer downloads a precompiled build, checks its SHA-256 checksum, installs it for your user, and adds an application shortcut. Run the same command to update. Your settings and progress stay where they are.
+The installer downloads a precompiled build, checks its SHA-256 checksum, installs it for your user, and adds an application shortcut with the Tank Yard icon. Run the same command to update. Your settings and progress stay where they are.
 
 Windows, from PowerShell:
 
@@ -23,7 +23,7 @@ Download the script first to inspect it or choose an install location:
 ~~~sh
 curl -fsSLO https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh
 sh install.sh --bin-dir "$HOME/.local/bin"
-sh install.sh --version v0.2.8 --no-desktop
+sh install.sh --version v0.2.9 --no-desktop
 sh install.sh --server
 ~~~
 

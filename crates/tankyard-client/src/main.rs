@@ -94,7 +94,13 @@ fn window_conf(cli: &Cli) -> Conf {
             _ => 1,
         },
         fullscreen: settings.fullscreen,
+        icon: Some(macroquad::miniquad::conf::Icon {
+            small: *include_bytes!("../../../assets/icons/tankyard-16.rgba"),
+            medium: *include_bytes!("../../../assets/icons/tankyard-32.rgba"),
+            big: *include_bytes!("../../../assets/icons/tankyard-64.rgba"),
+        }),
         platform: macroquad::miniquad::conf::Platform {
+            linux_wm_class: "tankyard",
             swap_interval: Some(if settings.vsync { 1 } else { 0 }),
             ..Default::default()
         },
@@ -114,6 +120,7 @@ struct App {
     session: Option<Session>,
     pending_join: Option<PendingJoin>,
     connecting_address: String,
+    last_join: Option<(String, String)>,
     view: render::View,
     effects: effects::Effects,
     paused: bool,
@@ -129,6 +136,7 @@ struct App {
     ability_queued: bool,
     fire_queued: bool,
     achievement_feed: achievements::Feed,
+    match_claims: achievements::Claims,
     bundle_revision: u64,
     community: community_ui::CommunityUi,
     catalog_paths: Vec<String>,
@@ -194,6 +202,7 @@ impl App {
             session: None,
             pending_join: None,
             connecting_address: CENTRAL_SERVER.into(),
+            last_join: None,
             view: render::View::new(),
             effects: effects::Effects::new(),
             paused: false,
@@ -209,6 +218,7 @@ impl App {
             ability_queued: false,
             fire_queued: false,
             achievement_feed: achievements::Feed::default(),
+            match_claims: achievements::Claims::default(),
             bundle_revision: 0,
             community: community_ui::CommunityUi::default(),
             catalog_paths,
@@ -279,12 +289,17 @@ impl App {
             self.save_progress();
         }
         self.content.clone_from(&session.bundle.content);
+        if !matches!(&session.engine, session::Engine::Online { host: None, .. }) {
+            self.last_join = None;
+        }
         self.bundle_revision = session.bundle_revision;
         graphics::load(
             &session.bundle.textures,
             self.settings.anisotropic_filtering,
         );
         self.session = Some(session);
+        self.match_claims = achievements::Claims::default();
+        self.achievement_feed = achievements::Feed::default();
         self.menu_over_game = false;
         self.menu_return_paused = false;
         self.paused = false;
@@ -373,7 +388,15 @@ impl App {
                     .collect(),
                 self.menu.difficulty_name(),
             ) {
-                Ok(session) => self.launch(session),
+                Ok(session) => {
+                    if let session::Engine::Online {
+                        host: Some(host), ..
+                    } = &session.engine
+                    {
+                        self.connecting_address = host.address.to_string();
+                    }
+                    self.launch(session);
+                }
                 Err(error) => {
                     self.menu.error = error;
                     self.menu.page = Page::Host;
@@ -396,10 +419,13 @@ impl App {
             Action::Quit => {
                 self.quit = true;
             }
-            Action::Save => match self.settings.save() {
-                Ok(()) => self.menu.error = "Settings saved.".into(),
-                Err(error) => self.menu.error = format!("Could not save: {error}"),
-            },
+            Action::Save => {
+                self.achievement_feed = achievements::Feed::default();
+                match self.settings.save() {
+                    Ok(()) => self.menu.error.clear(),
+                    Err(error) => self.menu.error = format!("Could not save: {error}"),
+                }
+            }
         }
     }
     fn begin_join(&mut self, address: String, password: String, return_page: Page) {
@@ -411,6 +437,7 @@ impl App {
         let (sender, result) = std::sync::mpsc::channel();
         let name = self.settings.player_name.clone();
         let destination = address.clone();
+        self.last_join = Some((address.clone(), password.clone()));
         match std::thread::Builder::new()
             .name("server-connect".into())
             .spawn(move || {
@@ -999,11 +1026,10 @@ impl App {
             }
         }
         if let Some(session) = &self.session
-            && let Some(progress) = session
-                .achievement_tracker
-                .progress(self.settings.games_played, self.settings.total_kills)
-            && achievements::unlock(
-                progress,
+            && self.match_claims.update(
+                &session.achievement_tracker,
+                self.settings.achievement_mode,
+                (self.settings.games_played, self.settings.total_kills),
                 &mut self.settings.unlocked_achievements,
                 &mut self.achievement_feed,
             )
@@ -1047,9 +1073,12 @@ impl App {
         }
         if self.session.is_none() || self.menu_over_game {
             let menu_scale = s.min(screen_height() / 800.0).min(screen_width() / 1180.0);
-            let action = self
-                .menu
-                .draw(&self.content, &mut self.settings, menu_scale);
+            let action = self.menu.draw(
+                &self.content,
+                &mut self.settings,
+                &self.match_claims.unlocked,
+                menu_scale,
+            );
             self.handle(action);
             notifications::draw(&self.achievement_feed, s, self.settings.reduced_motion);
             return;
@@ -1123,6 +1152,7 @@ impl App {
                 }
             }
             if let Some(error) = &session.failure {
+                set_interactive(true);
                 draw_rectangle(
                     0.0,
                     0.0,
@@ -1145,15 +1175,32 @@ impl App {
                     21.0 * s,
                     text_color(),
                 );
+                let retry = self.last_join.is_some();
+                if retry
+                    && button(
+                        Rect::new(
+                            screen_width() * 0.5 - 125.0 * s,
+                            screen_height() * 0.6,
+                            250.0 * s,
+                            42.0 * s,
+                        ),
+                        "Reconnect",
+                        true,
+                        true,
+                        s,
+                    )
+                {
+                    actions.push(HudAction::Reconnect);
+                }
                 if button(
                     Rect::new(
                         screen_width() * 0.5 - 125.0 * s,
-                        screen_height() * 0.6,
+                        screen_height() * 0.6 + if retry { 54.0 * s } else { 0.0 },
                         250.0 * s,
                         42.0 * s,
                     ),
                     "Return to menu",
-                    true,
+                    !retry,
                     true,
                     s,
                 ) {
@@ -1174,7 +1221,13 @@ impl App {
         for action in actions {
             self.hud_action(action);
         }
-        if self.paused && !self.menu_over_game && self.session.is_some() {
+        if self.paused
+            && !self.menu_over_game
+            && self
+                .session
+                .as_ref()
+                .is_some_and(|session| session.failure.is_none())
+        {
             self.pause(s);
         }
         if !self.paused
@@ -1239,6 +1292,12 @@ impl App {
             HudAction::Pause => self.paused = true,
             HudAction::Controls => self.open_menu(Page::Controls),
             HudAction::Menu => self.finish_session(),
+            HudAction::Reconnect => {
+                if let Some((address, password)) = self.last_join.clone() {
+                    self.finish_session();
+                    self.begin_join(address, password, Page::Main);
+                }
+            }
             HudAction::SandboxLevel(level) => {
                 if let Some(session) = &mut self.session {
                     session.sandbox_level(level);

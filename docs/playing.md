@@ -63,6 +63,14 @@ Shoot shapes to earn points before fighting other tanks. Tank upgrades unlock at
 
 ## Bots and multiplayer
 
-Bots farm, spend points, evolve, use abilities, retreat, and pursue mode objectives. They estimate enemy tank movement from visible positions. Steady movement builds their confidence in leading a shot; reversals lower it. Damage and deaths make them more cautious, while successful fights reduce caution. Their memory is bounded, survives respawns, and resets with the match. They do not train a persistent model or gain extra combat stats.
+Bots farm, spend points, evolve, use abilities, retreat, and pursue mode objectives. A small neural network learns motion trends from successive visible positions. It adjusts a bounded part of their aim prediction; reaction delays and aim error still apply. Reversals reduce confidence. Damage and deaths make them more cautious, while successful fights reduce caution. Memory survives respawns and resets with the match. Bots use the same combat stats as players.
+
+Online arenas fill to six tanks by default: 1–5 players get 5–1 bots, and 6 or more get none. Bots return as players leave. Co-op wave enemies are counted separately. Empty servers pause the arena until someone joins. Offline games keep your chosen bot count.
+
+Spawn protection lasts up to 15 seconds while idle. Protected tanks pulse white; Reduced motion uses a steady tint. Moving, firing, or using an ability ends protection. Reconnect on the disconnect screen retries the same server.
+
+## Achievements
+
+Per match is the default. Each achievement can be claimed once in a round, including across deaths and respawns; starting another game or a new round resets claims. Global keeps claims and kill totals across matches on this device. Off disables claims and popups without deleting saved global records. Select the mode on the Achievements page. The ten-round achievement is available in Global. Sandbox, Practice, and modded games do not count.
 
 Choose Host server to play with friends or Join server to enter an address. A local match pauses when you open its menu; a shared server keeps running. The [hosting guide](hosting.md) covers LAN and internet connections, moderation, and match controls.

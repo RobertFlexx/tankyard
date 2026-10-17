@@ -29,6 +29,9 @@ struct Args {
     max_players: Option<usize>,
     #[arg(long)]
     bots: Option<usize>,
+    /// Keep the configured bot population regardless of human player count.
+    #[arg(long)]
+    fixed_bots: bool,
     #[arg(long, value_parser = difficulty_from_name)]
     difficulty: Option<tankyard_ai::Difficulty>,
     #[arg(long)]
@@ -76,6 +79,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(bots) = args.bots {
         settings.bot_count = bots;
+    }
+    if args.fixed_bots {
+        settings.adaptive_bots = false;
     }
     if let Some(difficulty) = args.difficulty {
         settings.difficulty = difficulty;

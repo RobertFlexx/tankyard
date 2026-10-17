@@ -10,6 +10,7 @@ mod config;
 mod host;
 pub mod netem;
 mod session;
+mod sockets;
 mod storage;
 mod transport;
 pub mod websocket;

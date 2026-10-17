@@ -510,6 +510,8 @@ impl Session {
             tank.ability_cooldown = predicted.ability_cooldown;
             tank.boost = predicted.boost;
             tank.shield = predicted.shield;
+            tank.protection = predicted.protection;
+            tank.spawn_immunity = predicted.spawn_immunity;
             tank.barrel_shots.clone_from(&predicted.barrel_shots);
         }
     }
@@ -781,6 +783,35 @@ fn extrapolate_position(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_spawn_protection_display_ends_without_waiting_for_a_server_snapshot() {
+        let content = Content::builtin();
+        let config = WorldConfig {
+            target_count: 0,
+            ..Default::default()
+        };
+        let mut world = tankyard_core::World::new(config.clone(), content.clone());
+        let id = world.add_player("Pilot", false);
+        let snapshot = world.snapshot();
+        let client = NetworkClient::connect("127.0.0.1:9", "Pilot", "").unwrap();
+        let mut session = Session::create(
+            Engine::Online {
+                client: Box::new(client),
+                host: None,
+            },
+            id,
+            Some(snapshot),
+        );
+        let mut predicted = world.tanks[0].clone();
+        assert!(predicted.spawn_immunity);
+        predicted.input.movement = V2::new(1.0, 0.0);
+        predict_tank(&mut predicted, &content, &config, &[], 1, DT);
+        session.predicted = Some(predicted);
+        session.present_prediction(0.5);
+        let displayed = &session.display.as_ref().unwrap().tanks[0];
+        assert!(!displayed.spawn_immunity);
+        assert_eq!(displayed.protection, 0.0);
+    }
     #[test]
     fn sandbox_level_shortcuts_respect_bounds_and_game_state() {
         let mut session = Session::offline(

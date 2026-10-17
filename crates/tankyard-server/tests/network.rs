@@ -44,6 +44,292 @@ fn ready(server: &mut UdpServer, clients: &mut [&mut NetworkClient]) {
 }
 
 #[test]
+fn websocket_disconnect_reaches_the_game_server_before_the_bridge_closes() {
+    use std::net::TcpListener;
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let relay = listener.local_addr().unwrap();
+    drop(listener);
+    let address = server.address;
+    thread::spawn(move || tankyard_server::websocket::run_relay(&relay.to_string(), address, 4));
+    let start = Instant::now();
+    let mut client = loop {
+        match NetworkClient::connect(&format!("ws://{relay}"), "Pilot", "") {
+            Ok(client) => break client,
+            Err(_) if start.elapsed() < Duration::from_secs(3) => {
+                thread::sleep(Duration::from_millis(10))
+            }
+            Err(error) => panic!("{error}"),
+        }
+    };
+    ready(&mut server, &mut [&mut client]);
+    assert_eq!(server.player_count(), 1);
+    drop(client);
+    for _ in 0..120 {
+        pump(&mut server, &mut [], 1);
+        if server.player_count() == 0 {
+            return;
+        }
+    }
+    panic!("bridge discarded the final disconnect packet");
+}
+
+#[test]
+fn empty_online_arenas_sleep_and_resume_when_a_player_joins() {
+    let mut config = settings();
+    config.bot_count = 12;
+    let mut server = UdpServer::bind(config).unwrap();
+    let before = tankyard_protocol::encode_snapshot(&server.session.world.snapshot()).unwrap();
+    pump(&mut server, &mut [], 120);
+    assert_eq!(
+        tankyard_protocol::encode_snapshot(&server.session.world.snapshot()).unwrap(),
+        before
+    );
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Pilot", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    pump(&mut server, &mut [&mut client], 30);
+    assert!(server.session.world.tick > 0);
+    client.disconnect();
+    pump(&mut server, &mut [], 30);
+    assert_eq!(server.player_count(), 0);
+    let tick = server.session.world.tick;
+    pump(&mut server, &mut [], 120);
+    assert_eq!(server.session.world.tick, tick);
+}
+
+#[test]
+fn delayed_input_bursts_are_coalesced_without_kicking_the_player() {
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Burst", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    for sequence in 1..=200 {
+        assert!(client.send_input(PlayerInput {
+            sequence,
+            movement: V2::new(1.0, 0.0),
+            ..Default::default()
+        }));
+    }
+    client.flush().unwrap();
+    pump(&mut server, &mut [&mut client], 12);
+    assert!(client.is_ready());
+    assert_eq!(server.player_count(), 1);
+    let player = server
+        .session
+        .world
+        .tanks
+        .iter()
+        .find(|tank| Some(tank.id) == client.player_id)
+        .unwrap();
+    assert_eq!(player.last_input, 200);
+    // Even excess traffic is bounded and dropped rather than kicking a player.
+    for sequence in 201..=600 {
+        assert!(client.send_input(PlayerInput {
+            sequence,
+            movement: V2::new(1.0, 0.0),
+            ..Default::default()
+        }));
+    }
+    client.flush().unwrap();
+    pump(&mut server, &mut [&mut client], 12);
+    assert!(client.is_ready());
+    assert!(server.metrics.rejected_packets > 0);
+    assert!(client.send_input(PlayerInput {
+        sequence: 601,
+        ..Default::default()
+    }));
+    pump(&mut server, &mut [&mut client], 8);
+    assert_eq!(
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|tank| Some(tank.id) == client.player_id)
+            .unwrap()
+            .input
+            .movement,
+        V2::ZERO
+    );
+}
+
+#[test]
+fn delayed_click_and_ability_taps_survive_input_coalescing() {
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Tap", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    server
+        .session
+        .world
+        .sandbox_class(client.player_id.unwrap(), "riposte");
+    assert!(client.send_input(PlayerInput {
+        sequence: 1,
+        fire: true,
+        ability: true,
+        ..Default::default()
+    }));
+    assert!(client.send_input(PlayerInput {
+        sequence: 2,
+        ..Default::default()
+    }));
+    client.flush().unwrap();
+    pump(&mut server, &mut [&mut client], 1);
+    let tank = server
+        .session
+        .world
+        .tanks
+        .iter()
+        .find(|tank| Some(tank.id) == client.player_id)
+        .unwrap();
+    assert_eq!(tank.last_input, 2);
+    assert!(
+        tank.shot_count > 0,
+        "a queued release must not swallow a short click"
+    );
+    assert!(
+        tank.ability_cooldown > 0.0,
+        "a queued release must not swallow an ability tap"
+    );
+}
+
+#[test]
+fn online_bots_scale_with_join_leave_restart_and_admin_limits() {
+    let mut config = settings();
+    config.bot_count = 12;
+    let mut server = UdpServer::bind(config).unwrap();
+    let bots = |server: &UdpServer| {
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .filter(|tank| tank.bot)
+            .count()
+    };
+    assert_eq!(bots(&server), 6);
+    let mut clients = Vec::new();
+    for humans in 1..=7 {
+        clients.push(
+            NetworkClient::connect(&server.address.to_string(), &format!("Pilot {humans}"), "")
+                .unwrap(),
+        );
+        let mut refs: Vec<_> = clients.iter_mut().collect();
+        ready(&mut server, &mut refs);
+        assert_eq!(server.player_count(), humans);
+        assert_eq!(bots(&server), 6usize.saturating_sub(humans));
+    }
+    assert!(
+        !server
+            .admin_command("restart")
+            .message
+            .starts_with("Error:")
+    );
+    assert_eq!(bots(&server), 0);
+    for _ in 0..3 {
+        clients.pop().unwrap().disconnect();
+        let mut refs: Vec<_> = clients.iter_mut().collect();
+        pump(&mut server, &mut refs, 12);
+    }
+    assert_eq!(server.player_count(), 4);
+    assert_eq!(bots(&server), 2);
+    let reply = server.admin_command("bots 1");
+    assert!(!reply.message.starts_with("Error:"), "{}", reply.message);
+    assert_eq!(bots(&server), 1);
+    server.admin_command("bots 0");
+    assert_eq!(bots(&server), 0);
+}
+
+#[test]
+fn fixed_bot_policy_is_available_and_offline_population_is_unchanged() {
+    let mut config = settings();
+    config.bot_count = 12;
+    config.adaptive_bots = false;
+    let mut server = UdpServer::bind(config).unwrap();
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Pilot", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    assert_eq!(
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .filter(|tank| tank.bot)
+            .count(),
+        12
+    );
+    let offline = tankyard_server::LocalSession::new(WorldConfig::default(), 12);
+    assert_eq!(
+        offline.world.tanks.iter().filter(|tank| tank.bot).count(),
+        12
+    );
+}
+
+#[test]
+fn connection_and_controls_recover_under_delay_jitter_and_packet_loss() {
+    use tankyard_server::netem::{EmulationConfig, NetworkEmulator};
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let relay = NetworkEmulator::start(
+        server.address,
+        EmulationConfig {
+            latency_ms: 80,
+            jitter_ms: 15,
+            loss_percent: 10.0,
+            seed: 42,
+        },
+    )
+    .unwrap();
+    let mut client = NetworkClient::connect(&relay.address.to_string(), "Loss test", "").unwrap();
+    let start = Instant::now();
+    let mut previous = start;
+    let mut sequence = 0;
+    let mut received_ticks = 0;
+    let mut last_tick = 0;
+    let mut stopped = false;
+    while start.elapsed() < Duration::from_secs(5) {
+        let now = Instant::now();
+        let elapsed = now.duration_since(previous);
+        previous = now;
+        client.update(elapsed).unwrap();
+        if client.is_ready() {
+            sequence += 1;
+            assert!(client.send_input(PlayerInput {
+                sequence,
+                movement: if start.elapsed() < Duration::from_secs(3) {
+                    V2::new(1.0, 0.0)
+                } else {
+                    V2::ZERO
+                },
+                ..Default::default()
+            }));
+            client.flush().unwrap();
+        }
+        server.update(elapsed).unwrap();
+        if let Some(snapshot) = client.player_snapshot() {
+            if snapshot.tick > last_tick {
+                received_ticks += 1;
+                last_tick = snapshot.tick;
+            }
+            if start.elapsed() > Duration::from_secs(4) {
+                stopped = snapshot.tanks.iter().any(|tank| {
+                    Some(tank.id) == client.player_id && tank.input.movement == V2::ZERO
+                });
+            }
+        }
+        thread::sleep(STEP);
+    }
+    assert!(client.is_ready());
+    assert!(
+        received_ticks > 25,
+        "only {received_ticks} snapshots arrived"
+    );
+    assert!(
+        stopped,
+        "released controls must reach the server despite lost packets"
+    );
+    assert!(relay.stats().dropped > 0);
+    assert_eq!(server.metrics.dropped_catchup_ticks, 0);
+}
+
+#[test]
 fn coop_wave_snapshots_and_bot_settings_keep_raiders_separate_from_teammates() {
     let mut config = settings();
     config.world.mode = Mode::CoopPve;

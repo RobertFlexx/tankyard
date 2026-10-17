@@ -1,7 +1,6 @@
 use crate::{AdminReply, NetError, UdpServer, difficulty_from_name, mode_from_name, unix_time};
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Read, net::IpAddr, path::Path};
-use tankyard_core::Mode;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Ban {
@@ -99,12 +98,12 @@ impl UdpServer {
             "bots" => {
                 let count: usize = args.next().ok_or_else(|| NetError("expected a bot count".into()))?.parse().map_err(|_| NetError("invalid bot count".into()))?;
                 if count > 128 || count + self.settings.max_players > 256 { return Err(NetError("bot count exceeds configured resource limits".into())); }
-                let ids: Vec<_> = self.session.world.tanks.iter().filter(|tank| tank.bot && !(self.settings.world.mode == Mode::CoopPve && tank.team == 2)).map(|tank| tank.id).collect();
-                for &id in ids.iter().skip(count) { self.session.world.remove_player(id); }
-                for i in ids.len()..count { self.session.world.add_player(&format!("Vector {:02}", i + 1), true); }
                 self.settings.bot_count = count;
+                self.sync_bots();
                 self.broadcast_match_settings();
-                Ok(format!("Bot population is now {count}."))
+                Ok(if self.settings.adaptive_bots {
+                    format!("Bot limit is now {count}; population scales down as players join.")
+                } else { format!("Bot population is now {count}.") })
             }
             "mode" => {
                 let mode = mode_from_name(args.next().ok_or_else(|| NetError("expected a game mode".into()))?).map_err(NetError)?;

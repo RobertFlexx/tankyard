@@ -13,7 +13,7 @@ usage() {
     cat <<'HELP'
 Tank Yard installer
 
-  sh install.sh [--version v0.2.8] [--bin-dir DIR] [--no-desktop] [--server]
+  sh install.sh [--version v0.2.9] [--bin-dir DIR] [--no-desktop] [--server]
 
 Installs the game into ~/.local/bin and adds an application shortcut.
 Run the same command to update. --server installs the server and relay instead.
@@ -145,8 +145,10 @@ if [ "$desktop" = yes ]; then
     else
         data_dir=$(printenv XDG_DATA_HOME || true)
         [ -n "$data_dir" ] || data_dir="$HOME/.local/share"
-        mkdir -p "$data_dir/applications" "$data_dir/icons/hicolor/scalable/apps"
+        mkdir -p "$data_dir/applications" "$data_dir/icons/hicolor/scalable/apps" "$data_dir/icons/hicolor/256x256/apps"
         install -m 644 "$payload/tankyard.svg" "$data_dir/icons/hicolor/scalable/apps/tankyard.svg"
+        install -m 644 "$payload/tankyard.png" "$data_dir/icons/hicolor/256x256/apps/tankyard.png"
+        icon_path=$(printf '%s' "$data_dir/icons/hicolor/256x256/apps/tankyard.png" | sed 's/\\/\\\\/g')
         # Escape literal desktop Exec metacharacters, without shell expansion.
         # shellcheck disable=SC2016
         escaped=$(printf '%s' "$bin_dir/tankyard" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\$/\\$/g; s/`/\\`/g; s/%/%%/g')
@@ -155,12 +157,16 @@ if [ "$desktop" = yes ]; then
 Type=Application
 Name=Tank Yard
 Exec="$escaped"
-Icon=tankyard
+Icon=$icon_path
+StartupWMClass=tankyard
 Terminal=false
 Categories=Game;ActionGame;
 DESKTOP
         if command -v update-desktop-database >/dev/null 2>&1; then
             update-desktop-database "$data_dir/applications" >/dev/null 2>&1 || true
+        fi
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -f -t "$data_dir/icons/hicolor" >/dev/null 2>&1 || true
         fi
         printf 'Added Tank Yard to your application menu.\n'
     fi

@@ -40,6 +40,7 @@ pub struct Settings {
     pub total_kills: u32,
     pub highest_score: u32,
     pub unlocked_achievements: Vec<String>,
+    pub achievement_mode: tankyard_client::achievements::AchievementMode,
     pub practice_records: Vec<tankyard_client::practice::Record>,
     pub enabled_mods: Vec<String>,
 }
@@ -78,6 +79,7 @@ impl Default for Settings {
             total_kills: 0,
             highest_score: 0,
             unlocked_achievements: vec![],
+            achievement_mode: Default::default(),
             practice_records: vec![],
             enabled_mods: vec![],
         }
@@ -429,5 +431,9 @@ mod tests {
         let saved = serde_json::to_string(&settings).unwrap();
         let loaded: Settings = serde_json::from_str(&saved).unwrap();
         assert_eq!(loaded.unlocked_achievements, settings.unlocked_achievements);
+        assert_eq!(
+            loaded.achievement_mode,
+            tankyard_client::achievements::AchievementMode::PerMatch
+        );
     }
 }

@@ -6,6 +6,7 @@
 //! adjust spacing after damage, kills, and deaths. That memory lasts across lives.
 mod learning;
 mod navigation;
+mod neural;
 mod perception;
 
 use navigation::{Navigation, clear_line};
@@ -41,7 +42,7 @@ impl Difficulty {
             Self::Beginner => 20,
             Self::Normal => 12,
             Self::Advanced => 8,
-            Self::Expert => 5,
+            Self::Expert => 7,
         }
     }
 
@@ -58,8 +59,8 @@ impl Difficulty {
         match self {
             Self::Beginner => 0.15,
             Self::Normal => 0.55,
-            Self::Advanced => 0.9,
-            Self::Expert => 1.,
+            Self::Advanced => 0.8,
+            Self::Expert => 0.9,
         }
     }
 
@@ -67,8 +68,8 @@ impl Difficulty {
         match self {
             Self::Beginner => 0.12,
             Self::Normal => 0.075,
-            Self::Advanced => 0.025,
-            Self::Expert => 0.008,
+            Self::Advanced => 0.045,
+            Self::Expert => 0.03,
         }
     }
 
@@ -76,8 +77,8 @@ impl Difficulty {
         match self {
             Self::Beginner => 0.2,
             Self::Normal => 0.5,
-            Self::Advanced => 0.95,
-            Self::Expert => 1.2,
+            Self::Advanced => 0.75,
+            Self::Expert => 0.9,
         }
     }
 
@@ -229,9 +230,9 @@ impl BotController {
             }
             let dodge_period = match difficulty {
                 Difficulty::Beginner => 12,
-                Difficulty::Normal => 3,
-                Difficulty::Advanced => 2,
-                Difficulty::Expert => 1,
+                Difficulty::Normal => 6,
+                Difficulty::Advanced => 5,
+                Difficulty::Expert => 4,
             };
             if world
                 .tick

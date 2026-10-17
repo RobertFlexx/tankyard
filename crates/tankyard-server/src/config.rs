@@ -20,6 +20,7 @@ pub struct ServerSettings {
     pub public_addresses: Vec<std::net::SocketAddr>,
     pub max_players: usize,
     pub bot_count: usize,
+    pub adaptive_bots: bool,
     pub difficulty: Difficulty,
     pub password: String,
     pub allow_sandbox: bool,
@@ -48,6 +49,7 @@ impl Default for ServerSettings {
             public_addresses: vec![],
             max_players: 64,
             bot_count: 12,
+            adaptive_bots: true,
             difficulty: Difficulty::Normal,
             password: String::new(),
             allow_sandbox: false,
@@ -63,6 +65,14 @@ impl Default for ServerSettings {
     }
 }
 impl ServerSettings {
+    /// Fill quiet online arenas to six participants; humans always take priority.
+    pub fn desired_bots(&self, humans: usize) -> usize {
+        if self.adaptive_bots {
+            self.bot_count.min(6usize.saturating_sub(humans))
+        } else {
+            self.bot_count
+        }
+    }
     pub(crate) fn configured_match(
         &self,
         maps: &[tankyard_content::MapDef],
@@ -235,6 +245,7 @@ impl std::fmt::Debug for ServerSettings {
             .field("world", &self.world)
             .field("max_players", &self.max_players)
             .field("bot_count", &self.bot_count)
+            .field("adaptive_bots", &self.adaptive_bots)
             .field("require_accounts", &self.require_accounts)
             .field("password", &"[redacted]")
             .field(

@@ -1227,6 +1227,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1277,7 +1287,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-ai"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "serde",
  "tankyard-content",
@@ -1286,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-client"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "clap",
  "directories",
@@ -1304,7 +1314,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-content"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -1312,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-core"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "serde",
  "tankyard-content",
@@ -1321,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-mods"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "image",
  "serde",
@@ -1331,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-protocol"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "lz4_flex",
  "postcard",
@@ -1344,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-server"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "clap",
  "ctrlc",
@@ -1355,6 +1365,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "socket2",
  "tankyard-ai",
  "tankyard-content",
  "tankyard-core",
@@ -1367,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-tools"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "clap",
  "postcard",

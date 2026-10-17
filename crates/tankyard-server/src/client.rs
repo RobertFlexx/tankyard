@@ -133,6 +133,7 @@ impl NetworkClient {
         if password.len() > 128 {
             return Err(NetError("password exceeds 128 bytes".into()));
         }
+        crate::sockets::tune_udp(&socket, 256 * 1024);
         let transport = NetcodeClientTransport::new(unix_time(), authentication, socket)
             .map_err(|e| NetError(e.to_string()))?;
         let bundle = tankyard_mods::GameBundle::builtin();
@@ -177,6 +178,9 @@ impl NetworkClient {
     }
     pub fn update(&mut self, elapsed: Duration) -> Result<(), NetError> {
         self.events.clear();
+        if let Some(failure) = self._bridge.as_ref().and_then(|bridge| bridge.failure()) {
+            return self.fail(failure);
+        }
         if self.player_id.is_none() {
             self.handshake_elapsed += elapsed;
             if self.handshake_elapsed > Duration::from_secs(15) {

@@ -5,7 +5,7 @@ use crate::{
     ui::*,
 };
 use macroquad::prelude::*;
-use tankyard_client::achievements::ACHIEVEMENTS;
+use tankyard_client::achievements::{ACHIEVEMENTS, AchievementMode};
 use tankyard_content::{Ability, ClassDef, Content};
 use tankyard_core::{Mode, WorldConfig};
 
@@ -205,7 +205,13 @@ impl Menu {
             ..Default::default()
         }
     }
-    pub fn draw(&mut self, content: &Content, settings: &mut Settings, s: f32) -> Action {
+    pub fn draw(
+        &mut self,
+        content: &Content,
+        settings: &mut Settings,
+        match_claims: &[String],
+        s: f32,
+    ) -> Action {
         if is_key_pressed(KeyCode::Tab) && self.binding.is_none() {
             self.focus_next(is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift));
         }
@@ -240,7 +246,7 @@ impl Menu {
             Page::Host => self.connection(settings, true, s),
             Page::Encyclopedia => self.encyclopedia(content, s),
             Page::Settings => self.settings(settings, s),
-            Page::Achievements => self.achievements(settings, s),
+            Page::Achievements => self.achievements(settings, match_claims, s),
             Page::Mods => self.mods(settings, s),
             Page::Credits => self.credits(s),
             Page::Practice => self.practice(settings, s),
@@ -835,7 +841,7 @@ impl Menu {
             label(self.mode.name(), x, y + 219.0 * s, 24.0 * s, CYAN);
             label(
                 &format!(
-                    "{} bots  ·  {}  ·  UDP port 5000",
+                    "{} bot limit  ·  {}  ·  UDP port 5000",
                     self.bots,
                     self.difficulty_name()
                 ),
@@ -1736,15 +1742,45 @@ impl Menu {
         );
         Action::None
     }
-    fn achievements(&self, settings: &Settings, s: f32) -> Action {
+    fn achievements(&self, settings: &mut Settings, match_claims: &[String], s: f32) -> Action {
         let x = 40.0 * s;
         let y = 169.0 * s;
         label("Achievements", x, y, 30.0 * s, text_color());
+        for (i, (mode, name)) in [
+            (AchievementMode::PerMatch, "Per match"),
+            (AchievementMode::Global, "Global"),
+            (AchievementMode::Off, "Off"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if button(
+                Rect::new(x + i as f32 * 137.0 * s, y + 20.0 * s, 125.0 * s, 32.0 * s),
+                name,
+                settings.achievement_mode == mode,
+                true,
+                s,
+            ) && settings.achievement_mode != mode
+            {
+                settings.achievement_mode = mode;
+                return Action::Save;
+            }
+        }
+        let mode = settings.achievement_mode;
+        let unlocked = if mode == AchievementMode::Global {
+            settings.unlocked_achievements.as_slice()
+        } else {
+            match_claims
+        };
         right_label(
             &format!(
                 "{} / {} unlocked",
-                settings.unlocked_achievements.len(),
-                ACHIEVEMENTS.len()
+                if mode == AchievementMode::Off {
+                    0
+                } else {
+                    unlocked.len()
+                },
+                ACHIEVEMENTS.iter().filter(|a| a.available(mode)).count()
             ),
             screen_width() - x,
             y,
@@ -1752,20 +1788,32 @@ impl Menu {
             muted_color(),
         );
         label(
-            "Saved on this device. Sandbox and modded games do not count.",
+            match mode {
+                AchievementMode::PerMatch => {
+                    "Reset each match. Sandbox and modded games do not count."
+                }
+                AchievementMode::Global => {
+                    "Saved on this device across matches. Sandbox and modded games do not count."
+                }
+                AchievementMode::Off => "Achievements are off. Your saved global records are kept.",
+            },
             x,
-            y + 30.0 * s,
+            y + 77.0 * s,
             15.0 * s,
             muted_color(),
         );
         let gap = 12.0 * s;
         let width = (screen_width() - x * 2.0 - gap * 2.0) / 3.0;
-        let height = ((screen_height() - y - 135.0 * s) / 5.0 - gap).min(85.0 * s);
-        for (i, a) in ACHIEVEMENTS.iter().enumerate() {
-            let earned = settings.unlocked_achievements.iter().any(|id| id == a.id);
+        let height = ((screen_height() - y - 183.0 * s) / 5.0 - gap).min(85.0 * s);
+        for (i, a) in ACHIEVEMENTS
+            .iter()
+            .filter(|a| a.available(mode))
+            .enumerate()
+        {
+            let earned = unlocked.iter().any(|id| id == a.id);
             let r = Rect::new(
                 x + (i % 3) as f32 * (width + gap),
-                y + 54.0 * s + (i / 3) as f32 * (height + gap),
+                y + 96.0 * s + (i / 3) as f32 * (height + gap),
                 width,
                 height,
             );

@@ -26,6 +26,9 @@ struct Args {
     local: bool,
     #[arg(long, default_value_t = 12)]
     bots: usize,
+    /// Keep the requested bot count while measuring a fixed workload.
+    #[arg(long)]
+    fixed_bots: bool,
     #[arg(long, default_value = "")]
     password: String,
     #[arg(long, default_value_t = 0)]
@@ -48,6 +51,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             bind: "127.0.0.1:0".into(),
             max_players: args.clients,
             bot_count: args.bots,
+            adaptive_bots: !args.fixed_bots,
             ban_file: String::new(),
             password: args.password.clone(),
             ..Default::default()

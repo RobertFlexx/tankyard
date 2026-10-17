@@ -563,6 +563,15 @@ pub fn world(
         let visual = effects.hulls.get(&tank.id);
         let r = visual.map_or(tank.radius, |hull| hull.radius) * z;
         let color = team_color(tank.team, tank.id == local, settings.colorblind);
+        let spawn_flash = if tank.spawn_immunity && tank.protection > 0.0 {
+            if settings.reduced_motion {
+                0.03
+            } else {
+                0.035 + (get_time() as f32 * std::f32::consts::TAU * 1.5).sin() * 0.025
+            }
+        } else {
+            0.0
+        };
         let parrying = class.ability == tankyard_content::Ability::Parry && tank.shield > 0.0;
         if tank.protection > 0.0 || tank.shield > 0.0 {
             let aura = if parrying { AMBER } else { color };
@@ -593,7 +602,12 @@ pub fn world(
             r,
             *effects.display_aim.get(&tank.id).unwrap_or(&tank.aim),
             *effects.recoil.get(&tank.id).unwrap_or(&0.0),
-            *effects.flashes.get(&tank.id).unwrap_or(&0.0),
+            effects
+                .flashes
+                .get(&tank.id)
+                .copied()
+                .unwrap_or(0.0)
+                .max(spawn_flash),
             color,
             if tank.id == local {
                 local_animation_time

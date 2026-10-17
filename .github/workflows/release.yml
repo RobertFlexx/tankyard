@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -179,6 +179,10 @@ jobs:
         env:
           BUILD_PLATFORM: ${{ matrix.platform }}
         run: python scripts/package_release.py --platform "$BUILD_PLATFORM" --version "$RELEASE_TAG" --binary-dir "$BINARY_DIR"
+      - name: Test Windows installation before publishing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/tests/windows_install.ps1 -Version $env:RELEASE_TAG
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-${{ matrix.platform }}
@@ -266,7 +270,11 @@ jobs:
           "$RUNNER_TEMP/tankyard-installed/tankyard" --version
           if test "$RUNNER_OS" = macOS; then
             codesign --verify --strict "$HOME/Applications/Tank Yard.app"
+            test -s "$HOME/Applications/Tank Yard.app/Contents/Resources/tankyard.icns"
             "$HOME/Applications/Tank Yard.app/Contents/MacOS/tankyard" --version
+          else
+            test -s "$HOME/.local/share/icons/hicolor/256x256/apps/tankyard.png"
+            grep -q '^StartupWMClass=tankyard$' "$HOME/.local/share/applications/tankyard.desktop"
           fi
       - name: Install published Windows build
         if: runner.os == 'Windows'
@@ -276,3 +284,11 @@ jobs:
           ./install.ps1 -Version $env:RELEASE_TAG -InstallDir $Destination -NoShortcut -NoPath
           & "$Destination/tankyard.exe" --version
           if ($LASTEXITCODE -ne 0) { throw "Installed game failed to start." }
+          if (-not (Test-Path "$Destination/tankyard.ico")) { throw "Installed game icon missing." }
+          ./install.ps1 -Version $env:RELEASE_TAG -InstallDir $Destination -NoShortcut -NoPath -Server
+          foreach ($Binary in @("tankyard-server", "tankyard-relay")) {
+            & "$Destination/$Binary.exe" --version
+            if ($LASTEXITCODE -ne 0) { throw "Installed $Binary failed to start." }
+          }
+          & "$Destination/tankyard.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "Server install replaced the game." }

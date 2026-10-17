@@ -10,8 +10,11 @@ struct Opponent {
     position: V2,
     tick: u64,
     motion: Motion,
+    measured: V2,
+    features: Option<[f32; 6]>,
 }
 pub struct Learning {
+    neural: crate::neural::MotionNet,
     opponents: Vec<Opponent>,
     pub caution: f32,
     health: Option<f32>,
@@ -21,6 +24,7 @@ pub struct Learning {
 impl Default for Learning {
     fn default() -> Self {
         Self {
+            neural: Default::default(),
             opponents: Vec::new(),
             caution: 0.35,
             health: None,
@@ -50,10 +54,34 @@ impl Learning {
                 let tolerance = 12. + measured.length() * elapsed * 0.85;
                 let accuracy = (1. - position.distance(prediction) / tolerance).clamp(0., 1.);
                 opponent.motion.confidence += (accuracy - opponent.motion.confidence) * 0.18;
-                opponent.motion.velocity = opponent.motion.velocity.lerp(measured, 0.55);
+                let change = (measured - opponent.measured).clamp_length(200.0) / 200.0;
+                if let Some(features) = opponent.features {
+                    self.neural.train(features, [change.x, change.y]);
+                }
+                let features = [
+                    (measured.x / 1200.0).clamp(-1.0, 1.0),
+                    (measured.y / 1200.0).clamp(-1.0, 1.0),
+                    change.x,
+                    change.y,
+                    (elapsed / 0.8).clamp(0.0, 1.0),
+                    1.0,
+                ];
+                let learned = self.neural.predict(features);
+                let strength = (self.neural.samples as f32 / 120.0).min(1.0)
+                    * opponent.motion.confidence
+                    * 0.25;
+                let correction =
+                    V2::new(learned[0], learned[1]).clamp_length(1.0) * (80.0 * strength);
+                opponent.motion.velocity = (opponent.motion.velocity.lerp(measured, 0.55)
+                    + correction)
+                    .clamp_length(1200.0);
+                opponent.measured = measured;
+                opponent.features = Some(features);
             } else if elapsed > 0.8 {
                 opponent.motion.velocity = V2::ZERO;
                 opponent.motion.confidence *= 0.7;
+                opponent.measured = V2::ZERO;
+                opponent.features = None;
             }
             opponent.position = position;
             opponent.tick = tick;
@@ -78,6 +106,8 @@ impl Learning {
             position,
             tick,
             motion,
+            measured: V2::ZERO,
+            features: None,
         });
         motion
     }
@@ -101,6 +131,7 @@ mod tests {
             learning.observe(1, V2::new(i as f32 * 20., 0.), i * 12);
         }
         let steady = learning.confidence(1);
+        assert!(learning.neural.samples > 20);
         assert!(steady > 0.85);
         let mut position = V2::new(600., 0.);
         for i in 31..=45 {

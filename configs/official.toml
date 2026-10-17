@@ -6,6 +6,7 @@ bind = "0.0.0.0:5000"
 chat_enabled = false
 require_accounts = false
 bot_count = 12
+adaptive_bots = true # Fill to six tanks; no bots with six or more players.
 max_players = 64
 ban_file = "configs/official-bans.json"
 global_audit_file = "configs/global-audit.jsonl"

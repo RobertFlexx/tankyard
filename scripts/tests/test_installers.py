@@ -133,6 +133,10 @@ case "$1" in -s) printf '%s\\n' Linux ;; -m) printenv TANKYARD_TEST_ARCH ;; esac
         self.assertIn('Exec="', shortcut)
         self.assertIn(r'\"with spaces\"', shortcut)
         self.assertTrue((self.root / "data/icons/hicolor/scalable/apps/tankyard.svg").is_file())
+        icon = self.root / "data/icons/hicolor/256x256/apps/tankyard.png"
+        self.assertEqual(icon.read_bytes(), (ROOT / "assets/icons/tankyard.png").read_bytes())
+        self.assertIn(f"Icon={icon}\n", shortcut)
+        self.assertIn("StartupWMClass=tankyard\n", shortcut)
 
     def test_packages_have_licenses_examples_and_no_private_config(self):
         with tarfile.open(self.archive) as archive:

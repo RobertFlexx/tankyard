@@ -367,6 +367,7 @@ pub enum HudAction {
     Pause,
     Controls,
     Menu,
+    Reconnect,
     SandboxLevel(u8),
     SandboxClass(String),
     Bot,

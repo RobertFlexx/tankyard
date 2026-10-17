@@ -69,6 +69,10 @@ The load tool also supports `--latency-ms 100 --jitter-ms 20 --loss-percent 5`. 
 
 ## Scaling arenas
 
+`adaptive_bots = true` is the default for official and community servers. `bot_count` is a ceiling: the arena fills to six participants, with zero bots at six human players. Co-op wave enemies are separate. With no humans connected, the simulation and round timers pause while networking continues to accept joins. Use `adaptive_bots = false` or `--fixed-bots` for a fixed bot population.
+
+Realtime input bursts from delayed connections are coalesced. The server retains bounded processing and drops excess input instead of kicking a player for packet bunching. Malformed input and control-message limits still apply. UDP buffers absorb short bursts where the operating system allows it; WebSocket queues are bounded and pause UDP reads when TCP is blocked.
+
 Run each arena in its own server process. That lets separate CPU cores and machines handle additional rooms. The central lobby should send players to an arena's UDP address and issue its connection token before they join. Account, database, and matchmaking requests belong outside the simulation thread; account verifiers should read cached claims and revocations.
 
 Start with the current 64-player room limit and measure on the hosting hardware before increasing it. At 60 ticks per second, each tick has 16.7 ms; snapshot batches and network work need CPU time too. Monitor `status` for tick percentiles, snapshot time, skipped snapshots, and dropped catch-up ticks. Add rooms while there is still CPU and network headroom. The configured player limit alone does not establish capacity.
@@ -78,8 +82,8 @@ Start with the current 64-player room limit and measure on the hosting hardware 
 Repeat these local workloads after server changes:
 
 ```sh
-./target/release/tankyard-load --local --clients 64 --bots 24 --seconds 30
-./target/release/tankyard-load --local --clients 128 --bots 24 --seconds 30
+./target/release/tankyard-load --local --clients 64 --bots 24 --fixed-bots --seconds 30
+./target/release/tankyard-load --local --clients 128 --bots 24 --fixed-bots --seconds 30
 ./target/release/tankyard-load --local --clients 8 --seconds 30 --latency-ms 100 --jitter-ms 20 --loss-percent 5
 ```
 

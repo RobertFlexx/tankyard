@@ -46,18 +46,22 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
         shutil.copytree(ROOT / "docs", payload / "docs")
         shutil.copy2(ROOT / "assets/fonts/LICENSE-DejaVu.txt", payload / "licenses/DejaVu.txt")
         shutil.copy2(ROOT / "assets/tankyard.svg", payload)
+        for icon in ("tankyard.png", "tankyard.ico", "tankyard.icns"):
+            shutil.copy2(ROOT / "assets/icons" / icon, payload)
         (payload / "VERSION").write_text(version + "\n", encoding="utf-8")
         if platform == "macos-universal":
             app = payload / "Tank Yard.app/Contents"
             (app / "MacOS").mkdir(parents=True)
             (app / "Resources").mkdir()
             shutil.copy2(payload / "tankyard", app / "MacOS/tankyard")
+            shutil.copy2(payload / "tankyard.icns", app / "Resources/tankyard.icns")
             with (app / "Info.plist").open("wb") as stream:
                 plistlib.dump({
                     "CFBundleName": "Tank Yard",
                     "CFBundleDisplayName": "Tank Yard",
                     "CFBundleIdentifier": "me.kokonico.tankyard",
                     "CFBundleExecutable": "tankyard",
+                    "CFBundleIconFile": "tankyard.icns",
                     "CFBundlePackageType": "APPL",
                     "CFBundleShortVersionString": version.removeprefix("v").split("-")[0],
                     "CFBundleVersion": version.removeprefix("v").split("-")[0],

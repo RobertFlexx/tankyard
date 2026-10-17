@@ -22,7 +22,7 @@ try {
         $Release = Invoke-RestMethod "https://api.github.com/repos/$Repository/releases/latest" -Headers @{ "User-Agent" = "TankYard-Installer" }
         $Version = $Release.tag_name
     }
-    if ($Version -notmatch '^v\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$') { throw "Use a release tag such as v0.2.8." }
+    if ($Version -notmatch '^v\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$') { throw "Use a release tag such as v0.2.9." }
     $RootName = "tankyard-$Version-windows-x86_64"
     $Archive = "$RootName.zip"
     $Base = "https://github.com/$Repository/releases/download/$Version"
@@ -38,13 +38,16 @@ try {
     Write-Host "Download verified."
     Expand-Archive "$WorkDir\$Archive" "$WorkDir\unpacked"
     $Payload = Join-Path "$WorkDir\unpacked" $RootName
-    $Binaries = if ($Server) { @("tankyard-server", "tankyard-relay") } else { @("tankyard") }
+    [string[]]$Binaries = if ($Server) { @("tankyard-server", "tankyard-relay") } else { @("tankyard") }
     foreach ($Binary in $Binaries) {
         if (-not (Test-Path "$Payload\$Binary.exe" -PathType Leaf)) { throw "The archive is missing $Binary.exe." }
     }
     & "$Payload\$($Binaries[0]).exe" --version
     if ($LASTEXITCODE -ne 0) { throw "This build cannot run on this computer." }
     New-Item -ItemType Directory -Force $InstallDir | Out-Null
+    if (-not $Server) {
+        Copy-Item "$Payload\tankyard.ico" (Join-Path $InstallDir "tankyard.ico") -Force
+    }
     foreach ($Binary in $Binaries) {
         $Destination = Join-Path $InstallDir "$Binary.exe"
         Copy-Item "$Payload\$Binary.exe" "$Destination.new" -Force
@@ -64,6 +67,7 @@ try {
         $Shortcut = $Shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath("Programs")) "Tank Yard.lnk"))
         $Shortcut.TargetPath = Join-Path $InstallDir "tankyard.exe"
         $Shortcut.WorkingDirectory = $InstallDir
+        $Shortcut.IconLocation = (Join-Path $InstallDir "tankyard.ico") + ",0"
         $Shortcut.Save()
     }
     Write-Host "Installed to $InstallDir" -ForegroundColor Green

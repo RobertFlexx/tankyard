@@ -124,7 +124,7 @@ impl UdpServer {
         let loaded_mods = tankyard_mods::load(&settings.mods).map_err(NetError)?;
         let mut session = LocalSession::with_mods(
             settings.world.clone(),
-            settings.bot_count,
+            settings.desired_bots(0),
             loaded_mods.clone(),
         )
         .map_err(NetError)?;
@@ -132,6 +132,7 @@ impl UdpServer {
         let content_hash = session.bundle.fingerprint();
         let game_data = encode_game_data_message(&session.bundle)?;
         let socket = UdpSocket::bind(&settings.bind)?;
+        crate::sockets::tune_udp(&socket, 1024 * 1024);
         let address = socket.local_addr()?;
         if settings.netcode_private_key.is_none() && !address.ip().is_loopback() {
             log::warn!(
@@ -213,13 +214,24 @@ impl UdpServer {
             let client = self.client_ids[index];
             if let Some(peer) = self.peers.get_mut(&client) {
                 peer.control_tokens = (peer.control_tokens + elapsed.as_secs_f32() * 12.).min(24.);
-                peer.input_tokens = (peer.input_tokens + elapsed.as_secs_f32() * 120.).min(32.);
+                peer.input_tokens = (peer.input_tokens + elapsed.as_secs_f32() * 120.).min(256.);
             }
             self.receive_client(client);
         }
         self.expire_clients();
+        self.sync_bots();
+        let occupied = self
+            .peers
+            .values()
+            .any(|peer| peer.entity.is_some() && peer.disconnect_at.is_none());
         let tick_time = Duration::from_secs_f64(1. / f64::from(TICK_RATE));
-        self.accumulator += elapsed;
+        // Transport and joins keep running; discard idle simulation time so
+        // the first player does not inherit an empty arena's catch-up work.
+        if occupied {
+            self.accumulator += elapsed;
+        } else {
+            self.accumulator = Duration::ZERO;
+        }
         let mut catchup = 0;
         while self.accumulator >= tick_time && catchup < 8 {
             self.accumulator -= tick_time;
@@ -258,6 +270,36 @@ impl UdpServer {
 
     pub fn player_count(&self) -> usize {
         self.peers.values().filter(|p| p.entity.is_some()).count()
+    }
+    pub(crate) fn sync_bots(&mut self) {
+        let humans = self
+            .peers
+            .values()
+            .filter(|p| p.entity.is_some() && p.disconnect_at.is_none())
+            .count();
+        let desired = self.settings.desired_bots(humans);
+        let world = &mut self.session.world;
+        // Wave enemies are managed by co-op, not the arena population policy.
+        let is_arena_bot = |tank: &&tankyard_core::Tank| {
+            tank.bot && !(world.config.mode == Mode::CoopPve && tank.team == 2)
+        };
+        let current = world.tanks.iter().filter(is_arena_bot).count();
+        if current > desired {
+            let ids: Vec<_> = world
+                .tanks
+                .iter()
+                .filter(is_arena_bot)
+                .skip(desired)
+                .map(|t| t.id)
+                .collect();
+            for id in ids {
+                world.remove_player(id);
+            }
+        } else {
+            for i in current..desired {
+                world.add_player(&format!("Vector {:02}", i + 1), true);
+            }
+        }
     }
     pub fn player_id(&self, client: u64) -> Option<EntityId> {
         self.peers.get(&client)?.entity
@@ -348,7 +390,7 @@ impl UdpServer {
                             last_input_at: self.elapsed,
                             last_sequence: None,
                             control_tokens: 24.,
-                            input_tokens: 32.,
+                            input_tokens: 256.,
                             disconnect_at: None,
                         },
                     );
@@ -415,10 +457,13 @@ impl UdpServer {
                 break;
             };
             if !self.take_token(client, false) {
-                self.reject(client, "Input rate exceeded.");
-                return;
+                // Delayed UDP / WebSocket traffic can arrive in a burst. Drop
+                // excess realtime state within the fixed work budget; never
+                // disconnect a player because their packets arrived together.
+                self.metrics.rejected_packets += 1;
+                continue;
             }
-            let input = match decode_input(&bytes) {
+            let mut input = match decode_input(&bytes) {
                 Ok(input) => input,
                 Err(_) => {
                     self.metrics.rejected_packets += 1;
@@ -439,6 +484,12 @@ impl UdpServer {
                 !sequence_newer(input.sequence, last) || input.sequence.wrapping_sub(last) > 4096
             }) {
                 continue;
+            }
+            if let Some(previous) = newest {
+                // A short click can share a delayed packet batch with its
+                // release. Keep the tap while using the newest movement/aim.
+                input.fire |= previous.fire;
+                input.ability |= previous.ability;
             }
             newest = Some(input);
         }
@@ -966,9 +1017,12 @@ impl UdpServer {
             .seed
             .wrapping_add(u64::from(self.session.world.match_state.round));
         let round = self.session.world.match_state.round.saturating_add(1);
-        self.session =
-            LocalSession::with_mods(config, self.settings.bot_count, self.loaded_mods.clone())
-                .expect("previously validated mod pack");
+        self.session = LocalSession::with_mods(
+            config,
+            self.settings.desired_bots(players.len()),
+            self.loaded_mods.clone(),
+        )
+        .expect("previously validated mod pack");
         self.session.bots.difficulty = self.settings.difficulty;
         for factory in &self.native_plugins {
             self.session

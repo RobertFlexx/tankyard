@@ -11,6 +11,7 @@ bind = "0.0.0.0:5000"
 public_addresses = []
 max_players = 64
 bot_count = 12
+adaptive_bots = true # Fill to six tanks; no bots with six or more players.
 difficulty = "Normal"
 password = ""
 allow_sandbox = false

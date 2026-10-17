@@ -655,7 +655,7 @@ impl CommunityUi {
         let x = r.x + 20.0 * s;
         let enabled =
             client.permissions.contains(&Permission::Configure) && client.match_settings.is_some();
-        label("Bots", x, r.y + 121.0 * s, 17.0 * s, text_color());
+        label("Bot limit", x, r.y + 121.0 * s, 17.0 * s, text_color());
         if button(
             Rect::new(x, r.y + 139.0 * s, 45.0 * s, 30.0 * s),
             "-",

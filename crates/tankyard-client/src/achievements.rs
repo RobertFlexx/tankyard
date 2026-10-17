@@ -3,6 +3,15 @@ use std::collections::VecDeque;
 use tankyard_content::Content;
 use tankyard_core::{EntityId, MatchState, Mode, Snapshot, Tank, World, WorldConfig};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AchievementMode {
+    #[default]
+    PerMatch,
+    Global,
+    Off,
+}
+
 #[derive(Clone, Copy)]
 pub enum Goal {
     Games(u32),
@@ -77,7 +86,7 @@ pub static ACHIEVEMENTS: &[Achievement] = &[
     Achievement {
         id: "ten_kills",
         title: "Ten kills",
-        description: "Destroy ten tanks in total.",
+        description: "Destroy ten tanks.",
         goal: Goal::Kills(10),
     },
     Achievement {
@@ -101,7 +110,7 @@ pub static ACHIEVEMENTS: &[Achievement] = &[
     Achievement {
         id: "hundred_kills",
         title: "100 kills",
-        description: "Destroy 100 tanks in total.",
+        description: "Destroy 100 tanks.",
         goal: Goal::Kills(100),
     },
 ];
@@ -116,6 +125,10 @@ pub struct Progress {
     pub alive_ticks: u64,
 }
 impl Achievement {
+    pub fn available(&self, mode: AchievementMode) -> bool {
+        mode != AchievementMode::Off
+            && (mode == AchievementMode::Global || !matches!(self.goal, Goal::Games(2..)))
+    }
     pub fn earned(&self, p: Progress) -> bool {
         match self.goal {
             Goal::Games(n) => p.games >= n,
@@ -239,6 +252,13 @@ impl Tracker {
             ..progress
         })
     }
+    pub fn match_progress(&self) -> Option<Progress> {
+        self.progress.map(|progress| Progress {
+            games: 1,
+            kills: self.current_kills,
+            ..progress
+        })
+    }
     pub fn highest_score(&self) -> u32 {
         self.highest_score
     }
@@ -247,6 +267,48 @@ impl Tracker {
             self.observed_rounds,
             self.completed_kills.saturating_add(self.current_kills),
         )
+    }
+}
+
+/// Claims last for the current match, including deaths and respawns. A new
+/// session owns a new Claims value; authoritative round changes reset it too.
+#[derive(Default)]
+pub struct Claims {
+    round: u32,
+    mode: AchievementMode,
+    pub unlocked: Vec<String>,
+}
+impl Claims {
+    /// Returns true only when the persistent global profile changed.
+    pub fn update(
+        &mut self,
+        tracker: &Tracker,
+        mode: AchievementMode,
+        career: (u32, u32),
+        global: &mut Vec<String>,
+        feed: &mut Feed,
+    ) -> bool {
+        if self.round != tracker.observed_rounds {
+            self.round = tracker.observed_rounds;
+            self.unlocked.clear();
+            *feed = Feed::default();
+        }
+        if self.mode != mode {
+            self.mode = mode;
+            *feed = Feed::default();
+        }
+        match mode {
+            AchievementMode::PerMatch => {
+                if let Some(progress) = tracker.match_progress() {
+                    unlock(progress, &mut self.unlocked, feed);
+                }
+                false
+            }
+            AchievementMode::Global => tracker
+                .progress(career.0, career.1)
+                .is_some_and(|progress| unlock(progress, global, feed)),
+            AchievementMode::Off => false,
+        }
     }
 }
 pub struct Feed {
@@ -298,6 +360,125 @@ pub fn unlock(progress: Progress, unlocked: &mut Vec<String>, feed: &mut Feed) -
 mod tests {
     use super::*;
     use tankyard_core::{World, WorldConfig};
+
+    #[test]
+    fn match_claims_survive_respawns_but_reset_on_authoritative_round_change() {
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        let player = world.add_player("Pilot", false);
+        world.tanks[0].kills = 10;
+        let mut tracker = Tracker::default();
+        tracker.observe_world(&world, player);
+        let mut claims = Claims::default();
+        let mut global = vec!["first_kill".into()];
+        let mut feed = Feed::default();
+        assert!(!claims.update(
+            &tracker,
+            AchievementMode::PerMatch,
+            (99, 99),
+            &mut global,
+            &mut feed
+        ));
+        assert!(claims.unlocked.iter().any(|id| id == "ten_kills"));
+        assert!(
+            !claims
+                .unlocked
+                .iter()
+                .any(|id| id == "hundred_kills" || id == "ten_rounds")
+        );
+        let before = claims.unlocked.clone();
+        feed = Feed::default();
+        world.tick += 1;
+        world.tanks[0].deaths += 1;
+        tracker.observe_world(&world, player);
+        claims.update(
+            &tracker,
+            AchievementMode::PerMatch,
+            (99, 99),
+            &mut global,
+            &mut feed,
+        );
+        assert_eq!(claims.unlocked, before);
+        assert!(
+            feed.current().is_none(),
+            "respawns must not claim an achievement twice"
+        );
+        world.match_state.round += 1;
+        world.tanks[0].kills = 1;
+        tracker.observe_world(&world, player);
+        claims.update(
+            &tracker,
+            AchievementMode::PerMatch,
+            (99, 99),
+            &mut global,
+            &mut feed,
+        );
+        assert!(claims.unlocked.iter().any(|id| id == "first_kill"));
+        assert!(!claims.unlocked.iter().any(|id| id == "ten_kills"));
+        assert_eq!(global, ["first_kill"]);
+        assert_eq!(tracker.session_totals(), (2, 11));
+    }
+
+    #[test]
+    fn global_mode_uses_saved_totals_and_off_stops_claims_and_notifications() {
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        let player = world.add_player("Pilot", false);
+        world.tanks[0].kills = 1;
+        let mut tracker = Tracker::default();
+        tracker.observe_world(&world, player);
+        let mut claims = Claims::default();
+        let mut global = vec![];
+        let mut feed = Feed::default();
+        assert!(claims.update(
+            &tracker,
+            AchievementMode::Global,
+            (9, 99),
+            &mut global,
+            &mut feed
+        ));
+        assert!(global.iter().any(|id| id == "hundred_kills"));
+        assert!(global.iter().any(|id| id == "ten_rounds"));
+        let saved = global.clone();
+        world.tanks[0].score = 50_000;
+        tracker.observe_world(&world, player);
+        assert!(!claims.update(
+            &tracker,
+            AchievementMode::Off,
+            (9, 99),
+            &mut global,
+            &mut feed
+        ));
+        assert!(feed.current().is_none());
+        assert_eq!(global, saved);
+        assert!(claims.unlocked.is_empty());
+        claims.update(
+            &tracker,
+            AchievementMode::PerMatch,
+            (9, 99),
+            &mut global,
+            &mut feed,
+        );
+        assert!(claims.unlocked.iter().any(|id| id == "first_kill"));
+        assert!(!claims.unlocked.iter().any(|id| id == "hundred_kills"));
+        assert!(
+            !ACHIEVEMENTS
+                .iter()
+                .find(|a| a.id == "ten_rounds")
+                .unwrap()
+                .available(AchievementMode::PerMatch)
+        );
+    }
 
     #[test]
     fn bot_stats_cannot_unlock_achievements_or_enter_session_records() {
