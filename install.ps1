@@ -22,7 +22,7 @@ try {
         $Release = Invoke-RestMethod "https://api.github.com/repos/$Repository/releases/latest" -Headers @{ "User-Agent" = "TankYard-Installer" }
         $Version = $Release.tag_name
     }
-    if ($Version -notmatch '^v\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$') { throw "Use a release tag such as v0.2.7." }
+    if ($Version -notmatch '^v\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$') { throw "Use a release tag such as v0.2.8." }
     $RootName = "tankyard-$Version-windows-x86_64"
     $Archive = "$RootName.zip"
     $Base = "https://github.com/$Repository/releases/download/$Version"

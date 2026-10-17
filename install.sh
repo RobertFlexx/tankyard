@@ -13,7 +13,7 @@ usage() {
     cat <<'HELP'
 Tank Yard installer
 
-  sh install.sh [--version v0.2.7] [--bin-dir DIR] [--no-desktop] [--server]
+  sh install.sh [--version v0.2.8] [--bin-dir DIR] [--no-desktop] [--server]
 
 Installs the game into ~/.local/bin and adds an application shortcut.
 Run the same command to update. --server installs the server and relay instead.
@@ -71,7 +71,7 @@ if [ "$version" = latest ]; then
         --write-out '%{url_effective}' "$base/latest") || die "Could not find the latest release."
     version=$(printf '%s' "$resolved" | awk -F '/tag/' 'NF==2 {print $2}')
 fi
-case "$version" in v[0-9]*) ;; *) die "Use a release tag such as v0.2.7." ;; esac
+case "$version" in v[0-9]*) ;; *) die "Use a release tag such as v0.2.8." ;; esac
 case "$version" in *[!a-zA-Z0-9.-]*) die "Invalid release tag." ;; esac
 
 work_dir=$(mktemp -d)
@@ -115,7 +115,7 @@ fi
 for binary in $binaries; do
     [ -f "$payload/$binary" ] || die "The archive is missing $binary."
 done
-reported=$("$payload/$first" --version) || die "This build cannot run here. Linux requires glibc 2.31+ and desktop graphics libraries."
+reported=$("$payload/$first" --version) || die "This build cannot run here. Linux needs glibc 2.31+ on x86-64, glibc 2.35+ on ARM64, and desktop graphics libraries."
 printf '%s\n' "$reported"
 mkdir -p "$bin_dir"
 for binary in $binaries; do

@@ -23,7 +23,7 @@ Download the script first to inspect it or choose an install location:
 ~~~sh
 curl -fsSLO https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh
 sh install.sh --bin-dir "$HOME/.local/bin"
-sh install.sh --version v0.2.7 --no-desktop
+sh install.sh --version v0.2.8 --no-desktop
 sh install.sh --server
 ~~~
 
@@ -31,7 +31,7 @@ Use --server to install the dedicated server and WebSocket relay. Copy the sampl
 
 PowerShell accepts -Version, -InstallDir, -NoShortcut, -NoPath, and -Server.
 
-Linux builds support x86-64 and ARM64 with glibc 2.31 or newer. The game uses your system's X11 and OpenGL libraries. macOS has a universal build for Intel and Apple Silicon, including a **Tank Yard.app** bundle; the installer places it in your Applications folder. Windows has an x86-64 build with the C runtime included.
+Linux x86-64 builds need glibc 2.31 or newer; ARM64 builds need glibc 2.35 or newer. The game uses your system's X11 and OpenGL libraries. macOS has a universal build for Intel and Apple Silicon, including a **Tank Yard.app** bundle; the installer places it in your Applications folder. Windows has an x86-64 build with the C runtime included.
 
 ## Playing
 
@@ -39,6 +39,6 @@ Linux builds support x86-64 and ARM64 with glibc 2.31 or newer. The game uses yo
 
 ## Release builds
 
-Pushing a tag matching Cargo's version, such as v0.2.7, runs the Release workflow. It checks the source and installers, builds all four packages, generates SHA256SUMS, and publishes the release after every package is ready. Each archive includes the game, server, relay, command-line tools, example configs, bundled mods, and licenses.
+Pushing a tag matching Cargo's version, such as v0.2.8, runs the Release workflow. It checks the source and installers, builds all four packages, generates SHA256SUMS, and publishes the release after every package is ready. Each archive includes the game, server, relay, command-line tools, example configs, bundled mods, and licenses.
 
 The workflow then installs the published game into a temporary directory on Linux, macOS, and Windows. This checks the same downloads and installer paths players use. A failed build leaves the release unpublished. To retry an interrupted run, use Re-run jobs or dispatch Release with the existing tag. Use a new version tag to change an already published release.

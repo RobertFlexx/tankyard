@@ -4,7 +4,11 @@ use clap::Parser;
 use std::net::ToSocketAddrs;
 
 #[derive(Parser)]
-#[command(about = "Relay Tank Yard WebSocket clients to a UDP server", version)]
+#[command(
+    name = "tankyard-relay",
+    about = "Relay Tank Yard WebSocket clients to a UDP server",
+    version
+)]
 struct Args {
     /// Plain WebSocket listener; put TLS (e.g. cloudflared) in front of it.
     #[arg(long, default_value = "0.0.0.0:8080")]

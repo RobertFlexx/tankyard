@@ -10,7 +10,11 @@ use tankyard_server::netem::{EmulationConfig, NetworkEmulator};
 use tankyard_server::{HostedServer, NetworkClient, ServerSettings};
 
 #[derive(Parser)]
-#[command(about = "Generate and measure a real Tank Yard UDP multiplayer workload")]
+#[command(
+    name = "tankyard-load",
+    about = "Generate and measure a real Tank Yard UDP multiplayer workload",
+    version
+)]
 struct Args {
     #[arg(long, default_value = "127.0.0.1:5000")]
     server: String,

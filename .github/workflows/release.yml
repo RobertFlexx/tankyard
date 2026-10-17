@@ -82,7 +82,6 @@ jobs:
           - platform: linux-aarch64
             runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
-            zig_arch: aarch64
           - platform: macos-universal
             runner: macos-14
             target: aarch64-apple-darwin
@@ -110,19 +109,28 @@ jobs:
           rustup target add "$BUILD_TARGET"
           cargo fetch --locked
       - name: Build compatible Linux binaries
-        if: runner.os == 'Linux'
+        if: matrix.platform == 'linux-x86_64'
         env:
           ZIG_ARCH: ${{ matrix.zig_arch }}
           TANKYARD_BUILD_TARGET: ${{ matrix.target }}
         run: |
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxi-dev libgl1-mesa-dev
-          curl --fail --location --retry 3 "https://ziglang.org/download/0.16.0/zig-$ZIG_ARCH-linux-0.16.0.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+          curl --fail --location --retry 3 --connect-timeout 15 --max-time 180 "https://ziglang.org/download/0.16.0/zig-$ZIG_ARCH-linux-0.16.0.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
           mkdir -p "$RUNNER_TEMP/zig"
           tar -xf "$RUNNER_TEMP/zig.tar.xz" --strip-components=1 -C "$RUNNER_TEMP/zig"
           export TANKYARD_ZIG="$RUNNER_TEMP/zig/zig"
           scripts/build_linux_compatible.sh
           printf 'BINARY_DIR=target/linux-compatible/%s/release\n' "$TANKYARD_BUILD_TARGET" >> "$GITHUB_ENV"
+      - name: Build native ARM64 Linux binaries
+        if: matrix.platform == 'linux-aarch64'
+        env:
+          RUSTFLAGS: "-C target-feature=-crt-static -C target-cpu=generic -C strip=symbols"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxi-dev libgl1-mesa-dev
+          cargo build --locked --release --workspace --bins --target aarch64-unknown-linux-gnu
+          printf 'BINARY_DIR=target/aarch64-unknown-linux-gnu/release\n' >> "$GITHUB_ENV"
       - name: Build universal macOS binaries
         if: runner.os == 'macOS'
         env:
@@ -136,7 +144,7 @@ jobs:
           for binary in tankyard tankyard-server tankyard-relay tankyard-load tankyard-tools; do
             lipo -create "target/aarch64-apple-darwin/release/$binary" "target/x86_64-apple-darwin/release/$binary" -output "target/universal-release/$binary"
             codesign --force --sign - "target/universal-release/$binary"
-            lipo -verify_arch arm64 x86_64 "target/universal-release/$binary"
+            lipo "target/universal-release/$binary" -verify_arch arm64 x86_64
           done
           printf 'BINARY_DIR=target/universal-release\n' >> "$GITHUB_ENV"
       - name: Build Windows binaries
