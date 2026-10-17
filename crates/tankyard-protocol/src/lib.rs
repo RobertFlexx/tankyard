@@ -9,8 +9,8 @@ use tankyard_core::{BossKind, EntityId, GameEvent, PlayerInput, Snapshot};
 mod community;
 pub use community::*;
 
-pub const PROTOCOL_VERSION: u32 = 10;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000a;
+pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000b;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;

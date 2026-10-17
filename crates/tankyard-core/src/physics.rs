@@ -334,7 +334,7 @@ pub fn predict_tank(
     if tank.input.fire {
         tank.charge = (tank.charge + dt).min(1.5);
     }
-    let charged = tank.charge >= 1.0 || (!tank.input.fire && previous_charge > 0.15);
+    let charged = tank.charge >= 1.0 || (!tank.input.fire && previous_charge > 0.);
     let mut ready_defenses = [0_usize; 4];
     for (index, barrel) in class.barrels.iter().enumerate() {
         if barrel.pattern != FirePattern::Auto

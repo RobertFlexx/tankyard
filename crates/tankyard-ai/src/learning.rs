@@ -42,6 +42,10 @@ impl Default for Learning {
     }
 }
 impl Learning {
+    pub(crate) fn inherit_models(&mut self, previous: &Self) {
+        self.neural = previous.neural.clone();
+        self.build.inherit_models(&previous.build);
+    }
     pub fn feedback(&mut self, tank: &Tank, tick: u64, events: &[GameEvent]) {
         if self.feedback_tick == Some(tick) {
             return;
@@ -207,5 +211,27 @@ mod tests {
         }
         assert_eq!(learning.opponents.len(), 12);
         assert!(learning.opponents.iter().all(|opponent| opponent.id >= 489));
+    }
+}
+
+#[cfg(test)]
+mod round_learning_regressions {
+    use super::*;
+
+    #[test]
+    fn neural_weights_survive_a_round_without_retaining_player_sightings() {
+        let mut trained = Learning::default();
+        for tick in 1..=120 {
+            trained.observe(17, V2::new(tick as f32 * 5., 50.), tick * 6);
+        }
+        assert!(trained.neural.samples > 100);
+        let sample = [0.2, -0.2, 0.0, 0.0, 0.25, 1.0];
+        let mut fresh = Learning::default();
+        fresh.inherit_models(&trained);
+        assert_eq!(fresh.neural.samples, trained.neural.samples);
+        assert_eq!(fresh.neural.predict(sample), trained.neural.predict(sample));
+        assert!(fresh.opponents.is_empty());
+        assert!(fresh.feedback_tick.is_none());
+        assert_eq!(fresh.caution, 0.35);
     }
 }

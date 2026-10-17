@@ -30,6 +30,10 @@ use tankyard_content::Content;
 use tankyard_core::{DT, Mode, PlayerInput, V2};
 use ui::*;
 
+fn manual_fire(held: bool, queued_press: bool, over_ui: bool) -> bool {
+    queued_press || (held && !over_ui)
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "tankyard", version, about = "Tank Yard - tank arena")]
 struct Cli {
@@ -670,8 +674,14 @@ impl App {
         let cursor = self.view.world(vec2(mx, my)) - position;
         let aim = cursor.angle();
         let over_ui = self.pointer_over_ui(s);
+        // A click accepted over the arena stays accepted until the next tick,
+        // even if the cursor crosses a HUD button after the press.
         let fire = self.settings.auto_fire
-            || ((is_mouse_button_down(MouseButton::Left) || self.fire_queued) && !over_ui);
+            || manual_fire(
+                is_mouse_button_down(MouseButton::Left),
+                self.fire_queued,
+                over_ui,
+            );
         PlayerInput {
             sequence: self.sequence,
             movement: movement.normalized(),
@@ -1114,12 +1124,26 @@ impl App {
                     s,
                     &self.view,
                 );
+                for (index, kill) in self.effects.kills.iter().rev().enumerate() {
+                    let opacity = (kill.life / 0.45).min(1.0);
+                    center_label(
+                        &format!("Eliminated {}", kill.name),
+                        screen_width() * 0.5,
+                        (111.0 + index as f32 * 28.0) * s,
+                        19.0 * s,
+                        alpha(text_color(), opacity),
+                    );
+                }
                 if self.effects.notice_life > 0.0 {
                     let opacity = (self.effects.notice_life / 0.35).min(1.0);
                     center_label(
                         &self.effects.notice,
                         screen_width() * 0.5,
-                        screen_height() * 0.25,
+                        if self.effects.kills.is_empty() {
+                            screen_height() * 0.25
+                        } else {
+                            screen_height() * 0.36
+                        },
                         25.0 * s,
                         alpha(AMBER, opacity),
                     );
@@ -1513,5 +1537,19 @@ fn parse_mode(value: &str) -> Mode {
         "randomevents" | "events" => Mode::RandomEvents,
         "cooppve" | "pve" => Mode::CoopPve,
         _ => Mode::Ffa,
+    }
+}
+
+#[cfg(test)]
+mod tap_input_regressions {
+    use super::manual_fire;
+
+    #[test]
+    fn captured_click_survives_moving_the_cursor_over_the_hud() {
+        assert!(manual_fire(false, true, true));
+        assert!(manual_fire(false, true, false));
+        assert!(!manual_fire(true, false, true));
+        assert!(!manual_fire(false, false, false));
+        assert!(manual_fire(true, false, false));
     }
 }

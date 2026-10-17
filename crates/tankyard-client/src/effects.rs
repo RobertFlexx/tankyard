@@ -2,7 +2,7 @@ use crate::ui::{AMBER, CYAN, RED, alpha};
 use macroquad::prelude::*;
 use std::collections::{HashMap, HashSet};
 use tankyard_content::ProjectileKind;
-use tankyard_core::{EntityId, EventKind, GameEvent, Projectile, Tank, V2};
+use tankyard_core::{EntityId, EventKind, GameEvent, Projectile, Tank, V2, sanitize_name};
 
 pub struct Particle {
     pub pos: V2,
@@ -47,6 +47,10 @@ pub struct BarrelVisuals {
     pub aim: Vec<f32>,
 }
 
+pub struct KillNotice {
+    pub name: String,
+    pub life: f32,
+}
 pub struct Popup {
     pub pos: V2,
     pub text: String,
@@ -65,12 +69,13 @@ pub struct Effects {
     tracked_projectiles: HashMap<EntityId, LastProjectile>,
     projectile_tick: Option<u64>,
     pub popups: Vec<Popup>,
+    pub kills: Vec<KillNotice>,
     pub flashes: HashMap<EntityId, f32>,
     pub recoil: HashMap<EntityId, f32>,
     pub display_aim: HashMap<EntityId, f32>,
     pub barrels: HashMap<EntityId, BarrelVisuals>,
     active_tanks: HashSet<EntityId>,
-    seen: HashSet<(u64, u8, EntityId, u32)>,
+    seen: HashSet<(u64, u8, EntityId, u32, EntityId)>,
     pub shake: f32,
     pub notice: String,
     pub notice_life: f32,
@@ -87,6 +92,7 @@ impl Effects {
             tracked_projectiles: HashMap::with_capacity(1024),
             projectile_tick: None,
             popups: Vec::with_capacity(32),
+            kills: Vec::with_capacity(3),
             flashes: HashMap::new(),
             recoil: HashMap::new(),
             display_aim: HashMap::new(),
@@ -120,7 +126,13 @@ impl Effects {
     ) -> Vec<GameEvent> {
         let mut sounds = Vec::new();
         for event in events {
-            let key = (event.tick, event.kind as u8, event.subject, event.value);
+            let key = (
+                event.tick,
+                event.kind as u8,
+                event.subject,
+                event.value,
+                event.elimination.as_ref().map_or(0, |kill| kill.victim),
+            );
             if !self.seen.insert(key) {
                 continue;
             }
@@ -178,12 +190,23 @@ impl Effects {
             }
             if matches!(event.kind, EventKind::Kill) && event.subject == local {
                 self.shake = (self.shake + 1.0).min(4.0);
+                if let Some(elimination) = &event.elimination {
+                    // The name already went through the server's player-name sanitizer.
+                    // Never let a backlog of reliable events grow the HUD without bound.
+                    if self.kills.len() == 3 {
+                        self.kills.remove(0);
+                    }
+                    self.kills.push(KillNotice {
+                        name: sanitize_name(&elimination.name),
+                        life: 3.5,
+                    });
+                }
             }
             if event.subject == local {
                 let text = match event.kind {
                     EventKind::LevelUp => Some(format!("LEVEL {}", event.value)),
                     EventKind::Evolve => Some("Tank upgraded".into()),
-                    EventKind::Kill => Some("Kill".into()),
+                    EventKind::Kill => None, // The name belongs in the top-screen feed.
                     EventKind::Parry => Some("Parried".into()),
                     _ => None,
                 };
@@ -206,7 +229,7 @@ impl Effects {
             self.last_tick = self.last_tick.max(event.tick);
         }
         self.seen
-            .retain(|(tick, _, _, _)| tick.saturating_add(180) >= self.last_tick);
+            .retain(|(tick, _, _, _, _)| tick.saturating_add(180) >= self.last_tick);
         sounds
     }
     /// Track rendered projectile positions each frame. Only a fresh simulation
@@ -408,6 +431,10 @@ impl Effects {
             p.pos.y -= dt * 30.0;
         }
         self.popups.retain(|p| p.life > 0.0);
+        for kill in &mut self.kills {
+            kill.life -= dt;
+        }
+        self.kills.retain(|kill| kill.life > 0.0);
         self.flashes.retain(|_, v| {
             *v -= dt;
             *v > 0.0
@@ -515,6 +542,7 @@ mod tests {
             subject: 7,
             value: 0,
             team: 0,
+            elimination: None,
         };
         let late = GameEvent {
             tick: 37,
@@ -523,6 +551,7 @@ mod tests {
             subject: 7,
             value: 15,
             team: 0,
+            elimination: None,
         };
         assert_eq!(
             effects.ingest(std::slice::from_ref(&newest), 7, 1.0).len(),
@@ -732,6 +761,7 @@ mod tests {
                     subject: tick,
                     value: 0,
                     team: 0,
+                    elimination: None,
                 }],
                 0,
                 1.0,
@@ -740,5 +770,60 @@ mod tests {
         assert!(effects.particles.len() <= 2048);
         effects.update(3.0);
         assert!(effects.particles.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod elimination_regressions {
+    use super::*;
+    use tankyard_core::Elimination;
+
+    #[test]
+    fn distinct_same_tick_kills_survive_retries_and_expire() {
+        let mut effects = Effects::new();
+        let make = |victim| GameEvent {
+            tick: 100,
+            kind: EventKind::Kill,
+            pos: V2::ZERO,
+            subject: 7,
+            value: 150,
+            team: 0,
+            elimination: Some(Elimination {
+                victim,
+                name: format!("Rival {victim}"),
+            }),
+        };
+        let batch = vec![make(8), make(9)];
+        assert_eq!(effects.ingest(&batch, 7, 1.).len(), 2);
+        assert_eq!(effects.kills.len(), 2);
+        assert_eq!(effects.kills[0].name, "Rival 8");
+        assert!(effects.ingest(&batch, 7, 1.).is_empty());
+        for victim in 10..=14 {
+            effects.ingest(&[make(victim)], 7, 1.);
+        }
+        assert_eq!(effects.kills.len(), 3);
+        assert_eq!(effects.kills[2].name, "Rival 14");
+        effects.update(4.);
+        assert!(effects.kills.is_empty());
+        effects.ingest(
+            &[GameEvent {
+                tick: 101,
+                kind: EventKind::Kill,
+                pos: V2::ZERO,
+                subject: 7,
+                value: 150,
+                team: 0,
+                elimination: Some(Elimination {
+                    victim: 50,
+                    name: "A".repeat(200) + "\nBAD",
+                }),
+            }],
+            7,
+            1.,
+        );
+        assert_eq!(effects.kills[0].name.chars().count(), 24);
+        effects.sync_round(1);
+        effects.sync_round(2);
+        assert!(effects.seen.is_empty());
     }
 }

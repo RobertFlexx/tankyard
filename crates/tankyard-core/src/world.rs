@@ -169,16 +169,47 @@ impl World {
         value: u32,
         team: u8,
     ) {
-        if self.events.len() < 512 {
-            self.events.push(GameEvent {
-                tick: self.tick,
+        self.event_detail(kind, pos, subject, value, team, None);
+    }
+    fn event_detail(
+        &mut self,
+        kind: EventKind,
+        pos: V2,
+        subject: EntityId,
+        value: u32,
+        team: u8,
+        elimination: Option<Elimination>,
+    ) {
+        // Particle spam must not erase a confirmed kill or a match result.
+        if self.events.len() == 512 {
+            if matches!(
                 kind,
-                pos,
-                subject,
-                value,
-                team,
-            });
+                EventKind::Kill
+                    | EventKind::Destroy
+                    | EventKind::Victory
+                    | EventKind::Capture
+                    | EventKind::Evolve
+                    | EventKind::LevelUp
+                    | EventKind::Parry
+            ) && let Some(index) = self
+                .events
+                .iter()
+                .position(|event| matches!(event.kind, EventKind::Shot | EventKind::Impact))
+            {
+                self.events.remove(index);
+            } else {
+                return;
+            }
         }
+        self.events.push(GameEvent {
+            tick: self.tick,
+            kind,
+            pos,
+            subject,
+            value,
+            team,
+            elimination,
+        });
     }
     pub fn add_player(&mut self, name: &str, bot: bool) -> EntityId {
         let teams = self.config.mode.teams();
@@ -931,7 +962,18 @@ impl World {
                 }
             }
             self.event(EventKind::Destroy, pos, id, 0, team);
-            self.event(EventKind::Kill, pos, killer, xp, killer_team.unwrap_or(0));
+            let elimination = Elimination {
+                victim: id,
+                name: self.tanks[i].name.clone(),
+            };
+            self.event_detail(
+                EventKind::Kill,
+                pos,
+                killer,
+                xp,
+                killer_team.unwrap_or(0),
+                Some(elimination),
+            );
         }
         let dead_targets: Vec<_> = self
             .targets
@@ -1713,5 +1755,39 @@ mod name_hardening_tests {
         assert_eq!(sanitize_name("\u{2066}Pilot\u{2069}"), "Pilot");
         assert_eq!(sanitize_name("bob\u{202e}txt"), "bobtxt");
         assert_eq!(sanitize_name("世界 艾"), "世界 艾");
+    }
+}
+
+#[cfg(test)]
+mod important_event_regressions {
+    use super::*;
+
+    #[test]
+    fn spammy_shot_events_cannot_erase_the_kill_record() {
+        let mut world = World::new(WorldConfig::default(), tankyard_content::Content::builtin());
+        for i in 0..512 {
+            world.event(EventKind::Shot, V2::ZERO, 1, i, 0);
+        }
+        assert_eq!(world.events.len(), 512);
+        world.event_detail(
+            EventKind::Kill,
+            V2::ZERO,
+            1,
+            50,
+            0,
+            Some(Elimination {
+                victim: 2,
+                name: "Target".into(),
+            }),
+        );
+        assert_eq!(world.events.len(), 512);
+        assert_eq!(
+            world
+                .events
+                .iter()
+                .filter(|e| matches!(e.kind, EventKind::Kill))
+                .count(),
+            1
+        );
     }
 }

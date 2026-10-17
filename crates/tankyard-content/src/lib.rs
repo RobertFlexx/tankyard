@@ -678,7 +678,6 @@ mod tests {
             FirePattern::Normal,
             FirePattern::Alternating,
             FirePattern::Burst,
-            FirePattern::Charge,
             FirePattern::Auto,
             FirePattern::Spin,
         ] {

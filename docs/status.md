@@ -1,5 +1,8 @@
 # Checks
 
+**0.2.13 source candidate (not released or compiled):** The attached source contains immediate-fire changes for the original charged weapons, a named elimination feed with multi-kill deduplication, event-cap priority, and neural-weight carry-over between server rounds. Added tests cover one-tick taps on long-range tanks, victim identities, reliable kill deduplication, event flooding, and safe neural transfer. Rust/Cargo, a network-accessible toolchain source, and a graphical session were unavailable in the editing environment. All Rust tests, Clippy, gameplay checks, latency measurements, and cross-platform release checks remain unverified for 0.2.13. Do not tag or deploy this candidate until `scripts/check_source.sh`, `cargo run -p tankyard-tools -- validate`, GUI smoke tests, and online client/server tests pass. Clients and servers must update together for protocol 11.
+
+
 > # what to account for as a maintainer.
 
 Checked on 2026-10-17 with Rust 1.99.0 on Linux: 289 Rust tests and 8 installer tests pass, including UDP and WebSocket integration tests. Formatting, Clippy with warnings denied, the compatible Linux workspace release build, all 102 tank classes, and both bundled mods also pass.

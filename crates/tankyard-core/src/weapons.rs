@@ -185,7 +185,7 @@ impl World {
                     && (barrel.projectile == ProjectileKind::Minion
                         || tank.input.fire
                         || (barrel.pattern == FirePattern::Auto && auto_aims[i].is_some())
-                        || (barrel.pattern == FirePattern::Charge && tank.charge > 0.15))
+                        || (barrel.pattern == FirePattern::Charge && tank.charge > 0.))
             });
             if deploying {
                 for projectile in self
@@ -223,7 +223,7 @@ impl World {
             if tank.input.fire {
                 tank.charge = (tank.charge + DT).min(1.5);
             }
-            let charged = tank.charge >= 1. || (!tank.input.fire && previous_charge > 0.15);
+            let charged = tank.charge >= 1. || (!tank.input.fire && previous_charge > 0.);
             let mut ready_launchers = [0_usize; 5];
             if deploying {
                 for (i, barrel) in class.barrels.iter().enumerate() {

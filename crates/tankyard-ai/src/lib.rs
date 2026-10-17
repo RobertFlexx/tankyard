@@ -165,6 +165,20 @@ impl BotController {
         }
     }
 
+    /// Keep learned weights when a server starts its next round. New bots get
+    /// fresh tactical state and no information about past players or positions.
+    pub fn inherit_models(&mut self, previous: &Self, pairs: &[(EntityId, EntityId)]) {
+        for &(old_id, new_id) in pairs {
+            if let Some(old) = previous.brains.get(&old_id) {
+                self.brains
+                    .entry(new_id)
+                    .or_default()
+                    .learning
+                    .inherit_models(&old.learning);
+            }
+        }
+    }
+
     pub fn state(&self, id: EntityId) -> Option<BotState> {
         self.brains.get(&id).map(|brain| brain.state)
     }

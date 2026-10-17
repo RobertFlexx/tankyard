@@ -381,3 +381,78 @@ fn full_defense_pools_do_not_create_predicted_shots_or_recoil() {
         }
     }
 }
+
+#[test]
+fn single_click_and_held_fire_both_work_on_long_range_tanks() {
+    for class in ["lance", "surveyor", "longbow", "shear", "rail"] {
+        let (mut world, _) = arena(class);
+        world.tanks[0].aim = 0.;
+        world.tanks[0].input.fire = true;
+        world.step();
+        assert!(
+            world.tanks[0].shot_count > 0,
+            "{class}: a one-tick click did not fire"
+        );
+        let first_shots = world.tanks[0].shot_count;
+        world.tanks[0].input.fire = false;
+        for _ in 0..120 {
+            world.step();
+        }
+        assert_eq!(
+            world.tanks[0].shot_count, first_shots,
+            "{class}: fired without input"
+        );
+        world.tanks[0].input.fire = true;
+        for _ in 0..180 {
+            world.step();
+        }
+        assert!(
+            world.tanks[0].shot_count > first_shots + 1,
+            "{class}: held fire stalled"
+        );
+    }
+}
+
+#[test]
+fn kill_event_preserves_victim_name_without_leaking_it_from_a_respawn() {
+    let mut world = World::new(
+        WorldConfig {
+            target_count: 0,
+            spawn_protection: 0.,
+            ..WorldConfig::default()
+        },
+        Content::builtin(),
+    );
+    let killer = world.add_player("Victor", false);
+    let victim = world.add_player("Rival", false);
+    world.tanks[1].health = 0.;
+    world.tanks[1].last_attacker = killer;
+    world.step();
+    let event = world
+        .events
+        .iter()
+        .find(|e| matches!(e.kind, EventKind::Kill))
+        .unwrap();
+    assert_eq!(event.subject, killer);
+    let elimination = event.elimination.as_ref().unwrap();
+    assert_eq!(elimination.name, "Rival");
+    assert_eq!(elimination.victim, victim);
+}
+
+#[test]
+fn modded_charge_weapon_releases_even_after_a_one_tick_tap() {
+    let (mut world, _) = arena("lance");
+    let class = world
+        .content
+        .classes
+        .iter_mut()
+        .find(|class| class.id == "lance")
+        .unwrap();
+    class.barrels[0].pattern = tankyard_content::FirePattern::Charge;
+    world.tanks[0].input.fire = true;
+    world.step();
+    assert_eq!(world.tanks[0].shot_count, 0);
+    world.tanks[0].input.fire = false;
+    world.step();
+    assert_eq!(world.tanks[0].shot_count, 1);
+}

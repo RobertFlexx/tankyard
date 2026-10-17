@@ -4,6 +4,7 @@ const HIDDEN: usize = 8;
 
 pub type MotionNet = Network<6, 2>;
 
+#[derive(Clone)]
 pub struct Network<const INPUTS: usize, const OUTPUTS: usize> {
     hidden: [[f32; INPUTS]; HIDDEN],
     output: [[f32; HIDDEN + 1]; OUTPUTS],
@@ -49,7 +50,11 @@ impl<const INPUTS: usize, const OUTPUTS: usize> Network<INPUTS, OUTPUTS> {
         (hidden, output)
     }
     pub fn predict(&self, input: [f32; INPUTS]) -> [f32; OUTPUTS] {
-        self.forward(input).1
+        // Network inputs may eventually come from third-party mods.
+        if input.iter().any(|value| !value.is_finite()) {
+            return [0.0; OUTPUTS];
+        }
+        self.forward(input.map(|value| value.clamp(-1.0, 1.0))).1
     }
     pub fn train(&mut self, input: [f32; INPUTS], target: [f32; OUTPUTS]) {
         if input.iter().chain(target.iter()).any(|v| !v.is_finite()) {

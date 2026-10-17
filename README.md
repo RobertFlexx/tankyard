@@ -27,7 +27,7 @@ Hold Shift with a skill key or click to fill that stat. While firing, drones fol
 
 Random Events adds timed arena modifiers. Co-op PvE pits your squad against ten waves of raiders and bosses, with revives between waves. Riposte, a level 30 Destroyer upgrade, parries shots into homing returns with Space. Spawn protection lasts up to 30 seconds and ends when you move or attack. In Sandbox, PgUp/PgDn changes your level; hold Shift for 15 levels.
 
-Tank upgrades unlock at levels 15, 30, 45, and 55. Riposte leads to Counterguard, then Reprisal. Their parry windows get tighter, with stronger returns and a small heal on success. Normal cannon damage stays the same. A bar below your tank shows when its next shot is ready.
+Tank upgrades unlock at levels 15, 30, 45, and 55. Riposte leads to Counterguard, then Reprisal. Their parry windows get tighter, with stronger returns and a small heal on success. Normal cannon damage stays the same. A bar below your tank shows when its next shot is ready. A quick click fires once when the gun is ready, while holding the button keeps firing at the weapon's reload rate. Eliminations show the opponent's name at the top of the screen.
 
 Your first launch shows both themes side by side. Pick Dark or Light; F9 changes it later.
 
@@ -39,7 +39,7 @@ Skill labels follow your class: an Overseer gets Drone Speed / Health / Damage, 
 
 Practice is below Play on the main menu, in the pause menu, and on F6. It offers a shape sprint, drone drill, tank skirmish, and survival challenge with personal records. Press F1 for the current controls, F3 for diagnostics, F10 for settings, and F5 to restart an offline game from pause. Tab and Shift+Tab move between text fields; Esc goes back. See [playing](docs/playing.md) for goals and shortcuts.
 
-Game modes lets you choose Beginner through Expert bots; your choice also applies when hosting. Bots learn visible movement and combat results, remember rivals during a match, and adjust their tank and skill choices. They use the same combat stats as players, with reaction delays and aim error based on difficulty.
+Game modes lets you choose Beginner through Expert bots; your choice also applies when hosting. Bots learn visible movement and combat results, remember rivals during a match, and adjust their tank and skill choices. The server keeps learned network weights when a new round starts, but clears sightings and grudges. Learning does not survive a server restart. They use the same combat stats as players, with reaction delays and aim error based on difficulty.
 
 Multi-barrel guns use independent firing phases, producing staggered shots and occasional volleys. Double Burst and Overtrapper have centered front and rear mounts; Necromancer has two opposing drone ports. Rendering and simulation use the same mount positions.
 

@@ -478,6 +478,11 @@ pub enum EventKind {
     Parry,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Elimination {
+    pub victim: EntityId,
+    pub name: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GameEvent {
     pub tick: u64,
     pub kind: EventKind,
@@ -485,6 +490,8 @@ pub struct GameEvent {
     pub subject: EntityId,
     pub value: u32,
     pub team: u8,
+    #[serde(default)]
+    pub elimination: Option<Elimination>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {

@@ -1020,12 +1020,20 @@ impl UdpServer {
             .seed
             .wrapping_add(u64::from(self.session.world.match_state.round));
         let round = self.session.world.match_state.round.saturating_add(1);
-        self.session = LocalSession::with_mods(
+        let mut next = LocalSession::with_mods(
             config,
             self.settings.desired_bots(players.len()),
             self.loaded_mods.clone(),
         )
         .expect("previously validated mod pack");
+        let previous_bots = self.session.world.tanks.iter().filter(|tank| tank.bot);
+        let next_bots = next.world.tanks.iter().filter(|tank| tank.bot);
+        let pairs: Vec<_> = previous_bots
+            .zip(next_bots)
+            .map(|(a, b)| (a.id, b.id))
+            .collect();
+        next.bots.inherit_models(&self.session.bots, &pairs);
+        self.session = next;
         self.session.bots.difficulty = self.settings.difficulty;
         for factory in &self.native_plugins {
             self.session
@@ -1143,8 +1151,14 @@ mod tests {
                 subject: n + 1,
                 value: 9,
                 team: 2,
+                elimination: None,
             })
             .collect();
+        let mut events = events;
+        events[100].elimination = Some(tankyard_core::Elimination {
+            victim: 5000,
+            name: "Same-tick rival".into(),
+        });
         let batches = encode_event_batches(7, &events).unwrap();
         assert!(batches.len() > 1);
         assert!(batches.iter().all(|bytes| bytes.len() <= MAX_EVENT_BYTES));
@@ -1157,6 +1171,11 @@ mod tests {
             })
             .collect();
         assert_eq!(decoded.len(), events.len());
+        assert_eq!(decoded[100].elimination.as_ref().unwrap().victim, 5000);
+        assert_eq!(
+            decoded[100].elimination.as_ref().unwrap().name,
+            "Same-tick rival"
+        );
         assert!(
             decoded
                 .iter()

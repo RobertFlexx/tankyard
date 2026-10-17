@@ -92,6 +92,11 @@ fn build_features(class: &ClassDef, stats: [u8; 8]) -> [f32; 13] {
 }
 
 impl BuildLearning {
+    pub(crate) fn inherit_models(&mut self, previous: &Self) {
+        // Reuse trained weights, not per-player sightings or reward windows.
+        self.classes = previous.classes.clone();
+        self.builds = previous.builds.clone();
+    }
     /// Learn class traits from a human only while that person stays visible.
     /// Hidden gaps discard the sample; private skill allocations are not copied.
     pub fn observe_player(&mut self, player: &Tank, content: &Content, tick: u64) {

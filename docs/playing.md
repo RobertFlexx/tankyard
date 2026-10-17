@@ -2,7 +2,7 @@
 
 Play or Enter joins the main server at tankyard.kokonico.me. Play offline is beside it; Practice is just below. F6 opens Practice from the menu or during a game. Open Offline modes to choose the local arena, bot count, and difficulty. Beginner gives you more time to react; Expert has faster decisions and more accurate aim. Every difficulty uses the same combat stats and upgrade rules as a player.
 
-On your first launch, choose Dark or Light from two live arena previews. The choice is saved; F9 or Settings changes it later. A small bar below your tank fills as your next manual shot reloads. Charge weapons show charge while held. Automatic and drone-only tanks hide the bar.
+On your first launch, choose Dark or Light from two live arena previews. The choice is saved; F9 or Settings changes it later. A small bar below your tank fills as your next manual shot reloads. Auto-firing and drone-only tanks hide the reload bar. Custom mods may still add charge weapons.
 
 ## Controls
 
