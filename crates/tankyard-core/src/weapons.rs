@@ -13,6 +13,16 @@ fn deployable_slot(kind: ProjectileKind) -> Option<usize> {
     }
 }
 
+pub(crate) fn defense_slot(kind: ProjectileKind) -> Option<usize> {
+    match kind {
+        ProjectileKind::Trap => Some(0),
+        ProjectileKind::Mine => Some(1),
+        ProjectileKind::Barrier => Some(2),
+        ProjectileKind::Turret => Some(3),
+        _ => None,
+    }
+}
+
 fn cadence_phase(seed: u64, cycle: u32) -> f32 {
     let sample = |epoch: u32| {
         let mut value = seed ^ u64::from(epoch).wrapping_mul(0x9e3779b97f4a7c15);
@@ -73,6 +83,30 @@ pub(crate) fn reload_interval(
         0.0
     };
     (interval + remainder).max(0.0)
+}
+
+/// The next manual firing port, using the simulation's actual cadence and buffs.
+pub fn reload_progress(tank: &Tank, class: &ClassDef, config: &WorldConfig) -> Option<f32> {
+    class
+        .barrels
+        .iter()
+        .enumerate()
+        .filter(|(_, barrel)| barrel.pattern != FirePattern::Auto && !barrel.projectile.is_drone())
+        .map(|(index, barrel)| {
+            let remaining = tank.cooldowns.get(index).copied().unwrap_or(0.);
+            let period = if tank.barrel_shots.len() > index {
+                reload_interval(tank, class, config, index, 0., 0.)
+            } else {
+                barrel.cooldown / reload_rate(tank, class)
+            };
+            let progress = (1. - remaining / period.max(DT)).clamp(0., 1.);
+            if barrel.pattern == FirePattern::Charge && tank.input.fire {
+                progress.min(tank.charge.clamp(0., 1.))
+            } else {
+                progress
+            }
+        })
+        .max_by(f32::total_cmp)
 }
 
 impl World {
@@ -287,7 +321,13 @@ impl World {
                     } else {
                         (pellet as f32 / (count - 1) as f32 - 0.5) * barrel.spread
                     };
-                    let speed = barrel.speed * stat_scale(tank.stats[3]) * class.multipliers[3];
+                    let speed = barrel.speed
+                        * if barrel.projectile == ProjectileKind::Trap {
+                            crate::progression::trap_range_scale(tank.stats[3])
+                        } else {
+                            stat_scale(tank.stats[3])
+                        }
+                        * class.multipliers[3];
                     let damage = barrel.damage
                         * stat_scale(tank.stats[5])
                         * class.multipliers[5]
@@ -446,7 +486,7 @@ impl World {
             | Ability::Cloak
             | Ability::Overdrive
             | Ability::Blink => {}
-            Ability::Parry => {}
+            Ability::Parry | Ability::CounterParry | Ability::VolleyParry => {}
             Ability::Heal => {
                 let heal = self.tanks[index].max_health * 0.27;
                 for t in &mut self.tanks {

@@ -513,6 +513,9 @@ impl Session {
             tank.protection = predicted.protection;
             tank.spawn_immunity = predicted.spawn_immunity;
             tank.barrel_shots.clone_from(&predicted.barrel_shots);
+            tank.cooldowns.clone_from(&predicted.cooldowns);
+            tank.charge = predicted.charge;
+            tank.input = predicted.input;
         }
     }
     pub fn render_fraction(&self, fraction: f32) -> f32 {
@@ -634,7 +637,9 @@ impl Session {
         else {
             return;
         };
-        let level = i16::from(tank.level).saturating_add(step).clamp(1, 45) as u8;
+        let level = i16::from(tank.level)
+            .saturating_add(step)
+            .clamp(1, i16::from(tankyard_core::MAX_LEVEL)) as u8;
         if level != tank.level {
             self.sandbox_level(level);
         }
@@ -812,6 +817,47 @@ mod tests {
         assert!(!displayed.spawn_immunity);
         assert_eq!(displayed.protection, 0.0);
     }
+
+    #[test]
+    fn online_reload_display_uses_predicted_firing_instead_of_the_last_snapshot() {
+        let content = Content::builtin();
+        let config = WorldConfig {
+            target_count: 0,
+            ..Default::default()
+        };
+        let mut world = tankyard_core::World::new(config.clone(), content.clone());
+        let id = world.add_player("Pilot", false);
+        let client = NetworkClient::connect("127.0.0.1:9", "Pilot", "").unwrap();
+        let mut session = Session::create(
+            Engine::Online {
+                client: Box::new(client),
+                host: None,
+            },
+            id,
+            Some(world.snapshot()),
+        );
+        let mut predicted = world.tanks[0].clone();
+        predicted.input.fire = true;
+        predict_tank(&mut predicted, &content, &config, &[], 1, DT);
+        session.predicted = Some(predicted);
+        session.present_prediction(0.5);
+        let displayed = &session.display.as_ref().unwrap().tanks[0];
+        let progress = tankyard_core::reload_progress(
+            displayed,
+            content.class(&displayed.class).unwrap(),
+            &config,
+        )
+        .unwrap();
+        assert!(
+            progress < 0.04,
+            "a local shot should drain the bar immediately"
+        );
+        assert!(displayed.input.fire);
+        assert_eq!(
+            world.tanks[0].shot_count, 0,
+            "the authoritative snapshot is still before the shot"
+        );
+    }
     #[test]
     fn sandbox_level_shortcuts_respect_bounds_and_game_state() {
         let mut session = Session::offline(
@@ -826,9 +872,9 @@ mod tests {
         session.sandbox_adjust_level(1);
         assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 31);
         session.sandbox_adjust_level(15);
-        assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 45);
+        assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 46);
         session.sandbox_adjust_level(i16::MAX);
-        assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 45);
+        assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 55);
         session.sandbox_adjust_level(i16::MIN);
         assert_eq!(session.display.as_ref().unwrap().tanks[0].level, 1);
         session.display.as_mut().unwrap().tanks[0].alive = false;

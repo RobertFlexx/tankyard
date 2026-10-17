@@ -74,14 +74,20 @@ pub static ACHIEVEMENTS: &[Achievement] = &[
     Achievement {
         id: "level_45",
         title: "Level 45",
-        description: "Reach the maximum level.",
+        description: "Reach level 45.",
         goal: Goal::Level(45),
+    },
+    Achievement {
+        id: "level_55",
+        title: "Level 55",
+        description: "Reach the final tank tier.",
+        goal: Goal::Level(55),
     },
     Achievement {
         id: "full_build",
         title: "Full build",
-        description: "Spend all 33 skill points.",
-        goal: Goal::Points(33),
+        description: "Spend all 38 skill points.",
+        goal: Goal::Points(38),
     },
     Achievement {
         id: "ten_kills",

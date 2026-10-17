@@ -8,52 +8,67 @@ fn wrap(angle: f32) -> f32 {
 }
 
 impl World {
-    // Don't lock a whole squad onto an enemy behind a fucking wall. Grab something
-    // with an actual firing lane, and leave the owner's mouse commands alone.
     pub(crate) fn minion_target(&self, pos: V2, team: u8, owner: u64, range: f32) -> Option<V2> {
-        let visible = |target: V2| {
-            !self
-                .walls
-                .iter()
-                .any(|&wall| sweep_rect(pos, target, 0.5, wall).is_some())
+        self.minion_target_with_id(pos, team, owner, range, 0)
+            .map(|(_, pos)| pos)
+    }
+
+    pub(crate) fn minion_target_with_id(
+        &self,
+        pos: V2,
+        team: u8,
+        owner: u64,
+        range: f32,
+        preferred: u64,
+    ) -> Option<(u64, V2)> {
+        let pick = |candidates: &mut dyn Iterator<Item = (u64, V2)>| {
+            candidates
+                .filter_map(|(id, target)| {
+                    let distance = (target - pos).length_squared();
+                    if distance > range * range
+                        || self
+                            .walls
+                            .iter()
+                            .any(|&wall| sweep_rect(pos, target, 0.5, wall).is_some())
+                    {
+                        return None;
+                    }
+                    // A small distance advantage must not flip the squad's aim
+                    // every tick as two opponents cross each other's path.
+                    Some((
+                        distance * if id == preferred { 0.72 } else { 1. },
+                        id,
+                        target,
+                    ))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, id, target)| (id, target))
         };
-        let mut best = range * range;
-        let mut target = None;
-        for tank in &self.tanks {
-            let distance = (pos - tank.pos).length_squared();
-            if tank.alive
-                && tank.id != owner
-                && tank.protection <= 0.0
-                && self.hostile(team, tank.team)
-                && distance < best
-                && visible(tank.pos)
-            {
-                best = distance;
-                target = Some(tank.pos);
-            }
+        let tanks = self
+            .tanks
+            .iter()
+            .filter(|tank| {
+                tank.alive
+                    && tank.id != owner
+                    && tank.protection <= 0.
+                    && self.hostile(team, tank.team)
+            })
+            .map(|tank| (tank.id, tank.pos));
+        let bosses = self
+            .bosses
+            .iter()
+            .filter(|boss| boss.health > 0. && self.hostile(team, boss.team))
+            .map(|boss| (boss.id, boss.pos));
+        if let Some(enemy) = pick(&mut tanks.chain(bosses)) {
+            return Some(enemy);
         }
-        for boss in &self.bosses {
-            let distance = (pos - boss.pos).length_squared();
-            if boss.health > 0.0
-                && self.hostile(team, boss.team)
-                && distance < best
-                && visible(boss.pos)
-            {
-                best = distance;
-                target = Some(boss.pos);
-            }
-        }
-        if target.is_some() {
-            return target;
-        }
-        for shape in &self.targets {
-            let distance = (pos - shape.pos).length_squared();
-            if shape.health > 0.0 && distance < best && visible(shape.pos) {
-                best = distance;
-                target = Some(shape.pos);
-            }
-        }
-        target
+        pick(
+            &mut self
+                .targets
+                .iter()
+                .filter(|target| target.health > 0.)
+                .map(|target| (target.id, target.pos)),
+        )
     }
 
     pub(crate) fn fire_minion(&mut self, index: usize, queued: usize) -> Option<Projectile> {
@@ -73,19 +88,26 @@ impl World {
         {
             return None;
         }
-        let goal = if tank.input.alt_fire {
-            None
+        let speed = 420.0 * stat_scale(tank.stats[3]) * class.multipliers[3];
+        let range = (speed * 1.25).min(650.);
+        let (goal, locked) = if tank.input.alt_fire {
+            (None, 0)
         } else if tank.input.fire {
             let cursor = tank.pos + V2::from_angle(tank.aim) * tank.input.aim_distance.min(1600.0);
             // If the pointer is sitting on this minion, fire along the owner's
             // aim instead of spinning the gun at a zero-length vector.
-            Some(if cursor.distance(p.pos) < p.radius + 4.0 {
-                p.pos + V2::from_angle(tank.aim) * 200.0
-            } else {
-                cursor
-            })
+            (
+                Some(if cursor.distance(p.pos) < p.radius * 1.5 {
+                    let aim = p.gun.map_or(tank.aim, |gun| gun.aim);
+                    p.pos + V2::from_angle(aim) * 200.0
+                } else {
+                    cursor
+                }),
+                0,
+            )
         } else {
-            self.minion_target(p.pos, p.team, p.owner, 600.0)
+            let target = self.minion_target_with_id(p.pos, p.team, p.owner, range, p.homing_target);
+            (target.map(|(_, pos)| pos), target.map_or(0, |(id, _)| id))
         };
         let reload = stat_scale(tank.stats[6]) * class.multipliers[6];
         let damage = 6.0
@@ -93,9 +115,9 @@ impl World {
             * class.multipliers[5]
             * self.config.rules.damage_multiplier;
         let penetration = 1.5 * stat_scale(tank.stats[4]) * class.multipliers[4];
-        let speed = 420.0 * stat_scale(tank.stats[3]) * class.multipliers[3];
         let full = self.projectiles.len() + queued >= self.config.max_projectiles;
         let p = &mut self.projectiles[index];
+        p.homing_target = locked;
         let gun = p.gun.get_or_insert(MinionGun {
             aim: p.vel.angle(),
             cooldown: 0.35,
@@ -104,6 +126,9 @@ impl World {
         let previous = gun.cooldown;
         gun.cooldown = (previous - DT).max(0.0);
         let goal = goal?;
+        if p.pos.distance(goal) > range + p.radius * MinionGun::BARREL_LENGTH {
+            return None;
+        }
         let desired = (goal - p.pos).angle();
         gun.aim = wrap(gun.aim + wrap(desired - gun.aim) * (1.0 - (-12.0 * DT).exp()));
         if gun.cooldown > 0.0 || p.age < 0.3 || wrap(desired - gun.aim).abs() > 0.25 || full {

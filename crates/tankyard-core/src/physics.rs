@@ -335,18 +335,27 @@ pub fn predict_tank(
         tank.charge = (tank.charge + dt).min(1.5);
     }
     let charged = tank.charge >= 1.0 || (!tank.input.fire && previous_charge > 0.15);
+    let mut ready_defenses = [0_usize; 4];
+    for (index, barrel) in class.barrels.iter().enumerate() {
+        if barrel.pattern != FirePattern::Auto
+            && tank.cooldowns[index] <= dt
+            && (if barrel.pattern == FirePattern::Charge {
+                charged
+            } else {
+                tank.input.fire
+            })
+            && let Some(slot) = crate::weapons::defense_slot(barrel.projectile)
+        {
+            ready_defenses[slot] += 1;
+        }
+    }
     for (index, barrel) in class.barrels.iter().enumerate() {
         let previous_cooldown = tank.cooldowns[index];
         tank.cooldowns[index] = (previous_cooldown - dt).max(0.0);
         if barrel.pattern == FirePattern::Auto
             || matches!(
                 barrel.projectile,
-                ProjectileKind::Drone
-                    | ProjectileKind::Minion
-                    | ProjectileKind::Trap
-                    | ProjectileKind::Mine
-                    | ProjectileKind::Barrier
-                    | ProjectileKind::Turret
+                ProjectileKind::Drone | ProjectileKind::Minion
             )
         {
             continue;
@@ -358,6 +367,17 @@ pub fn predict_tank(
         };
         if !firing || tank.cooldowns[index] > 0.0 {
             continue;
+        }
+        if let Some(slot) = crate::weapons::defense_slot(barrel.projectile) {
+            let room = [24_u8, 24, 8, 6][slot].saturating_sub(tank.deployed_defenses[slot]);
+            let count = usize::from(barrel.count.max(1))
+                .min(usize::from(room).div_ceil(ready_defenses[slot].max(1)));
+            ready_defenses[slot] = ready_defenses[slot].saturating_sub(1);
+            if count == 0 {
+                tank.cooldowns[index] = 0.2;
+                continue;
+            }
+            tank.deployed_defenses[slot] += count as u8;
         }
         let angle = tank.aim
             + barrel.angle
@@ -399,7 +419,9 @@ pub(crate) fn apply_personal_ability(
             tank.boost = 0.6;
         }
         Ability::Shield => tank.shield = 3.5,
-        Ability::Parry => tank.shield = 0.5,
+        Ability::Parry | Ability::CounterParry | Ability::VolleyParry => {
+            tank.shield = ability.parry_window().unwrap_or(0.)
+        }
         Ability::Recall => tank.shield = 1.,
         Ability::Cloak => {
             tank.protection = 2.;
@@ -435,7 +457,7 @@ pub(crate) fn update_protection(tank: &mut Tank, dt: f32) {
     let moving = tank.input.movement.length_squared() > 0.0;
     if tank.input.fire
         || (tank.spawn_immunity && (moving || tank.input.ability))
-        || tank.protection <= dt + 0.0001
+        || tank.protection <= dt + 0.001
     {
         tank.protection = 0.0;
     } else {
@@ -518,7 +540,7 @@ impl<T: Copy> SpatialGrid<T> {
 mod tests {
     use super::*;
     #[test]
-    fn spawn_immunity_lasts_fifteen_idle_seconds_and_prediction_agrees() {
+    fn spawn_immunity_lasts_thirty_idle_seconds_and_prediction_agrees() {
         let content = Content::builtin();
         let config = WorldConfig {
             target_count: 0,
@@ -527,8 +549,8 @@ mod tests {
         let mut world = crate::World::new(config, content);
         world.add_player("Idle", false);
         let mut predicted = world.tanks[0].clone();
-        assert_eq!(predicted.protection, 15.0);
-        for tick in 1..=900 {
+        assert_eq!(predicted.protection, 30.0);
+        for tick in 1..=1800 {
             predicted.aim = tick as f32 * 0.01;
             predict_tank(
                 &mut predicted,
@@ -542,7 +564,7 @@ mod tests {
             let actual = &world.tanks[0];
             assert_eq!(predicted.protection, actual.protection);
             assert_eq!(predicted.spawn_immunity, actual.spawn_immunity);
-            if tick < 900 {
+            if tick < 1800 {
                 assert!(actual.protection > 0.0);
             }
         }

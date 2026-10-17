@@ -860,7 +860,7 @@ fn sustained_direct_weapon_damage_stays_within_tier_budgets() {
             world.events.clear();
             world.tick += 1;
         }
-        let limit = [32.0, 48.0, 72.0, 95.0][class.tier as usize];
+        let limit = [32.0, 48.0, 72.0, 95.0, 105.0][class.tier as usize];
         assert!(
             damage / 60.0 <= limit + 4.0,
             "{} exceeds the tier {} damage budget: {}",
@@ -1504,6 +1504,9 @@ fn manual_recoil_prediction_matches_the_authoritative_simulation() {
         "needlefan",
         "streamliner",
         "echo",
+        "anchor",
+        "bastille",
+        "rook",
     ] {
         let mut world = empty(Mode::Sandbox);
         let player = world.add_player("Prediction", false);

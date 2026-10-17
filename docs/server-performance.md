@@ -68,3 +68,21 @@ The same 64-client / 24-fixed-bot UDP workload ran for 15 seconds on the i7-9700
 The synthetic 64-player / 24-bot benchmark with roughly 3,000 replenished projectiles averaged 0.940 ms per simulation tick in Open and 6.719 ms in Maze. AI averaged 0.072 / 0.423 ms respectively. Reports are `artifacts/bench/v0211-after-{open,maze}.json`. These short local samples cover simulation and networking, not production capacity or rendering performance.
 
 Each bot now has two additional eight-hidden-unit networks: an 8-input class-value model and a 13-input skill-allocation model, each with one output. They train from the bot's own results over two-second windows, with a maximum of 40 replay entries and three replay updates per outcome. Very short builds are discarded; deaths still count. The models only influence legal upgrade commands. The class model also learns from the results of up to eight continuously visible human players, discarding samples across hidden gaps. Skill allocations and controls remain private. A separate 12-opponent memory tracks fear and animosity, with decay over time and bounded changes to target choice, spacing, and retreat. These memories persist across lives and reset with the match. Idle arenas still stop simulation and learning.
+
+## v0.2.12 follow-up
+
+Measured on the same i7-9700 on 2026-10-17, with the level-55 catalog, input history, and deployable prediction state. Each network run lasted 15 seconds; compilers and graphical checks were stopped during measurement.
+
+| Transport / workload | Ready at finish | Stale | Reported loss | Dropped ticks / skipped snapshots |
+| --- | --- | --- | --- | --- |
+| UDP, 64 clients + 24 fixed bots | 64 | 0 | 0.00% | 0 / 0 |
+| UDP, 8 clients, 100 ms delay / 20 ms jitter / 10% imposed loss | 8 | 0 | 9.73% | 0 / 0 |
+| WebSocket relay, 32 clients + 24 fixed bots | 32 | 0 | 0.00% | 0 / 0 |
+
+The 64-client run measured average/p95/p99 simulation ticks of 85.8/100/121 µs, a maximum snapshot batch of 4.172 ms, and about 24 MiB resident memory for the combined server and client process. The WebSocket run used separate server and relay processes and averaged 71.5 µs per simulation tick. The impaired run used adaptive bots, with no arena bots after eight humans joined. These are short loopback and emulated-link checks, not production capacity guarantees.
+
+The synthetic 64-player / 24-bot / roughly 3,000-projectile workload averaged 0.967 ms per tick in Open and 7.396 ms in Maze; p99 was 1.170 / 14.163 ms. AI averaged 0.076 / 0.526 ms. This heavier cover sample costs more than the v0.2.11 sample; timings include run-to-run variation and the expanded catalog. Parry interception calculations now run only for tanks that can parry. The normal multiplayer workload remained well below its tick budget in these tests.
+
+Each input packet carries its current frame and two recent frames, in a fixed bundle below 80 bytes. Sequence validation discards already applied inputs, while coalescing preserves short fire and ability taps with the newest movement. The 16 KiB client input queue, per-peer rate budget, and 64-packet receive limit remain bounded. Four authoritative defense counts let recoil prediction respect deployable limits even when older units are outside the snapshot's view. No reliable input backlog was added.
+
+Reports: `artifacts/bench/v0212-{open,maze}.json`, `v0212-{udp64,impaired,ws32}.txt`, and `v0212-ws-server.txt`.

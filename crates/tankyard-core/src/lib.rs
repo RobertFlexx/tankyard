@@ -1,5 +1,7 @@
 //! Server authoritative fixed-step simulation, with no rendering dependencies.
 mod arena;
+#[cfg(test)]
+mod combat_regressions;
 mod drones;
 mod homing;
 pub mod math;
@@ -18,4 +20,6 @@ pub use arena::PVE_WAVES;
 pub use math::*;
 pub use model::*;
 pub use progression::*;
+pub use tankyard_content::{MAX_LEVEL, UPGRADE_LEVELS};
+pub use weapons::reload_progress;
 pub use world::*;

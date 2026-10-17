@@ -23,7 +23,7 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 
 Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
 
-These modes and the new combat state use protocol 9. Update clients and servers together. The sample configs use 15 seconds of spawn protection; existing configs keep their chosen duration.
+Current clients and servers use protocol 10. Level-55 tanks, the new parry abilities, and input history require matching versions. Update clients and servers together. The sample configs use 30 seconds of spawn protection; existing configs keep their chosen duration.
 
 The process console is the host's administration interface:
 

@@ -463,35 +463,38 @@ impl UdpServer {
                 self.metrics.rejected_packets += 1;
                 continue;
             }
-            let mut input = match decode_input(&bytes) {
-                Ok(input) => input,
+            let inputs = match decode_inputs(&bytes) {
+                Ok(inputs) => inputs,
                 Err(_) => {
                     self.metrics.rejected_packets += 1;
                     self.reject(client, "Malformed player input.");
                     return;
                 }
             };
-            let Some(peer) = self.peers.get(&client) else {
-                return;
-            };
-            if peer.entity.is_none() {
-                continue;
+            for mut input in inputs.iter() {
+                let Some(peer) = self.peers.get(&client) else {
+                    return;
+                };
+                if peer.entity.is_none() {
+                    continue;
+                }
+                let baseline = newest
+                    .map(|i: PlayerInput| i.sequence)
+                    .or(peer.last_sequence);
+                if baseline.is_some_and(|last| {
+                    !sequence_newer(input.sequence, last)
+                        || input.sequence.wrapping_sub(last) > 4096
+                }) {
+                    continue;
+                }
+                if let Some(previous) = newest {
+                    // A short click can share a delayed packet batch with its
+                    // release. Keep the tap while using the newest movement/aim.
+                    input.fire |= previous.fire;
+                    input.ability |= previous.ability;
+                }
+                newest = Some(input);
             }
-            let baseline = newest
-                .map(|i: PlayerInput| i.sequence)
-                .or(peer.last_sequence);
-            if baseline.is_some_and(|last| {
-                !sequence_newer(input.sequence, last) || input.sequence.wrapping_sub(last) > 4096
-            }) {
-                continue;
-            }
-            if let Some(previous) = newest {
-                // A short click can share a delayed packet batch with its
-                // release. Keep the tap while using the newest movement/aim.
-                input.fire |= previous.fire;
-                input.ability |= previous.ability;
-            }
-            newest = Some(input);
         }
         if let Some(input) = newest
             && let Some(peer) = self.peers.get_mut(&client)

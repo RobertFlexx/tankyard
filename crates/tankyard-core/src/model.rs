@@ -104,7 +104,7 @@ impl Default for WorldConfig {
             target_count: 180,
             max_projectiles: 6000,
             friendly_fire: false,
-            spawn_protection: 15.,
+            spawn_protection: 30.,
             score_limit: 100,
             time_limit: 600.,
             lives: 1,
@@ -187,6 +187,9 @@ pub struct Tank {
     pub carrying: bool,
     #[serde(default)]
     pub deployed_drones: u8,
+    /// Trap, mine, barrier and turret counts, including units outside interest.
+    #[serde(default)]
+    pub deployed_defenses: [u8; 4],
     #[serde(default)]
     pub spawn_immunity: bool,
 }
@@ -230,6 +233,7 @@ impl Clone for Tank {
             barrel_aims: self.barrel_aims.clone(),
             carrying: self.carrying,
             deployed_drones: self.deployed_drones,
+            deployed_defenses: self.deployed_defenses,
             spawn_immunity: self.spawn_immunity,
         }
     }
@@ -270,6 +274,7 @@ impl Clone for Tank {
         self.barrel_aims.clone_from(&source.barrel_aims);
         self.carrying.clone_from(&source.carrying);
         self.deployed_drones.clone_from(&source.deployed_drones);
+        self.deployed_defenses.clone_from(&source.deployed_defenses);
         self.spawn_immunity.clone_from(&source.spawn_immunity);
     }
 }

@@ -1207,8 +1207,9 @@ impl Menu {
             if class.ability != Ability::None {
                 label(
                     &format!(
-                        "ABILITY  {:?}  /  {:.0}s cooldown",
-                        class.ability, class.ability_cooldown
+                        "ABILITY  {}  /  {:.0}s cooldown",
+                        class.ability.name(),
+                        class.ability_cooldown
                     ),
                     rx + 22.0 * s,
                     by,

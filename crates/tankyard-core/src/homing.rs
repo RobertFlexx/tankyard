@@ -211,7 +211,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(barrels, 16);
+        assert_eq!(barrels, 18);
         let short = arena(V2::new(7000.0, 7000.0), 280.0, 0.4);
         assert_eq!(short.projectiles[0].lifetime, 0.4);
     }

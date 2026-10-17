@@ -206,8 +206,8 @@ impl ServerSettings {
         {
             return invalid("entity population exceeds supported limits");
         }
-        if !world.spawn_protection.is_finite() || !(0.0..=15.0).contains(&world.spawn_protection) {
-            return invalid("spawn protection must be between 0 and 15 seconds");
+        if !world.spawn_protection.is_finite() || !(0.0..=30.0).contains(&world.spawn_protection) {
+            return invalid("spawn protection must be between 0 and 30 seconds");
         }
         if !world.time_limit.is_finite()
             || !(10.0..=86400.0).contains(&world.time_limit)

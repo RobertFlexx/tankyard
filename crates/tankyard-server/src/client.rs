@@ -46,6 +46,7 @@ pub struct NetworkClient {
     tick_rate: u32,
     event_queue: Vec<GameEvent>,
     handshake_elapsed: Duration,
+    input_history: InputBundle,
     _bridge: Option<crate::websocket::ClientBridge>,
 }
 
@@ -163,6 +164,7 @@ impl NetworkClient {
             tick_rate: 60,
             event_queue: Vec::with_capacity(128),
             handshake_elapsed: Duration::ZERO,
+            input_history: InputBundle::default(),
             _bridge: bridge,
             bundle,
             bundle_revision,
@@ -315,6 +317,7 @@ impl NetworkClient {
                         self.events.clear();
                     }
                     self.player_id = Some(player);
+                    self.input_history = InputBundle::default();
                     self.player_round = Some(round);
                     self.server_name = server_name;
                     self.sandbox_allowed = sandbox_allowed;
@@ -413,7 +416,8 @@ impl NetworkClient {
         if !self.is_ready() || !input.valid() {
             return false;
         }
-        let Ok(bytes) = encode(&InputMessage { input }, MAX_INPUT_BYTES) else {
+        self.input_history.push(input);
+        let Ok(bytes) = encode(&self.input_history, MAX_INPUT_BYTES) else {
             return false;
         };
         if !self.client.can_send_message(REALTIME_CHANNEL, bytes.len()) {
@@ -544,7 +548,104 @@ fn snapshot_matches_player(
 mod tests {
     use super::*;
     use tankyard_content::Content;
-    use tankyard_core::{World, WorldConfig};
+    use tankyard_core::{V2, World, WorldConfig};
+
+    #[test]
+    fn a_received_history_recovers_lost_taps_once_and_keeps_the_latest_movement() {
+        use crate::{ServerSettings, UdpServer};
+        let mut server = UdpServer::bind(ServerSettings {
+            bind: "127.0.0.1:0".into(),
+            bot_count: 0,
+            ban_file: String::new(),
+            world: WorldConfig {
+                mode: tankyard_core::Mode::Sandbox,
+                target_count: 0,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+        let mut client = NetworkClient::connect(&server.address.to_string(), "Pilot", "").unwrap();
+        let step = Duration::from_nanos(16_666_667);
+        for _ in 0..240 {
+            client.update(step).unwrap();
+            server.update(step).unwrap();
+            if client.is_ready() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(client.is_ready());
+        let id = client.player_id.unwrap();
+        assert!(server.session.world.sandbox_class(id, "riposte"));
+        let mut history = InputBundle::default();
+        history.push(PlayerInput {
+            sequence: u32::MAX - 1,
+            fire: true,
+            ability: true,
+            ..Default::default()
+        });
+        history.push(PlayerInput {
+            sequence: u32::MAX,
+            ..Default::default()
+        });
+        history.push(PlayerInput {
+            sequence: 0,
+            movement: V2::new(0., 1.),
+            ..Default::default()
+        });
+        // Only the third packet reaches the transport. Its history contains
+        // the two missing packets, including a press followed by a release.
+        client
+            .client
+            .send_message(REALTIME_CHANNEL, encode(&history, MAX_INPUT_BYTES).unwrap());
+        client.flush().unwrap();
+        server.update(step).unwrap();
+        let tank = server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap();
+        assert_eq!(tank.last_input, 0);
+        assert_eq!(tank.input.movement, V2::new(0., 1.));
+        assert_eq!(tank.shot_count, 1);
+        assert!(tank.ability_cooldown > 0.);
+        let tank = server
+            .session
+            .world
+            .tanks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .unwrap();
+        tank.cooldowns.fill(0.);
+        tank.ability_cooldown = 0.;
+        history.push(PlayerInput {
+            sequence: 1,
+            ..Default::default()
+        });
+        client
+            .client
+            .send_message(REALTIME_CHANNEL, encode(&history, MAX_INPUT_BYTES).unwrap());
+        client.flush().unwrap();
+        server.update(step).unwrap();
+        let tank = server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap();
+        assert_eq!(tank.last_input, 1);
+        assert_eq!(tank.input.movement, V2::ZERO);
+        assert_eq!(tank.shot_count, 1, "repeated history must not fire again");
+        assert_eq!(
+            tank.ability_cooldown, 0.,
+            "repeated history must not reuse an ability"
+        );
+    }
 
     #[test]
     fn round_assignments_reject_reordered_snapshots_with_reused_human_and_bot_ids() {

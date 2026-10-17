@@ -375,7 +375,7 @@ impl Condition {
         }
         match self {
             Self::HealthBelow { fraction } => finite_range(*fraction, 0.0, 1.0),
-            Self::LevelAtLeast { level } => (1..=45).contains(level),
+            Self::LevelAtLeast { level } => (1..=tankyard_content::MAX_LEVEL).contains(level),
             Self::ClassIs { class } => content.class(class).is_some(),
             Self::TeamIs { team } => *team <= 4,
             Self::IsBot { .. } => true,

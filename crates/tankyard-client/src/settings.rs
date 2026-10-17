@@ -28,6 +28,7 @@ pub struct Settings {
     pub colorblind: bool,
     pub high_contrast: bool,
     pub dark_arena: bool,
+    pub theme_chosen: bool,
     pub master_volume: f32,
     pub effects_volume: f32,
     pub ui_volume: f32,
@@ -67,6 +68,7 @@ impl Default for Settings {
             colorblind: false,
             high_contrast: false,
             dark_arena: false,
+            theme_chosen: false,
             master_volume: 0.65,
             effects_volume: 0.7,
             ui_volume: 0.6,
@@ -114,7 +116,15 @@ impl Settings {
             .ok()
             .filter(|metadata| metadata.len() <= 1024 * 1024)
             .and_then(|_| std::fs::read(&path).ok())
-            .and_then(|bytes| serde_json::from_slice::<Self>(&bytes).ok())
+            .and_then(|bytes| {
+                let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+                let mut value: Self = serde_json::from_value(json.clone()).ok()?;
+                // Existing installations have already chosen a preference.
+                if json.get("theme_chosen").is_none() {
+                    value.theme_chosen = true;
+                }
+                Some(value)
+            })
             .unwrap_or_default();
         value.validate();
         value

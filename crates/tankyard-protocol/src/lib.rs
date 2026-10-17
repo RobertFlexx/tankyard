@@ -9,8 +9,8 @@ use tankyard_core::{BossKind, EntityId, GameEvent, PlayerInput, Snapshot};
 mod community;
 pub use community::*;
 
-pub const PROTOCOL_VERSION: u32 = 9;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0009;
+pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000a;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -109,7 +109,7 @@ impl ClientControl {
             }
             Self::UpgradeStat { stat, count } => *stat < 8 && (1..=7).contains(count),
             Self::Evolve { class } | Self::SandboxClass { class } => valid_class_id(class),
-            Self::SandboxLevel { level } => (1..=45).contains(level),
+            Self::SandboxLevel { level } => (1..=tankyard_core::MAX_LEVEL).contains(level),
             Self::SandboxInvulnerability { .. } | Self::SandboxBoss { .. } | Self::Leave => true,
             Self::Chat { room, text } => {
                 tankyard_mods::identifier(room)
@@ -177,6 +177,34 @@ pub enum ServerControl {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InputMessage {
     pub input: PlayerInput,
+}
+
+/// At most three chronological input frames. Repeating recent frames recovers
+/// short taps after UDP loss without resending old movement as the current one.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct InputBundle {
+    pub inputs: [PlayerInput; 3],
+    pub count: u8,
+}
+impl InputBundle {
+    pub fn push(&mut self, input: PlayerInput) {
+        if self.count < 3 {
+            self.inputs[usize::from(self.count)] = input;
+            self.count += 1;
+        } else {
+            self.inputs.rotate_left(1);
+            self.inputs[2] = input;
+        }
+    }
+    pub fn iter(&self) -> impl Iterator<Item = PlayerInput> + '_ {
+        self.inputs
+            .iter()
+            .copied()
+            .take(usize::from(self.count.min(3)))
+    }
+    fn valid(&self) -> bool {
+        (1..=3).contains(&self.count) && self.iter().all(PlayerInput::valid)
+    }
 }
 pub fn game_data(bundle: &tankyard_mods::GameBundle) -> Result<ServerControl, DecodeError> {
     bundle
@@ -251,6 +279,21 @@ pub fn decode_input(bytes: &[u8]) -> Result<PlayerInput, DecodeError> {
         return Err(DecodeError("invalid input values"));
     }
     Ok(message.input)
+}
+
+pub fn decode_inputs(bytes: &[u8]) -> Result<InputBundle, DecodeError> {
+    // A single frame occupies at most 24 bytes (five-byte sequence, four
+    // four-byte floats, three booleans). A fixed three-frame bundle is >=61.
+    if bytes.len() <= 24 {
+        let mut bundle = InputBundle::default();
+        bundle.push(decode_input(bytes)?);
+        return Ok(bundle);
+    }
+    let bundle: InputBundle = decode(bytes, MAX_INPUT_BYTES)?;
+    if !bundle.valid() {
+        return Err(DecodeError("invalid input history"));
+    }
+    Ok(bundle)
 }
 
 /// Independent LZ4 blocks make dropped or reordered snapshots harmless. No
@@ -390,7 +433,7 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && scalar(t.charge)
                 && scalar(t.boost)
                 && t.stats.iter().all(|stat| *stat <= 7)
-                && t.points <= 33
+                && t.points <= 38
                 && t.team <= 4
                 && t.input.valid()
                 && t.name.len() <= 96
@@ -402,7 +445,7 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && t.barrel_aims.iter().all(|v| scalar(*v))
                 && t.cooldowns.len() == t.barrel_shots.len()
                 && t.cooldowns.len() == t.barrel_aims.len()
-                && (1..=45).contains(&t.level)
+                && (1..=tankyard_core::MAX_LEVEL).contains(&t.level)
         })
         && s.projectiles.iter().all(|p| {
             vector(p.pos)
@@ -481,6 +524,45 @@ mod name_hardening_tests {
 mod tests {
     use super::*;
     use tankyard_core::V2;
+
+    #[test]
+    fn input_history_recovers_taps_across_wrap_and_rejects_malformed_bundles() {
+        let mut history = InputBundle::default();
+        for sequence in [u32::MAX - 1, u32::MAX, 0, 1] {
+            history.push(PlayerInput {
+                sequence,
+                fire: sequence == u32::MAX,
+                ability: sequence == 0,
+                movement: V2::new(0.5, -0.5),
+                ..Default::default()
+            });
+        }
+        let bytes = encode(&history, MAX_INPUT_BYTES).unwrap();
+        assert!(bytes.len() < 80, "history must fit in a small datagram");
+        let decoded = decode_inputs(&bytes).unwrap();
+        assert_eq!(
+            decoded.iter().map(|i| i.sequence).collect::<Vec<_>>(),
+            [u32::MAX, 0, 1]
+        );
+        assert!(decoded.inputs[0].fire && decoded.inputs[1].ability);
+        for count in [0, 4, 255] {
+            history.count = count;
+            assert!(decode_inputs(&encode(&history, MAX_INPUT_BYTES).unwrap()).is_err());
+        }
+        history.count = 3;
+        history.inputs[1].aim = f32::NAN;
+        assert!(decode_inputs(&encode(&history, MAX_INPUT_BYTES).unwrap()).is_err());
+        assert!(decode_inputs(&[0; MAX_INPUT_BYTES + 1]).is_err());
+        let single = InputMessage {
+            input: PlayerInput {
+                sequence: u32::MAX,
+                ..Default::default()
+            },
+        };
+        let single = decode_inputs(&encode(&single, MAX_INPUT_BYTES).unwrap()).unwrap();
+        assert_eq!(single.count, 1);
+        assert_eq!(single.inputs[0].sequence, u32::MAX);
+    }
     #[test]
     fn arena_status_spawn_immunity_and_reflected_shots_survive_the_wire() {
         use tankyard_core::{ArenaEvent, Mode, World, WorldConfig};
@@ -657,7 +739,15 @@ mod tests {
         let player = world.add_player("Pilot", false);
         world.step();
         assert!(!world.tanks[0].barrel_shots.is_empty());
-        for class in ["bulwark", "fork", "bulwark", "vector"] {
+        for class in [
+            "bulwark",
+            "fork",
+            "counterguard",
+            "reprisal",
+            "commodore",
+            "juggernaut",
+            "vector",
+        ] {
             assert!(world.sandbox_class(player, class), "{class}");
             for _ in 0..2 {
                 let snapshot = world.snapshot();

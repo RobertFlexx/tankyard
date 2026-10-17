@@ -73,7 +73,7 @@ pub fn team_color(team: u8, local: bool, colorblind: bool) -> Color {
         }
     }
 }
-fn polygon(center: Vec2, sides: u8, radius: f32, angle: f32, color: Color) {
+pub(crate) fn polygon(center: Vec2, sides: u8, radius: f32, angle: f32, color: Color) {
     if sides < 3 {
         draw_poly(
             center.x,
@@ -572,7 +572,7 @@ pub fn world(
         } else {
             0.0
         };
-        let parrying = class.ability == tankyard_content::Ability::Parry && tank.shield > 0.0;
+        let parrying = class.ability.is_parry() && tank.shield > 0.0;
         if tank.protection > 0.0 || tank.shield > 0.0 {
             let aura = if parrying { AMBER } else { color };
             draw_circle(

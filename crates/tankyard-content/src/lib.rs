@@ -8,6 +8,9 @@ use std::collections::{HashMap, HashSet};
 mod maps;
 pub use maps::*;
 
+pub const MAX_LEVEL: u8 = 55;
+pub const UPGRADE_LEVELS: [u8; 5] = [1, 15, 30, 45, 55];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectileKind {
     Bullet,
@@ -55,6 +58,41 @@ pub enum Ability {
     Fortify,
     Magnet,
     Parry,
+    CounterParry,
+    VolleyParry,
+}
+
+impl Ability {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Dash => "Dash",
+            Self::Shield => "Shield",
+            Self::Heal => "Heal",
+            Self::Nova => "Nova",
+            Self::Recall => "Recall",
+            Self::Cloak => "Cloak",
+            Self::Overdrive => "Overdrive",
+            Self::Blink => "Blink",
+            Self::Fortify => "Fortify",
+            Self::Magnet => "Magnet",
+            Self::Parry => "Parry",
+            Self::CounterParry => "Counter",
+            Self::VolleyParry => "Reprisal",
+        }
+    }
+
+    pub fn parry_window(self) -> Option<f32> {
+        match self {
+            Self::Parry => Some(0.18),
+            Self::CounterParry => Some(0.16),
+            Self::VolleyParry => Some(0.14),
+            _ => None,
+        }
+    }
+    pub fn is_parry(self) -> bool {
+        self.parry_window().is_some()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -283,7 +321,8 @@ impl Content {
                 1 => 15,
                 2 => 30,
                 3 => 45,
-                _ => return Err(format!("{}: tier must be 0..3", class.id)),
+                4 => 55,
+                _ => return Err(format!("{}: tier must be 0..4", class.id)),
             };
             if class.min_level != required_level {
                 return Err(format!(
@@ -356,7 +395,7 @@ impl Content {
             if class.id != "vector" && (class.tier == 0 || class.parents.is_empty()) {
                 return Err(format!("{}: non-root class must have parents", class.id));
             }
-            if class.parents.len() > 16 || class.upgrades.len() > 32 {
+            if class.parents.len() > 64 || class.upgrades.len() > 32 {
                 return Err(format!("{}: oversized upgrade adjacency list", class.id));
             }
             check_unique_edges(&class.id, &class.parents)?;
@@ -547,7 +586,7 @@ mod tests {
                     .contains(&id.to_owned())
             );
         }
-        assert_eq!(content.classes.len(), 92);
+        assert_eq!(content.classes.len(), 102);
         content.validate().unwrap();
     }
 
@@ -559,7 +598,7 @@ mod tests {
         assert_eq!(content.class("vector").unwrap().upgrades.len(), 8);
         assert!(content.classes.iter().filter(|c| c.tier == 3).count() >= 30);
         for class in &content.classes {
-            assert_eq!(class.min_level, [1, 15, 30, 45][class.tier as usize]);
+            assert_eq!(class.min_level, UPGRADE_LEVELS[class.tier as usize]);
         }
     }
 

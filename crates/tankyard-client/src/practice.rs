@@ -86,7 +86,7 @@ impl Challenge {
             width: 2400.,
             height: 1800.,
             target_count: 130,
-            spawn_protection: 15.,
+            spawn_protection: 30.,
             time_limit: self.seconds as f32,
             ..Default::default()
         }

@@ -6,6 +6,7 @@ compile_error!(
 
 mod community_ui;
 mod effects;
+mod first_run;
 mod graphics;
 mod hud;
 mod menu;
@@ -142,11 +143,12 @@ struct App {
     catalog_paths: Vec<String>,
 }
 impl App {
-    async fn new(cli: Cli) -> Self {
-        ui::init_font();
+    async fn new(cli: Cli, dark_theme: bool) -> Self {
         // Older launch scripts still pass this flag.
         let _ = cli.no_audio;
         let mut settings = Settings::load();
+        settings.dark_arena = dark_theme;
+        settings.theme_chosen = true;
         if cli.safe_graphics {
             settings.use_safe_graphics();
         }
@@ -1405,7 +1407,12 @@ async fn run(cli: Cli) {
     prevent_quit();
     // Drop GPU resources before the window and its OpenGL library are closed.
     let _resources = graphics::Resources;
-    let mut app = App::new(cli).await;
+    ui::init_font();
+    let Some(dark_theme) = first_run::choose_theme(cli.smoke_frames.is_some()).await else {
+        ui::unload_font();
+        return;
+    };
+    let mut app = App::new(cli, dark_theme).await;
     // Render directly at the window's drawable resolution.
     macroquad::texture::set_default_filter_mode(FilterMode::Linear);
     loop {

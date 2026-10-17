@@ -155,7 +155,7 @@ impl World {
             let pos = self.spawn_position(2);
             let class = classes[(index + usize::from(wave)) % classes.len()];
             let minimum = self.content.class(class).map_or(1, |class| class.min_level);
-            self.set_level_unchecked(id, (10 + wave * 3).max(minimum).min(45));
+            self.set_level_unchecked(id, (10 + wave * 3).max(minimum).min(MAX_LEVEL));
             if self.content.class(class).is_some() {
                 self.set_class(id, class);
             }

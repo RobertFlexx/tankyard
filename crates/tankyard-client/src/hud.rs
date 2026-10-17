@@ -112,8 +112,8 @@ fn stat_hints(class: Option<&ClassDef>) -> [StatHint; 8] {
             ),
             ProjectileKind::Trap => (
                 StatHint {
-                    name: "Trap Launch Speed",
-                    description: "Launch traps farther and faster; placed traps don't move on their own.",
+                    name: "Trap Range",
+                    description: "Launch traps farther before they settle.",
                 },
                 StatHint {
                     name: "Trap Health",
@@ -355,6 +355,16 @@ fn stat_hints(class: Option<&ClassDef>) -> [StatHint; 8] {
             description: "Fire each weapon more often.",
         };
     }
+    if class
+        .barrels
+        .iter()
+        .any(|b| b.projectile == ProjectileKind::Trap)
+    {
+        hints[3] = StatHint {
+            name: "Speed / Trap Range",
+            description: "Faster shots and longer trap launches.",
+        };
+    }
     hints
 }
 
@@ -498,6 +508,25 @@ impl Hud {
             self.offered_class.clear();
         }
         let class = content.class(&tank.class);
+        if tank.alive
+            && !modal
+            && let Some(class) = class
+            && let Some(progress) = tankyard_core::reload_progress(tank, class, &snapshot.config)
+        {
+            let p = view.screen(tank.pos);
+            let width = 52. * s;
+            let y = p.y + tank.radius * view.zoom + 23. * s;
+            let rect = Rect::new(p.x - width * 0.5, y, width, 5. * s);
+            arcade_track(
+                rect,
+                progress,
+                if progress >= 0.999 {
+                    alpha(CYAN, 0.75)
+                } else {
+                    CYAN
+                },
+            );
+        }
         let available = class.is_some_and(|class| {
             class
                 .upgrades
@@ -723,9 +752,9 @@ impl Hud {
         self.minimap(snapshot, local, settings, s, view);
         let xp_width = (w * 0.36).min(430.0 * s);
         let xp_x = (w - xp_width) * 0.5;
-        let next = xp_for_level((tank.level + 1).min(45));
+        let next = xp_for_level((tank.level + 1).min(tankyard_core::MAX_LEVEL));
         let prev = xp_for_level(tank.level);
-        let fraction = if tank.level >= 45 {
+        let fraction = if tank.level >= tankyard_core::MAX_LEVEL {
             1.0
         } else {
             tank.xp.saturating_sub(prev) as f32 / (next - prev).max(1) as f32
@@ -774,12 +803,12 @@ impl Hud {
             && class.ability != Ability::None
         {
             let ready = tank.ability_cooldown <= 0.0;
-            let parrying = class.ability == Ability::Parry && tank.shield > 0.0;
+            let parrying = class.ability.is_parry() && tank.shield > 0.0;
             center_label(
                 &format!(
-                    "[{}] {:?}  {}",
+                    "[{}] {}  {}",
                     settings.bindings[4],
-                    class.ability,
+                    class.ability.name(),
                     if parrying {
                         "ACTIVE".into()
                     } else if ready {
@@ -1170,12 +1199,12 @@ impl Hud {
             12.0 * s,
             muted_color(),
         );
-        for (index, level) in [1, 15, 30, 45].into_iter().enumerate() {
+        for (index, level) in tankyard_core::UPGRADE_LEVELS.into_iter().enumerate() {
             if small_button(
                 Rect::new(
-                    x + 20.0 * s + index as f32 * 85.0 * s,
+                    x + 20.0 * s + index as f32 * 68.0 * s,
                     y + 101.0 * s,
-                    75.0 * s,
+                    60.0 * s,
                     32.0 * s,
                 ),
                 &level.to_string(),

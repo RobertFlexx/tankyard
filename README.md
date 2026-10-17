@@ -1,6 +1,6 @@
 # Tank Yard
 
-Tank Yard is a tank arena made by RobertFlexx, inspired by Diep.io and Arras.io. It has 92 tanks, fourteen modes, offline play, practice challenges, and player-hosted multiplayer.
+Tank Yard is a tank arena made by RobertFlexx, inspired by Diep.io and Arras.io. It has 102 tanks, fourteen modes, offline play, practice challenges, and player-hosted multiplayer.
 
 Install or update on Linux and macOS:
 
@@ -25,13 +25,17 @@ Use WASD to move, the mouse to aim, left click to fire, E for auto-fire, Space f
 
 Hold Shift with a skill key or click to fill that stat. While firing, drones follow the cursor; right click recalls them. Friendly drones bunch together with physical contact, slide along walls, and keep their individual shapes and headings when resting.
 
-Random Events adds timed arena modifiers. Co-op PvE pits your squad against ten waves of raiders and bosses, with revives between waves. Riposte, a level 30 Destroyer upgrade, parries shots into homing returns with Space. Spawn protection lasts up to 15 seconds and ends when you move or attack. In Sandbox, PgUp/PgDn changes your level; hold Shift for 15 levels.
+Random Events adds timed arena modifiers. Co-op PvE pits your squad against ten waves of raiders and bosses, with revives between waves. Riposte, a level 30 Destroyer upgrade, parries shots into homing returns with Space. Spawn protection lasts up to 30 seconds and ends when you move or attack. In Sandbox, PgUp/PgDn changes your level; hold Shift for 15 levels.
+
+Tank upgrades unlock at levels 15, 30, 45, and 55. Riposte leads to Counterguard, then Reprisal. Their parry windows get tighter, with stronger returns and a small heal on success. Normal cannon damage stays the same. A bar below your tank shows when its next shot is ready.
+
+Your first launch shows both themes side by side. Pick Dark or Light; F9 changes it later.
 
 Protected tanks pulse white. Online arenas fill to six tanks with bots: one player gets five bots, five players get one, and six or more players get none. Empty servers pause until someone joins. Achievements reset each match by default; the Achievements page also offers Global and Off.
 
-The Factory is the fun oddball: it builds up to six tiny tanks with their own cannons. Hold left click and they'll circle your cursor while firing. Let go and they'll pick fights with nearby visible targets, then hang back around your tank when it's quiet. Kill a minion and the launcher will replace it when reloaded. The Assembly upgrade keeps the same six-unit cap.
+The Factory is the fun oddball: it builds up to six tiny tanks with their own cannons. Hold left click and they'll settle around your cursor while firing. Let go and they'll pick fights with nearby visible targets, then hang back around your tank when it's quiet. Kill a minion and the launcher will replace it when reloaded. The Assembly upgrade keeps the same six-unit cap.
 
-Skill labels follow your class: an Overseer gets Drone Speed / Health / Damage, the Factory gets Minion stats, and the Trapper gets trap stats. Mixed tanks spell out which bits benefit in the hover descriptions. The underlying upgrade values have not changed.
+Skill labels follow your class: an Overseer gets Drone Speed / Health / Damage, the Factory gets Minion stats, and the Trapper gets trap stats. Mixed tanks spell out which bits benefit in the hover descriptions. Trap Range sends traps farther before they settle.
 
 Practice is below Play on the main menu, in the pause menu, and on F6. It offers a shape sprint, drone drill, tank skirmish, and survival challenge with personal records. Press F1 for the current controls, F3 for diagnostics, F10 for settings, and F5 to restart an offline game from pause. Tab and Shift+Tab move between text fields; Esc goes back. See [playing](docs/playing.md) for goals and shortcuts.
 

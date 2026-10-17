@@ -10,11 +10,11 @@ impl World {
     ) -> bool {
         let tank = &self.tanks[defender];
         let shot = &self.projectiles[projectile];
+        let ability = self.content.class(&tank.class).map(|class| class.ability);
         if tank.shield <= 0.0
-            || !self
-                .content
-                .class(&tank.class)
-                .is_some_and(|class| class.ability == Ability::Parry)
+            || !ability.is_some_and(Ability::is_parry)
+            || shot.lifetime <= 0.
+            || shot.penetration <= 0.
             || !matches!(
                 shot.kind,
                 ProjectileKind::Bullet
@@ -29,6 +29,7 @@ impl World {
             return false;
         }
         let (owner, team, pos) = (tank.id, tank.team, tank.pos);
+        let ability = ability.unwrap_or(Ability::Parry);
         let target = shot.owner;
         let target_pos = self.homing_position(target, team, owner);
         let direction = target_pos.map_or_else(
@@ -57,11 +58,50 @@ impl World {
         shot.pos = impact + direction * (shot.radius + 1.0);
         shot.previous = shot.pos;
         shot.penetration = shot.penetration.clamp(1.0, 3.0);
+        let (multiplier, minimum, maximum, healing) = match ability {
+            Ability::CounterParry => (3., 55., 220., 0.12),
+            Ability::VolleyParry => (3.2, 60., 240., 0.12),
+            _ => (2.6, 45., 200., 0.08),
+        };
+        // Only a successful reflection earns this damage and healing. The
+        // player's ordinary cannon and a missed timing window get no bonus.
+        shot.damage = (shot.damage * multiplier).clamp(minimum, maximum);
         shot.lifetime = crate::homing::flight_lifetime(remaining, shot.cruise_speed);
         shot.age = 0.0;
         shot.ricochets = 0;
         shot.gun = None;
         shot.hit.clear();
+        let (echo_origin, echo_speed, echo_radius, echo_damage) = (
+            shot.pos,
+            shot.cruise_speed * 0.92,
+            (shot.radius * 0.75).clamp(3., 8.),
+            (shot.damage * 0.45).min(80.),
+        );
+        let tank = &mut self.tanks[defender];
+        tank.health = (tank.health + tank.max_health * healing).min(tank.max_health);
+        if ability == Ability::VolleyParry {
+            let room = self
+                .config
+                .max_projectiles
+                .saturating_sub(self.projectiles.len())
+                .min(2);
+            for offset in [-0.22, 0.22].into_iter().take(room) {
+                let velocity = direction.rotate(offset) * echo_speed;
+                let mut echo = self.simple_projectile(
+                    owner,
+                    team,
+                    echo_origin,
+                    velocity,
+                    ProjectileKind::Homing,
+                    echo_damage,
+                    echo_radius,
+                    1.1,
+                    2.,
+                );
+                echo.homing_target = target;
+                self.projectiles.push(echo);
+            }
+        }
         self.event(EventKind::Parry, pos, owner, 0, team);
         true
     }

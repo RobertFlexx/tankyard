@@ -149,7 +149,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "Validated {} mechanically unique classes; all tiers and upgrade edges reachable.",
                 data.classes.len()
             );
-            for tier in 0..=3 {
+            for tier in 0..=4 {
                 println!(
                     "  Tier {tier}: {} classes",
                     data.classes.iter().filter(|c| c.tier == tier).count()

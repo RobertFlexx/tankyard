@@ -122,13 +122,22 @@ fn delayed_input_bursts_are_coalesced_without_kicking_the_player() {
         .unwrap();
     assert_eq!(player.last_input, 200);
     // Even excess traffic is bounded and dropped rather than kicking a player.
+    let mut queued = 0;
     for sequence in 201..=600 {
-        assert!(client.send_input(PlayerInput {
+        queued += usize::from(client.send_input(PlayerInput {
             sequence,
             movement: V2::new(1.0, 0.0),
             ..Default::default()
         }));
     }
+    assert!(
+        queued >= 128,
+        "a delayed burst should reach the server rate limit"
+    );
+    assert!(
+        queued < 400,
+        "the client queue must stay bounded under overload"
+    );
     client.flush().unwrap();
     pump(&mut server, &mut [&mut client], 12);
     assert!(client.is_ready());

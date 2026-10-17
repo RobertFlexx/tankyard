@@ -70,9 +70,9 @@ impl World {
         config.target_count = config.target_count.min(10000);
         config.max_projectiles = config.max_projectiles.clamp(100, 30000);
         config.spawn_protection = if config.spawn_protection.is_finite() {
-            config.spawn_protection.clamp(0., 15.)
+            config.spawn_protection.clamp(0., 30.)
         } else {
-            15.
+            30.
         };
         config.time_limit = if config.time_limit.is_finite() {
             config.time_limit.clamp(10., 86400.)
@@ -231,12 +231,16 @@ impl World {
             barrel_aims: vec![],
             carrying: false,
             deployed_drones: 0,
+            deployed_defenses: [0; 4],
             spawn_immunity: protection > 0.0,
         });
         if matches!(self.config.mode, Mode::Deathmatch | Mode::Sandbox) {
             self.set_level_unchecked(id, 30);
         } else if self.config.mode == Mode::CoopPve {
-            self.set_level_unchecked(id, (12 + self.match_state.arena.wave * 3).clamp(15, 45));
+            self.set_level_unchecked(
+                id,
+                (12 + self.match_state.arena.wave * 3).clamp(15, MAX_LEVEL),
+            );
         }
         self.refresh_stats(id, true);
         id
@@ -340,7 +344,7 @@ impl World {
         }
     }
     pub fn sandbox_level(&mut self, id: EntityId, level: u8) -> bool {
-        if self.config.mode != Mode::Sandbox || !(1..=45).contains(&level) {
+        if self.config.mode != Mode::Sandbox || !(1..=MAX_LEVEL).contains(&level) {
             return false;
         }
         if !self.tanks.iter().any(|t| t.id == id) {
@@ -356,7 +360,7 @@ impl World {
         {
             return false;
         }
-        self.set_level_unchecked(id, 45);
+        self.set_level_unchecked(id, MAX_LEVEL);
         self.set_class(id, class);
         true
     }
@@ -462,10 +466,21 @@ impl World {
             .retain(|p| p.lifetime > 0. && p.penetration > 0. && p.pos.finite());
         for tank in &mut self.tanks {
             tank.deployed_drones = 0;
+            tank.deployed_defenses = [0; 4];
         }
-        for drone in self.projectiles.iter().filter(|p| p.kind.is_drone()) {
-            if let Some(tank) = self.tanks.iter_mut().find(|tank| tank.id == drone.owner) {
-                tank.deployed_drones = tank.deployed_drones.saturating_add(1);
+        for projectile in &self.projectiles {
+            let defense = crate::weapons::defense_slot(projectile.kind);
+            if (projectile.kind.is_drone() || defense.is_some())
+                && let Some(tank) = self
+                    .tanks
+                    .iter_mut()
+                    .find(|tank| tank.id == projectile.owner)
+            {
+                if let Some(slot) = defense {
+                    tank.deployed_defenses[slot] = tank.deployed_defenses[slot].saturating_add(1);
+                } else {
+                    tank.deployed_drones = tank.deployed_drones.saturating_add(1);
+                }
             }
         }
         self.targets.retain(|t| t.health > 0.);
@@ -1175,7 +1190,12 @@ impl World {
                     | ProjectileKind::Barrier
                     | ProjectileKind::Turret
             ) {
-                p.vel *= (-4. * DT).exp();
+                let drag = if p.kind == ProjectileKind::Trap {
+                    2.5
+                } else {
+                    4.
+                };
+                p.vel *= (-drag * DT).exp();
             }
             let start = p.pos;
             let mut end = start + p.vel * flight_dt;
@@ -1462,27 +1482,32 @@ impl World {
         if kind.is_drone() {
             let desired = if let Some(t) = self.tanks.iter().find(|t| t.id == owner && t.alive) {
                 if t.input.alt_fire {
-                    Some(t.pos + V2::from_angle(self.tick as f32 * 0.03 + drone_phase(id)) * 90.)
+                    Some(t.pos + V2::from_angle(drone_phase(id)) * 90.)
                 } else if t.input.fire {
                     let cursor = t.pos + V2::from_angle(t.aim) * t.input.aim_distance.min(1600.);
                     if kind == ProjectileKind::Minion {
-                        // Factory minions need room to shoot, not a damn pileup on the cursor.
-                        // Each ID gets its own moving slot; the owner still chooses the target.
-                        let orbit = drone_phase(id) + self.tick as f32 * DT * 0.8;
+                        // Stable slots leave each minion room to aim and fire.
+                        let orbit = drone_phase(id);
                         Some(cursor + V2::from_angle(orbit) * 90.0)
                     } else {
                         Some(cursor)
                     }
                 } else if kind == ProjectileKind::Minion {
-                    let orbit = drone_phase(id) + self.tick as f32 * DT * 0.7;
-                    if let Some(target) = self.minion_target(pos, team, owner, 420.0) {
+                    let orbit = drone_phase(id) + self.tick as f32 * DT * 0.35;
+                    if let Some((_, target)) = self.minion_target_with_id(
+                        pos,
+                        team,
+                        owner,
+                        500.0,
+                        self.projectiles[i].homing_target,
+                    ) {
                         // Give the little bastards a firing circle instead of ramming.
                         Some(target + V2::from_angle(orbit) * 90.0)
                     } else {
                         Some(t.pos + V2::from_angle(orbit) * 110.0)
                     }
                 } else {
-                    self.nearest_position(pos, team, owner, 700.).or(Some(
+                    self.minion_target(pos, team, owner, 700.).or(Some(
                         t.pos + V2::from_angle(self.tick as f32 * 0.02 + drone_phase(id)) * 120.,
                     ))
                 }

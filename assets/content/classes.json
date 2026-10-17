@@ -449,7 +449,7 @@
           "recoil": 20,
           "pattern": "Normal",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 23,
           "radius": 10,
           "lifetime": 18,
@@ -2167,7 +2167,7 @@
           "width": 27,
           "cooldown": 1.25,
           "delay": 0,
-          "recoil": 5,
+          "recoil": 0,
           "pattern": "Normal",
           "projectile": "Minion",
           "speed": 175,
@@ -2229,7 +2229,7 @@
           "recoil": 20,
           "pattern": "Normal",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 21,
           "radius": 10,
           "lifetime": 18,
@@ -2316,7 +2316,7 @@
           "recoil": 20,
           "pattern": "Normal",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 22,
           "radius": 10,
           "lifetime": 18,
@@ -2669,7 +2669,9 @@
       "parents": [
         "trident"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -2809,7 +2811,9 @@
       "parents": [
         "trident"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "longbow"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -2908,7 +2912,9 @@
       "parents": [
         "gearbox"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -3004,7 +3010,9 @@
       "parents": [
         "gearbox"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "bastille"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -3074,7 +3082,7 @@
           "recoil": 20,
           "pattern": "Normal",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 20,
           "radius": 10,
           "lifetime": 18,
@@ -3096,7 +3104,7 @@
           "recoil": 20,
           "pattern": "Normal",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 20,
           "radius": 10,
           "lifetime": 18,
@@ -3122,7 +3130,9 @@
       "parents": [
         "crosswind"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         0.9,
         1,
@@ -3198,7 +3208,9 @@
       "parents": [
         "crosswind"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "bastille"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -3294,7 +3306,10 @@
       "parents": [
         "surveyor"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "mirage",
+        "longbow"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -3315,7 +3330,7 @@
           "angle": 0,
           "length": 68,
           "width": 10,
-          "cooldown": 0.95,
+          "cooldown": 1.007,
           "delay": 0,
           "recoil": 28,
           "pattern": "Charge",
@@ -3337,7 +3352,7 @@
           "angle": 0,
           "length": 68,
           "width": 10,
-          "cooldown": 1.0,
+          "cooldown": 1.12,
           "delay": 0,
           "recoil": 13,
           "pattern": "Normal",
@@ -3359,7 +3374,7 @@
           "angle": 0,
           "length": 68,
           "width": 10,
-          "cooldown": 1.0,
+          "cooldown": 1.12,
           "delay": 0.5,
           "recoil": 13,
           "pattern": "Normal",
@@ -3390,7 +3405,9 @@
       "parents": [
         "surveyor"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "longbow"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -3486,7 +3503,10 @@
       "parents": [
         "whisper"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "harrier",
+        "mirage"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -3582,7 +3602,10 @@
       "parents": [
         "whisper"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "rook",
+        "mirage"
+      ],
       "multipliers": [
         0.9,
         1,
@@ -3722,7 +3745,9 @@
       "parents": [
         "rail"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "longbow"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -3796,7 +3821,9 @@
       "parents": [
         "rail"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "longbow"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -3936,7 +3963,9 @@
       "parents": [
         "fan"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -4058,7 +4087,9 @@
       "parents": [
         "fan"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "rook"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -4154,7 +4185,9 @@
       "parents": [
         "shaker"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.05,
         1,
@@ -4368,7 +4401,9 @@
       "parents": [
         "shaker"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "longbow"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -4442,7 +4477,9 @@
       "parents": [
         "flare"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.1,
         1,
@@ -4604,7 +4641,9 @@
       "parents": [
         "flare"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "bastille"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -4700,7 +4739,9 @@
       "parents": [
         "compass"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "rook"
+      ],
       "multipliers": [
         1.2,
         1.1,
@@ -4950,7 +4991,9 @@
       "parents": [
         "compass"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -5090,7 +5133,9 @@
       "parents": [
         "gyro"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "longbow"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -5296,7 +5341,9 @@
       "parents": [
         "gyro"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "harrier"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -5502,7 +5549,9 @@
       "parents": [
         "backdraft"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         0.95,
         1,
@@ -5642,7 +5691,9 @@
       "parents": [
         "backdraft"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "bastille"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -5690,7 +5741,7 @@
           "recoil": 20,
           "pattern": "Normal",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 20,
           "radius": 10,
           "lifetime": 18,
@@ -5716,7 +5767,9 @@
       "parents": [
         "flock"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "harrier"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -5812,7 +5865,10 @@
       "parents": [
         "flock"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "harrier",
+        "longbow"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -5930,7 +5986,10 @@
       "parents": [
         "sentinel"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "rook",
+        "harrier"
+      ],
       "multipliers": [
         1.3,
         1.2,
@@ -6070,7 +6129,10 @@
       "parents": [
         "foundry"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "commodore",
+        "rook"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -6159,7 +6221,7 @@
           "width": 21,
           "cooldown": 1.65,
           "delay": 0,
-          "recoil": 5,
+          "recoil": 0,
           "pattern": "Normal",
           "projectile": "Minion",
           "speed": 175,
@@ -6182,7 +6244,7 @@
           "width": 21,
           "cooldown": 1.65,
           "delay": 0.5,
-          "recoil": 5,
+          "recoil": 0,
           "pattern": "Normal",
           "projectile": "Minion",
           "speed": 175,
@@ -6213,7 +6275,9 @@
       "parents": [
         "briar"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "bastille"
+      ],
       "multipliers": [
         1.25,
         1.1,
@@ -6239,7 +6303,7 @@
           "recoil": 80,
           "pattern": "Normal",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 15,
           "radius": 10,
           "lifetime": 18,
@@ -6265,7 +6329,9 @@
       "parents": [
         "silt"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "bastille"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -6405,7 +6471,9 @@
       "parents": [
         "outpost"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "rook"
+      ],
       "multipliers": [
         1.25,
         1.1,
@@ -6545,7 +6613,9 @@
       "parents": [
         "pike"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "juggernaut"
+      ],
       "multipliers": [
         1.65,
         1.1,
@@ -6620,7 +6690,9 @@
       "parents": [
         "citadel"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "juggernaut"
+      ],
       "multipliers": [
         1.95,
         1.5,
@@ -6695,7 +6767,9 @@
       "parents": [
         "comet"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "juggernaut"
+      ],
       "multipliers": [
         1.45,
         1.1,
@@ -6747,7 +6821,9 @@
       "parents": [
         "breach"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.1,
         1,
@@ -6843,7 +6919,9 @@
       "parents": [
         "mortar"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "mirage"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -6961,7 +7039,9 @@
       "parents": [
         "twinforge"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.25,
         1.1,
@@ -7400,7 +7480,9 @@
       "parents": [
         "trident"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -7496,7 +7578,9 @@
       "parents": [
         "breach"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "harrier"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -7571,7 +7655,9 @@
       "parents": [
         "flock"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "harrier"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -7647,7 +7733,9 @@
       "parents": [
         "gunner"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -7792,7 +7880,9 @@
       "parents": [
         "tri_angle"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -7910,7 +8000,9 @@
       "parents": [
         "gearbox"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -8028,7 +8120,9 @@
       "parents": [
         "gyro"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -8190,7 +8284,9 @@
       "parents": [
         "rail"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "longbow"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -8242,7 +8338,9 @@
       "parents": [
         "briar"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "bastille"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -8268,7 +8366,7 @@
           "recoil": 20,
           "pattern": "Alternating",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 21,
           "radius": 10,
           "lifetime": 18,
@@ -8290,7 +8388,7 @@
           "recoil": 20,
           "pattern": "Alternating",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 21,
           "radius": 10,
           "lifetime": 18,
@@ -8312,7 +8410,7 @@
           "recoil": 20,
           "pattern": "Alternating",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 21,
           "radius": 10,
           "lifetime": 18,
@@ -8338,7 +8436,9 @@
       "parents": [
         "gunner"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -8412,7 +8512,10 @@
       "parents": [
         "flock"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "harrier",
+        "longbow"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -8487,7 +8590,9 @@
       "parents": [
         "gearbox"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "fusillade"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -8649,7 +8754,10 @@
       "parents": [
         "outpost"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "bastille",
+        "harrier"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -8675,7 +8783,7 @@
           "recoil": 20,
           "pattern": "Normal",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 22,
           "radius": 10,
           "lifetime": 18,
@@ -8724,7 +8832,9 @@
       "parents": [
         "flock"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "harrier"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -8843,7 +8953,9 @@
       "parents": [
         "citadel"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "juggernaut"
+      ],
       "multipliers": [
         1.95,
         1.4,
@@ -8896,7 +9008,9 @@
       "parents": [
         "auto_three"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "mirage"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -9042,7 +9156,9 @@
         "gunner",
         "briar"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "bastille"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -9112,7 +9228,7 @@
           "recoil": 20,
           "pattern": "Normal",
           "projectile": "Trap",
-          "speed": 150,
+          "speed": 225,
           "damage": 21,
           "radius": 10,
           "lifetime": 18,
@@ -9138,7 +9254,9 @@
       "parents": [
         "flock"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "harrier"
+      ],
       "multipliers": [
         1.0,
         1.0,
@@ -9191,7 +9309,9 @@
       "parents": [
         "hammer"
       ],
-      "upgrades": [],
+      "upgrades": [
+        "counterguard"
+      ],
       "multipliers": [
         1.15,
         1,
@@ -9234,6 +9354,1034 @@
       "strengths": "Returns heavy shots and volleys.",
       "weaknesses": "Short parry window; modest cannon damage.",
       "ai_range": 360
+    },
+    {
+      "id": "counterguard",
+      "name": "Counterguard",
+      "description": "A tighter parry restores health and returns a stronger shot.",
+      "tier": 3,
+      "min_level": 45,
+      "parents": [
+        "riposte"
+      ],
+      "upgrades": [
+        "reprisal"
+      ],
+      "multipliers": [
+        1.2,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1.02
+      ],
+      "hull_sides": 8,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 37,
+          "width": 20,
+          "cooldown": 0.62,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Bullet",
+          "speed": 370,
+          "damage": 18,
+          "radius": 6,
+          "lifetime": 2.0,
+          "penetration": 1.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "trapezoid"
+        }
+      ],
+      "ability": "CounterParry",
+      "ability_cooldown": 4.0,
+      "passive_regen": 0,
+      "strengths": "A successful parry heals and returns a heavy countershot.",
+      "weaknesses": "The timing window is short. Drones bypass the parry.",
+      "ai_range": 360
+    },
+    {
+      "id": "reprisal",
+      "name": "Reprisal",
+      "description": "A perfect parry returns a three-shot counter volley.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "counterguard"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        1.3,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1.02
+      ],
+      "hull_sides": 10,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 37,
+          "width": 20,
+          "cooldown": 0.62,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Bullet",
+          "speed": 370,
+          "damage": 18,
+          "radius": 6,
+          "lifetime": 2.0,
+          "penetration": 1.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "trapezoid"
+        }
+      ],
+      "ability": "VolleyParry",
+      "ability_cooldown": 4.2,
+      "passive_regen": 0,
+      "strengths": "A landed parry returns the shot and two smaller echoes.",
+      "weaknesses": "A 0.14-second window leaves little room for error.",
+      "ai_range": 360
+    },
+    {
+      "id": "fusillade",
+      "name": "Fusillade",
+      "description": "Three cannons fire in a staggered line.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "crownline",
+        "metronome",
+        "skimmer",
+        "petal",
+        "carousel",
+        "sunburst",
+        "sentryweb",
+        "booster",
+        "rupture",
+        "anvil",
+        "triplet",
+        "streamliner",
+        "afterburner",
+        "crossfire",
+        "helix",
+        "echo",
+        "triple_twin"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        1.1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0.98
+      ],
+      "hull_sides": 0,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 54,
+          "width": 12,
+          "cooldown": 0.48,
+          "delay": 0.0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Bullet",
+          "speed": 390,
+          "damage": 14,
+          "radius": 5.5,
+          "lifetime": 1.9,
+          "penetration": 1,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            -12
+          ],
+          "angle": 0,
+          "length": 40,
+          "width": 10,
+          "cooldown": 0.48,
+          "delay": 0.16,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Bullet",
+          "speed": 390,
+          "damage": 14,
+          "radius": 5.5,
+          "lifetime": 1.9,
+          "penetration": 1,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            12
+          ],
+          "angle": 0,
+          "length": 40,
+          "width": 10,
+          "cooldown": 0.48,
+          "delay": 0.32,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Bullet",
+          "speed": 390,
+          "damage": 14,
+          "radius": 5.5,
+          "lifetime": 1.9,
+          "penetration": 1,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Overdrive",
+      "ability_cooldown": 8,
+      "passive_regen": 0,
+      "strengths": "Steady pressure with small gaps between shots.",
+      "weaknesses": "A wide nose makes close fights awkward.",
+      "ai_range": 420
+    },
+    {
+      "id": "longbow",
+      "name": "Longbow",
+      "description": "A charged piercing cannon with a rear trap launcher.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "needlefan",
+        "horizon",
+        "triangulator",
+        "sabre",
+        "prismline",
+        "shear",
+        "flywheel",
+        "intercept",
+        "needlepoint",
+        "relay"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        0.95,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "hull_sides": 5,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 58,
+          "width": 17,
+          "cooldown": 1.65,
+          "delay": 0,
+          "recoil": 65,
+          "pattern": "Charge",
+          "projectile": "Piercing",
+          "speed": 720,
+          "damage": 32,
+          "radius": 5.5,
+          "lifetime": 2.2,
+          "penetration": 5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 3.141592653589793,
+          "length": 26,
+          "width": 15,
+          "cooldown": 2.2,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Trap",
+          "speed": 230,
+          "damage": 18,
+          "radius": 5.5,
+          "lifetime": 18,
+          "penetration": 4,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "trap"
+        }
+      ],
+      "ability": "Blink",
+      "ability_cooldown": 8,
+      "passive_regen": 0,
+      "strengths": "Long firing lanes and a trap to cover retreat.",
+      "weaknesses": "Charging exposes the front.",
+      "ai_range": 590
+    },
+    {
+      "id": "bastille",
+      "name": "Bastille",
+      "description": "Three forward launchers and a rear trap port.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "switchback",
+        "wake",
+        "cinder",
+        "undertow",
+        "thicket",
+        "quarry",
+        "tri_bastion",
+        "overtrapper",
+        "gunner_trapper"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        1.3,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0.88
+      ],
+      "hull_sides": 6,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 36,
+          "width": 12,
+          "cooldown": 2.4,
+          "delay": 0.0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Trap",
+          "speed": 230,
+          "damage": 22,
+          "radius": 5.5,
+          "lifetime": 18,
+          "penetration": 4.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "trap"
+        },
+        {
+          "offset": [
+            0,
+            -15
+          ],
+          "angle": 0,
+          "length": 29,
+          "width": 12,
+          "cooldown": 2.4,
+          "delay": 0.18,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Trap",
+          "speed": 230,
+          "damage": 22,
+          "radius": 5.5,
+          "lifetime": 18,
+          "penetration": 4.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "trap"
+        },
+        {
+          "offset": [
+            0,
+            15
+          ],
+          "angle": 0,
+          "length": 29,
+          "width": 12,
+          "cooldown": 2.4,
+          "delay": 0.36,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Trap",
+          "speed": 230,
+          "damage": 22,
+          "radius": 5.5,
+          "lifetime": 18,
+          "penetration": 4.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "trap"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 3.141592653589793,
+          "length": 25,
+          "width": 17,
+          "cooldown": 2.4,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Trap",
+          "speed": 225,
+          "damage": 18,
+          "radius": 5.5,
+          "lifetime": 18,
+          "penetration": 4.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "trap"
+        }
+      ],
+      "ability": "Fortify",
+      "ability_cooldown": 8,
+      "passive_regen": 0,
+      "strengths": "Builds a field without leaving the rear open.",
+      "weaknesses": "Slow movement and a shared trap limit.",
+      "ai_range": 270
+    },
+    {
+      "id": "commodore",
+      "name": "Commodore",
+      "description": "Six armed minions and a rear barrier launcher.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "assembly"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        1.1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0.96
+      ],
+      "hull_sides": 4,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            -13
+          ],
+          "angle": -0.3,
+          "length": 29,
+          "width": 16,
+          "cooldown": 1.8,
+          "delay": 0.0,
+          "recoil": 0,
+          "pattern": "Normal",
+          "projectile": "Minion",
+          "speed": 180,
+          "damage": 10,
+          "radius": 5.5,
+          "lifetime": 50,
+          "penetration": 7.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            13
+          ],
+          "angle": 0.3,
+          "length": 29,
+          "width": 16,
+          "cooldown": 1.8,
+          "delay": 0.9,
+          "recoil": 0,
+          "pattern": "Normal",
+          "projectile": "Minion",
+          "speed": 180,
+          "damage": 10,
+          "radius": 5.5,
+          "lifetime": 50,
+          "penetration": 7.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 3.141592653589793,
+          "length": 24,
+          "width": 20,
+          "cooldown": 4,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Barrier",
+          "speed": 150,
+          "damage": 4,
+          "radius": 5.5,
+          "lifetime": 16,
+          "penetration": 7,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Recall",
+      "ability_cooldown": 8,
+      "passive_regen": 0,
+      "strengths": "A squad can hold a lane while barriers cover retreat.",
+      "weaknesses": "The squad takes time to rebuild.",
+      "ai_range": 370,
+      "drone_limit": 6
+    },
+    {
+      "id": "harrier",
+      "name": "Harrier",
+      "description": "Four ports replace a fast eight-drone squad.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "specter",
+        "satellite",
+        "murmuration",
+        "intercept",
+        "palisade",
+        "hybrid",
+        "necromancer",
+        "relay",
+        "overtrapper",
+        "battleship",
+        "manager"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        0.95,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1.1
+      ],
+      "hull_sides": 4,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0.0,
+          "length": 30,
+          "width": 15,
+          "cooldown": 2.2,
+          "delay": 0.0,
+          "recoil": 5,
+          "pattern": "Normal",
+          "projectile": "Drone",
+          "speed": 220,
+          "damage": 10,
+          "radius": 5.5,
+          "lifetime": 18,
+          "penetration": 3.2,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 1.5707963267948966,
+          "length": 30,
+          "width": 15,
+          "cooldown": 2.2,
+          "delay": 0.55,
+          "recoil": 5,
+          "pattern": "Normal",
+          "projectile": "Drone",
+          "speed": 220,
+          "damage": 10,
+          "radius": 5.5,
+          "lifetime": 18,
+          "penetration": 3.2,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 3.141592653589793,
+          "length": 30,
+          "width": 15,
+          "cooldown": 2.2,
+          "delay": 1.1,
+          "recoil": 5,
+          "pattern": "Normal",
+          "projectile": "Drone",
+          "speed": 220,
+          "damage": 10,
+          "radius": 5.5,
+          "lifetime": 18,
+          "penetration": 3.2,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 4.71238898038469,
+          "length": 30,
+          "width": 15,
+          "cooldown": 2.2,
+          "delay": 1.6500000000000001,
+          "recoil": 5,
+          "pattern": "Normal",
+          "projectile": "Drone",
+          "speed": 220,
+          "damage": 10,
+          "radius": 5.5,
+          "lifetime": 18,
+          "penetration": 3.2,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Blink",
+      "ability_cooldown": 10,
+      "passive_regen": 0,
+      "strengths": "Mobile control with quick replacements.",
+      "weaknesses": "Low hull health; losing the squad leaves an opening.",
+      "ai_range": 390,
+      "drone_limit": 8
+    },
+    {
+      "id": "juggernaut",
+      "name": "Juggernaut",
+      "description": "A heavy spiked hull with two small support guns.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "javelin",
+        "monolith",
+        "meteor",
+        "auto_smasher"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        1.85,
+        1.2,
+        2.9,
+        0.8,
+        0.7,
+        0.65,
+        0.65,
+        1.06
+      ],
+      "hull_sides": 12,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            -13
+          ],
+          "angle": 0,
+          "length": 23,
+          "width": 9,
+          "cooldown": 1.6,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Auto",
+          "projectile": "Bullet",
+          "speed": 300,
+          "damage": 5,
+          "radius": 5.5,
+          "lifetime": 1.2,
+          "penetration": 1,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            13
+          ],
+          "angle": 0,
+          "length": 23,
+          "width": 9,
+          "cooldown": 1.6,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Auto",
+          "projectile": "Bullet",
+          "speed": 300,
+          "damage": 5,
+          "radius": 5.5,
+          "lifetime": 1.2,
+          "penetration": 1,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Dash",
+      "ability_cooldown": 7,
+      "passive_regen": 0,
+      "strengths": "A timed charge can finish a weakened tank.",
+      "weaknesses": "A missed charge leaves the hull exposed.",
+      "ai_range": 95,
+      "body_style": "spike",
+      "body_scale": 1.02
+    },
+    {
+      "id": "mirage",
+      "name": "Mirage",
+      "description": "Twin guided cannons with a short rear spread.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "horizon",
+        "specter",
+        "wisp",
+        "catapult",
+        "auto_five"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1.08
+      ],
+      "hull_sides": 6,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            -10
+          ],
+          "angle": 0,
+          "length": 35,
+          "width": 12,
+          "cooldown": 0.95,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Homing",
+          "speed": 330,
+          "damage": 12,
+          "radius": 5.5,
+          "lifetime": 2.2,
+          "penetration": 1.3,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            10
+          ],
+          "angle": 0,
+          "length": 35,
+          "width": 12,
+          "cooldown": 0.95,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Homing",
+          "speed": 330,
+          "damage": 12,
+          "radius": 5.5,
+          "lifetime": 2.2,
+          "penetration": 1.3,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 3.141592653589793,
+          "length": 25,
+          "width": 17,
+          "cooldown": 0.55,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Scatter",
+          "speed": 280,
+          "damage": 3,
+          "radius": 5.5,
+          "lifetime": 1.1,
+          "penetration": 1,
+          "count": 3,
+          "spread": 0.35,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Cloak",
+      "ability_cooldown": 9,
+      "passive_regen": 0,
+      "strengths": "Can turn a pursuit around with cloak and rear fire.",
+      "weaknesses": "Guided rounds can be sidestepped and expire quickly.",
+      "ai_range": 390
+    },
+    {
+      "id": "rook",
+      "name": "Rook",
+      "description": "A turret field with barriers along the firing lane.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "wisp",
+        "rainmaker",
+        "watchtower",
+        "palisade",
+        "assembly",
+        "redoubt"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        1.35,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0.84
+      ],
+      "hull_sides": 8,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0.7853981633974483,
+          "length": 29,
+          "width": 16,
+          "cooldown": 5.2,
+          "delay": 0.0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Turret",
+          "speed": 160,
+          "damage": 10,
+          "radius": 5.5,
+          "lifetime": 20,
+          "penetration": 4.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 2.356194490192345,
+          "length": 29,
+          "width": 16,
+          "cooldown": 5.2,
+          "delay": 0.4,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Turret",
+          "speed": 160,
+          "damage": 10,
+          "radius": 5.5,
+          "lifetime": 20,
+          "penetration": 4.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 3.9269908169872414,
+          "length": 29,
+          "width": 16,
+          "cooldown": 5.2,
+          "delay": 0.8,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Turret",
+          "speed": 160,
+          "damage": 10,
+          "radius": 5.5,
+          "lifetime": 20,
+          "penetration": 4.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 5.497787143782138,
+          "length": 29,
+          "width": 16,
+          "cooldown": 5.2,
+          "delay": 1.2000000000000002,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Turret",
+          "speed": 160,
+          "damage": 10,
+          "radius": 5.5,
+          "lifetime": 20,
+          "penetration": 4.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 27,
+          "width": 14,
+          "cooldown": 3.4,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Barrier",
+          "speed": 155,
+          "damage": 4,
+          "radius": 5.5,
+          "lifetime": 16,
+          "penetration": 7,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 3.141592653589793,
+          "length": 27,
+          "width": 14,
+          "cooldown": 3.4,
+          "delay": 0,
+          "recoil": 16,
+          "pattern": "Normal",
+          "projectile": "Barrier",
+          "speed": 155,
+          "damage": 4,
+          "radius": 5.5,
+          "lifetime": 16,
+          "penetration": 7,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Magnet",
+      "ability_cooldown": 8,
+      "passive_regen": 0,
+      "strengths": "A prepared position is hard to rush.",
+      "weaknesses": "Slow setup and limited reach.",
+      "ai_range": 300
     }
   ]
 }

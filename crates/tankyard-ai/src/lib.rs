@@ -132,6 +132,7 @@ struct Brain {
     last_decision_tick: u64,
     dodge: V2,
     danger: f32,
+    parry_eta: Option<f32>,
     escape: V2,
     steering: V2,
 }
@@ -268,6 +269,11 @@ impl BotController {
                 brain.dodge = brain.dodge.lerp(next_dodge, 0.55);
                 brain.danger = danger;
                 brain.escape = escape;
+                brain.parry_eta = if class.ability.is_parry() {
+                    parry_opportunity(world, tank, &self.seen)
+                } else {
+                    None
+                };
             }
             let mut movement = navigate(world, tank, brain, &mut self.navigation);
             // Guided threats can turn after the current collision prediction.
@@ -356,7 +362,7 @@ impl BotController {
                 || wrapped_angle(desired_aim - aim).abs() < 0.25;
             let ability = tank.ability_cooldown <= 0.
                 && facing
-                && use_ability(class.ability, tank, brain, target_distance);
+                && use_ability(class, tank, brain, target_distance);
             self.inputs.push((
                 tank.id,
                 PlayerInput {
@@ -677,7 +683,27 @@ fn decide(
         };
         let strafe = V2::new(-outward.y, outward.x) * side;
         goal = if melee {
-            sample.pos + sample.velocity * 0.15
+            let lead = (distance / (tank.vel.length().max(180.) + 100.)).clamp(0.12, 0.4);
+            let intercept = sample.pos + sample.velocity * lead;
+            let dangerous_front = world
+                .tanks
+                .iter()
+                .find(|other| other.id == sample.id)
+                .is_some_and(|other| {
+                    let facing = V2::from_angle(other.aim).dot(outward) > 0.75;
+                    facing
+                        && world.content.class(&other.class).is_some_and(|enemy| {
+                            enemy
+                                .barrels
+                                .iter()
+                                .any(|barrel| barrel.damage >= 25. || barrel.recoil >= 70.)
+                        })
+                });
+            if distance > 155. && dangerous_front {
+                intercept + strafe * (distance * 0.3).min(100.)
+            } else {
+                intercept
+            }
         } else if distance > preferred * 1.25 {
             sample.pos + outward * preferred
         } else {
@@ -1063,15 +1089,74 @@ fn projectile_avoidance(world: &World, tank: &Tank, seen: &[Seen]) -> (V2, f32, 
     (dodge.clamp_length(2.), danger, escape.clamp_length(1.))
 }
 
-fn use_ability(ability: Ability, tank: &Tank, brain: &Brain, distance: f32) -> bool {
+fn parry_opportunity(world: &World, tank: &Tank, seen: &[Seen]) -> Option<f32> {
+    seen.iter()
+        .filter_map(|item| {
+            let Seen::Projectile(index) = *item else {
+                return None;
+            };
+            let shot = &world.projectiles[index];
+            if shot.owner == tank.id
+                || !hostile(tank.team, shot.team)
+                || shot.damage <= 0.
+                || shot.lifetime <= 0.
+                || shot.penetration <= 0.
+                || matches!(
+                    shot.kind,
+                    tankyard_content::ProjectileKind::Drone
+                        | tankyard_content::ProjectileKind::Minion
+                        | tankyard_content::ProjectileKind::Trap
+                        | tankyard_content::ProjectileKind::Mine
+                        | tankyard_content::ProjectileKind::Barrier
+                        | tankyard_content::ProjectileKind::Turret
+                )
+            {
+                return None;
+            }
+            let delta = shot.pos - tank.pos;
+            if delta.length_squared() > 340. * 340.
+                || !clear_line(tank.pos, shot.pos, shot.radius, &world.walls)
+            {
+                return None;
+            }
+            let velocity = shot.vel - tank.vel;
+            let safety = tank.radius + shot.radius + 2.;
+            let a = velocity.length_squared();
+            let b = 2. * delta.dot(velocity);
+            let c = delta.length_squared() - safety * safety;
+            if c <= 0. {
+                return Some(0.);
+            }
+            let discriminant = b * b - 4. * a * c;
+            if a < 0.01 || b >= 0. || discriminant < 0. {
+                return None;
+            }
+            let eta = (-b - discriminant.sqrt()) / (2. * a);
+            ((0. ..=0.3).contains(&eta) && eta < shot.lifetime).then_some(eta)
+        })
+        .min_by(f32::total_cmp)
+}
+
+fn use_ability(class: &ClassDef, tank: &Tank, brain: &Brain, distance: f32) -> bool {
     let health = tank.health / tank.max_health.max(1.);
+    let ability = class.ability;
     match ability {
         Ability::None => false,
         Ability::Dash => {
-            brain.state == BotState::Retreating || (distance > 100. && distance < 420.)
+            brain.state == BotState::Retreating
+                || if class.multipliers[2] >= 2. {
+                    health > 0.5
+                        && (80. ..240.).contains(&distance)
+                        && brain.danger < 0.55
+                        && brain.state == BotState::Attacking
+                } else {
+                    distance > 100. && distance < 420.
+                }
         }
         Ability::Shield => brain.danger > 0.3 || (distance < 350. && health < 0.75),
-        Ability::Parry => brain.danger > 0.35,
+        Ability::Parry | Ability::CounterParry | Ability::VolleyParry => brain
+            .parry_eta
+            .is_some_and(|eta| eta <= ability.parry_window().unwrap_or(0.) * 0.85),
         Ability::Heal => health < 0.72 || (brain.state == BotState::Escorting && distance < 500.),
         Ability::Nova => distance < 190. || brain.danger > 0.6,
         Ability::Recall => brain.state == BotState::Retreating || (health < 0.5 && distance < 200.),
@@ -1862,6 +1947,90 @@ mod tests {
         );
         assert_eq!(brain.state, BotState::Attacking);
         assert_eq!(brain.goal, world.tanks[1].pos);
+    }
+
+    #[test]
+    fn smashers_flank_heavy_cannons_commit_up_close_and_retreat_when_hurt() {
+        let mut world = pursuit_world(ProjectileKind::Bullet);
+        world.projectiles.clear();
+        world.config.mode = Mode::Sandbox;
+        let bot = world.tanks[0].id;
+        let enemy = world.tanks[1].id;
+        assert!(world.sandbox_class(bot, "juggernaut"));
+        assert!(world.sandbox_class(enemy, "hammer"));
+        world.tanks[0].pos = V2::new(1000., 1000.);
+        world.tanks[1].pos = V2::new(1300., 1000.);
+        world.tanks[1].aim = std::f32::consts::PI;
+        let class = world.content.class("juggernaut").unwrap();
+        let mut brain = Brain::default();
+        decide(
+            &world,
+            &world.tanks[0],
+            class,
+            Difficulty::Expert,
+            &[Seen::Tank(1)],
+            &mut brain,
+        );
+        assert_eq!(brain.state, BotState::Attacking);
+        assert!(brain.goal.x > world.tanks[0].pos.x);
+        assert!((brain.goal.y - world.tanks[1].pos.y).abs() > 50.);
+        world.tanks[1].pos.x = 1100.;
+        decide(
+            &world,
+            &world.tanks[0],
+            class,
+            Difficulty::Expert,
+            &[Seen::Tank(1)],
+            &mut brain,
+        );
+        assert_eq!(brain.goal, world.tanks[1].pos);
+        world.tanks[0].health = world.tanks[0].max_health * 0.2;
+        decide(
+            &world,
+            &world.tanks[0],
+            class,
+            Difficulty::Expert,
+            &[Seen::Tank(1)],
+            &mut brain,
+        );
+        assert_eq!(brain.state, BotState::Retreating);
+        assert!(brain.goal.x < world.tanks[0].pos.x);
+    }
+
+    #[test]
+    fn parry_bots_wait_for_impact_and_ignore_hidden_or_expiring_shots() {
+        let mut world = pursuit_world(ProjectileKind::Bullet);
+        world.config.mode = Mode::Sandbox;
+        let id = world.tanks[0].id;
+        assert!(world.sandbox_class(id, "reprisal"));
+        world.tanks[0].pos = V2::new(1000., 1000.);
+        world.tanks[0].vel = V2::ZERO;
+        world.projectiles[0].pos = V2::new(1100., 1000.);
+        world.projectiles[0].vel = V2::new(-400., 0.);
+        let seen = [Seen::Projectile(0)];
+        let class = world.content.class("reprisal").unwrap();
+        let mut brain = Brain {
+            parry_eta: parry_opportunity(&world, &world.tanks[0], &seen),
+            ..Default::default()
+        };
+        assert!(brain.parry_eta.unwrap() > 0.14);
+        assert!(!use_ability(class, &world.tanks[0], &brain, 100.));
+        world.projectiles[0].pos.x = 1060.;
+        brain.parry_eta = parry_opportunity(&world, &world.tanks[0], &seen);
+        assert!(use_ability(class, &world.tanks[0], &brain, 60.));
+        world.projectiles[0].lifetime = 0.001;
+        assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_none());
+        world.projectiles[0].lifetime = 2.;
+        world.walls.push(tankyard_core::Rect {
+            x: 1035.,
+            y: 950.,
+            w: 10.,
+            h: 100.,
+        });
+        assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_none());
+        world.walls.clear();
+        world.projectiles[0].kind = ProjectileKind::Drone;
+        assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_none());
     }
 
     #[test]
