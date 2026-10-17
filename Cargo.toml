@@ -20,6 +20,9 @@ clap = { version = "4", features = ["derive"] }
 directories = "6"
 log = "0.4"
 env_logger = "0.11"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
 tankyard-content = { path = "crates/tankyard-content" }
 tankyard-mods = { path = "crates/tankyard-mods" }
 tankyard-core = { path = "crates/tankyard-core" }

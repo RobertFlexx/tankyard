@@ -55,6 +55,8 @@ For authenticated connections, set a private 32-byte hexadecimal `netcode_privat
 
 Global staff authority is a separate trusted backend gateway, restricted to official servers with authenticated transport and a private `global_audit_file`. It supports account suspension, official player removal, and community directory delisting. Staff credentials, roles, and actions have no client packet or user-facing panel. A community role cannot grant global access. The gateway must enforce revocation and propagate account suspensions to the other official servers. Global and community audit paths must differ.
 
+To publish a server behind an HTTP-only proxy such as a Cloudflare Tunnel hostname, run `tankyard-relay --listen 0.0.0.0:8080 --server 127.0.0.1:5000` and route the hostname to port 8080. Players join `wss://host` or just `host`; the client carries netcode packets over the WebSocket. Every player then shares the relay's address, so use `kick` or a password rather than address bans. The relay log shows each player's original IP when Cloudflare forwards it.
+
 Use `scripts/host_server.sh` for a convenience launcher. `configs/tankyard.service` runs under a dedicated user at `/opt/tankyard`, restarts on failure, and handles SIGTERM. Adjust paths and allow that user to write the configuration directory. Use `--no-console` under a service manager. Logs use `RUST_LOG`.
 
 Check a running server on a machine with UDP access:

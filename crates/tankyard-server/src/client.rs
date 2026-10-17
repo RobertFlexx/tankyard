@@ -46,6 +46,7 @@ pub struct NetworkClient {
     tick_rate: u32,
     event_queue: Vec<GameEvent>,
     handshake_elapsed: Duration,
+    _bridge: Option<crate::websocket::ClientBridge>,
 }
 
 impl NetworkClient {
@@ -53,10 +54,16 @@ impl NetworkClient {
         if address.len() > 256 || password.len() > 128 {
             return Err(NetError("server address or password is too long".into()));
         }
-        let address = address
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| NetError("server address did not resolve".into()))?;
+        let bridge = crate::websocket::websocket_url(address)
+            .map(|url| crate::websocket::ClientBridge::connect(&url))
+            .transpose()?;
+        let address = match &bridge {
+            Some(bridge) => bridge.address,
+            None => address
+                .to_socket_addrs()?
+                .next()
+                .ok_or_else(|| NetError("server address did not resolve".into()))?,
+        };
         let socket = UdpSocket::bind(if address.is_ipv4() {
             "0.0.0.0:0"
         } else {
@@ -75,6 +82,7 @@ impl NetworkClient {
             },
             None,
             socket,
+            bridge,
         )
     }
     pub fn connect_authenticated(
@@ -110,6 +118,7 @@ impl NetworkClient {
             },
             account_token,
             socket,
+            None,
         )
     }
     fn connect_with_auth(
@@ -119,6 +128,7 @@ impl NetworkClient {
         authentication: ClientAuthentication,
         account_token: Option<String>,
         socket: UdpSocket,
+        bridge: Option<crate::websocket::ClientBridge>,
     ) -> Result<Self, NetError> {
         if password.len() > 128 {
             return Err(NetError("password exceeds 128 bytes".into()));
@@ -152,6 +162,7 @@ impl NetworkClient {
             tick_rate: 60,
             event_queue: Vec::with_capacity(128),
             handshake_elapsed: Duration::ZERO,
+            _bridge: bridge,
             bundle,
             bundle_revision,
             kind: ServerKind::Community,

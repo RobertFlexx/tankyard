@@ -12,6 +12,7 @@ pub mod netem;
 mod session;
 mod storage;
 mod transport;
+pub mod websocket;
 
 pub use client::{NetworkClient, NetworkDiagnostics};
 pub use config::{ServerSettings, difficulty_from_name, mode_from_name};

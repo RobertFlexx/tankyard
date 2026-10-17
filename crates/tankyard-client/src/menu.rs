@@ -898,7 +898,7 @@ impl Menu {
                 let _ = settings.save();
             }
             wrap(
-                "Enter the server's IP address and port, then connect.",
+                "Enter the server's IP address and port, or a web address such as tankyard.example.com, then connect.",
                 x,
                 y + 370.0 * s,
                 width,

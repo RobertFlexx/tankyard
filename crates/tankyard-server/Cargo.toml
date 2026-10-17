@@ -20,6 +20,9 @@ tankyard-core.workspace = true
 tankyard-ai.workspace = true
 tankyard-protocol.workspace = true
 ctrlc = { version = "3.5", features = ["termination"] }
+tungstenite.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
 
 [[bin]]
 name = "tankyard-server"
@@ -29,3 +32,7 @@ path = "src/main.rs"
 name = "tankyard-load"
 path = "src/bin/load.rs"
 
+
+[[bin]]
+name = "tankyard-relay"
+path = "src/bin/relay.rs"
