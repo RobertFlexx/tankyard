@@ -210,7 +210,9 @@ fn reload_display_tracks_real_firing_and_charge_and_hides_without_a_manual_weapo
         &charged.config,
     )
     .unwrap();
-    assert!(progress > 0.3 && progress < 0.4);
+    // The lance is now a normal (non-charge) weapon: holding fire keeps it
+    // shooting, so the reload display shows a fractional in-progress value.
+    assert!(progress > 0.2 && progress < 0.35);
     for class in ["hive", "foundry", "auto_smasher"] {
         let (world, _) = arena(class);
         assert_eq!(
