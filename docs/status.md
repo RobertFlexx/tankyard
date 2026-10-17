@@ -2,13 +2,15 @@
 
 > # what to account for as a maintainer.
 
-Checked on 2026-10-16 with Rust 1.99.0 on Linux: 237 tests pass, including UDP integration tests. Formatting, Clippy with warnings denied, the workspace release build, all 92 tank classes, and both bundled mods also pass.
+Checked on 2026-10-16 with Rust 1.99.0 on Linux: 240 Rust tests and 8 installer tests pass, including UDP and WebSocket integration tests. Formatting, Clippy with warnings denied, the workspace release build, all 92 tank classes, and both bundled mods also pass.
 
 Graphical checks under Xvfb cover the HUD, menu, credits, mode switching, long player names, and the Sandbox button at 800×600, 1280×800, and 1920×1080, with interface scales from 80% to 140%. Captures are in `artifacts/ui-review`. The latest server work and 64/128-client load results are in [server measurements](server-performance.md).
 
 New checks cover Random Events, all ten Co-op PvE waves, squad wipes and revives, enemy pursuit, parry ownership and homing, spawn protection and prediction, Sandbox level shortcuts, and multiplayer mode changes. New GUI captures are in `artifacts/new-modes-review`. The menu and controls fit at 800×600, 1280×800, and 1920×1080. Focused captures confirm short ability and fire taps register, the parry window and cooldown display correctly, and the co-op board shows the squad.
 
 A 15-second release workload with 64 clients and 24 bots kept all clients ready, with no stale clients, skipped snapshots, or dropped catch-up ticks; reported transport loss was 0.94%.
+
+The v0.2.7 menu checks cover Play joining tankyard.kokonico.me, Offline beside it, saved custom addresses, and cancelling a stalled WebSocket handshake. Captures are in `artifacts/central-play-review` at 800×600, 1280×800, and 1920×1080. The Linux release archive runs and imports no glibc symbol newer than 2.30. Actionlint, ShellCheck, and installer fixture tests pass. The tagged workflow builds all platform packages and tests the published installers on Linux, macOS, and Windows.
 
 ## Previous runs
 

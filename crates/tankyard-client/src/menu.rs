@@ -1,7 +1,7 @@
 use crate::ui::RED;
 use crate::{
     render,
-    settings::{Settings, bindable_pressed},
+    settings::{CENTRAL_SERVER, Settings, bindable_pressed},
     ui::*,
 };
 use macroquad::prelude::*;
@@ -41,6 +41,7 @@ pub enum Action {
     None,
     Page(Page),
     Back,
+    QuickPlay,
     Offline,
     Host,
     Join,
@@ -281,70 +282,65 @@ impl Menu {
             s,
             false,
         );
-        label("GAME MODE", x, y + 102.0 * s, 13.0 * s, muted_color());
-        let choices = [Mode::Ffa, Mode::TwoTeams, Mode::FourTeams, Mode::Maze];
-        for (index, mode) in choices.into_iter().enumerate() {
-            let rw = (pane_w - 9.0 * s) * 0.5;
-            if button(
-                Rect::new(
-                    x + (index % 2) as f32 * (rw + 9.0 * s),
-                    y + 113.0 * s + (index / 2) as f32 * 49.0 * s,
-                    rw,
-                    40.0 * s,
-                ),
-                mode.name(),
-                self.mode == mode,
-                true,
-                s * 0.88,
-            ) {
-                self.select_mode(mode);
-            }
-        }
-        let play_y = y + 229.0 * s;
+        label("MAIN SERVER", x, y + 102.0 * s, 13.0 * s, muted_color());
+        panel(Rect::new(x, y + 113.0 * s, pane_w, 48.0 * s));
+        draw_rectangle(x, y + 113.0 * s, 4.0 * s, 48.0 * s, CYAN);
+        label(
+            CENTRAL_SERVER,
+            x + 17.0 * s,
+            y + 144.0 * s,
+            20.0 * s,
+            text_color(),
+        );
+        let play_y = y + 190.0 * s;
         if button(
-            Rect::new(x, play_y, pane_w - 190.0 * s, 51.0 * s),
-            "Play offline [Enter]",
+            Rect::new(x, play_y, pane_w - 162.0 * s, 55.0 * s),
+            "Play [Enter]",
             true,
             true,
             s * 1.08,
         ) || is_key_pressed(KeyCode::Enter)
         {
             let _ = settings.save();
-            return Action::Offline;
+            return Action::QuickPlay;
         }
         if button(
-            Rect::new(x + pane_w - 180.0 * s, play_y, 180.0 * s, 51.0 * s),
-            "Practice [F6]",
+            Rect::new(x + pane_w - 152.0 * s, play_y, 152.0 * s, 55.0 * s),
+            "Play offline",
             false,
             true,
             s * 0.9,
         ) {
-            return Action::Page(Page::Practice);
+            return Action::Offline;
         }
-        let half = (pane_w - 9.0 * s) * 0.5;
-        if button(
-            Rect::new(x, play_y + 61.0 * s, half, 41.0 * s),
-            "Host server",
-            false,
-            true,
-            s * 0.88,
-        ) {
-            let _ = settings.save();
-            return Action::Page(Page::Host);
-        }
-        if button(
-            Rect::new(x + half + 9.0 * s, play_y + 61.0 * s, half, 41.0 * s),
-            "Join server",
-            false,
-            true,
-            s * 0.88,
-        ) {
-            let _ = settings.save();
-            return Action::Page(Page::Join);
+        let third = (pane_w - 18.0 * s) / 3.0;
+        for (index, (title, page)) in [
+            ("Practice [F6]", Page::Practice),
+            ("Host server", Page::Host),
+            ("Join server", Page::Join),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if button(
+                Rect::new(
+                    x + index as f32 * (third + 9.0 * s),
+                    play_y + 65.0 * s,
+                    third,
+                    41.0 * s,
+                ),
+                title,
+                false,
+                true,
+                s * 0.85,
+            ) {
+                let _ = settings.save();
+                return Action::Page(page);
+            }
         }
         let links_y = play_y + 122.0 * s;
         for (index, (title, page)) in [
-            ("Modes", Page::Modes),
+            ("Offline modes", Page::Modes),
             ("Tank tree", Page::Encyclopedia),
             ("Settings", Page::Settings),
             ("Mods", Page::Mods),

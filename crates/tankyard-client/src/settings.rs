@@ -3,6 +3,8 @@ use macroquad::prelude::KeyCode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub const CENTRAL_SERVER: &str = "tankyard.kokonico.me";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -45,7 +47,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             player_name: "Pilot".into(),
-            server_address: "127.0.0.1:5000".into(),
+            server_address: CENTRAL_SERVER.into(),
             favorites: vec![],
             recent_servers: vec![],
             width: 1280,
@@ -382,6 +384,19 @@ mod tests {
         assert_eq!(settings.server_address.chars().count(), 128);
         assert!(settings.favorites.is_empty());
         assert_eq!(settings.key(0), KeyCode::W);
+    }
+
+    #[test]
+    fn default_server_is_central_and_saved_manual_addresses_are_preserved() {
+        assert_eq!(Settings::default().server_address, CENTRAL_SERVER);
+        assert_eq!(
+            tankyard_server::websocket::websocket_url(CENTRAL_SERVER),
+            Some("wss://tankyard.kokonico.me".into())
+        );
+        let mut saved: Settings =
+            serde_json::from_str(r#"{"server_address":"127.0.0.1:5000"}"#).unwrap();
+        saved.validate();
+        assert_eq!(saved.server_address, "127.0.0.1:5000");
     }
 
     #[test]

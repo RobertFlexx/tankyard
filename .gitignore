@@ -6,3 +6,7 @@ configs/access.json
 configs/*.jsonl*
 *.token
 configs/private*.toml
+
+/dist/
+__pycache__/
+*.pyc

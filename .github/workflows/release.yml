@@ -1,0 +1,270 @@
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Source and installer checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Verify release version
+        run: |
+          python - <<'PY'
+          import os, tomllib
+          with open("Cargo.toml", "rb") as source:
+              version = tomllib.load(source)["workspace"]["package"]["version"]
+          assert os.environ["RELEASE_TAG"] == f"v{version}", "Tag must match Cargo.toml"
+          PY
+      - name: Install build and display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxi-dev libgl1-mesa-dev xvfb shellcheck
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+      - name: Check source
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace
+      - name: Check installers
+        run: |
+          shellcheck install.sh scripts/build_linux_compatible.sh scripts/link_linux_compatible.sh
+          python -m unittest discover -s scripts/tests -v
+      - name: Validate content and render offline
+        run: |
+          cargo run --locked -p tankyard-tools -- validate
+          cargo run --locked -p tankyard-tools -- validate-mods --mod mods/fast_arena --mod mods/vampire
+          cargo build --locked -p tankyard-client --bin tankyard
+          mkdir -p artifacts
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/tankyard-smoke"
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a target/debug/tankyard --offline --bots 4 --smoke-frames 120 --screenshot artifacts/release-smoke.png
+          test -s artifacts/release-smoke.png
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: verify
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            zig_arch: x86_64
+          - platform: linux-aarch64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            zig_arch: aarch64
+          - platform: macos-universal
+            runner: macos-14
+            target: aarch64-apple-darwin
+          - platform: windows-x86_64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install Rust
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$BUILD_TARGET"
+          cargo fetch --locked
+      - name: Build compatible Linux binaries
+        if: runner.os == 'Linux'
+        env:
+          ZIG_ARCH: ${{ matrix.zig_arch }}
+          TANKYARD_BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxi-dev libgl1-mesa-dev
+          curl --fail --location --retry 3 "https://ziglang.org/download/0.16.0/zig-$ZIG_ARCH-linux-0.16.0.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+          mkdir -p "$RUNNER_TEMP/zig"
+          tar -xf "$RUNNER_TEMP/zig.tar.xz" --strip-components=1 -C "$RUNNER_TEMP/zig"
+          export TANKYARD_ZIG="$RUNNER_TEMP/zig/zig"
+          scripts/build_linux_compatible.sh
+          printf 'BINARY_DIR=target/linux-compatible/%s/release\n' "$TANKYARD_BUILD_TARGET" >> "$GITHUB_ENV"
+      - name: Build universal macOS binaries
+        if: runner.os == 'macOS'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          RUSTFLAGS: "-C strip=symbols"
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo build --locked --release --workspace --bins --target aarch64-apple-darwin
+          cargo build --locked --release --workspace --bins --target x86_64-apple-darwin
+          mkdir -p target/universal-release
+          for binary in tankyard tankyard-server tankyard-relay tankyard-load tankyard-tools; do
+            lipo -create "target/aarch64-apple-darwin/release/$binary" "target/x86_64-apple-darwin/release/$binary" -output "target/universal-release/$binary"
+            codesign --force --sign - "target/universal-release/$binary"
+            lipo -verify_arch arm64 x86_64 "target/universal-release/$binary"
+          done
+          printf 'BINARY_DIR=target/universal-release\n' >> "$GITHUB_ENV"
+      - name: Build Windows binaries
+        if: runner.os == 'Windows'
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static -C strip=symbols"
+        run: |
+          cargo build --locked --release --workspace --bins --target x86_64-pc-windows-msvc
+          printf 'BINARY_DIR=target/x86_64-pc-windows-msvc/release\n' >> "$GITHUB_ENV"
+      - name: Check native binaries
+        env:
+          BUILD_PLATFORM: ${{ matrix.platform }}
+        run: |
+          python - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          suffix = ".exe" if os.name == "nt" else ""
+          for name in ("tankyard", "tankyard-server", "tankyard-relay", "tankyard-load", "tankyard-tools"):
+              executable = Path(os.environ["BINARY_DIR"]) / (name + suffix)
+              result = subprocess.run([str(executable), "--version"], check=True, text=True, capture_output=True)
+              assert os.environ["RELEASE_TAG"][1:] in result.stdout, result.stdout
+              print(result.stdout.strip())
+          PY
+      - name: Check Windows installer syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$null, [ref]$Errors)
+          if ($Errors) { throw ($Errors | Out-String) }
+      - name: Package binaries
+        env:
+          BUILD_PLATFORM: ${{ matrix.platform }}
+        run: python scripts/package_release.py --platform "$BUILD_PLATFORM" --version "$RELEASE_TAG" --binary-dir "$BINARY_DIR"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    name: Publish complete release
+    needs: [verify, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Verify every package and generate checksums
+        run: |
+          python - <<'PY'
+          import hashlib, os, shutil
+          from pathlib import Path
+          directory = Path("dist")
+          tag = os.environ["RELEASE_TAG"]
+          names = [f"tankyard-{tag}-{platform}.{extension}" for platform, extension in
+              (("linux-x86_64", "tar.gz"), ("linux-aarch64", "tar.gz"),
+               ("macos-universal", "tar.gz"), ("windows-x86_64", "zip"))]
+          for name in ("install.sh", "install.ps1"):
+              shutil.copyfile(name, directory / name)
+          lines = []
+          for name in names + ["install.sh", "install.ps1"]:
+              with (directory / name).open("rb") as stream:
+                  digest = hashlib.file_digest(stream, "sha256").hexdigest()
+              line = f"{digest}  {name}\n"
+              if name in names:
+                  assert (directory / (name + ".sha256")).read_text().strip() == line.strip(), name
+              lines.append(line)
+          (directory / "SHA256SUMS").write_text("".join(lines), encoding="utf-8")
+          PY
+      - name: Create draft, upload assets, then publish
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft > "$RUNNER_TEMP/existing-release.json" 2>/dev/null; then
+            python -c 'import json,sys; assert json.load(open(sys.argv[1]))["isDraft"], "Release is already published; use a new version tag."' "$RUNNER_TEMP/existing-release.json"
+          elif test -f "docs/releases/$RELEASE_TAG.md"; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Tank Yard $RELEASE_TAG" --notes-file "docs/releases/$RELEASE_TAG.md"
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Tank Yard $RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/install.sh dist/install.ps1 dist/SHA256SUMS --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+
+  install:
+    name: Install on ${{ matrix.runner }}
+    needs: publish
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, macos-14, windows-2022]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: Install published Unix build
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          sh install.sh --version "$RELEASE_TAG" --bin-dir "$RUNNER_TEMP/tankyard-installed"
+          "$RUNNER_TEMP/tankyard-installed/tankyard" --version
+          if test "$RUNNER_OS" = macOS; then
+            codesign --verify --strict "$HOME/Applications/Tank Yard.app"
+            "$HOME/Applications/Tank Yard.app/Contents/MacOS/tankyard" --version
+          fi
+      - name: Install published Windows build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Destination = Join-Path $env:RUNNER_TEMP "tankyard-installed"
+          ./install.ps1 -Version $env:RELEASE_TAG -InstallDir $Destination -NoShortcut -NoPath
+          & "$Destination/tankyard.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "Installed game failed to start." }

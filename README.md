@@ -2,11 +2,19 @@
 
 Tank Yard is a tank arena made by RobertFlexx, inspired by Diep.io and Arras.io. It has 92 tanks, fourteen modes, offline play, practice challenges, and player-hosted multiplayer.
 
-Build with Rust 1.88 or newer:
+Install or update on Linux and macOS:
+
+```sh
+curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh | sh
+```
+
+Windows downloads and PowerShell installation are in the [installation guide](docs/installing.md). **Play** or Enter joins **tankyard.kokonico.me**; **Play offline** is beside it. Custom servers are still available through Join server.
+
+Build from source with Rust 1.88 or newer:
 
 ```sh
 cargo build --locked --release --workspace
-./target/release/tankyard --offline
+./target/release/tankyard
 ```
 
 Linux needs a C linker and X11/OpenGL. On Debian or Ubuntu, install `build-essential libx11-dev libxi-dev libgl1-mesa-dev`.
@@ -23,7 +31,7 @@ The Factory is the fun oddball: it builds up to six tiny tanks with their own ca
 
 Skill labels follow your class: an Overseer gets Drone Speed / Health / Damage, the Factory gets Minion stats, and the Trapper gets trap stats. Mixed tanks spell out which bits benefit in the hover descriptions. The underlying upgrade values have not changed.
 
-Practice is beside Play on the main menu, in the pause menu, and on F6. It offers a shape sprint, drone drill, tank skirmish, and survival challenge with personal records. Press F1 for the current controls, F3 for diagnostics, F10 for settings, and F5 to restart an offline game from pause. Tab and Shift+Tab move between text fields; Esc goes back. See [playing](docs/playing.md) for goals and shortcuts.
+Practice is below Play on the main menu, in the pause menu, and on F6. It offers a shape sprint, drone drill, tank skirmish, and survival challenge with personal records. Press F1 for the current controls, F3 for diagnostics, F10 for settings, and F5 to restart an offline game from pause. Tab and Shift+Tab move between text fields; Esc goes back. See [playing](docs/playing.md) for goals and shortcuts.
 
 Game modes lets you choose Beginner through Expert bots; your choice also applies when hosting. Bots estimate visible opponents' movement, adjust their aim as they learn the pattern, and change their spacing after damage, kills, and deaths. This experience lasts for the match.
 

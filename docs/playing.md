@@ -1,6 +1,6 @@
 # Playing Tank Yard
 
-Start with Play offline for a normal arena, or the Practice button beside it for a short goal. F6 opens Practice from the menu or during a game. Open Game modes to choose the arena, bot count, and difficulty. Beginner gives you more time to react; Expert has faster decisions and more accurate aim. Every difficulty uses the same combat stats and upgrade rules as a player.
+Play or Enter joins the main server at tankyard.kokonico.me. Play offline is beside it; Practice is just below. F6 opens Practice from the menu or during a game. Open Offline modes to choose the local arena, bot count, and difficulty. Beginner gives you more time to react; Expert has faster decisions and more accurate aim. Every difficulty uses the same combat stats and upgrade rules as a player.
 
 ## Controls
 

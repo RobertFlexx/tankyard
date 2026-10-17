@@ -24,7 +24,7 @@ use hud::{Hud, HudAction};
 use macroquad::prelude::*;
 use menu::{Action, Menu, Page};
 use session::Session;
-use settings::Settings;
+use settings::{CENTRAL_SERVER, Settings};
 use tankyard_content::Content;
 use tankyard_core::{DT, Mode, PlayerInput, V2};
 use ui::*;
@@ -101,12 +101,19 @@ fn window_conf(cli: &Cli) -> Conf {
         ..Default::default()
     }
 }
+struct PendingJoin {
+    result: std::sync::mpsc::Receiver<Result<Session, String>>,
+    address: String,
+    return_page: Page,
+}
 struct App {
     settings: Settings,
     content: Content,
     menu: Menu,
     hud: Hud,
     session: Option<Session>,
+    pending_join: Option<PendingJoin>,
+    connecting_address: String,
     view: render::View,
     effects: effects::Effects,
     paused: bool,
@@ -185,6 +192,8 @@ impl App {
             menu,
             hud: Hud::new(),
             session: None,
+            pending_join: None,
+            connecting_address: CENTRAL_SERVER.into(),
             view: render::View::new(),
             effects: effects::Effects::new(),
             paused: false,
@@ -315,6 +324,10 @@ impl App {
                     self.paused = self.menu_return_paused;
                 }
             }
+            Action::QuickPlay => {
+                let _ = self.settings.save();
+                self.begin_join(CENTRAL_SERVER.into(), String::new(), Page::Main);
+            }
             Action::Offline => {
                 let paths: Vec<_> = self
                     .settings
@@ -366,22 +379,11 @@ impl App {
                     self.menu.page = Page::Host;
                 }
             },
-            Action::Join => match Session::join(
-                &self.settings.server_address,
-                &self.settings.player_name,
-                &self.menu.password,
-            ) {
-                Ok(session) => {
-                    let address = self.settings.server_address.clone();
-                    self.settings.remember_server(&address);
-                    let _ = self.settings.save();
-                    self.launch(session);
-                }
-                Err(error) => {
-                    self.menu.error = error;
-                    self.menu.page = Page::Join;
-                }
-            },
+            Action::Join => self.begin_join(
+                self.settings.server_address.clone(),
+                self.menu.password.clone(),
+                Page::Join,
+            ),
             Action::Practice(index) => {
                 match Session::practice(index, &self.settings.player_name, self.menu.seed) {
                     Ok(session) => self.launch(session),
@@ -398,6 +400,57 @@ impl App {
                 Ok(()) => self.menu.error = "Settings saved.".into(),
                 Err(error) => self.menu.error = format!("Could not save: {error}"),
             },
+        }
+    }
+    fn begin_join(&mut self, address: String, password: String, return_page: Page) {
+        if self.pending_join.is_some() {
+            return;
+        }
+        self.menu.clear_focus();
+        self.menu.error.clear();
+        let (sender, result) = std::sync::mpsc::channel();
+        let name = self.settings.player_name.clone();
+        let destination = address.clone();
+        match std::thread::Builder::new()
+            .name("server-connect".into())
+            .spawn(move || {
+                let _ = sender.send(Session::join(&destination, &name, &password));
+            }) {
+            Ok(_) => {
+                self.connecting_address.clone_from(&address);
+                self.pending_join = Some(PendingJoin {
+                    result,
+                    address,
+                    return_page,
+                });
+            }
+            Err(error) => self.menu.error = format!("Could not start connection: {error}"),
+        }
+    }
+    fn poll_join(&mut self) {
+        let outcome =
+            self.pending_join
+                .as_ref()
+                .and_then(|pending| match pending.result.try_recv() {
+                    Ok(result) => Some(result),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        Some(Err("Connection closed.".into()))
+                    }
+                });
+        if let Some(outcome) = outcome {
+            let pending = self.pending_join.take().unwrap();
+            match outcome {
+                Ok(session) => {
+                    self.settings.remember_server(&pending.address);
+                    let _ = self.settings.save();
+                    self.launch(session);
+                }
+                Err(error) => {
+                    self.menu.reset(pending.return_page);
+                    self.menu.error = format!("Could not connect to {}: {error}", pending.address);
+                }
+            }
         }
     }
     fn finish_session(&mut self) {
@@ -650,6 +703,14 @@ impl App {
                 self.community.message(&message);
                 self.effects.notice(&message);
             }
+        }
+        if self.pending_join.is_some() {
+            if is_key_pressed(KeyCode::Escape) {
+                self.pending_join = None;
+            } else {
+                self.poll_join();
+            }
+            return;
         }
         if self.shortcuts() {
             return;
@@ -952,6 +1013,38 @@ impl App {
         }
     }
     fn draw(&mut self, s: f32) {
+        if let Some(pending) = &self.pending_join {
+            render::menu_background(get_time() as f32);
+            center_label(
+                "Connecting…",
+                screen_width() * 0.5,
+                screen_height() * 0.42,
+                32.0 * s,
+                CYAN,
+            );
+            center_label(
+                &pending.address,
+                screen_width() * 0.5,
+                screen_height() * 0.42 + 40.0 * s,
+                18.0 * s,
+                muted_color(),
+            );
+            if button(
+                Rect::new(
+                    screen_width() * 0.5 - 110.0 * s,
+                    screen_height() * 0.42 + 76.0 * s,
+                    220.0 * s,
+                    40.0 * s,
+                ),
+                "Cancel [Esc]",
+                false,
+                true,
+                s,
+            ) {
+                self.pending_join = None;
+            }
+            return;
+        }
         if self.session.is_none() || self.menu_over_game {
             let menu_scale = s.min(screen_height() / 800.0).min(screen_width() / 1180.0);
             let action = self
@@ -1010,7 +1103,7 @@ impl App {
                     CYAN,
                 );
                 center_label(
-                    &self.settings.server_address,
+                    &self.connecting_address,
                     screen_width() * 0.5,
                     screen_height() * 0.45 + 38.0 * s,
                     18.0 * s,
