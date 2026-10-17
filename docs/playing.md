@@ -38,6 +38,8 @@ Twin, Gunner, and other alternating guns use slightly independent firing phases:
 
 Friendly drones press into a compact swarm at the cursor. They collide and slide around each other, with room for each drone's outline. They also slide along walls and arena edges. Right-click recall keeps the swarm around your tank; redirecting it restores cruising speed. Small movements inside a resting swarm keep their previous visual heading.
 
+Homing rounds make gradual corrections toward targets ahead. A close sidestep can beat their turn rate, and a shot that passes you cannot turn back. They expire after at most 2.2 seconds or 850 units of travel; automatic homing turrets have a shorter 1.8-second lifetime. Riposte returns follow the same limits.
+
 In a text field, use arrows or Home/End to place the caret. Hold Shift to select, double click a word to select it, or drag across text. Ctrl+A selects all; Ctrl+C/X/V copies, cuts, and pastes. Password fields allow paste but keep their text out of the clipboard. Backspace and Delete repeat when held. Ctrl with an arrow, Backspace, or Delete works by word.
 
 ## Modes

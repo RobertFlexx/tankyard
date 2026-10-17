@@ -90,6 +90,11 @@ impl World {
         lifetime: f32,
         penetration: f32,
     ) -> Projectile {
+        let lifetime = if kind == ProjectileKind::Homing {
+            crate::homing::flight_lifetime(lifetime, vel.length())
+        } else {
+            lifetime
+        };
         Projectile {
             id: self.id(),
             owner,

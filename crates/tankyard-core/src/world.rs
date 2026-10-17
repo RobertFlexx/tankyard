@@ -1161,7 +1161,12 @@ impl World {
             }
             let p = &mut self.projectiles[i];
             p.previous = p.pos;
-            p.age += DT;
+            let flight_dt = if p.kind == ProjectileKind::Homing {
+                p.lifetime.min(DT)
+            } else {
+                DT
+            };
+            p.age += flight_dt;
             p.lifetime -= DT;
             if matches!(
                 p.kind,
@@ -1173,7 +1178,7 @@ impl World {
                 p.vel *= (-4. * DT).exp();
             }
             let start = p.pos;
-            let mut end = start + p.vel * DT;
+            let mut end = start + p.vel * flight_dt;
             let radius = p.radius;
             if p.kind.is_drone() {
                 self.drone_contacts.move_drone(p, &self.config);
@@ -1446,68 +1451,55 @@ impl World {
         self.collision_hits = hits;
     }
     fn steer_projectile(&mut self, i: usize) {
+        if self.projectiles[i].kind == ProjectileKind::Homing {
+            self.steer_homing(i);
+            return;
+        }
         let (kind, pos, owner, team, speed, id) = {
             let p = &self.projectiles[i];
             (p.kind, p.pos, p.owner, p.team, p.cruise_speed, p.id)
         };
-        if kind == ProjectileKind::Homing || kind.is_drone() {
-            let desired = if kind.is_drone() {
-                if let Some(t) = self.tanks.iter().find(|t| t.id == owner && t.alive) {
-                    if t.input.alt_fire {
-                        Some(
-                            t.pos + V2::from_angle(self.tick as f32 * 0.03 + drone_phase(id)) * 90.,
-                        )
-                    } else if t.input.fire {
-                        let cursor =
-                            t.pos + V2::from_angle(t.aim) * t.input.aim_distance.min(1600.);
-                        if kind == ProjectileKind::Minion {
-                            // Factory minions need room to shoot, not a damn pileup on the cursor.
-                            // Each ID gets its own moving slot; the owner still chooses the target.
-                            let orbit = drone_phase(id) + self.tick as f32 * DT * 0.8;
-                            Some(cursor + V2::from_angle(orbit) * 90.0)
-                        } else {
-                            Some(cursor)
-                        }
-                    } else if kind == ProjectileKind::Minion {
-                        let orbit = drone_phase(id) + self.tick as f32 * DT * 0.7;
-                        if let Some(target) = self.minion_target(pos, team, owner, 420.0) {
-                            // Give the little bastards a firing circle instead of ramming.
-                            Some(target + V2::from_angle(orbit) * 90.0)
-                        } else {
-                            Some(t.pos + V2::from_angle(orbit) * 110.0)
-                        }
+        if kind.is_drone() {
+            let desired = if let Some(t) = self.tanks.iter().find(|t| t.id == owner && t.alive) {
+                if t.input.alt_fire {
+                    Some(t.pos + V2::from_angle(self.tick as f32 * 0.03 + drone_phase(id)) * 90.)
+                } else if t.input.fire {
+                    let cursor = t.pos + V2::from_angle(t.aim) * t.input.aim_distance.min(1600.);
+                    if kind == ProjectileKind::Minion {
+                        // Factory minions need room to shoot, not a damn pileup on the cursor.
+                        // Each ID gets its own moving slot; the owner still chooses the target.
+                        let orbit = drone_phase(id) + self.tick as f32 * DT * 0.8;
+                        Some(cursor + V2::from_angle(orbit) * 90.0)
                     } else {
-                        self.nearest_position(pos, team, owner, 700.).or(Some(
-                            t.pos
-                                + V2::from_angle(self.tick as f32 * 0.02 + drone_phase(id)) * 120.,
-                        ))
+                        Some(cursor)
                     }
-                } else if let Some(b) = self.bosses.iter().find(|b| b.id == owner && b.health > 0.)
-                {
-                    self.nearest_position(pos, team, owner, 1000.)
-                        .or(Some(b.pos))
+                } else if kind == ProjectileKind::Minion {
+                    let orbit = drone_phase(id) + self.tick as f32 * DT * 0.7;
+                    if let Some(target) = self.minion_target(pos, team, owner, 420.0) {
+                        // Give the little bastards a firing circle instead of ramming.
+                        Some(target + V2::from_angle(orbit) * 90.0)
+                    } else {
+                        Some(t.pos + V2::from_angle(orbit) * 110.0)
+                    }
                 } else {
-                    self.projectiles[i].lifetime = 0.;
-                    None
+                    self.nearest_position(pos, team, owner, 700.).or(Some(
+                        t.pos + V2::from_angle(self.tick as f32 * 0.02 + drone_phase(id)) * 120.,
+                    ))
                 }
+            } else if let Some(b) = self.bosses.iter().find(|b| b.id == owner && b.health > 0.) {
+                self.nearest_position(pos, team, owner, 1000.)
+                    .or(Some(b.pos))
             } else {
-                self.homing_position(self.projectiles[i].homing_target, team, owner)
-                    .or_else(|| self.nearest_position(pos, team, owner, 800.))
+                self.projectiles[i].lifetime = 0.;
+                None
             };
             if let Some(goal) = desired {
                 let offset = goal - pos;
-                let desired_speed = if kind.is_drone() {
-                    // Arrive at a nearby cursor or guard slot without orbiting
-                    // forever at full speed. Distant commands keep full speed.
-                    speed.max(170.) * (offset.length() / 90.).clamp(0.0, 1.0)
-                } else {
-                    speed.max(170.)
-                };
+                // Arrive at a nearby cursor or guard slot without orbiting
+                // forever at full speed. Distant commands keep full speed.
+                let desired_speed = speed.max(170.) * (offset.length() / 90.).clamp(0.0, 1.0);
                 let target = offset.normalized() * desired_speed;
-                self.projectiles[i].vel = self.projectiles[i].vel.lerp(
-                    target,
-                    (DT * if kind.is_drone() { 5. } else { 2.5 }).min(1.),
-                );
+                self.projectiles[i].vel = self.projectiles[i].vel.lerp(target, (DT * 5.).min(1.));
             }
         }
     }

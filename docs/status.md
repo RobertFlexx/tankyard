@@ -2,7 +2,7 @@
 
 > # what to account for as a maintainer.
 
-Checked on 2026-10-16 with Rust 1.99.0 on Linux: 254 Rust tests and 8 installer tests pass, including UDP and WebSocket integration tests. Formatting, Clippy with warnings denied, the workspace release build, all 92 tank classes, and both bundled mods also pass.
+Checked on 2026-10-16 with Rust 1.99.0 on Linux: 260 Rust tests and 8 installer tests pass, including UDP and WebSocket integration tests. Formatting, Clippy with warnings denied, the workspace release build, all 92 tank classes, and both bundled mods also pass.
 
 Graphical checks under Xvfb cover the HUD, menu, credits, mode switching, long player names, and the Sandbox button at 800×600, 1280×800, and 1920×1080, with interface scales from 80% to 140%. Captures are in `artifacts/ui-review`. The latest server work and 64/128-client load results are in [server measurements](server-performance.md).
 
@@ -15,6 +15,8 @@ The v0.2.8 menu checks cover Play joining tankyard.kokonico.me, Offline beside i
 The v0.2.9 checks cover empty-arena sleep and resume, adaptive bot counts through joins/leaves and round restarts, delayed input bursts without kicks, short taps, per-match/global/off achievements, neural prediction training and limits, and WebSocket backpressure and early disconnect reporting. Current load measurements are in [server performance](server-performance.md#v029-follow-up). Native icon assets are bundled for all desktop platforms; the tagged workflow tests Windows installation against its archive before publication.
 
 GUI checks at 800×600, 1280×800, and 1920×1080 cover all three achievement modes, saved preferences, protected and moving tanks, native window icon/class properties, and a measured white pulse while idle. A local WebSocket relay was stopped and restarted to verify the disconnect screen and successful Reconnect. Captures are in `artifacts/v029-review`.
+
+The v0.2.10 homing checks cover bounded turning without slowing into a hover, forward-only acquisition and retargeting, a successful aimed hit, a successful late sidestep, flight expiry for all 16 homing barrels at base and upgraded speeds, the final tick's travel limit, and repeated parries without lifetime refresh.
 
 ## Previous runs
 

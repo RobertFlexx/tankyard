@@ -1,6 +1,7 @@
 //! Server authoritative fixed-step simulation, with no rendering dependencies.
 mod arena;
 mod drones;
+mod homing;
 pub mod math;
 mod minions;
 pub mod modding;

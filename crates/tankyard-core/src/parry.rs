@@ -42,6 +42,11 @@ impl World {
             |target| (target - impact).normalized(),
         );
         let shot = &mut self.projectiles[projectile];
+        let remaining = if shot.kind == ProjectileKind::Homing {
+            shot.lifetime
+        } else {
+            crate::homing::MAX_FLIGHT_SECONDS
+        };
         shot.owner = owner;
         shot.team = team;
         shot.kind = ProjectileKind::Homing;
@@ -52,7 +57,7 @@ impl World {
         shot.pos = impact + direction * (shot.radius + 1.0);
         shot.previous = shot.pos;
         shot.penetration = shot.penetration.clamp(1.0, 3.0);
-        shot.lifetime = 3.0;
+        shot.lifetime = crate::homing::flight_lifetime(remaining, shot.cruise_speed);
         shot.age = 0.0;
         shot.ricochets = 0;
         shot.gun = None;
@@ -131,6 +136,24 @@ mod tests {
         let id = shot.id;
         world.projectiles.push(shot);
         id
+    }
+
+    #[test]
+    fn parrying_an_already_homing_round_does_not_refresh_its_lifetime() {
+        let (mut world, shooter, _) = arena();
+        shoot(&mut world, shooter, ProjectileKind::Bullet);
+        world.tanks[1].shield = 0.4;
+        assert!(world.parry_projectile(0, 1, V2::new(770.0, 500.0)));
+        assert!(world.projectiles[0].lifetime <= crate::homing::MAX_FLIGHT_SECONDS);
+        assert!(
+            world.projectiles[0].lifetime * world.projectiles[0].cruise_speed
+                <= crate::homing::MAX_FLIGHT_DISTANCE + 0.001
+        );
+        world.projectiles[0].lifetime = 0.12;
+        world.tanks[0].class = "riposte".into();
+        world.tanks[0].shield = 0.4;
+        assert!(world.parry_projectile(0, 0, V2::new(520.0, 500.0)));
+        assert_eq!(world.projectiles[0].lifetime, 0.12);
     }
 
     #[test]
@@ -227,7 +250,8 @@ mod tests {
         let (mut world, shooter, defender) = arena();
         world.tanks[0].pos = V2::new(500.0, 900.0);
         let other = world.add_player("Closer", false);
-        world.tanks[2].pos = V2::new(700.0, 400.0);
+        // Keep the fallback inside the forward cone after the first step.
+        world.tanks[2].pos = V2::new(700.0, 450.0);
         shoot(&mut world, shooter, ProjectileKind::Bullet);
         world.tanks[1].shield = 0.4;
         assert!(world.parry_projectile(0, 1, V2::new(770.0, 500.0)));
