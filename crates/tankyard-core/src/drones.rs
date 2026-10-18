@@ -222,20 +222,20 @@ impl DroneWalls {
                 break;
             }
         }
-        if p.pos.x <= p.radius {
+        let bounds = config.bounds();
+        if p.pos.x <= bounds.x + p.radius {
             p.vel.x = p.vel.x.max(0.0);
         }
-        if p.pos.x >= config.width - p.radius {
+        if p.pos.x >= bounds.x + bounds.w - p.radius {
             p.vel.x = p.vel.x.min(0.0);
         }
-        if p.pos.y <= p.radius {
+        if p.pos.y <= bounds.y + p.radius {
             p.vel.y = p.vel.y.max(0.0);
         }
-        if p.pos.y >= config.height - p.radius {
+        if p.pos.y >= bounds.y + bounds.h - p.radius {
             p.vel.y = p.vel.y.min(0.0);
         }
-        p.pos.x = p.pos.x.clamp(p.radius, config.width - p.radius);
-        p.pos.y = p.pos.y.clamp(p.radius, config.height - p.radius);
+        p.pos = bounds.clamp_circle(p.pos, p.radius);
     }
 }
 

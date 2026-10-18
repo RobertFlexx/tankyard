@@ -271,18 +271,61 @@ pub fn constrain_tank(tank: &mut Tank, config: &WorldConfig, walls: &[Rect]) {
             break;
         }
     }
-    if tank.pos.x <= tank.radius {
-        tank.vel.x = tank.vel.x.max(0.0);
-    } else if tank.pos.x >= config.width - tank.radius {
-        tank.vel.x = tank.vel.x.min(0.0);
+    let bounds = config.bounds();
+    let clamped = bounds.clamp_circle(tank.pos, tank.radius);
+    if tank.pos.x < clamped.x {
+        tank.vel.x = tank.vel.x.max(0.);
     }
-    if tank.pos.y <= tank.radius {
-        tank.vel.y = tank.vel.y.max(0.0);
-    } else if tank.pos.y >= config.height - tank.radius {
-        tank.vel.y = tank.vel.y.min(0.0);
+    if tank.pos.x > clamped.x {
+        tank.vel.x = tank.vel.x.min(0.);
     }
-    tank.pos.x = tank.pos.x.clamp(tank.radius, config.width - tank.radius);
-    tank.pos.y = tank.pos.y.clamp(tank.radius, config.height - tank.radius);
+    if tank.pos.y < clamped.y {
+        tank.vel.y = tank.vel.y.max(0.);
+    }
+    if tank.pos.y > clamped.y {
+        tank.vel.y = tank.vel.y.min(0.);
+    }
+    tank.pos = clamped;
+    if let Some(clear) = clear_circle_position(tank.pos, tank.radius, bounds, walls) {
+        tank.pos = clear;
+    }
+}
+
+/// Resolve a moving border pinching a circle against a fixed map wall.
+pub fn clear_circle_position(pos: V2, radius: f32, bounds: Rect, walls: &[Rect]) -> Option<V2> {
+    let pos = bounds.clamp_circle(pos, radius);
+    let valid = |p: V2| {
+        bounds.contains_circle(p, radius)
+            && walls
+                .iter()
+                .all(|&wall| circle_rect(p, radius, wall).is_none())
+    };
+    if valid(pos) {
+        return Some(pos);
+    }
+    let mut best: Option<V2> = None;
+    for wall in walls.iter().take(256) {
+        let left = wall.x - radius - 0.1;
+        let right = wall.x + wall.w + radius + 0.1;
+        let top = wall.y - radius - 0.1;
+        let bottom = wall.y + wall.h + radius + 0.1;
+        for p in [
+            V2::new(left, pos.y),
+            V2::new(right, pos.y),
+            V2::new(pos.x, top),
+            V2::new(pos.x, bottom),
+            V2::new(left, top),
+            V2::new(left, bottom),
+            V2::new(right, top),
+            V2::new(right, bottom),
+        ] {
+            let p = bounds.clamp_circle(p, radius);
+            if valid(p) && best.is_none_or(|b| p.distance(pos) < b.distance(pos)) {
+                best = Some(p);
+            }
+        }
+    }
+    best
 }
 
 /// Predict movement, personal ability effects, and manual cannon recoil.
@@ -433,10 +476,7 @@ pub(crate) fn apply_personal_ability(
         }
         Ability::Blink => {
             let desired = tank.pos + V2::from_angle(tank.aim) * 260.;
-            if desired.x > 30.
-                && desired.y > 30.
-                && desired.x < config.width - 30.
-                && desired.y < config.height - 30.
+            if config.bounds().contains_circle(desired, 30.)
                 && walls
                     .iter()
                     .all(|&wall| sweep_rect(tank.pos, desired, tank.radius, wall).is_none())

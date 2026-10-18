@@ -420,10 +420,7 @@ impl World {
     }
     /// Check static navigation clearance without depending on renderer geometry.
     pub fn position_clear(&self, pos: V2, radius: f32) -> bool {
-        pos.x >= radius
-            && pos.y >= radius
-            && pos.x <= self.config.width - radius
-            && pos.y <= self.config.height - radius
+        self.config.bounds().contains_circle(pos, radius)
             && self
                 .walls
                 .iter()

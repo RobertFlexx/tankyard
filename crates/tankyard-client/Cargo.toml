@@ -28,3 +28,9 @@ clap.workspace = true
 log.workspace = true
 env_logger.workspace = true
 cpal = "0.16"
+opus = "0.4"
+display-info = "0.5.9"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Load the desktop's XCB ABI at runtime, matching Miniquad's display handling.
+xcb = { version = "1.7", features = ["dl"] }

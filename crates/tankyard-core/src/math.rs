@@ -99,6 +99,20 @@ pub struct Rect {
     pub h: f32,
 }
 impl Rect {
+    pub fn clamp_circle(self, p: V2, radius: f32) -> V2 {
+        let radius = radius.max(0.).min(self.w.min(self.h) * 0.49);
+        V2::new(
+            p.x.clamp(self.x + radius, self.x + self.w - radius),
+            p.y.clamp(self.y + radius, self.y + self.h - radius),
+        )
+    }
+    pub fn contains_circle(self, p: V2, radius: f32) -> bool {
+        p.finite()
+            && p.x >= self.x + radius
+            && p.y >= self.y + radius
+            && p.x <= self.x + self.w - radius
+            && p.y <= self.y + self.h - radius
+    }
     pub fn center(self) -> V2 {
         V2::new(self.x + self.w * 0.5, self.y + self.h * 0.5)
     }

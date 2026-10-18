@@ -1,5 +1,5 @@
 use macroquad::prelude::*;
-use std::borrow::Cow;
+use std::{borrow::Cow, cell::Cell};
 
 // Shared colors for the light arcade theme.
 pub const BG: Color = Color::new(0.804, 0.804, 0.804, 1.0);
@@ -61,8 +61,8 @@ pub fn init_font() {
 pub fn unload_font() {
     UI_FONT.with(|font| font.borrow_mut().take());
 }
-pub fn set_interactive(value: bool) {
-    INTERACTIVE.with(|state| state.set(value));
+pub fn set_interactive(value: bool) -> bool {
+    INTERACTIVE.with(|state| state.replace(value))
 }
 // The main loop sets the theme before drawing menus, the HUD, and overlays.
 thread_local! { static DARK_THEME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
@@ -346,33 +346,82 @@ pub fn toggle(rect: Rect, text: &str, value: &mut bool, s: f32) -> bool {
     click
 }
 pub fn slider(rect: Rect, text: &str, value: &mut f32, lo: f32, hi: f32, s: f32) -> bool {
-    label(text, rect.x, rect.y + 18.0 * s, 18.0 * s, text_color());
-    // For the scale control, show 100% as 100%, not its position on
-    // the 80%-to-140% track. That 33% label was confusing as hell.
-    let displayed_percent = if (lo - 0.8).abs() < f32::EPSILON && (hi - 1.4).abs() < f32::EPSILON {
-        *value * 100.0
-    } else {
-        (*value - lo) / (hi - lo) * 100.0
-    };
+    slider_value(rect, text, value, [lo, hi], 0., s, |value| {
+        let percent = if (lo - 0.8).abs() < f32::EPSILON && (hi - 1.4).abs() < f32::EPSILON {
+            value * 100.
+        } else {
+            (value - lo) / (hi - lo) * 100.
+        };
+        format!("{percent:.0}%")
+    })
+}
+thread_local! {
+    static ACTIVE_SLIDER: Cell<Option<[u32; 4]>> = const { Cell::new(None) };
+}
+pub fn slider_value(
+    rect: Rect,
+    text: &str,
+    value: &mut f32,
+    limits: [f32; 2],
+    step: f32,
+    s: f32,
+    format: impl FnOnce(f32) -> String,
+) -> bool {
+    let [lo, hi] = limits;
+    let track = Rect::new(rect.x, rect.y + 32. * s, rect.w, 5. * s);
+    let hit = Rect::new(rect.x, rect.y + 24. * s, rect.w, 24. * s);
+    let id = [
+        rect.x.to_bits(),
+        rect.y.to_bits(),
+        rect.w.to_bits(),
+        rect.h.to_bits(),
+    ];
+    let interactive = INTERACTIVE.with(|state| state.get());
+    let dragged = ACTIVE_SLIDER.with(|active| {
+        if !is_mouse_button_down(MouseButton::Left) {
+            active.set(None);
+        }
+        if contains(hit) && is_mouse_button_pressed(MouseButton::Left) {
+            active.set(Some(id));
+        }
+        interactive && active.get() == Some(id) && is_mouse_button_down(MouseButton::Left)
+    });
+    if dragged {
+        let raw = lo + (hi - lo) * ((mouse_position().0 - track.x) / track.w.max(1.)).clamp(0., 1.);
+        *value = if step > 0. {
+            (raw / step).round().clamp(lo, hi)
+        } else {
+            raw
+        };
+    }
+    let display = format(*value);
+    let available = (rect.w - label_width(&display, 16. * s) - 12. * s).max(0.);
+    label(
+        &fitted_label(text, 18. * s, available),
+        rect.x,
+        rect.y + 18. * s,
+        18. * s,
+        text_color(),
+    );
     right_label(
-        &format!("{displayed_percent:.0}%"),
+        &display,
         rect.x + rect.w,
-        rect.y + 18.0 * s,
-        16.0 * s,
+        rect.y + 18. * s,
+        16. * s,
         muted_color(),
     );
-    let track = Rect::new(rect.x, rect.y + 32.0 * s, rect.w, 5.0 * s);
-    let hit = Rect::new(rect.x, rect.y + 24.0 * s, rect.w, 24.0 * s);
-    let dragged = contains(hit) && is_mouse_button_down(MouseButton::Left);
-    if dragged {
-        *value = lo + (hi - lo) * ((mouse_position().0 - track.x) / track.w).clamp(0.0, 1.0);
-    }
-    let f = ((*value - lo) / (hi - lo)).clamp(0.0, 1.0);
+    let fraction = ((*value - lo) / (hi - lo)).clamp(0., 1.);
     draw_rectangle(track.x, track.y, track.w, track.h, line_color());
-    draw_rectangle(track.x, track.y, track.w * f, track.h, CYAN);
-    draw_circle(track.x + track.w * f, track.y + 2.5 * s, 5.0 * s, CYAN);
+    draw_rectangle(track.x, track.y, track.w * fraction, track.h, CYAN);
+    draw_circle(
+        track.x + track.w * fraction,
+        track.y + 2.5 * s,
+        5. * s,
+        CYAN,
+    );
     dragged
 }
+
 #[derive(Default)]
 struct FieldState {
     editor: tankyard_client::text_edit::Editor,
@@ -674,6 +723,36 @@ pub fn wrap(value: &str, x: f32, mut y: f32, width: f32, size: f32, color: Color
         y += size * 1.35;
     }
     y
+}
+pub fn wrapped_lines(value: &str, width: f32, size: f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in value.split_whitespace() {
+        let proposed = if line.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{line} {word}")
+        };
+        if label_width(&proposed, size) <= width {
+            line = proposed;
+            continue;
+        }
+        if !line.is_empty() {
+            lines.push(std::mem::take(&mut line));
+        }
+        for ch in word.chars() {
+            line.push(ch);
+            if line.len() > ch.len_utf8() && label_width(&line, size) > width {
+                line.pop();
+                lines.push(std::mem::take(&mut line));
+                line.push(ch);
+            }
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 pub fn progress(rect: Rect, ratio: f32, color: Color) {
     draw_rectangle(rect.x, rect.y, rect.w, rect.h, line_color());

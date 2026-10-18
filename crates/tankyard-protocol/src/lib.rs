@@ -11,8 +11,8 @@ pub use community::*;
 mod voice;
 pub use voice::*;
 
-pub const PROTOCOL_VERSION: u32 = 12;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000c;
+pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000d;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -426,6 +426,7 @@ fn snapshot_valid(s: &Snapshot) -> bool {
         && scalar(s.config.height)
         && (100.0..=20000.0).contains(&s.config.width)
         && (100.0..=20000.0).contains(&s.config.height)
+        && (0.5..=1.0).contains(&s.config.arena_scale)
         && scalar(s.config.spawn_protection)
         && scalar(s.config.time_limit)
         && s.config.map.len() <= 48
@@ -504,6 +505,11 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && b.max_health > 0.0
                 && scalar(b.timer)
                 && scalar(b.aim)
+                && vector(b.goal)
+                && scalar(b.tactic_time)
+                && scalar(b.arrival)
+                && (1..=3).contains(&b.phase)
+                && b.team <= 4
         })
         && s.walls.iter().all(|w| {
             scalar(w.x) && scalar(w.y) && scalar(w.w) && scalar(w.h) && w.w >= 0. && w.h >= 0.

@@ -79,6 +79,8 @@ pub struct Effects {
     pub shake: f32,
     pub notice: String,
     pub notice_life: f32,
+    pub boss_arrival: Option<(tankyard_core::BossKind, f32)>,
+    pub arena_scale: Option<f32>,
     last_tick: u64,
     random: u64,
 }
@@ -102,6 +104,8 @@ impl Effects {
             shake: 0.0,
             notice: String::new(),
             notice_life: 0.0,
+            boss_arrival: None,
+            arena_scale: None,
             last_tick: 0,
             random: 7919,
         }
@@ -111,6 +115,10 @@ impl Effects {
             *self = Self::new();
         }
         self.round = Some(round);
+    }
+    pub fn sync_arena(&mut self, scale: f32, dt: f32) {
+        let shown = self.arena_scale.get_or_insert(scale);
+        *shown += (scale - *shown) * (1. - (-dt * 16.).exp());
     }
     fn rand(&mut self) -> f32 {
         self.random ^= self.random << 13;
@@ -137,6 +145,11 @@ impl Effects {
                 continue;
             }
             sounds.push(event.clone());
+            if matches!(event.kind, EventKind::BossSpawn)
+                && let Some(&kind) = tankyard_core::BossKind::ALL.get(event.value as usize)
+            {
+                self.boss_arrival = Some((kind, 5.));
+            }
             let (color, count, ring) = match event.kind {
                 EventKind::Shot => {
                     self.recoil.insert(event.subject, 0.10);
@@ -415,6 +428,12 @@ impl Effects {
         }
     }
     pub fn update(&mut self, dt: f32) {
+        if let Some((_, life)) = &mut self.boss_arrival {
+            *life -= dt;
+            if *life <= 0. {
+                self.boss_arrival = None;
+            }
+        }
         for p in &mut self.projectile_fades {
             p.life -= dt;
         }
@@ -530,6 +549,33 @@ mod tests {
         tank.alive = false;
         effects.sync_barrels(&[tank], 1. / 60., false);
         assert!(effects.hulls.is_empty());
+    }
+
+    #[test]
+    fn boss_arrival_expires_after_five_seconds_and_reliable_replays_do_not_restart_it() {
+        let mut effects = Effects::new();
+        let event = GameEvent {
+            tick: 120,
+            kind: EventKind::BossSpawn,
+            pos: V2::ZERO,
+            subject: 42,
+            value: tankyard_core::BossKind::Guardian as u32,
+            team: 0,
+            elimination: None,
+        };
+        assert_eq!(effects.ingest(std::slice::from_ref(&event), 1, 0.).len(), 1);
+        effects.update(4.9);
+        assert!(effects.boss_arrival.is_some());
+        assert!(
+            effects
+                .ingest(std::slice::from_ref(&event), 1, 0.)
+                .is_empty()
+        );
+        effects.update(0.11);
+        assert!(effects.boss_arrival.is_none());
+        effects.sync_arena(1., 0.016);
+        effects.sync_arena(0.9, 0.016);
+        assert!((0.9..1.).contains(&effects.arena_scale.unwrap()));
     }
 
     #[test]

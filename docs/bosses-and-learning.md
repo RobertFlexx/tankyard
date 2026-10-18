@@ -1,0 +1,43 @@
+# Bosses, arenas, voice, and learning
+
+Random boss events run in Free For All, Two Teams, Four Teams, Maze, and Random Events. After a 60-second initial grace period, the server makes **one aggregate 0.25% roll per simulation second**. A successful roll chooses uniformly among all eleven boss types. This is not a per-frame or per-type probability. Only one random boss can be active, with a 90-second grace period after it disappears. Dedicated Boss Rush and Co-op waves keep their own schedules; Sandbox bosses remain manual.
+
+Boss arrivals use a reliable, deduplicated event: an original 48 kHz alarm, a brief red pulse, and a top-center banner that expires after five seconds. Reduced Motion suppresses the red flash. Audio Disabled and the master/effects volume controls apply to the alarm independently of microphone mute and voice volume. Bosses remain stationary and cannot deal contact damage during their first two seconds. Spawns search for free space away from tanks and fail safely if the map cannot accommodate them.
+
+| Boss | Silhouette and weapons | Hull radius |
+| --- | --- | --- |
+| Guardian of the Pentagons | Pink triangle, rear spawner, pursuing triangular swarm | 102 |
+| Summoner | Yellow square, four spawners, square drone swarm | 96 |
+| Defender | Red triangle, three rotating trap launchers and three auto turrets | 106 |
+| Fallen Overlord | Gray circular hull, four flared spawners, faster durable drones | 88 |
+| Fallen Booster | Gray Booster hull, front cannon and four rear thrusters, fast pursuit | 82 |
+| Sentinel | Hexagonal armor, phased forward shell spreads | 90 |
+| Prism | Triangular armor, rotating ricocheting volleys | 90 |
+| Foundry | Pentagon, capped drone escorts and deployed turrets | 100 |
+| Tempest | Octagonal armor, homing salvos and telegraphed lunges | 78 |
+| Bastion | Square armor, rotating mine ring and explosive cannon | 100 |
+| Eclipse | Seven-sided armor, phase-dependent radial bursts and charge | 90 |
+
+The classic bosses were researched through the community's original game observations: [Guardian](https://diepio.fandom.com/wiki/Guardian), [Summoner](https://diepio.fandom.com/wiki/Summoner), [Defender](https://diepio.fandom.com/wiki/Defender), [Fallen Overlord](https://diepio.fandom.com/wiki/Fallen_Overlord), and [Fallen Booster](https://diepio.fandom.com/wiki/Fallen_Booster). Their recognizable silhouettes and arsenals are recreated with original vector geometry. Tank Yard uses its own sizes, damage values, phases, spawn schedule, and combat rules. No external game artwork or code is included.
+
+Bosses lead moving targets, prefer recent attackers, maintain target continuity, observe line of sight, avoid approaching projectiles, manage distance while replenishing swarms, steer around walls, and respect the current arena border. Drone populations and projectile queues are capped. Custom charge attacks show a directional warning before accelerating.
+
+Open arena modes animate their border around a fixed coordinate system. Both humans and bots count, including participants waiting to respawn, so deaths do not pulse the map size. Two or fewer participants use 65% of the configured width/height; the border smoothly grows to the full configured dimensions by 24 participants. Smaller configured maps retain at least 900 × 700 playable units. Each border edge moves at most 24 units per second with damped easing; the client also interpolates between network updates. Shape counts follow playable area. Team homes/objectives move with the border, while fixed walls stay in place. Hull constraints resolve a shrinking border pinching a tank against a wall. Maze, Survival, Sandbox, Boss Rush, and Co-op retain their designed layouts or elimination boundaries. Server owners can set `world.dynamic_arena = false`.
+
+Voice is 48 kHz mono Opus at a target 96 kbps, in bounded 20 ms packets, with full-band encoding, in-band FEC, waveform loss concealment, a short jitter buffer, and smoothed proximity gains. Codec work runs outside the audio callback lock. This replaces 16 kHz G.711 companding. Frame validation, per-sender rate limits, server-authoritative distance, mutes, living-player restrictions, and sequence replay rejection remain in force. The codec is statically bundled; no separate Opus install is required.
+
+The Display tab's Native option follows the monitor's reported desktop mode. Monitor queries run periodically, and display changes update the requested resolution. Linux/Windows select the display with the greatest window overlap, including monitors with negative coordinates; macOS uses its reported primary display. High DPI is accounted for without changing the operating system's display mode. Fixed resolution presets and safe graphics mode remain available. Sandbox includes an integer level slider, tier presets, and a 0.25×–2× offline speed slider with a reset button. Online speed controls are disabled, and level slider requests are coalesced below server rate limits. Sliders retain their drag when the pointer leaves the track. Sandbox and server panels reserve space below arrival alerts; chat and tooltips occupy separate HUD regions.
+
+Bots train real, small neural networks online using bounded replay buffers. Motion observations train aim prediction; visible class outcomes from humans and bots and their own loadout results train tank/build preferences. A contextual network chooses combat spacing, flanking, approach, and ally rally maneuvers from actual score, damage, kills, and survival outcomes. Exploration continues so alternatives are not permanently excluded. Strong melee tanks still commit at contact range, while recovery, objectives, visibility, legal movement, and map constraints take precedence.
+
+Cooperation under shared threats builds personal friendship. Betrayal reduces friendship and increases fear/animosity; grudges cool down and memories are bounded. These relationships influence target preferences and support weighting without granting hidden information. Parry decisions use stable per-projectile mistakes and varied timing: intended missed-attempt rates are 48% / 28% / 18% / 10% for Beginner / Normal / Advanced / Expert, before aim, reaction delay, and physical evasion affect the outcome. Repeated frames cannot reroll the same threat into a guaranteed defense.
+
+Learning survives deaths and network weights carry into subsequent rounds. Player sightings, relationships, and tactical trials reset between rounds; learning is not saved across process restarts. These are experience-trained controllers operating within game rules, not claims of consciousness or unrestricted agency.
+
+Stat upgrades immediately update deployed class drones/minions: speed, damage, remaining durability fraction, and minion reload. Upgrades preserve damage already taken, entity identity, lifetime, and location. Captured parry returns retain their tier-specific caps; already-fired ordinary bullets retain their launch stats.
+
+To inspect actual boss geometry without a GPU:
+
+```sh
+cargo run --locked -p tankyard-client --bin tankyard-models -- --bosses --columns 4 --output artifacts/models/bosses.svg
+```

@@ -774,8 +774,7 @@ impl UdpServer {
             }
             ClientControl::SandboxBoss { kind } => {
                 if permitted && self.session.world.bosses.len() < 12 {
-                    self.session.world.spawn_boss(kind);
-                    true
+                    self.session.world.spawn_boss(kind) != 0
                 } else {
                     false
                 }

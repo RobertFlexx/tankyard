@@ -17,7 +17,7 @@ cargo build --locked --release --workspace
 ./target/release/tankyard
 ```
 
-Linux needs a C linker, X11/OpenGL, and ALSA. On Debian or Ubuntu, install `build-essential libx11-dev libxi-dev libgl1-mesa-dev libasound2-dev`.
+Linux needs a C linker, X11/OpenGL, and ALSA. On Debian or Ubuntu, install `build-essential libx11-dev libxi-dev libgl1-mesa-dev libasound2-dev cmake`.
 
 For a Linux binary to share across distributions, use `scripts/build_linux_compatible.sh` with Zig installed. It targets glibc 2.31 and baseline x86-64 CPUs. The client uses the desktop's shared glibc and graphics drivers; static glibc causes a reproduced NVIDIA startup crash. See [Linux builds and startup diagnostics](docs/linux-builds.md).
 
@@ -31,9 +31,11 @@ Tank upgrades unlock at levels 15, 30, 45, and 55. Riposte leads to Counterguard
 
 Parried drones and minions merge into one large drone. Hold left click to guide it toward the cursor, release to send it back at the attacker, and right-click to recall it. Each parry upgrade captures a stronger swarm. Reprisal also heals more and has a shorter ability cooldown.
 
-Online proximity voice fades with distance. Your microphone starts muted; press M or click the microphone icon at the bottom right to toggle it. Settings → Audio controls voice playback volume. Recent text chat stays visible outside the chatbox. After death, follow living tanks and use Left/Right or the spectator buttons to switch; team modes only show teammates. Enter still respawns when permitted. Clients and servers must update together to protocol 12.
+Online proximity voice uses full-band 48 kHz, 96 kbps Opus with loss recovery and fades with distance. Your microphone starts muted; press M or click the microphone icon at the bottom right to toggle it. Settings → Audio controls voice playback volume. Recent text chat stays visible outside the chatbox. After death, follow living tanks and use Left/Right or the spectator buttons to switch; team modes only show teammates. Enter still respawns when permitted. Clients and servers must update together to protocol 13.
 
 Your first launch shows both themes side by side. Pick Dark or Light; F9 changes it later.
+
+Open arena modes smoothly resize their playable border with the number of participants. Rare boss events can bring five classic Diep-style bosses or six original bosses, with a five-second warning banner, red arrival pulse, and original alarm. [Boss, arena, and learning details](docs/bosses-and-learning.md). Settings → Display also offers Native resolution, which follows the monitor's reported desktop resolution.
 
 Protected tanks pulse white. Online arenas fill to six tanks with bots: one player gets five bots, five players get one, and six or more players get none. Empty servers pause until someone joins. Achievements reset each match by default; the Achievements page also offers Global and Off.
 
@@ -43,7 +45,7 @@ Skill labels follow your class: an Overseer gets Drone Speed / Health / Damage, 
 
 Practice is below Play on the main menu, in the pause menu, and on F6. It offers a shape sprint, drone drill, tank skirmish, and survival challenge with personal records. Press F1 for the current controls, F3 for diagnostics, F10 for settings, and F5 to restart an offline game from pause. Tab and Shift+Tab move between text fields; Esc goes back. See [playing](docs/playing.md) for goals and shortcuts.
 
-Game modes lets you choose Beginner through Expert bots; your choice also applies when hosting. Bots learn visible movement and combat results, remember rivals during a match, and adjust their tank and skill choices. The server keeps learned network weights when a new round starts, but clears sightings and grudges. Learning does not survive a server restart. They use the same combat stats as players, with reaction delays and aim error based on difficulty.
+Game modes lets you choose Beginner through Expert bots; your choice also applies when hosting. Bots train small neural networks from visible movement and combat outcomes, choose learned spacing and flanking tactics, remember rivals and cooperative allies, and adjust their tank and skill choices. Parry bots can mistime or miss defenses, including on Expert. The server keeps learned network weights when a new round starts, but clears sightings and grudges. Learning does not survive a server restart. They use the same combat stats as players, with reaction delays and aim error based on difficulty.
 
 Multi-barrel guns use independent firing phases, producing staggered shots and occasional volleys. Double Burst and Overtrapper have centered front and rear mounts; Necromancer has two opposing drone ports. Rendering and simulation use the same mount positions.
 

@@ -10,6 +10,7 @@ mod first_run;
 mod graphics;
 mod hud;
 mod menu;
+mod native_resolution;
 mod notifications;
 mod practice_ui;
 mod render;
@@ -699,6 +700,8 @@ impl App {
     }
     fn pointer_over_ui(&self, s: f32) -> bool {
         self.voice.captures_pointer(s)
+            || (self.effects.boss_arrival.is_some()
+                && contains(hud::boss_banner_layout(screen_width(), s)))
             || self.session.as_ref().is_some_and(|session| {
                 let community = match &session.engine {
                     session::Engine::Online { client, .. } => {
@@ -731,6 +734,8 @@ impl App {
             }
         }
         self.effects.update(dt);
+        self.voice
+            .effects_volume(self.settings.master_volume * self.settings.effects_volume);
         self.achievement_feed.update(dt);
         let now = get_time();
         if let Some(session) = &mut self.session {
@@ -1007,6 +1012,7 @@ impl App {
                 1.0 - (-dt * 22.0).exp()
             };
             self.effects.sync_round(snapshot.match_state.round);
+            self.effects.sync_arena(snapshot.config.arena_scale, dt);
             self.effects
                 .sync_barrels(&snapshot.tanks, dt, self.settings.reduced_motion);
             for other in snapshot.tanks.iter().filter(|t| t.alive) {
@@ -1046,9 +1052,16 @@ impl App {
                 dt,
                 self.settings.reduced_motion,
             );
-            let _ = self
-                .effects
-                .ingest(&session.events, session.player, self.settings.effects);
+            let sounds =
+                self.effects
+                    .ingest(&session.events, session.player, self.settings.effects);
+            if sounds
+                .iter()
+                .any(|event| matches!(event.kind, tankyard_core::EventKind::BossSpawn))
+            {
+                self.voice
+                    .boss_alarm(self.settings.master_volume * self.settings.effects_volume);
+            }
         }
         if let Some(session) = &mut self.session {
             session.events.clear();
@@ -1139,6 +1152,27 @@ impl App {
                     session.local_animation_time(self.accumulator / DT),
                     &session.previous_positions,
                 );
+                if let Some((_, life)) = self.effects.boss_arrival {
+                    let age = 5. - life;
+                    let flash = if self.settings.reduced_motion {
+                        0.
+                    } else if age < 1.2 {
+                        ((age * std::f32::consts::TAU * 1.5).sin().max(0.) * (1. - age / 1.2))
+                            * 0.20
+                    } else {
+                        0.
+                    };
+                    draw_rectangle(0., 0., screen_width(), screen_height(), alpha(RED, flash));
+                }
+                self.hud.local_simulation = session.offline_mode();
+                self.hud.sandbox_allowed = match &session.engine {
+                    session::Engine::Offline(_) => true,
+                    session::Engine::Online { client, .. } => client.sandbox_allowed,
+                };
+                if self.community.admin_open {
+                    self.hud.sandbox = false;
+                    self.hud.evolution = false;
+                }
                 actions = self.hud.draw(
                     snapshot,
                     &self.content,
@@ -1148,17 +1182,52 @@ impl App {
                     s,
                     &self.view,
                 );
-                for (index, kill) in self.effects.kills.iter().rev().enumerate() {
+                if let Some((kind, life)) = self.effects.boss_arrival {
+                    let opacity = (life / 0.4).min(1.);
+                    let rect = hud::boss_banner_layout(screen_width(), s);
+                    let width = rect.w;
+                    let y = rect.y;
+                    panel(rect);
+                    draw_rectangle(rect.x, rect.y, 4. * s, rect.h, alpha(RED, opacity));
+                    center_label(
+                        "BOSS INCOMING",
+                        rect.x + rect.w * 0.5,
+                        y + 20. * s,
+                        12. * s,
+                        alpha(RED, opacity),
+                    );
+                    center_label(
+                        &fitted_label(kind.name(), 22. * s, width - 24. * s),
+                        rect.x + rect.w * 0.5,
+                        y + 47. * s,
+                        22. * s,
+                        alpha(text_color(), opacity),
+                    );
+                }
+                for (index, kill) in self
+                    .effects
+                    .kills
+                    .iter()
+                    .rev()
+                    .filter(|_| !self.hud.sandbox && !self.community.admin_open)
+                    .enumerate()
+                {
                     let opacity = (kill.life / 0.45).min(1.0);
                     center_label(
                         &format!("Eliminated {}", kill.name),
                         screen_width() * 0.5,
-                        (111.0 + index as f32 * 28.0) * s,
+                        (if self.effects.boss_arrival.is_some() {
+                            208.0
+                        } else {
+                            132.0
+                        } + index as f32 * 28.0)
+                            * s,
                         19.0 * s,
                         alpha(text_color(), opacity),
                     );
                 }
-                if self.effects.notice_life > 0.0 {
+                if self.effects.notice_life > 0.0 && !self.hud.sandbox && !self.community.admin_open
+                {
                     let opacity = (self.effects.notice_life / 0.35).min(1.0);
                     center_label(
                         &self.effects.notice,
@@ -1210,27 +1279,43 @@ impl App {
                     screen_height(),
                     alpha(bg_color(), 0.92),
                 );
+                let retry = self.last_join.is_some();
+                let size = 21. * s;
+                let mut lines =
+                    wrapped_lines(error, (640. * s).min(screen_width() - 44. * s), size);
+                if lines.len() > 6 {
+                    lines.truncate(6);
+                    if let Some(last) = lines.last_mut() {
+                        last.push('…');
+                    }
+                }
+                let line_height = size * 1.35;
+                let buttons_height = if retry { 96. * s } else { 42. * s };
+                let block_height =
+                    34. * s + 24. * s + lines.len() as f32 * line_height + 24. * s + buttons_height;
+                let top = (screen_height() - block_height) * 0.5;
                 center_label(
                     "Disconnected",
                     screen_width() * 0.5,
-                    screen_height() * 0.4,
-                    34.0 * s,
+                    top + 34. * s,
+                    34. * s,
                     RED,
                 );
-                wrap(
-                    error,
-                    screen_width() * 0.5 - 320.0 * s,
-                    screen_height() * 0.4 + 50.0 * s,
-                    640.0 * s,
-                    21.0 * s,
-                    text_color(),
-                );
-                let retry = self.last_join.is_some();
+                for (index, line) in lines.iter().enumerate() {
+                    center_label(
+                        line,
+                        screen_width() * 0.5,
+                        top + 58. * s + (index + 1) as f32 * line_height,
+                        size,
+                        text_color(),
+                    );
+                }
+                let buttons_y = top + 58. * s + lines.len() as f32 * line_height + 24. * s;
                 if retry
                     && button(
                         Rect::new(
                             screen_width() * 0.5 - 125.0 * s,
-                            screen_height() * 0.6,
+                            buttons_y,
                             250.0 * s,
                             42.0 * s,
                         ),
@@ -1245,7 +1330,7 @@ impl App {
                 if button(
                     Rect::new(
                         screen_width() * 0.5 - 125.0 * s,
-                        screen_height() * 0.6 + if retry { 54.0 * s } else { 0.0 },
+                        buttons_y + if retry { 54.0 * s } else { 0.0 },
                         250.0 * s,
                         42.0 * s,
                     ),
@@ -1480,6 +1565,7 @@ async fn run(cli: Cli) {
         return;
     };
     let mut app = App::new(cli, dark_theme).await;
+    let mut native_resolution = native_resolution::NativeResolution::new();
     // Render directly at the window's drawable resolution.
     macroquad::texture::set_default_filter_mode(FilterMode::Linear);
     loop {
@@ -1487,6 +1573,7 @@ async fn run(cli: Cli) {
             break;
         }
         let start = get_time();
+        native_resolution.update(&app.settings);
         let dt = get_frame_time().clamp(0.0, 0.15);
         // Recalculate camera zoom after resizing and as the tank levels up.
         let level = app

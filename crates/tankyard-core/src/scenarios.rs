@@ -662,17 +662,11 @@ fn team_damage_and_spawn_protection() {
 }
 #[test]
 fn every_boss_attacks_and_never_hits_itself() {
-    for kind in [
-        BossKind::Sentinel,
-        BossKind::Prism,
-        BossKind::Foundry,
-        BossKind::Tempest,
-        BossKind::Bastion,
-        BossKind::Eclipse,
-    ] {
+    for kind in BossKind::ALL {
         let mut w = empty(Mode::Sandbox);
         w.add_player("A", false);
         w.tanks[0].pos = V2::new(2300., 1300.);
+        w.tanks[0].level = 45;
         let boss = w.spawn_boss(kind);
         let starting = w.bosses[0].health;
         let mut shots = 0;
@@ -1158,6 +1152,7 @@ fn boss_contacts_separate_and_allow_ramming_damage() {
     let mut w = empty(Mode::Sandbox);
     w.add_player("Ram", false);
     w.spawn_boss(BossKind::Sentinel);
+    w.bosses[0].arrival = 0.;
     w.tanks[0].pos = w.bosses[0].pos + V2::new(30., 0.);
     let health = w.bosses[0].health;
     w.step();

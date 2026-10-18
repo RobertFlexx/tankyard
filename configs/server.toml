@@ -24,6 +24,7 @@ ban_file = "configs/bans.json"
 round_restart_seconds = 10.0
 
 [world]
+dynamic_arena = true
 width = 3600.0
 height = 2600.0
 mode = "Ffa"

@@ -47,10 +47,8 @@ fn voice_frame(client: &NetworkClient, sequence: u32) -> tankyard_protocol::Voic
     tankyard_protocol::VoiceFrame {
         round: client.player_round.unwrap(),
         sequence,
-        samples: vec![
-            tankyard_protocol::encode_voice_sample(0.3);
-            tankyard_protocol::VOICE_FRAME_SAMPLES
-        ],
+        // Transport treats codec payloads as opaque bounded packets.
+        samples: vec![0xf8; 240],
     }
 }
 

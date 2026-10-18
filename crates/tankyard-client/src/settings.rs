@@ -14,6 +14,7 @@ pub struct Settings {
     pub recent_servers: Vec<String>,
     pub width: u32,
     pub height: u32,
+    pub native_resolution: bool,
     pub fullscreen: bool,
     pub vsync: bool,
     pub anti_aliasing: u8,
@@ -55,6 +56,7 @@ impl Default for Settings {
             recent_servers: vec![],
             width: 1280,
             height: 800,
+            native_resolution: false,
             fullscreen: false,
             vsync: true,
             anti_aliasing: 4,
@@ -91,6 +93,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn use_safe_graphics(&mut self) {
+        self.native_resolution = false;
         self.fullscreen = false;
         self.width = 1280;
         self.height = 800;

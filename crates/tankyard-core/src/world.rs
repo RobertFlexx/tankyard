@@ -32,6 +32,8 @@ pub struct World {
     pub(crate) last_arena_event: ArenaEvent,
     pub(crate) score_fraction: [f32; 4],
     pub(crate) sandbox_god: Vec<EntityId>,
+    pub(crate) arena_velocity: f32,
+    pub(crate) boss_roll_at: u64,
 }
 impl World {
     pub fn new(mut config: WorldConfig, content: Content) -> Self {
@@ -67,6 +69,7 @@ impl World {
         }
         config.width = config.width.clamp(900., 16000.);
         config.height = config.height.clamp(700., 16000.);
+        config.arena_scale = 1.;
         config.target_count = config.target_count.min(10000);
         config.max_projectiles = config.max_projectiles.clamp(100, 30000);
         config.spawn_protection = if config.spawn_protection.is_finite() {
@@ -138,6 +141,8 @@ impl World {
             last_arena_event: ArenaEvent::None,
             score_fraction: [0.; 4],
             sandbox_god: vec![],
+            arena_velocity: 0.,
+            boss_roll_at: 60 * 60,
         };
         world.initialize_map();
         world.initialize_mode();
@@ -315,8 +320,33 @@ impl World {
         if t.points == 0 || t.stats[index] >= 7 || !t.alive {
             return false;
         }
+        let previous = stat_scale(t.stats[index]);
         t.stats[index] += 1;
+        let ratio = stat_scale(t.stats[index]) / previous;
         t.points -= 1;
+        for drone in self.projectiles.iter_mut().filter(|p| {
+            p.owner == id
+                && p.kind.is_drone()
+                && !p.is_return_drone()
+                && p.lifetime > 0.
+                && p.penetration > 0.
+        }) {
+            match index {
+                3 => {
+                    drone.cruise_speed *= ratio;
+                    drone.vel *= ratio;
+                }
+                // Preserve damage already taken, as a fraction of durability.
+                4 => drone.penetration *= ratio,
+                5 => drone.damage *= ratio,
+                6 => {
+                    if let Some(gun) = &mut drone.gun {
+                        gun.cooldown /= ratio;
+                    }
+                }
+                _ => {}
+            }
+        }
         self.refresh_stats(id, false);
         true
     }
@@ -481,6 +511,8 @@ impl World {
         }
         self.tick += 1;
         self.match_state.elapsed += DT;
+        self.update_arena_size();
+        self.random_boss_event();
         self.update_tanks();
         self.update_targets();
         self.update_bosses();
@@ -521,8 +553,7 @@ impl World {
         self.bosses.retain(|b| b.health > 0.);
         if self.tick.is_multiple_of(15) {
             let count = self
-                .config
-                .target_count
+                .target_capacity()
                 .saturating_sub(self.targets.len())
                 .min(8);
             for _ in 0..count {
@@ -593,14 +624,17 @@ impl World {
             t.angle += DT * 0.16;
             let old = t.pos;
             t.pos += t.vel * DT;
-            if t.pos.x < t.radius || t.pos.x > self.config.width - t.radius {
+            if t.pos.x < self.config.bounds().x + t.radius
+                || t.pos.x > self.config.bounds().x + self.config.bounds().w - t.radius
+            {
                 t.vel.x = -t.vel.x;
             }
-            if t.pos.y < t.radius || t.pos.y > self.config.height - t.radius {
+            if t.pos.y < self.config.bounds().y + t.radius
+                || t.pos.y > self.config.bounds().y + self.config.bounds().h - t.radius
+            {
                 t.vel.y = -t.vel.y;
             }
-            t.pos.x = t.pos.x.clamp(t.radius, self.config.width - t.radius);
-            t.pos.y = t.pos.y.clamp(t.radius, self.config.height - t.radius);
+            t.pos = self.config.bounds().clamp_circle(t.pos, t.radius);
             if self
                 .walls
                 .iter()
@@ -647,23 +681,21 @@ impl World {
             let regions = || self.map.spawn_regions.iter().filter(|r| r.team == team);
             let count = regions().count();
             let region = regions().nth(((x * count as f32) as usize).min(count.saturating_sub(1)));
+            let bounds = self.config.bounds();
             let p = if let Some(region) = region {
                 let rect = region.rect;
                 V2::new(
-                    (rect[0] + self.random() * rect[2]) * self.config.width,
-                    (rect[1] + y * rect[3]) * self.config.height,
+                    bounds.x + (rect[0] + self.random() * rect[2]) * bounds.w,
+                    bounds.y + (rect[1] + y * rect[3]) * bounds.h,
                 )
             } else if team == 0 {
                 V2::new(
-                    70. + x * (self.config.width - 140.),
-                    70. + y * (self.config.height - 140.),
+                    bounds.x + 70. + x * (bounds.w - 140.),
+                    bounds.y + 70. + y * (bounds.h - 140.),
                 )
             } else {
                 let home = self.team_home(team);
-                V2::new(
-                    (home.x + (x - 0.5) * 400.).clamp(50., self.config.width - 50.),
-                    (home.y + (y - 0.5) * 400.).clamp(50., self.config.height - 50.),
-                )
+                bounds.clamp_circle(home + V2::new((x - 0.5) * 400., (y - 0.5) * 400.), 50.)
             };
             if self.walls.iter().any(|&w| circle_rect(p, 36., w).is_some()) {
                 continue;
@@ -697,21 +729,22 @@ impl World {
                 break;
             }
         }
-        best
+        crate::physics::clear_circle_position(best, 36., self.config.bounds(), &self.walls)
+            .unwrap_or(best)
     }
     pub fn team_home(&self, team: u8) -> V2 {
         if let Some(base) = self.map.team_bases.iter().find(|b| b.team == team) {
-            return V2::new(
+            return self.config.arena_point(V2::new(
                 base.position[0] * self.config.width,
                 base.position[1] * self.config.height,
-            );
+            ));
         }
-        match team {
+        self.config.arena_point(match team {
             1 => V2::new(220., 220.),
             2 => V2::new(self.config.width - 220., self.config.height - 220.),
             3 => V2::new(self.config.width - 220., 220.),
             _ => V2::new(220., self.config.height - 220.),
-        }
+        })
     }
     pub(crate) fn spawn_target(&mut self) {
         let roll = self.random();
@@ -731,10 +764,11 @@ impl World {
             (TargetKind::Square, 14., 35., 22)
         };
         for _ in 0..32 {
-            let pos = V2::new(
+            let base = V2::new(
                 radius + 50. + self.random() * (self.config.width - 2. * radius - 100.),
                 radius + 50. + self.random() * (self.config.height - 2. * radius - 100.),
             );
+            let pos = self.config.arena_point(base);
             if self
                 .walls
                 .iter()
@@ -1189,12 +1223,14 @@ impl World {
         }
         for (i, j, normal, overlap) in contacts {
             self.tanks[i].pos -= normal * (overlap + 0.01);
-            if self.hostile(self.tanks[i].team, self.bosses[j].team) {
+            if self.bosses[j].arrival <= 0. && self.hostile(self.tanks[i].team, self.bosses[j].team)
+            {
                 let damage = self.body_damage(i) * DT;
                 let owner = self.tanks[i].id;
                 let boss_id = self.bosses[j].id;
                 if self.tanks[i].protection <= 0. {
                     self.bosses[j].health -= damage;
+                    self.bosses[j].last_attacker = owner;
                     self.record_damage(boss_id, owner, damage);
                 }
                 self.damage_tank(i, 35. * DT, boss_id, normal * -7.);
@@ -1453,6 +1489,7 @@ impl World {
                     }
                     Body::Boss(j) => {
                         self.bosses[j].health -= applied;
+                        self.bosses[j].last_attacker = owner;
                         self.record_damage(id, owner, applied);
                         self.event(
                             EventKind::Impact,
@@ -1625,7 +1662,7 @@ impl World {
         }
         for b in &self.bosses {
             let d = (pos - b.pos).length_squared();
-            if b.health > 0. && self.hostile(team, b.team) && d < best {
+            if b.id != owner && b.health > 0. && self.hostile(team, b.team) && d < best {
                 best = d;
                 target = Some(b.pos);
             }
@@ -1685,6 +1722,7 @@ impl World {
                         && (team == 0 || team != b.team)
                     {
                         b.health -= damage;
+                        b.last_attacker = owner;
                         let id = b.id;
                         self.record_damage(id, owner, damage);
                     }
@@ -1747,9 +1785,24 @@ pub fn target_sides(kind: TargetKind) -> u8 {
 fn boundary_hits(start: V2, end: V2, r: f32, config: &WorldConfig) -> [Option<(f32, V2)>; 2] {
     let d = end - start;
     let mut hits = [None; 2];
+    let bounds = config.bounds();
     for (index, (a, b, delta, low, high, axis)) in [
-        (start.x, end.x, d.x, r, config.width - r, true),
-        (start.y, end.y, d.y, r, config.height - r, false),
+        (
+            start.x,
+            end.x,
+            d.x,
+            bounds.x + r,
+            bounds.x + bounds.w - r,
+            true,
+        ),
+        (
+            start.y,
+            end.y,
+            d.y,
+            bounds.y + r,
+            bounds.y + bounds.h - r,
+            false,
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -1787,6 +1840,66 @@ mod name_hardening_tests {
         assert_eq!(sanitize_name("\u{2066}Pilot\u{2069}"), "Pilot");
         assert_eq!(sanitize_name("bob\u{202e}txt"), "bobtxt");
         assert_eq!(sanitize_name("世界 艾"), "世界 艾");
+    }
+}
+
+#[cfg(test)]
+mod drone_upgrade_regressions {
+    use super::*;
+    #[test]
+    fn upgrades_apply_to_deployed_drones_without_restoring_damage_or_respawning() {
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::Sandbox,
+                target_count: 0,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        let owner = world.add_player("Pilot", false);
+        world.tanks[0].points = 20;
+        for kind in [
+            ProjectileKind::Drone,
+            ProjectileKind::Minion,
+            ProjectileKind::Bullet,
+        ] {
+            let mut projectile = world.simple_projectile(
+                owner,
+                0,
+                V2::new(1000., 1000.),
+                V2::new(200., 0.),
+                kind,
+                12.,
+                10.,
+                5.,
+                4.,
+            );
+            projectile.penetration = 2.; // Half of the drone's durability remains.
+            if kind == ProjectileKind::Minion {
+                projectile.gun = Some(MinionGun {
+                    aim: 0.,
+                    cooldown: 0.6,
+                    shots: 0,
+                });
+            }
+            world.projectiles.push(projectile);
+        }
+        let before = world.projectiles.clone();
+        for stat in [3, 4, 5, 6] {
+            assert!(world.upgrade_stat(owner, stat));
+        }
+        let ratio = stat_scale(1) / stat_scale(0);
+        for (projectile, before) in world.projectiles.iter().zip(&before).take(2) {
+            assert_eq!(projectile.id, before.id);
+            assert_eq!(projectile.pos, before.pos);
+            assert_eq!(projectile.lifetime, before.lifetime);
+            assert!((projectile.damage - 12. * ratio).abs() < 0.0001);
+            assert!((projectile.cruise_speed - 200. * ratio).abs() < 0.0001);
+            assert!((projectile.penetration - 2. * ratio).abs() < 0.0001);
+        }
+        assert!((world.projectiles[1].gun.unwrap().cooldown - 0.6 / ratio).abs() < 0.0001);
+        assert_eq!(world.projectiles[2].damage, before[2].damage);
+        assert_eq!(world.projectiles[2].vel, before[2].vel);
     }
 }
 

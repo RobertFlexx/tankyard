@@ -7,6 +7,7 @@ const MEMORY_LIMIT: usize = 12;
 pub struct Disposition {
     pub fear: f32,
     pub animosity: f32,
+    pub friendship: f32,
 }
 
 struct Relationship {
@@ -31,6 +32,7 @@ impl Relationships {
                 Disposition {
                     fear: person.disposition.fear * decay,
                     animosity: person.disposition.animosity * decay,
+                    friendship: person.disposition.friendship * decay,
                 }
             })
     }
@@ -48,6 +50,7 @@ impl Relationships {
                 + damage.clamp(0., 1.) * 0.35
                 + if killed { 0.25 } else { 0. })
             .min(0.85),
+            friendship: disposition.friendship * 0.25,
         };
     }
 
@@ -60,6 +63,30 @@ impl Relationships {
         person.disposition = Disposition {
             fear: disposition.fear * 0.6,
             animosity: disposition.animosity * 0.7,
+            friendship: disposition.friendship * 0.7,
+        };
+    }
+
+    pub fn cooperate(&mut self, id: EntityId, strength: f32, tick: u64) {
+        if id == 0 || !strength.is_finite() || strength <= 0. {
+            return;
+        }
+        let previous_tick = self
+            .people
+            .iter()
+            .find(|p| p.id == id)
+            .map_or(tick.saturating_sub(12), |p| p.tick);
+        let elapsed = tick.saturating_sub(previous_tick).min(30) as f32 / 60.;
+        if elapsed <= 0. {
+            return;
+        }
+        let disposition = self.get(id, tick);
+        let person = self.remember(id, tick);
+        person.disposition = Disposition {
+            friendship: (disposition.friendship + strength.clamp(0., 1.) * elapsed * 0.025)
+                .min(0.9),
+            animosity: (disposition.animosity - elapsed * 0.008).max(0.),
+            fear: disposition.fear * (1. - elapsed * 0.015),
         };
     }
 
@@ -122,5 +149,20 @@ mod tests {
         }
         assert_eq!(memory.people.len(), MEMORY_LIMIT);
         assert_eq!(memory.get(1, 400).fear, 0.);
+    }
+    #[test]
+    fn cooperation_builds_friendship_and_betrayal_changes_that_relationship() {
+        let mut memory = Relationships::default();
+        for tick in (0..3600).step_by(12) {
+            memory.cooperate(41, 1., tick);
+        }
+        let friendship = memory.get(41, 3600).friendship;
+        assert!(friendship > 0.8);
+        memory.hurt_by(41, 0.5, false, 3601);
+        let betrayed = memory.get(41, 3601);
+        assert!(betrayed.friendship < friendship * 0.26);
+        assert!(betrayed.animosity > 0.15 && betrayed.fear > 0.3);
+        memory.cooperate(42, f32::NAN, 3602);
+        assert_eq!(memory.get(42, 3602).friendship, 0.);
     }
 }

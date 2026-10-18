@@ -345,7 +345,7 @@ impl CommunityUi {
         );
         let r = Rect::new(
             (screen_width() - 710.0 * s) * 0.5,
-            (screen_height() - 560.0 * s) * 0.5,
+            ((screen_height() - 560.0 * s) * 0.5).max(190. * s),
             710.0 * s,
             560.0 * s,
         );

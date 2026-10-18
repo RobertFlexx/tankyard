@@ -16,6 +16,7 @@ struct Opponent {
 pub struct Learning {
     pub build: crate::policy::BuildLearning,
     pub relationships: crate::relationships::Relationships,
+    pub tactics: crate::tactics::TacticsLearning,
     neural: crate::neural::MotionNet,
     opponents: Vec<Opponent>,
     pub caution: f32,
@@ -30,6 +31,7 @@ impl Default for Learning {
         Self {
             build: Default::default(),
             relationships: Default::default(),
+            tactics: Default::default(),
             neural: Default::default(),
             opponents: Vec::new(),
             caution: 0.35,
@@ -45,12 +47,14 @@ impl Learning {
     pub(crate) fn inherit_models(&mut self, previous: &Self) {
         self.neural = previous.neural.clone();
         self.build.inherit_models(&previous.build);
+        self.tactics.inherit(&previous.tactics);
     }
     pub fn feedback(&mut self, tank: &Tank, tick: u64, events: &[GameEvent]) {
         if self.feedback_tick == Some(tick) {
             return;
         }
         self.feedback_tick = Some(tick);
+        self.tactics.observe(tank, tick);
         let health = tank.health / tank.max_health.max(1.);
         let hit = (tank.damaged_at, tank.last_attacker);
         if tank.alive && tank.last_attacker != 0 && self.last_hit != Some(hit) {

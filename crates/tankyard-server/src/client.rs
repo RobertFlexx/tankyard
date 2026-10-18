@@ -436,7 +436,7 @@ impl NetworkClient {
             || !self.voice_enabled
             || self.voice_muted
             || self.player_round != Some(frame.round)
-            || frame.samples.len() != VOICE_FRAME_SAMPLES
+            || !frame.valid()
         {
             return false;
         }

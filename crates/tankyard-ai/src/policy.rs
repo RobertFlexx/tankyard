@@ -100,7 +100,7 @@ impl BuildLearning {
     /// Learn class traits from a human only while that person stays visible.
     /// Hidden gaps discard the sample; private skill allocations are not copied.
     pub fn observe_player(&mut self, player: &Tank, content: &Content, tick: u64) {
-        if player.bot || !player.alive {
+        if !player.alive {
             return;
         }
         let Some(class) = content.class(&player.class) else {

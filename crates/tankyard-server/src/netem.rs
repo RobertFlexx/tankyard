@@ -189,7 +189,7 @@ mod tests {
             let (n, peer) = echo.recv_from(&mut buffer).unwrap();
             echo.send_to(&buffer[..n], peer).unwrap();
         });
-        let relay = NetworkEmulator::start(
+        let mut relay = NetworkEmulator::start(
             address,
             EmulationConfig {
                 latency_ms: 50,
@@ -209,6 +209,8 @@ mod tests {
         assert_eq!(&buffer[..n], b"tankyard");
         assert!(started.elapsed() >= Duration::from_millis(45));
         worker.join().unwrap();
+        // Receiving the echo can race the relay's post-send counter update.
+        relay.shutdown();
         assert_eq!(relay.stats().forwarded, 2);
     }
 }

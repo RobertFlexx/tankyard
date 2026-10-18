@@ -13,6 +13,7 @@ ban_file = "configs/official-bans.json"
 global_audit_file = "configs/global-audit.jsonl"
 
 [world]
+dynamic_arena = true
 width = 3600.0
 height = 2600.0
 mode = "Ffa"

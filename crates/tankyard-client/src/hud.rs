@@ -395,6 +395,10 @@ pub struct Hud {
     pub invulnerable: bool,
     pub boss_index: usize,
     pub speed: f32,
+    pub local_simulation: bool,
+    pub sandbox_allowed: bool,
+    sandbox_level_pending: Option<u8>,
+    sandbox_level_at: f64,
     stat_visibility: f32,
     offered_class: String,
     ranking_tick: Option<(u64, usize)>,
@@ -411,6 +415,10 @@ impl Hud {
             invulnerable: false,
             boss_index: 0,
             speed: 1.0,
+            local_simulation: false,
+            sandbox_allowed: false,
+            sandbox_level_pending: None,
+            sandbox_level_at: 0.,
             stat_visibility: 0.0,
             offered_class: String::new(),
             ranking_tick: None,
@@ -504,8 +512,15 @@ impl Hud {
             center_label("Connecting…", w * 0.5, h * 0.5, 26.0 * s, CYAN);
             return actions;
         };
-        let modal = self.sandbox || !tank.alive || snapshot.match_state.finished;
         let sandbox_controls = snapshot.config.mode == Mode::Sandbox && !self.practice;
+        if !self.sandbox {
+            self.sandbox_level_pending = None;
+        }
+        if !sandbox_controls || !tank.alive || snapshot.match_state.finished {
+            self.sandbox = false;
+            self.sandbox_level_pending = None;
+        }
+        let modal = self.sandbox || !tank.alive || snapshot.match_state.finished;
         if !tank.alive {
             self.evolution = false;
             self.offered_class.clear();
@@ -654,7 +669,7 @@ impl Hud {
             );
             for (row, &index) in stat_order.iter().enumerate() {
                 let r = Rect::new(stats_x, stats_y + row as f32 * 26.0 * s, stat_w, 22.0 * s);
-                let hovered = contains(r) && !modal && tank.points > 0;
+                let hovered = contains(r) && !modal && !self.evolution && tank.points > 0;
                 if hovered {
                     tooltip = Some(index);
                 }
@@ -724,9 +739,8 @@ impl Hud {
             }
         }
         if let Some(index) = tooltip {
-            let x = (stats_x + stat_w + 10.0 * s).min(w - 274.0 * s);
-            let row = stat_order.iter().position(|&i| i == index).unwrap_or(0);
-            let y = (stats_y + row as f32 * 26.0 * s).min(h - 125.0 * s);
+            let x = stats_x;
+            let y = stats_y - 130. * s;
             panel(Rect::new(x, y, 264.0 * s, 112.0 * s));
             label(
                 hints[index].name,
@@ -753,7 +767,7 @@ impl Hud {
         }
         let leader_score = self.leaderboard(snapshot, local, settings, s);
         self.minimap(snapshot, local, settings, s, view);
-        if tank.alive {
+        if tank.alive && !self.sandbox {
             let xp_width = (w * 0.36).min(430.0 * s);
             let xp_x = (w - xp_width) * 0.5;
             let next = xp_for_level((tank.level + 1).min(tankyard_core::MAX_LEVEL));
@@ -912,7 +926,7 @@ impl Hud {
             self.evolution_overlay(tank, content, &mut actions, s);
         }
         if sandbox_controls && self.sandbox {
-            self.sandbox_overlay(content, &mut actions, s);
+            self.sandbox_overlay(tank, content, &mut actions, s);
         }
         if !tank.alive && !snapshot.match_state.finished {
             if let Some(watched) = snapshot
@@ -1043,6 +1057,16 @@ impl Hud {
         let sx = (width - 12.0 * s) / snapshot.config.width;
         let sy = (height - 12.0 * s) / snapshot.config.height;
         let point = |p: tankyard_core::V2| vec2(x + 6.0 * s + p.x * sx, y + 6.0 * s + p.y * sy);
+        let bounds = snapshot.config.bounds();
+        let edge = point(tankyard_core::V2::new(bounds.x, bounds.y));
+        draw_rectangle_lines(
+            edge.x,
+            edge.y,
+            bounds.w * sx,
+            bounds.h * sy,
+            1.5 * s,
+            alpha(CYAN, 0.8),
+        );
         let top = view.world(vec2(0.0, 0.0));
         let bottom = view.world(vec2(screen_width(), screen_height()));
         let a = point(tankyard_core::V2::new(
@@ -1197,49 +1221,70 @@ impl Hud {
             actions.push(HudAction::Encyclopedia);
         }
     }
-    fn sandbox_overlay(&mut self, content: &Content, actions: &mut Vec<HudAction>, s: f32) {
-        let s = s.min(screen_height() / 760.0).min(screen_width() / 500.0);
-        let width = 380.0 * s;
-        let x = (screen_width() - width) * 0.5;
-        let y = 65.0 * s;
-        let height = 650.0 * s;
-        panel(Rect::new(x, y, width, height));
-        label("Sandbox", x + 20.0 * s, y + 32.0 * s, 24.0 * s, CYAN);
-        label(
-            "SET LEVEL",
-            x + 20.0 * s,
-            y + 63.0 * s,
-            12.0 * s,
+    fn sandbox_overlay(
+        &mut self,
+        tank: &Tank,
+        content: &Content,
+        actions: &mut Vec<HudAction>,
+        s: f32,
+    ) {
+        let (panel_rect, s) = sandbox_layout(screen_width(), screen_height(), s);
+        let Rect { x, y, w: width, .. } = panel_rect;
+        panel(panel_rect);
+        label("Sandbox", x + 20. * s, y + 32. * s, 24. * s, CYAN);
+        right_label(
+            "PgUp / PgDn · Shift: 15",
+            x + width - 20. * s,
+            y + 30. * s,
+            10. * s,
             muted_color(),
         );
+        let interactive = set_interactive(false);
+        set_interactive(interactive && self.sandbox_allowed);
+        if self.sandbox_level_pending == Some(tank.level) {
+            self.sandbox_level_pending = None;
+        }
+        let mut level = f32::from(self.sandbox_level_pending.unwrap_or(tank.level));
+        if slider_value(
+            Rect::new(x + 20. * s, y + 53. * s, width - 40. * s, 48. * s),
+            "Level",
+            &mut level,
+            [1., f32::from(tankyard_core::MAX_LEVEL)],
+            1.,
+            s * 0.85,
+            |value| format!("{value:.0}"),
+        ) {
+            self.sandbox_level_pending = Some(level.round() as u8);
+        }
+        let step = (width - 40. * s) / tankyard_core::UPGRADE_LEVELS.len() as f32;
         for (index, level) in tankyard_core::UPGRADE_LEVELS.into_iter().enumerate() {
             if small_button(
                 Rect::new(
-                    x + 20.0 * s + index as f32 * 68.0 * s,
-                    y + 101.0 * s,
-                    60.0 * s,
-                    32.0 * s,
+                    x + 20. * s + index as f32 * step,
+                    y + 109. * s,
+                    step - 7. * s,
+                    28. * s,
                 ),
                 &level.to_string(),
-                s,
+                s * 0.85,
             ) {
-                actions.push(HudAction::SandboxLevel(level));
+                self.sandbox_level_pending = Some(level);
             }
         }
-        label(
-            "PgUp / PgDn · Shift: 15 levels",
-            x + 20.0 * s,
-            y + 87.0 * s,
-            11.0 * s,
-            muted_color(),
-        );
+        if let Some(level) = self.sandbox_level_pending
+            && get_time() - self.sandbox_level_at >= 0.11
+            && self.sandbox_allowed
+        {
+            self.sandbox_level_at = get_time();
+            actions.push(HudAction::SandboxLevel(level));
+        }
         let page_count = content.classes.len().div_ceil(6);
         self.sandbox_page = self.sandbox_page.min(page_count.saturating_sub(1));
         label(
             "Choose tank",
-            x + 20.0 * s,
-            y + 145.0 * s,
-            12.0 * s,
+            x + 20. * s,
+            y + 159. * s,
+            12. * s,
             muted_color(),
         );
         for (row, class) in content
@@ -1251,21 +1296,21 @@ impl Hud {
         {
             if button(
                 Rect::new(
-                    x + 20.0 * s,
-                    y + 159.0 * s + row as f32 * 37.0 * s,
-                    width - 40.0 * s,
-                    31.0 * s,
+                    x + 20. * s,
+                    y + 174. * s + row as f32 * 37. * s,
+                    width - 40. * s,
+                    31. * s,
                 ),
                 &class.name,
-                false,
-                true,
+                tank.class == class.id,
+                self.sandbox_allowed,
                 s * 0.75,
             ) {
                 actions.push(HudAction::SandboxClass(class.id.clone()));
             }
         }
         if small_button(
-            Rect::new(x + 20.0 * s, y + 390.0 * s, 65.0 * s, 30.0 * s),
+            Rect::new(x + 20. * s, y + 407. * s, 65. * s, 30. * s),
             "‹",
             s,
         ) {
@@ -1274,81 +1319,97 @@ impl Hud {
         center_label(
             &format!("{} / {}", self.sandbox_page + 1, page_count),
             x + width * 0.5,
-            y + 411.0 * s,
-            14.0 * s,
+            y + 428. * s,
+            14. * s,
             muted_color(),
         );
         if small_button(
-            Rect::new(x + width - 85.0 * s, y + 390.0 * s, 65.0 * s, 30.0 * s),
+            Rect::new(x + width - 85. * s, y + 407. * s, 65. * s, 30. * s),
             "›",
             s,
         ) {
             self.sandbox_page = (self.sandbox_page + 1).min(page_count.saturating_sub(1));
         }
         if toggle(
-            Rect::new(x + 20.0 * s, y + 437.0 * s, width - 40.0 * s, 30.0 * s),
+            Rect::new(x + 20. * s, y + 456. * s, width - 40. * s, 30. * s),
             "Invulnerability",
             &mut self.invulnerable,
             s,
         ) {
             actions.push(HudAction::Invulnerable(self.invulnerable));
         }
+        set_interactive(interactive && self.local_simulation);
+        let previous_speed = self.speed;
+        if slider_value(
+            Rect::new(x + 20. * s, y + 501. * s, width - 40. * s, 48. * s),
+            if self.local_simulation {
+                "Simulation speed"
+            } else {
+                "Server controls speed"
+            },
+            &mut self.speed,
+            [0.25, 2.],
+            0.25,
+            s * 0.85,
+            |value| format!("{value:.2}×"),
+        ) && self.speed != previous_speed
+        {
+            actions.push(HudAction::Speed(self.speed));
+        }
+        set_interactive(interactive && self.sandbox_allowed);
         if small_button(
-            Rect::new(x + 20.0 * s, y + 480.0 * s, 155.0 * s, 31.0 * s),
-            "Add AI tank (host)",
-            s * 0.9,
+            Rect::new(x + 20. * s, y + 563. * s, 180. * s, 31. * s),
+            "Add AI tank",
+            s * 0.85,
         ) {
             actions.push(HudAction::Bot);
         }
+        set_interactive(interactive && self.local_simulation);
         if small_button(
-            Rect::new(x + 190.0 * s, y + 480.0 * s, 170.0 * s, 31.0 * s),
-            &format!("Speed {:.1}× (local)", self.speed),
-            s * 0.9,
+            Rect::new(x + 220. * s, y + 563. * s, 180. * s, 31. * s),
+            "Reset speed",
+            s * 0.85,
         ) {
-            self.speed = if self.speed < 1.0 {
-                1.0
-            } else if self.speed < 2.0 {
-                2.0
-            } else {
-                0.5
-            };
-            actions.push(HudAction::Speed(self.speed));
+            self.speed = 1.;
+            actions.push(HudAction::Speed(1.));
         }
-        let bosses = [
-            BossKind::Sentinel,
-            BossKind::Prism,
-            BossKind::Foundry,
-            BossKind::Tempest,
-            BossKind::Bastion,
-            BossKind::Eclipse,
-        ];
+        set_interactive(interactive && self.sandbox_allowed);
+        let bosses = BossKind::ALL;
         if small_button(
-            Rect::new(x + 20.0 * s, y + 529.0 * s, 210.0 * s, 31.0 * s),
-            &format!("Boss: {:?}", bosses[self.boss_index]),
-            s * 0.9,
+            Rect::new(x + 20. * s, y + 611. * s, 240. * s, 31. * s),
+            bosses[self.boss_index].name(),
+            s * 0.8,
         ) {
-            self.boss_index = (self.boss_index + 1) % 6;
+            self.boss_index = (self.boss_index + 1) % bosses.len();
         }
         if small_button(
-            Rect::new(x + 242.0 * s, y + 529.0 * s, 118.0 * s, 31.0 * s),
+            Rect::new(x + 280. * s, y + 611. * s, 120. * s, 31. * s),
             "Spawn boss",
-            s * 0.9,
+            s * 0.85,
         ) {
             actions.push(HudAction::Boss(bosses[self.boss_index]));
         }
         label(
-            "Online tools require server sandbox permission.",
-            x + 20.0 * s,
-            y + 592.0 * s,
-            12.0 * s,
+            if self.local_simulation {
+                "Speed changes affect this offline session."
+            } else if self.sandbox_allowed {
+                "Level and spawning changes are applied by the server."
+            } else {
+                "Sandbox tools are disabled by this server."
+            },
+            x + 20. * s,
+            y + 674. * s,
+            11. * s,
             muted_color(),
         );
+        set_interactive(interactive);
         if small_button(
-            Rect::new(x + 20.0 * s, y + 609.0 * s, width - 40.0 * s, 27.0 * s),
+            Rect::new(x + 20. * s, y + 694. * s, width - 40. * s, 27. * s),
             "Close [T]",
-            s * 0.9,
+            s * 0.85,
         ) {
             self.sandbox = false;
+            self.sandbox_level_pending = None;
         }
     }
     fn death(&self, tank: &Tank, mode: Mode, actions: &mut Vec<HudAction>, s: f32) {
@@ -1482,6 +1543,23 @@ impl Hud {
         }
     }
 }
+pub(crate) fn boss_banner_layout(width: f32, s: f32) -> Rect {
+    let left = 402. * s;
+    let right = width - 402. * s;
+    let available = (right - left).max(1.);
+    let w = (600. * s).min(available);
+    Rect::new((left + right - w) * 0.5, 112. * s, w, 62. * s)
+}
+fn sandbox_layout(width: f32, height: f32, scale: f32) -> (Rect, f32) {
+    let s = scale.min(height / 1000.).min(width / 640.);
+    let w = 420. * s;
+    let h = 744. * s;
+    (
+        Rect::new((width - w) * 0.5, (height - h) * 0.5 + 96. * s, w, h),
+        s,
+    )
+}
+
 fn evolution_cards(count: usize, width: f32, height: f32, s: f32) -> Vec<Rect> {
     if count == 0 {
         return Vec::new();
@@ -1506,6 +1584,42 @@ fn evolution_cards(count: usize, width: f32, height: f32, s: f32) -> Vec<Rect> {
 mod tests {
     use super::*;
     use tankyard_core::{World, WorldConfig};
+
+    #[test]
+    fn sandbox_and_boss_panels_fit_between_other_hud_regions_at_all_supported_scales() {
+        for (width, height) in [
+            (800_f32, 600_f32),
+            (1024., 768.),
+            (1280., 800.),
+            (1920., 1080.),
+            (2560., 1440.),
+            (3440., 1440.),
+            (800., 1200.),
+        ] {
+            for scale in [0.8, 1., 1.4] {
+                let s = ((width / 1280.).min(height / 800.) * scale)
+                    .min((width - 24.) / 1280.)
+                    .min((height - 24.) / 800.);
+                let (sandbox, _) = sandbox_layout(width, height, s);
+                let boss = boss_banner_layout(width, s);
+                assert!(
+                    sandbox.x >= 0.
+                        && sandbox.y >= 0.
+                        && sandbox.x + sandbox.w <= width
+                        && sandbox.y + sandbox.h <= height - 16.
+                );
+                assert!(
+                    sandbox.y >= boss.y + boss.h + 4. * s,
+                    "{width}x{height} at {scale}"
+                );
+                assert!((boss.x + boss.w * 0.5 - width * 0.5).abs() < 0.001);
+                assert!(boss.x >= 380. * s + 12. * s);
+                assert!(boss.x + boss.w <= width - 242. * s - 12. * s);
+                assert!(sandbox.x >= (22. + 246.) * s + 8. * s);
+                assert!(sandbox.x + sandbox.w <= width - 380. * s - 8. * s);
+            }
+        }
+    }
 
     #[test]
     fn skill_panel_follows_earned_points_and_hides_after_spending() {

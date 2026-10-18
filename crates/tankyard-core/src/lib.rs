@@ -1,5 +1,7 @@
 //! Server authoritative fixed-step simulation, with no rendering dependencies.
 mod arena;
+mod arena_size;
+mod bosses;
 #[cfg(test)]
 mod combat_regressions;
 mod drones;

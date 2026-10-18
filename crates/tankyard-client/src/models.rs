@@ -8,6 +8,9 @@ use tankyard_content::Content;
 #[derive(Parser)]
 #[command(about = "Export a tank model sheet using the native game's vector geometry")]
 struct Args {
+    /// Export all boss models at their actual relative sizes.
+    #[arg(long)]
+    bosses: bool,
     #[arg(long, default_value = "artifacts/models/tanks.svg")]
     output: PathBuf,
     #[arg(long)]
@@ -25,6 +28,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     if !args.aim.is_finite() || !args.time.is_finite() || !(1..=16).contains(&args.columns) {
         return Err("Use finite aim/time and 1 to 16 columns.".into());
+    }
+    if args.bosses {
+        return export_bosses(&args);
     }
     let content = if let Some(path) = args.content {
         Content::from_json(&std::fs::read_to_string(path)?)?
@@ -124,6 +130,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "Exported {} tanks to {}",
         classes.len(),
+        args.output.display()
+    );
+    Ok(())
+}
+fn export_bosses(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    use tankyard_core::BossKind;
+    let columns = args.columns.min(4);
+    let width = columns * 360;
+    let height = BossKind::ALL.len().div_ceil(columns) * 320;
+    let mut svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\"><rect width=\"100%\" height=\"100%\" fill=\"#cdcdcd\"/>"
+    );
+    for (index, kind) in BossKind::ALL.into_iter().enumerate() {
+        let x = (index % columns) as f32 * 360. + 180.;
+        let y = (index / columns) as f32 * 320. + 145.;
+        tankyard_client::boss_model::boss_model_geometry(
+            kind,
+            vec2(x, y),
+            kind.radius() * 0.9,
+            args.aim,
+            args.time,
+            1,
+            None,
+            &mut |primitive| write_primitive(&mut svg, primitive),
+        );
+        writeln!(
+            svg,
+            "<text x=\"{x}\" y=\"{}\" text-anchor=\"middle\" font-family=\"DejaVu Sans,sans-serif\" font-size=\"15\" font-weight=\"bold\" fill=\"#404040\">{}</text>",
+            y + 150.,
+            kind.name()
+        )?;
+    }
+    svg.push_str("</svg>");
+    if let Some(parent) = args.output.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&args.output, svg)?;
+    println!(
+        "Exported {} bosses to {}",
+        BossKind::ALL.len(),
         args.output.display()
     );
     Ok(())

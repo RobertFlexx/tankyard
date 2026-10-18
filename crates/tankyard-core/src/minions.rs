@@ -138,10 +138,7 @@ impl World {
         let origin = p.pos + direction * (p.radius * MinionGun::BARREL_LENGTH);
         let radius = (p.radius * 0.34).clamp(2.5, 5.0);
         // Muzzle clipping through solid walls is bullshit. No magic bullets.
-        if origin.x < radius
-            || origin.y < radius
-            || origin.x > self.config.width - radius
-            || origin.y > self.config.height - radius
+        if !self.config.bounds().contains_circle(origin, radius)
             || self.walls.iter().any(|&wall| {
                 sweep_rect(p.pos, origin, radius, wall).is_some()
                     || sweep_rect(p.pos, goal, 0.5, wall).is_some()

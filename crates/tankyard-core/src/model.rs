@@ -80,6 +80,11 @@ pub struct WorldConfig {
     pub mode_name: Option<String>,
     pub width: f32,
     pub height: f32,
+    #[serde(default = "enabled")]
+    pub dynamic_arena: bool,
+    /// Authoritative animated playable bounds inside the configured map.
+    #[serde(default = "unit_scale")]
+    pub arena_scale: f32,
     pub mode: Mode,
     pub seed: u64,
     pub target_count: usize,
@@ -99,6 +104,8 @@ impl Default for WorldConfig {
             mode_name: None,
             width: 3600.,
             height: 2600.,
+            dynamic_arena: true,
+            arena_scale: 1.,
             mode: Mode::Ffa,
             seed: 42,
             target_count: 180,
@@ -110,6 +117,34 @@ impl Default for WorldConfig {
             lives: 1,
             map: "open".into(),
         }
+    }
+}
+fn enabled() -> bool {
+    true
+}
+fn unit_scale() -> f32 {
+    1.
+}
+impl WorldConfig {
+    pub fn bounds(&self) -> Rect {
+        let scale = if self.arena_scale.is_finite() {
+            self.arena_scale.clamp(0.5, 1.)
+        } else {
+            1.
+        };
+        Rect {
+            x: self.width * (1. - scale) * 0.5,
+            y: self.height * (1. - scale) * 0.5,
+            w: self.width * scale,
+            h: self.height * scale,
+        }
+    }
+    pub fn arena_point(&self, point: V2) -> V2 {
+        let bounds = self.bounds();
+        V2::new(
+            bounds.x + point.x / self.width * bounds.w,
+            bounds.y + point.y / self.height * bounds.h,
+        )
     }
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -396,6 +431,72 @@ pub enum BossKind {
     Tempest,
     Bastion,
     Eclipse,
+    Guardian,
+    Summoner,
+    Defender,
+    FallenOverlord,
+    FallenBooster,
+}
+impl BossKind {
+    pub const ALL: [Self; 11] = [
+        Self::Sentinel,
+        Self::Prism,
+        Self::Foundry,
+        Self::Tempest,
+        Self::Bastion,
+        Self::Eclipse,
+        Self::Guardian,
+        Self::Summoner,
+        Self::Defender,
+        Self::FallenOverlord,
+        Self::FallenBooster,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Sentinel => "Sentinel",
+            Self::Prism => "Prism",
+            Self::Foundry => "Foundry",
+            Self::Tempest => "Tempest",
+            Self::Bastion => "Bastion",
+            Self::Eclipse => "Eclipse",
+            Self::Guardian => "Guardian of the Pentagons",
+            Self::Summoner => "Summoner",
+            Self::Defender => "Defender",
+            Self::FallenOverlord => "Fallen Overlord",
+            Self::FallenBooster => "Fallen Booster",
+        }
+    }
+    pub fn radius(self) -> f32 {
+        match self {
+            Self::Guardian => 102.,
+            Self::Summoner => 96.,
+            Self::Defender => 106.,
+            Self::FallenOverlord => 88.,
+            Self::FallenBooster => 82.,
+            Self::Foundry | Self::Bastion => 100.,
+            Self::Tempest => 78.,
+            _ => 90.,
+        }
+    }
+    pub fn drone_limit(self) -> usize {
+        match self {
+            Self::Guardian => 24,
+            Self::Summoner => 28,
+            Self::FallenOverlord => 16,
+            Self::Foundry => 12,
+            _ => 0,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BossTactic {
+    #[default]
+    Patrol,
+    Advance,
+    Orbit,
+    Retreat,
+    Windup,
+    Charge,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Boss {
@@ -411,6 +512,12 @@ pub struct Boss {
     pub aim: f32,
     pub team: u8,
     pub mothership: bool,
+    pub target: EntityId,
+    pub goal: V2,
+    pub tactic: BossTactic,
+    pub tactic_time: f32,
+    pub last_attacker: EntityId,
+    pub arrival: f32,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Objective {

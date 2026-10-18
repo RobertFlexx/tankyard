@@ -1,3 +1,13 @@
+# v0.2.15 checks (2026-10-18)
+
+323 Rust tests and eight installer tests pass on Linux, including real UDP/WebSocket integration tests. Formatting, Clippy with warnings denied, workflow validation, all 102 class profiles, both bundled mods, and the compatible Linux workspace release build pass. Coverage includes all eleven bosses, aggregate spawn scheduling, capped swarms, arrival grace, adaptive borders, wall pinning, deployed drone upgrades, neural tactical choices, friendship/betrayal, stable parry mistakes, Opus decoding/loss recovery, and alert expiry.
+
+Native GUI checks use virtual audio devices and a 1920×1080 virtual display. Captures in `artifacts/boss-review` and `artifacts/ui-polish-review` cover alarm/voice playback, boss arrivals and banner expiry, smooth arena resizing, monitor resolution syncing, Sandbox level slider dragging outside the track, selected levels, open chat with Sandbox, both themes, and small/large display layouts. Layout tests cover 800×600 through 3440×1440 and a portrait viewport at 80%–140% interface scale. Full-band voice hardware/headset conversations and non-Linux monitor behavior remain manual platform checks.
+
+The compatible release imports glibc 2.30; its codec is statically bundled. A synthetic release workload with 64 participants, 24 bots, about 3000 projectiles, and 932 shapes measured simulation p99 1.21 ms, AI p99 0.12 ms, and snapshot p99 0.23 ms on an i7-9700. These are local headless measurements, not internet latency or rendering guarantees. The previous network-emulator test's send-counter race is fixed by joining the relay before checking final statistics.
+
+Clients and servers must update together for protocol 13. The tagged Release workflow validates source and builds Linux x86-64/ARM64, macOS universal, and Windows x86-64 packages before publishing.
+
 # Checks
 
 **0.2.14 development checks (2026-10-18):** All 309 Rust tests and eight installer tests pass on Linux, including real UDP/WebSocket integration tests. Formatting, Clippy with warnings denied, all 102 classes, both bundled mods, and the compatible Linux workspace release build pass. New coverage includes physical swarm capture/merging, cursor and automatic drone control, tier progression, voice codec/resampling, bounded playback, distance routing, replay rejection, moderator mutes, and spectator interest returning correctly on respawn. Clients and servers must update together for protocol 12.

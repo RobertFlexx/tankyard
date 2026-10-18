@@ -13,7 +13,7 @@ use tankyard_core::{Mode, WorldConfig};
 // of the button hitboxes, even when the whole menu gets scaled down.
 const DISPLAY_RESOLUTION_LABEL: f32 = 19.0;
 const DISPLAY_RESOLUTION_ROW: f32 = 30.0;
-const DISPLAY_RESOLUTION_STEP: f32 = 39.0;
+const DISPLAY_RESOLUTION_STEP: f32 = 33.0;
 const DISPLAY_FRAME_LABEL: f32 = 215.0;
 const DISPLAY_FRAME_ROW: f32 = 226.0;
 const DISPLAY_AA_LABEL: f32 = 287.0;
@@ -1321,6 +1321,20 @@ impl Menu {
                     13.0 * s,
                     muted_color(),
                 );
+                let native_title = crate::native_resolution::current().map_or_else(
+                    || "Native (monitor resolution)".to_owned(),
+                    |(width, height)| format!("Native · {width} × {height}"),
+                );
+                if button(
+                    Rect::new(rx, by + DISPLAY_RESOLUTION_ROW * s, col, 28. * s),
+                    &native_title,
+                    settings.native_resolution,
+                    true,
+                    s * 0.85,
+                ) {
+                    settings.native_resolution = true;
+                    let _ = settings.save();
+                }
                 for (index, (width, height)) in
                     [(1024, 768), (1280, 800), (1600, 900), (1920, 1080)]
                         .into_iter()
@@ -1329,16 +1343,20 @@ impl Menu {
                     if button(
                         Rect::new(
                             rx,
-                            by + (DISPLAY_RESOLUTION_ROW + index as f32 * DISPLAY_RESOLUTION_STEP)
+                            by + (DISPLAY_RESOLUTION_ROW
+                                + (index + 1) as f32 * DISPLAY_RESOLUTION_STEP)
                                 * s,
                             col,
-                            34.0 * s,
+                            28.0 * s,
                         ),
                         &format!("{width} × {height}"),
-                        settings.width == width && settings.height == height,
+                        !settings.native_resolution
+                            && settings.width == width
+                            && settings.height == height,
                         true,
                         s * 0.85,
                     ) {
+                        settings.native_resolution = false;
                         settings.width = width;
                         settings.height = height;
                         if !settings.fullscreen {
@@ -2118,7 +2136,7 @@ mod tests {
         let groups = [
             (
                 DISPLAY_RESOLUTION_LABEL - 13.0,
-                DISPLAY_RESOLUTION_ROW + 3.0 * DISPLAY_RESOLUTION_STEP + 34.0,
+                DISPLAY_RESOLUTION_ROW + 4.0 * DISPLAY_RESOLUTION_STEP + 28.0,
             ),
             (DISPLAY_FRAME_LABEL - 13.0, DISPLAY_FRAME_ROW + 34.0),
             (DISPLAY_AA_LABEL - 13.0, DISPLAY_AA_ROW + 33.0),

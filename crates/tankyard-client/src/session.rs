@@ -741,8 +741,7 @@ impl Session {
         }
         match &mut self.engine {
             Engine::Offline(local) => {
-                if local.world.bosses.len() < 12 {
-                    local.world.spawn_boss(kind);
+                if local.world.bosses.len() < 12 && local.world.spawn_boss(kind) != 0 {
                     self.events.extend(local.world.events.last().cloned());
                     self.display = Some(local.world.snapshot());
                 }

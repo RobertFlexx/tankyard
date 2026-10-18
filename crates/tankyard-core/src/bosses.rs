@@ -1,0 +1,670 @@
+use crate::physics::{circle_rect, sweep_rect};
+use crate::*;
+use tankyard_content::ProjectileKind;
+
+fn boss_clear_steering(pos: V2, desired: V2, radius: f32, bounds: Rect, walls: &[Rect]) -> V2 {
+    let mut best = V2::ZERO;
+    let mut best_score = f32::NEG_INFINITY;
+    for angle in [0., 0.35, -0.35, 0.7, -0.7, 1.2, -1.2, 1.8, -1.8, 2.6, -2.6] {
+        let velocity = desired.rotate(angle);
+        let next = pos + velocity * 0.75;
+        if !bounds.contains_circle(next, radius + 8.)
+            || walls
+                .iter()
+                .any(|&w| sweep_rect(pos, next, radius + 4., w).is_some())
+        {
+            continue;
+        }
+        let border = (next.x - bounds.x)
+            .min(next.y - bounds.y)
+            .min(bounds.x + bounds.w - next.x)
+            .min(bounds.y + bounds.h - next.y);
+        let score =
+            velocity.normalized().dot(desired.normalized()) + (border / 300.).min(1.) * 0.25;
+        if score > best_score {
+            best = velocity;
+            best_score = score;
+        }
+    }
+    best
+}
+
+impl World {
+    pub(crate) fn random_boss_event(&mut self) {
+        if self.tick < self.boss_roll_at {
+            return;
+        }
+        self.boss_roll_at = self.tick.saturating_add(60);
+        if !matches!(
+            self.config.mode,
+            Mode::Ffa | Mode::TwoTeams | Mode::FourTeams | Mode::Maze | Mode::RandomEvents
+        ) {
+            return;
+        }
+        if !self.bosses.is_empty() {
+            self.boss_roll_at = self.tick.saturating_add(90 * 60);
+            return;
+        }
+        if !self.tanks.iter().any(|t| t.alive) {
+            return;
+        }
+        // One aggregate 0.25% roll per second, independent of simulation FPS.
+        if self.random() < 0.0025 {
+            let index = (self.random() * BossKind::ALL.len() as f32) as usize;
+            self.spawn_boss(BossKind::ALL[index.min(BossKind::ALL.len() - 1)]);
+        }
+    }
+
+    /// Returns zero if the map cannot accommodate the boss safely.
+    pub fn spawn_boss(&mut self, kind: BossKind) -> EntityId {
+        if self.bosses.len() >= 16 {
+            return 0;
+        }
+        let bounds = self.config.bounds();
+        let radius = kind.radius();
+        let mut best = None;
+        let mut safety = f32::NEG_INFINITY;
+        for attempt in 0..128 {
+            let pos = if attempt == 0 {
+                bounds.center()
+            } else {
+                V2::new(
+                    bounds.x + radius + 30. + self.random() * (bounds.w - 2. * radius - 60.),
+                    bounds.y + radius + 30. + self.random() * (bounds.h - 2. * radius - 60.),
+                )
+            };
+            if !self.position_clear(pos, radius + 25.)
+                || self
+                    .bosses
+                    .iter()
+                    .any(|b| b.pos.distance(pos) < b.radius + radius + 40.)
+            {
+                continue;
+            }
+            let nearest = self
+                .tanks
+                .iter()
+                .filter(|t| t.alive)
+                .map(|t| t.pos.distance(pos) - t.radius - radius)
+                .fold(1500., f32::min);
+            if nearest > safety {
+                safety = nearest;
+                best = Some(pos);
+            }
+            if safety > 700. {
+                break;
+            }
+        }
+        let Some(pos) = best else {
+            return 0;
+        };
+        // Never materialize a damaging hull on top of a participant.
+        if safety < 100. {
+            return 0;
+        }
+        let health = 1800. + f32::from(self.match_state.boss_wave.max(1)) * 350.;
+        let health = health * (1. + self.tanks.len().saturating_sub(4).min(16) as f32 * 0.045);
+        let id = self.id();
+        self.bosses.push(Boss {
+            id,
+            pos,
+            vel: V2::ZERO,
+            radius,
+            health,
+            max_health: health,
+            kind,
+            phase: 1,
+            timer: 2.,
+            aim: 0.,
+            team: 0,
+            mothership: false,
+            target: 0,
+            goal: pos,
+            tactic: BossTactic::Patrol,
+            tactic_time: 2.,
+            last_attacker: 0,
+            arrival: 2.,
+        });
+        self.event(EventKind::BossSpawn, pos, id, kind as u32, 0);
+        id
+    }
+    pub(crate) fn update_bosses(&mut self) {
+        let mut volleys = Vec::new();
+        for i in 0..self.bosses.len() {
+            let b = &self.bosses[i];
+            if b.health <= 0. {
+                continue;
+            }
+            let owned = self
+                .projectiles
+                .iter()
+                .filter(|p| {
+                    p.owner == b.id && p.kind.is_drone() && p.lifetime > 0. && p.penetration > 0.
+                })
+                .count();
+            let target = self
+                .tanks
+                .iter()
+                .filter(|t| {
+                    t.alive
+                        && t.health > 0.
+                        && self.hostile(b.team, t.team)
+                        && t.protection <= 0.
+                        && t.pos.distance(b.pos) < 1600.
+                        && (t.level >= 15
+                            || b.kind.drone_limit() == 0
+                            || t.id == b.last_attacker
+                            || t.pos.distance(b.pos) < 420.)
+                        && self
+                            .walls
+                            .iter()
+                            .all(|&w| sweep_rect(b.pos, t.pos, 5., w).is_none())
+                })
+                .min_by(|a, c| {
+                    let cost = |t: &Tank| {
+                        t.pos.distance(b.pos)
+                            * if t.id == b.target { 0.75 } else { 1. }
+                            * if t.id == b.last_attacker { 0.65 } else { 1. }
+                            * (0.85 + t.health / t.max_health.max(1.) * 0.15)
+                    };
+                    cost(a).total_cmp(&cost(c))
+                })
+                .map(|t| (t.id, t.pos, t.vel));
+            let bounds = self.config.bounds();
+            let b = &mut self.bosses[i];
+            b.arrival = (b.arrival - DT).max(0.);
+            b.phase = if b.health < b.max_health * 0.3 {
+                3
+            } else if b.health < b.max_health * 0.65 {
+                2
+            } else {
+                1
+            };
+            if let Some((id, position, _)) = target {
+                b.target = id;
+                b.goal = position;
+            } else if b.pos.distance(b.goal) < 130.
+                || !bounds.contains_circle(b.goal, b.radius + 60.)
+            {
+                b.target = 0;
+                let angle = self.tick as f32 * 0.003 + b.id as f32 * 1.618;
+                b.goal = bounds.clamp_circle(
+                    bounds.center() + V2::from_angle(angle) * (bounds.w.min(bounds.h) * 0.3),
+                    b.radius + 80.,
+                );
+            }
+            let to = b.goal - b.pos;
+            let velocity = target.map_or(V2::ZERO, |(_, _, v)| v);
+            let lead = (to.length() / 420.).clamp(0., 0.7);
+            if b.tactic != BossTactic::Windup && b.tactic != BossTactic::Charge {
+                let aim = (to + velocity * lead).angle();
+                let difference = (aim - b.aim + std::f32::consts::PI)
+                    .rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI;
+                b.aim += difference.clamp(-2.8 * DT, 2.8 * DT);
+            }
+            b.tactic_time = (b.tactic_time - DT).max(0.);
+            let speed = if b.mothership {
+                28.
+            } else {
+                match b.kind {
+                    BossKind::Tempest => 125.,
+                    BossKind::Eclipse => 95.,
+                    BossKind::FallenBooster => 195.,
+                    BossKind::Guardian => 90.,
+                    BossKind::Summoner => 45.,
+                    BossKind::FallenOverlord => 65.,
+                    BossKind::Foundry | BossKind::Bastion | BossKind::Defender => 32.,
+                    _ => 55.,
+                }
+            };
+            let preferred = match b.kind {
+                BossKind::FallenBooster => 0.,
+                BossKind::Guardian => 330.,
+                BossKind::Summoner | BossKind::FallenOverlord | BossKind::Foundry => 540.,
+                BossKind::Bastion | BossKind::Defender => 650.,
+                _ => 450.,
+            };
+            let depleted = b.kind.drone_limit() > 0 && owned < b.kind.drone_limit() / 3;
+            let mut desired = if target.is_none() {
+                b.tactic = BossTactic::Patrol;
+                to.normalized() * speed * 0.45
+            } else if b.tactic == BossTactic::Windup && b.tactic_time > 0. {
+                V2::ZERO
+            } else if b.tactic == BossTactic::Windup {
+                b.tactic = BossTactic::Charge;
+                b.tactic_time = 0.65;
+                V2::from_angle(b.aim) * speed * 2.2
+            } else if b.tactic == BossTactic::Charge && b.tactic_time > 0. {
+                V2::from_angle(b.aim) * speed * 2.2
+            } else if to.length() < preferred * if depleted || b.phase == 3 { 1.15 } else { 0.7 } {
+                b.tactic = BossTactic::Retreat;
+                to.normalized() * -speed
+            } else if to.length() > preferred + 130. {
+                b.tactic = BossTactic::Advance;
+                to.normalized() * speed
+            } else {
+                b.tactic = BossTactic::Orbit;
+                V2::new(-to.y, to.x).normalized()
+                    * speed
+                    * if b.id.is_multiple_of(2) { 0.8 } else { -0.8 }
+            };
+            // Read nearby incoming rounds, never inputs, and sidestep collisions.
+            let mut evasion = V2::ZERO;
+            for shot in self.projectiles.iter().filter(|p| {
+                p.owner != b.id
+                    && p.lifetime > 0.
+                    && p.penetration > 0.
+                    && (p.team == 0 || b.team == 0 || p.team != b.team)
+                    && p.pos.distance(b.pos) < 450.
+            }) {
+                let relative = shot.vel - b.vel;
+                let delta = b.pos - shot.pos;
+                let time = delta.dot(relative) / relative.length_squared().max(1.);
+                if (0.05..0.65).contains(&time)
+                    && (delta - relative * time).length() < b.radius + shot.radius + 18.
+                {
+                    let side = V2::new(-relative.y, relative.x).normalized();
+                    evasion += side * if delta.dot(side) < 0. { -1. } else { 1. };
+                }
+            }
+            if b.tactic != BossTactic::Charge {
+                desired += evasion.clamp_length(1.) * speed * 0.7;
+            }
+            desired = boss_clear_steering(b.pos, desired, b.radius, bounds, &self.walls);
+            if b.arrival > 0. {
+                desired = V2::ZERO;
+            }
+            b.vel = b.vel.lerp(desired, 1. - (-DT * 3.5).exp());
+            let next = b.pos + b.vel * DT;
+            if self
+                .walls
+                .iter()
+                .all(|&w| circle_rect(next, b.radius, w).is_none())
+            {
+                b.pos = bounds.clamp_circle(next, b.radius);
+            } else {
+                b.vel *= 0.6;
+            }
+            b.timer -= DT;
+            if b.timer > 0. || target.is_none() {
+                continue;
+            }
+            let mut spawned_drones = owned;
+            let mut emit = |angle: f32,
+                            kind: ProjectileKind,
+                            speed: f32,
+                            damage: f32,
+                            radius: f32,
+                            life: f32,
+                            pen: f32,
+                            bounces: u8| {
+                if kind.is_drone() {
+                    if spawned_drones >= b.kind.drone_limit() {
+                        return;
+                    }
+                    spawned_drones += 1;
+                }
+                let origin = b.pos + V2::from_angle(angle) * (b.radius + radius + 3.);
+                if !bounds.contains_circle(origin, radius)
+                    || self
+                        .walls
+                        .iter()
+                        .any(|&w| sweep_rect(b.pos, origin, radius, w).is_some())
+                {
+                    return;
+                }
+                volleys.push((
+                    b.id,
+                    b.team,
+                    origin,
+                    V2::from_angle(angle) * speed,
+                    kind,
+                    damage,
+                    radius,
+                    life,
+                    pen,
+                    bounces,
+                ));
+            };
+            match b.kind {
+                BossKind::Guardian => {
+                    for n in 0..4 {
+                        emit(
+                            b.aim + std::f32::consts::PI + (n as f32 - 1.5) * 0.18,
+                            ProjectileKind::Drone,
+                            255.,
+                            16.,
+                            15.,
+                            10.,
+                            3.5,
+                            0,
+                        );
+                    }
+                    b.timer = 0.65;
+                }
+                BossKind::Summoner => {
+                    for n in 0..4 {
+                        emit(
+                            b.aim + n as f32 * std::f32::consts::FRAC_PI_2,
+                            ProjectileKind::Drone,
+                            220.,
+                            20.,
+                            19.,
+                            11.,
+                            4.,
+                            0,
+                        );
+                    }
+                    b.timer = 0.6;
+                }
+                BossKind::FallenOverlord => {
+                    for n in 0..4 {
+                        emit(
+                            b.aim + n as f32 * std::f32::consts::FRAC_PI_2,
+                            ProjectileKind::Drone,
+                            290.,
+                            24.,
+                            17.,
+                            10.,
+                            5.,
+                            0,
+                        );
+                    }
+                    b.timer = 0.95;
+                }
+                BossKind::Defender => {
+                    for n in 0..3 {
+                        let angle =
+                            self.tick as f32 * DT * 0.35 + n as f32 * std::f32::consts::TAU / 3.;
+                        emit(angle, ProjectileKind::Trap, 180., 26., 18., 7., 3., 0);
+                        emit(
+                            b.aim + (n as f32 - 1.) * 0.1,
+                            ProjectileKind::Bullet,
+                            410.,
+                            17.,
+                            8.,
+                            2.5,
+                            1.5,
+                            0,
+                        );
+                    }
+                    b.timer = 0.85;
+                }
+                BossKind::FallenBooster => {
+                    emit(b.aim, ProjectileKind::Bullet, 460., 21., 10., 2., 1.8, 0);
+                    for angle in [-0.45_f32, -0.2, 0.2, 0.45] {
+                        emit(
+                            b.aim + std::f32::consts::PI + angle,
+                            ProjectileKind::Bullet,
+                            330.,
+                            12.,
+                            7.,
+                            1.6,
+                            1.,
+                            0,
+                        );
+                    }
+                    b.timer = 0.65;
+                }
+                BossKind::Sentinel => {
+                    for n in 0..(3 + b.phase as usize * 2) {
+                        let count = 3 + b.phase as usize * 2;
+                        emit(
+                            b.aim + (n as f32 - (count - 1) as f32 / 2.) * 0.16,
+                            ProjectileKind::Shell,
+                            330.,
+                            24.,
+                            12.,
+                            3.5,
+                            2.,
+                            0,
+                        );
+                    }
+                    b.timer = 1.15;
+                }
+                BossKind::Prism => {
+                    for n in 0..(6 + b.phase as usize * 2) {
+                        emit(
+                            self.tick as f32 * DT * 0.6
+                                + n as f32 * std::f32::consts::TAU
+                                    / (6 + b.phase as usize * 2) as f32,
+                            ProjectileKind::Piercing,
+                            410.,
+                            16.,
+                            7.,
+                            5.,
+                            2.,
+                            2,
+                        );
+                    }
+                    b.timer = 1.3;
+                }
+                BossKind::Foundry => {
+                    for n in 0..(2 + b.phase) {
+                        emit(
+                            b.aim + (n as f32 - 1.) * 0.7,
+                            ProjectileKind::Drone,
+                            200.,
+                            17.,
+                            12.,
+                            7.,
+                            4.,
+                            0,
+                        );
+                    }
+                    if b.phase > 1 {
+                        emit(b.aim, ProjectileKind::Turret, 80., 19., 17., 6., 4., 0);
+                    }
+                    b.timer = 1.8;
+                }
+                BossKind::Tempest => {
+                    for n in 0..(3 + b.phase) {
+                        emit(
+                            b.aim + (n as f32 - 1.) * 0.45,
+                            ProjectileKind::Homing,
+                            285.,
+                            14.,
+                            7.,
+                            4.,
+                            1.,
+                            0,
+                        );
+                    }
+                    if b.tactic != BossTactic::Windup && b.tactic != BossTactic::Charge {
+                        b.tactic = BossTactic::Windup;
+                        b.tactic_time = 0.7;
+                    }
+                    b.timer = 0.9;
+                }
+                BossKind::Bastion => {
+                    for n in 0..8 {
+                        emit(
+                            n as f32 * std::f32::consts::TAU / 8. + self.tick as f32 * 0.005,
+                            ProjectileKind::Mine,
+                            220.,
+                            32.,
+                            13.,
+                            8.,
+                            2.,
+                            0,
+                        );
+                    }
+                    emit(b.aim, ProjectileKind::Explosive, 300., 40., 15., 3., 1., 0);
+                    b.timer = 2.;
+                }
+                BossKind::Eclipse => {
+                    for n in 0..(10 + b.phase as usize * 4) {
+                        emit(
+                            b.aim
+                                + n as f32 * std::f32::consts::TAU
+                                    / (10 + b.phase as usize * 4) as f32,
+                            ProjectileKind::Fragment,
+                            370.,
+                            20.,
+                            9.,
+                            2.5,
+                            1.,
+                            0,
+                        );
+                    }
+                    b.timer = 2.2;
+                    if b.tactic != BossTactic::Windup && b.tactic != BossTactic::Charge {
+                        b.tactic = BossTactic::Windup;
+                        b.tactic_time = 0.9;
+                    }
+                }
+            }
+        }
+        let room = self
+            .config
+            .max_projectiles
+            .saturating_sub(self.projectiles.len());
+        for (owner, team, pos, vel, kind, damage, radius, life, pen, bounces) in
+            volleys.into_iter().take(room)
+        {
+            let mut p =
+                self.simple_projectile(owner, team, pos, vel, kind, damage, radius, life, pen);
+            p.ricochets = bounces;
+            self.projectiles.push(p);
+            self.event(EventKind::Shot, pos, owner, kind as u32, team);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tankyard_content::Content;
+
+    fn arena() -> World {
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                dynamic_arena: false,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        world.add_player("Pilot", false);
+        world.tanks[0].level = 45;
+        world
+    }
+
+    #[test]
+    fn random_events_roll_once_per_second_with_grace_and_a_single_boss_cooldown() {
+        let mut world = arena();
+        let rng = world.rng;
+        for tick in 1..3600 {
+            world.tick = tick;
+            world.random_boss_event();
+        }
+        assert!(world.bosses.is_empty());
+        assert_eq!(world.rng, rng);
+        let mut arrivals = 0;
+        for second in 60..10060 {
+            world.tick = second * 60;
+            world.random_boss_event();
+            arrivals += world.bosses.len();
+            world.bosses.clear();
+        }
+        assert!(
+            (10..=45).contains(&arrivals),
+            "0.25% aggregate roll produced {arrivals} arrivals in 10000 seconds"
+        );
+        assert_ne!(world.spawn_boss(BossKind::Summoner), 0);
+        world.tick += 60;
+        world.random_boss_event();
+        assert_eq!(world.bosses.len(), 1);
+        assert_eq!(world.boss_roll_at, world.tick + 90 * 60);
+    }
+
+    #[test]
+    fn every_drone_boss_has_a_bounded_swarm_that_pursues_players() {
+        for kind in BossKind::ALL
+            .into_iter()
+            .filter(|kind| kind.drone_limit() > 0)
+        {
+            let mut world = arena();
+            world.config.mode = Mode::Sandbox;
+            let player = world.tanks[0].id;
+            world.sandbox_invulnerability(player, true);
+            world.tanks[0].pos = V2::new(2450., 1300.);
+            let id = world.spawn_boss(kind);
+            assert_ne!(id, 0);
+            world.bosses[0].pos = V2::new(1600., 1300.);
+            for _ in 0..1200 {
+                world.step();
+                assert!(
+                    world
+                        .projectiles
+                        .iter()
+                        .filter(|p| p.owner == id && p.kind.is_drone())
+                        .count()
+                        <= kind.drone_limit()
+                );
+            }
+            assert!(
+                world
+                    .projectiles
+                    .iter()
+                    .any(|p| p.owner == id && p.kind.is_drone())
+            );
+            assert_eq!(world.bosses[0].target, player);
+        }
+    }
+
+    #[test]
+    fn boss_movement_and_spawn_respect_borders_walls_and_protected_players() {
+        let mut world = arena();
+        world.config.arena_scale = 0.7;
+        world.walls.push(Rect {
+            x: 1750.,
+            y: 600.,
+            w: 100.,
+            h: 1400.,
+        });
+        let id = world.spawn_boss(BossKind::FallenBooster);
+        assert_ne!(id, 0);
+        let boss = &world.bosses[0];
+        assert!(world.position_clear(boss.pos, boss.radius));
+        world.tanks[0].protection = 30.;
+        for _ in 0..120 {
+            world.update_bosses();
+        }
+        assert!(
+            !world
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::Shot))
+        );
+        assert!(
+            world
+                .config
+                .bounds()
+                .contains_circle(world.bosses[0].pos, world.bosses[0].radius)
+        );
+    }
+
+    #[test]
+    fn arrival_grace_separates_hulls_without_contact_damage_then_combat_resumes() {
+        let mut world = arena();
+        world.config.mode = Mode::Sandbox;
+        world.spawn_boss(BossKind::Sentinel);
+        world.tanks[0].pos = world.bosses[0].pos + V2::new(30., 0.);
+        let health = world.bosses[0].health;
+        world.step();
+        assert_eq!(world.bosses[0].health, health);
+        assert_eq!(world.tanks[0].health, world.tanks[0].max_health);
+        assert!(
+            world.tanks[0].pos.distance(world.bosses[0].pos)
+                >= world.tanks[0].radius + world.bosses[0].radius - 0.1
+        );
+        world.bosses[0].arrival = 0.;
+        world.tanks[0].pos = world.bosses[0].pos + V2::new(30., 0.);
+        world.step();
+        assert!(world.tanks[0].health < world.tanks[0].max_health);
+        assert!(world.bosses[0].health < health);
+    }
+}

@@ -17,3 +17,10 @@ Voice capture and playback use CPAL. The microphone and muted microphone icons
 are from [Lucide](https://lucide.dev), under the ISC license. Their unmodified
 SVG sources, rasterized HUD copies, and full license are in
 `assets/icons/lucide`; release archives also include `licenses/Lucide.txt`.
+
+Proximity voice uses Opus 1.6.1 through the `opus` and `opusic-sys` crates.
+The bundled codec's full BSD notice is in [licenses/Opus.txt](licenses/Opus.txt)
+and is included in release archives. The boss arrival alarm is original audio,
+reproducible with `scripts/generate_boss_alarm.py`, covered by this project's license.
+Boss models are original procedural geometry; behavior references are documented
+in [bosses and learning](docs/bosses-and-learning.md).
