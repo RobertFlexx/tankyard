@@ -27,3 +27,4 @@ directories.workspace = true
 clap.workspace = true
 log.workspace = true
 env_logger.workspace = true
+cpal = "0.16"

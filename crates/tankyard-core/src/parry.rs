@@ -15,17 +15,24 @@ impl World {
             || !ability.is_some_and(Ability::is_parry)
             || shot.lifetime <= 0.
             || shot.penetration <= 0.
-            || !matches!(
-                shot.kind,
-                ProjectileKind::Bullet
-                    | ProjectileKind::Shell
-                    | ProjectileKind::Piercing
-                    | ProjectileKind::Scatter
-                    | ProjectileKind::Homing
-                    | ProjectileKind::Explosive
-                    | ProjectileKind::Fragment
-            )
+            || shot.owner == tank.id
+            || !self.hostile(tank.team, shot.team)
         {
+            return false;
+        }
+        if shot.kind.is_drone() {
+            return self.parry_drone(projectile, defender, impact, ability.unwrap());
+        }
+        if !matches!(
+            shot.kind,
+            ProjectileKind::Bullet
+                | ProjectileKind::Shell
+                | ProjectileKind::Piercing
+                | ProjectileKind::Scatter
+                | ProjectileKind::Homing
+                | ProjectileKind::Explosive
+                | ProjectileKind::Fragment
+        ) {
             return false;
         }
         let (owner, team, pos) = (tank.id, tank.team, tank.pos);
@@ -60,7 +67,7 @@ impl World {
         shot.penetration = shot.penetration.clamp(1.0, 3.0);
         let (multiplier, minimum, maximum, healing) = match ability {
             Ability::CounterParry => (3., 55., 220., 0.12),
-            Ability::VolleyParry => (3.2, 60., 240., 0.12),
+            Ability::VolleyParry => (3.2, 60., 240., 0.15),
             _ => (2.6, 45., 200., 0.08),
         };
         // Only a successful reflection earns this damage and healing. The
@@ -102,6 +109,82 @@ impl World {
                 self.projectiles.push(echo);
             }
         }
+        self.event(EventKind::Parry, pos, owner, 0, team);
+        true
+    }
+
+    fn parry_drone(
+        &mut self,
+        projectile: usize,
+        defender: usize,
+        impact: V2,
+        ability: Ability,
+    ) -> bool {
+        let tank = &self.tanks[defender];
+        let (owner, team, pos) = (tank.id, tank.team, tank.pos);
+        let incoming = &self.projectiles[projectile];
+        if incoming.owner == 0 {
+            return false;
+        }
+        let target = incoming.owner;
+        let direction = self.homing_position(target, team, owner).map_or_else(
+            || incoming.vel.normalized() * -1.0,
+            |p| (p - impact).normalized(),
+        );
+        let (multiplier, damage_cap, health_cap, radius_cap, speed, lifetime, healing) =
+            match ability {
+                Ability::CounterParry => (3.0, 260., 9., 42., 560., 7., 0.12),
+                Ability::VolleyParry => (3.2, 320., 12., 48., 620., 8., 0.15),
+                _ => (2.6, 200., 6., 36., 500., 6., 0.08),
+            };
+        let damage = (incoming.damage * multiplier).clamp(45., damage_cap);
+        let health = incoming.penetration.clamp(2., health_cap);
+        let radius = (incoming.radius * 1.8).clamp(20., radius_cap);
+        // Re-parrying a returned swarm must not renew its remaining life.
+        let lifetime = if incoming.is_return_drone() {
+            incoming.lifetime.min(lifetime)
+        } else {
+            lifetime
+        };
+        let merged = self.projectiles.iter().position(|p| {
+            p.id != self.projectiles[projectile].id
+                && p.owner == owner
+                && p.is_return_drone()
+                && p.lifetime > 0.
+                && p.penetration > 0.
+        });
+        if let Some(index) = merged {
+            let drone = &mut self.projectiles[index];
+            drone.radius = (drone.radius * drone.radius + radius * radius)
+                .sqrt()
+                .min(radius_cap);
+            drone.damage = (drone.damage + damage).min(damage_cap);
+            drone.penetration = (drone.penetration + health).min(health_cap);
+            drone.cruise_speed = speed;
+            drone.lifetime = drone.lifetime.min(lifetime);
+            self.projectiles[projectile].lifetime = 0.;
+            self.projectiles[projectile].penetration = 0.;
+        } else {
+            let drone = &mut self.projectiles[projectile];
+            drone.owner = owner;
+            drone.team = team;
+            drone.kind = ProjectileKind::Drone;
+            drone.homing_target = target;
+            drone.radius = radius;
+            drone.damage = damage;
+            drone.penetration = health;
+            drone.cruise_speed = speed;
+            drone.vel = direction * speed;
+            drone.pos = impact + direction * (radius + 1.);
+            drone.previous = drone.pos;
+            drone.lifetime = lifetime;
+            drone.age = 0.;
+            drone.ricochets = 0;
+            drone.gun = None;
+            drone.hit.clear();
+        }
+        let tank = &mut self.tanks[defender];
+        tank.health = (tank.health + tank.max_health * healing).min(tank.max_health);
         self.event(EventKind::Parry, pos, owner, 0, team);
         true
     }
@@ -268,8 +351,6 @@ mod tests {
             "cooldown must prevent reopening the window"
         );
         for kind in [
-            ProjectileKind::Drone,
-            ProjectileKind::Minion,
             ProjectileKind::Mine,
             ProjectileKind::Barrier,
             ProjectileKind::Turret,
@@ -283,6 +364,131 @@ mod tests {
         world.projectiles.clear();
         shoot(&mut world, shooter, ProjectileKind::Bullet);
         assert!(!world.parry_projectile(0, 1, V2::new(770.0, 500.0)));
+    }
+
+    #[test]
+    fn parried_swarm_becomes_one_drone_and_switches_between_cursor_and_attacker() {
+        let (mut world, shooter, defender) = arena();
+        world.tanks[1].shield = 0.1;
+        for kind in [
+            ProjectileKind::Drone,
+            ProjectileKind::Minion,
+            ProjectileKind::Drone,
+        ] {
+            shoot(&mut world, shooter, kind);
+            let incoming = world.projectiles.len() - 1;
+            assert!(world.parry_projectile(incoming, 1, V2::new(770., 500.)));
+        }
+        let returns: Vec<_> = world
+            .projectiles
+            .iter()
+            .filter(|p| p.lifetime > 0. && p.penetration > 0. && p.owner == defender)
+            .collect();
+        assert_eq!(returns.len(), 1);
+        let drone = returns[0];
+        assert!(drone.is_return_drone());
+        assert_eq!(drone.homing_target, shooter);
+        assert!(drone.radius > 30.);
+        assert!(drone.gun.is_none());
+        let lifetime = drone.lifetime;
+        // A nearer bystander must not distract the automatic return.
+        world.add_player("Bystander", false);
+        world.tanks[2].pos = V2::new(790., 300.);
+        world.projectiles[0].vel = V2::ZERO;
+        world.steer_projectile(0);
+        assert!(world.projectiles[0].vel.x < 0.);
+        world.tanks[1].input.fire = true;
+        world.tanks[1].input.steer_return = true;
+        world.tanks[1].aim = std::f32::consts::FRAC_PI_2;
+        world.tanks[1].input.aim_distance = 500.;
+        world.projectiles[0].vel = V2::ZERO;
+        world.steer_projectile(0);
+        assert!(world.projectiles[0].vel.y > 0.);
+        // Releasing the mouse must return the drone even with auto-fire on.
+        world.tanks[1].input.steer_return = false;
+        world.projectiles[0].vel = V2::ZERO;
+        world.steer_projectile(0);
+        assert!(world.projectiles[0].vel.x < 0.);
+        assert_eq!(world.projectiles[0].lifetime, lifetime);
+        world.tanks[1].alive = false;
+        world.steer_projectile(0);
+        assert_eq!(world.projectiles[0].lifetime, 0.);
+    }
+
+    #[test]
+    fn each_parry_upgrade_has_a_stronger_merged_drone() {
+        let mut previous = (0., 0., 0., 0., 0.);
+        for class in ["riposte", "counterguard", "reprisal"] {
+            let (mut world, shooter, _) = arena();
+            world.tanks[1].class = class.into();
+            world.tanks[1].shield = 0.1;
+            for _ in 0..8 {
+                shoot(&mut world, shooter, ProjectileKind::Drone);
+                let index = world.projectiles.len() - 1;
+                assert!(world.parry_projectile(index, 1, V2::new(770., 500.)));
+            }
+            let drone = &world.projectiles[0];
+            assert!(drone.damage > previous.0);
+            assert!(drone.penetration > previous.1);
+            assert!(drone.radius > previous.2);
+            assert!(drone.cruise_speed > previous.3);
+            assert!(drone.lifetime > previous.4);
+            previous = (
+                drone.damage,
+                drone.penetration,
+                drone.radius,
+                drone.cruise_speed,
+                drone.lifetime,
+            );
+        }
+    }
+
+    #[test]
+    fn a_real_incoming_swarm_merges_before_the_captured_body_can_destroy_it() {
+        let (mut world, shooter, defender) = arena();
+        world.tanks[1].input.ability = true;
+        for index in 0..8 {
+            shoot(&mut world, shooter, ProjectileKind::Drone);
+            let drone = world.projectiles.last_mut().unwrap();
+            drone.pos = V2::new(738. - index as f32, 500.);
+            drone.previous = drone.pos;
+            drone.vel = V2::new(400., 0.);
+            drone.cruise_speed = 400.;
+            drone.damage = 10.;
+            drone.penetration = 2.;
+        }
+        let health = world.tanks[1].health;
+        for _ in 0..10 {
+            world.step();
+        }
+        assert_eq!(world.tanks[1].health, health);
+        let captured: Vec<_> = world
+            .projectiles
+            .iter()
+            .filter(|p| p.owner == defender && p.is_return_drone())
+            .collect();
+        assert_eq!(captured.len(), 1);
+        assert!(captured[0].radius >= 35.);
+        assert_eq!(captured[0].damage, 200.);
+        assert!(world.projectiles.iter().all(|p| p.owner != shooter));
+    }
+
+    #[test]
+    fn drone_collision_parries_without_damaging_defender_and_cannot_refresh_returns() {
+        let (mut world, shooter, defender) = arena();
+        let health = world.tanks[1].health;
+        shoot(&mut world, shooter, ProjectileKind::Drone);
+        world.tanks[1].input.ability = true;
+        world.step();
+        assert_eq!(world.tanks[1].health, health);
+        assert_eq!(world.projectiles.len(), 1);
+        assert_eq!(world.projectiles[0].owner, defender);
+        world.tanks[0].class = "reprisal".into();
+        world.tanks[0].shield = 0.1;
+        world.projectiles[0].lifetime = 0.4;
+        assert!(world.parry_projectile(0, 0, V2::new(520., 500.)));
+        assert!(world.projectiles[0].lifetime <= 0.4);
+        assert_eq!(world.projectiles[0].homing_target, defender);
     }
 
     #[test]

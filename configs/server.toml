@@ -2,6 +2,7 @@
 kind = "Community"
 server_id = "tankyard-local"
 chat_enabled = true
+voice_enabled = true
 access_file = "configs/access.json"
 audit_file = "configs/audit.jsonl"
 require_accounts = false

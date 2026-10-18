@@ -389,6 +389,7 @@ impl BotController {
                         difficulty.perception_radius()
                     },
                     fire: fire || deploy,
+                    steer_return: false,
                     alt_fire: retreat && class.barrels.iter().any(|b| b.projectile.is_drone()),
                     ability,
                 },
@@ -1117,9 +1118,7 @@ fn parry_opportunity(world: &World, tank: &Tank, seen: &[Seen]) -> Option<f32> {
                 || shot.penetration <= 0.
                 || matches!(
                     shot.kind,
-                    tankyard_content::ProjectileKind::Drone
-                        | tankyard_content::ProjectileKind::Minion
-                        | tankyard_content::ProjectileKind::Trap
+                    tankyard_content::ProjectileKind::Trap
                         | tankyard_content::ProjectileKind::Mine
                         | tankyard_content::ProjectileKind::Barrier
                         | tankyard_content::ProjectileKind::Turret
@@ -2044,6 +2043,10 @@ mod tests {
         assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_none());
         world.walls.clear();
         world.projectiles[0].kind = ProjectileKind::Drone;
+        assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_some());
+        world.projectiles[0].kind = ProjectileKind::Minion;
+        assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_some());
+        world.projectiles[0].kind = ProjectileKind::Trap;
         assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_none());
     }
 

@@ -11,7 +11,7 @@ cargo build --locked --release -p tankyard-server --bin tankyard-server
 
 The port is UDP 5000. Local players join `127.0.0.1:5000`; LAN players use the host's local address. Internet players need a reachable public address and a forwarded UDP port. IPv6 addresses use brackets, such as `[2001:db8::1234]:5000`.
 
-Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default. Protocol 8 is required on both clients and servers. Validated mod data is sent when joining, so clients do not need to install server packs.
+Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default. Protocol 12 is required on both clients and servers. Validated mod data is sent when joining, so clients do not need to install server packs.
 
 Inputs and menu commands are flushed before the client finishes each frame. Movement abilities use shared prediction rules. Remote movement can bridge a packet gap for up to 75 ms, constrained by walls and the arena boundary; longer gaps freeze until a new snapshot arrives. The server reuses snapshot storage between viewers and bounds catch-up work during overload.
 
@@ -23,7 +23,7 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 
 Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
 
-Current clients and servers use protocol 10. Level-55 tanks, the new parry abilities, and input history require matching versions. Update clients and servers together. The sample configs use 30 seconds of spawn protection; existing configs keep their chosen duration.
+Current clients and servers use protocol 12. Proximity voice, spectator controls, and captured drones require matching versions. Update clients and servers together. The sample configs use 30 seconds of spawn protection; existing configs keep their chosen duration.
 
 The process console is the host's administration interface:
 
@@ -48,6 +48,10 @@ Owners can nominate lower roles and choose Kick, Ban, Mute, Manage rooms, Manage
 Anonymous grants last for the connection. Persistent roles and account bans/mutes require a verified account, an installed account verifier, and authenticated transport. Names and client IDs never prove account ownership. Address bans work without accounts. Anonymous mutes end on disconnect. `access_file` stores verified grants and sanctions; `audit_file` stores bounded, rotating community logs. New operator files use private permissions on Unix and atomic replacement. Audit logging is optional; the sample config enables it.
 
 Community servers can enable chat and up to eight rooms. Rooms can restrict access by role, keep 32 messages, and limit sending to three initial messages followed by one every two seconds. Enter opens chat; Escape closes it. Chat keeps full messages with wrapped lines and mouse-wheel history. Rejoining a room does not duplicate messages. Official servers always reject chat and do not expose community role controls, even if their configuration enables chat.
+
+`voice_enabled = true` enables proximity voice independently of text chat on either server kind. Set it to false to disable voice. Voice uses the existing game connection and relay, so no extra ports or voice service are needed. The server supplies the sender identity and distance attenuation, and forwards audio only between living players within 900 units. Moderator mutes also block voice, including modified clients. Audio uses bounded 20 ms mono frames on a separate unreliable channel, capped at 50 frames per second with a small burst allowance; old rounds, duplicate sequences, oversized frames, and excess traffic are discarded. One continuously speaking player sends about 16 KiB/s before transport overhead, multiplied by the number of nearby listeners on server egress. Silence is gated at the client. Voice is not recorded or persisted by Tank Yard.
+
+Dead players can follow living tanks; team modes restrict targets to teammates. Spectator requests are checked against the current round and authoritative life/team state. Snapshots and effects follow the selected tank's location, and return to the player's own location on respawn.
 
 Set `kind = "Official"` for an official mode server. `configs/official.toml` is an accountless policy example. Accounts, matchmaking, the public server directory, and cloud provisioning remain separate services. Their integration points are `AccountVerifier`, `AccountContext`, `VerifiedAccount`, and `GlobalAuthority` in `tankyard_server::access`. Verification must check signed claims against the destination server and client ID, use cached revocation state, and avoid blocking network calls on the game thread. Override `AccountVerifier::is_current` to check cached revocations; active claims are rechecked once per second and expired or revoked sessions are removed.
 

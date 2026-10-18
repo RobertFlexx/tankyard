@@ -119,6 +119,9 @@ pub struct PlayerInput {
     pub aim: f32,
     pub aim_distance: f32,
     pub fire: bool,
+    /// Manual cursor control for a captured drone, independent of auto-fire.
+    #[serde(default)]
+    pub steer_return: bool,
     pub alt_fire: bool,
     pub ability: bool,
 }
@@ -130,6 +133,7 @@ impl Default for PlayerInput {
             aim: 0.,
             aim_distance: 500.,
             fire: false,
+            steer_return: false,
             alt_fire: false,
             ability: false,
         }
@@ -310,6 +314,12 @@ pub struct Projectile {
     pub gun: Option<MinionGun>,
     #[serde(default)]
     pub homing_target: EntityId,
+}
+impl Projectile {
+    /// Captured swarms use a drone body and remember the attacking owner.
+    pub fn is_return_drone(&self) -> bool {
+        self.kind == ProjectileKind::Drone && self.homing_target != 0
+    }
 }
 // Reuse owned buffers when refreshing native client snapshots.
 impl Clone for Projectile {

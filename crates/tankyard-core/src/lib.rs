@@ -14,12 +14,14 @@ pub mod physics;
 pub mod progression;
 #[cfg(test)]
 mod scenarios;
+mod spectating;
 mod weapons;
 pub mod world;
 pub use arena::PVE_WAVES;
 pub use math::*;
 pub use model::*;
 pub use progression::*;
+pub use spectating::*;
 pub use tankyard_content::{MAX_LEVEL, UPGRADE_LEVELS};
 pub use weapons::reload_progress;
 pub use world::*;

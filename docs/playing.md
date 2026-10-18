@@ -13,6 +13,9 @@ On your first launch, choose Dark or Light from two live arena previews. The cho
 | Auto-fire | E |
 | Ability | Space |
 | Recall drones | Right click |
+| Microphone mute / unmute | M or the bottom-right microphone button |
+| Previous / next spectator target | Left / Right or spectator buttons, while dead |
+| Open text chat | Enter while alive, or Slash, on community servers |
 | Spend a skill point | 1 through 8, or click the skill |
 | Fill a skill | Hold Shift while pressing its key or clicking |
 | Tank upgrades | Tab |
@@ -32,7 +35,9 @@ F1 shows your current bindings. Controls can be rebound in Settings, with a butt
 
 You spawn protected for up to 30 seconds. Moving, firing, or using an ability ends that protection immediately. The HUD shows the time left.
 
-Riposte upgrades from Destroyer at level 30. Press Space just before a shot hits to parry it. The window lasts 0.18 seconds, with a 4.2-second cooldown. A successful parry boosts returned damage and heals 8% of your maximum health. Counterguard unlocks at 45 with a 0.16-second window and a stronger return. Reprisal unlocks at 55 with a 0.14-second window and two extra return shots. Both upgrades heal 12% on success. Ordinary cannon damage stays at 18 throughout the branch. Its cannon reloads in 0.62 seconds. Returned shots home toward the shooter and count as your damage and kills. Drones, mines, and other placed weapons cannot be parried.
+Riposte upgrades from Destroyer at level 30. Press Space just before a shot hits to parry it. The window lasts 0.18 seconds, with a 4.2-second cooldown. A successful parry boosts returned damage and heals 8% of your maximum health. Counterguard unlocks at 45 with a 0.16-second window, a 4-second cooldown, a stronger return, and 12% healing. Reprisal unlocks at 55 with a 0.14-second window, a 3.8-second cooldown, two extra return shots, and 15% healing. Ordinary cannon damage stays at 18 throughout the branch. Its cannon reloads in 0.62 seconds. Returned shots home toward the shooter and count as your damage and kills. Mines, traps, and other placed defenses cannot be parried.
+
+Parry drones or Factory minions to capture them into a single large drone. Additional captures merge into it, increasing its size, contact damage, and durability up to a tier-dependent cap. Hold left click to steer it toward your cursor; let go to chase the original attacker, even while auto-fire is on. Right click recalls it. If the attacker is gone, it seeks nearby enemies. Riposte's capture lasts six seconds, Counterguard's seven, and Reprisal's eight; it expires when you die. Re-parrying cannot renew a returned drone's remaining lifetime. Captured minions lose their cannons.
 
 Drone tanks guide their drones toward the cursor while firing. Recall them before moving through a dangerous lane. Factory is a bit different: its six minions have actual cannons, settle around your cursor when commanded, and shoot nearby enemies or shapes on their own when you let go. The Factory keeps making replacements until it has six again, never more. Right-click still recalls the group, same as Tank Yard’s other drone classes. Watch where you park them: walls block their bullets, and they need room to get a clean shot.
 
@@ -80,6 +85,12 @@ Sight ranges are 420 / 500 / 560 / 620 units from Beginner through Expert, inclu
 Online arenas fill to six tanks by default: 1–5 players get 5–1 bots, and 6 or more get none. Bots return as players leave. Co-op wave enemies are counted separately. Empty servers pause the arena until someone joins. Offline games keep your chosen bot count.
 
 Spawn protection lasts up to 30 seconds while idle. Protected tanks pulse white; Reduced motion uses a steady tint. Moving, firing, or using an ability ends protection. Reconnect on the disconnect screen retries the same server.
+
+When you die, the camera follows a living tank. Use Left/Right or the Previous/Next buttons to switch. Team modes and Co-op PvE only allow watching teammates. The view automatically changes when the watched tank dies or leaves, and returns to your own tank after respawning. If nobody can be watched, the death screen stays open. Survival elimination and Co-op wave revives keep their normal rules.
+
+Proximity voice works online within 900 arena units and fades with distance. The microphone starts muted each connection and round. Press M or click the bottom-right microphone icon to toggle it; the icon lights green while sending speech. Muting the microphone closes its capture stream and still lets you hear nearby players. Settings → Audio has master and voice volume sliders. Capture and playback use your operating system's default devices. Use headphones to avoid feedback. Missing devices show an error on the microphone control without interrupting gameplay; click it again to retry. Voice stops during menus and while dead, and server mutes also apply to voice. `--no-audio` disables capture and playback entirely.
+
+On community servers, Enter opens chat while alive and Slash opens it even while spectating. Escape closes the chatbox; the last five wrapped lines stay readable on a shaded background. Chat moves to the right while upgrades or Sandbox tools are open. Scroll through older messages while the chatbox is open. Enter remains the respawn key outside the chatbox.
 
 ## Achievements
 

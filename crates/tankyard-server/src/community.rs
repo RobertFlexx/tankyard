@@ -162,17 +162,19 @@ impl UdpServer {
             } => {
                 self.ban_client(target.unwrap(), u64::from(minutes), &reason)?;
             }
-            ServerCommand::Mute { minutes, .. } => self
-                .access
-                .mute(
-                    target.unwrap(),
-                    if minutes == 0 {
-                        0
-                    } else {
-                        now.saturating_add(u64::from(minutes) * 60)
-                    },
-                )
-                .map_err(NetError)?,
+            ServerCommand::Mute { minutes, .. } => {
+                self.access
+                    .mute(
+                        target.unwrap(),
+                        if minutes == 0 {
+                            0
+                        } else {
+                            now.saturating_add(u64::from(minutes) * 60)
+                        },
+                    )
+                    .map_err(NetError)?;
+                self.send_voice_status(target.unwrap());
+            }
             ServerCommand::Nominate {
                 role, permissions, ..
             } => {

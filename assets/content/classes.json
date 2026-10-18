@@ -9303,7 +9303,7 @@
     {
       "id": "riposte",
       "name": "Riposte",
-      "description": "Time your parry to return enemy shots as homing bullets.",
+      "description": "Return shots and merge parried drones. Hold fire to steer the captured swarm; release to counterattack.",
       "tier": 2,
       "min_level": 30,
       "parents": [
@@ -9351,14 +9351,14 @@
       "ability": "Parry",
       "ability_cooldown": 4.2,
       "passive_regen": 0,
-      "strengths": "Returns heavy shots and volleys.",
+      "strengths": "Returns heavy shots and merges captured drones into one controllable counter-drone.",
       "weaknesses": "Short parry window; modest cannon damage.",
       "ai_range": 360
     },
     {
       "id": "counterguard",
       "name": "Counterguard",
-      "description": "A tighter parry restores health and returns a stronger shot.",
+      "description": "A tighter parry restores more health and returns stronger shots and larger, faster captured swarms.",
       "tier": 3,
       "min_level": 45,
       "parents": [
@@ -9407,13 +9407,13 @@
       "ability_cooldown": 4.0,
       "passive_regen": 0,
       "strengths": "A successful parry heals and returns a heavy countershot.",
-      "weaknesses": "The timing window is short. Drones bypass the parry.",
+      "weaknesses": "The timing window is short. Placed defenses bypass the parry.",
       "ai_range": 360
     },
     {
       "id": "reprisal",
       "name": "Reprisal",
-      "description": "A perfect parry returns a three-shot counter volley.",
+      "description": "A perfect parry returns a three-shot volley or the strongest merged drone, and heals 15% health.",
       "tier": 4,
       "min_level": 55,
       "parents": [
@@ -9457,7 +9457,7 @@
         }
       ],
       "ability": "VolleyParry",
-      "ability_cooldown": 4.2,
+      "ability_cooldown": 3.8,
       "passive_regen": 0,
       "strengths": "A landed parry returns the shot and two smaller echoes.",
       "weaknesses": "A 0.14-second window leaves little room for error.",

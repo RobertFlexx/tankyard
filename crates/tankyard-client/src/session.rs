@@ -21,6 +21,8 @@ pub struct Session {
     pub practice: Option<tankyard_client::practice::Run>,
     pub engine: Engine,
     pub player: EntityId,
+    pub spectating: Option<EntityId>,
+    spectating_round: u32,
     pub display: Option<Snapshot>,
     pub failure: Option<String>,
     pub notice: Option<String>,
@@ -169,6 +171,8 @@ impl Session {
             practice: None,
             engine,
             player,
+            spectating: None,
+            spectating_round: 0,
             display,
             failure: None,
             notice: None,
@@ -192,6 +196,64 @@ impl Session {
     }
     pub fn offline_mode(&self) -> bool {
         matches!(self.engine, Engine::Offline(_))
+    }
+    pub fn sync_spectating(&mut self) {
+        let Some(snapshot) = &self.display else {
+            return;
+        };
+        if self.spectating_round != snapshot.match_state.round {
+            self.spectating = None;
+            self.spectating_round = snapshot.match_state.round;
+        }
+        let target = tankyard_core::spectator_target(
+            &snapshot.tanks,
+            self.player,
+            self.spectating,
+            snapshot.config.mode,
+        )
+        .map(|tank| tank.id);
+        self.set_spectating(target);
+    }
+    fn set_spectating(&mut self, target: Option<EntityId>) {
+        if target != self.spectating {
+            // Retry on the next frame if the reliable control queue is full.
+            if let Engine::Online { client, .. } = &mut self.engine
+                && target.is_some()
+                && !client.spectate(target)
+            {
+                return;
+            }
+            self.spectating = target;
+        }
+    }
+    pub fn cycle_spectating(&mut self, direction: i8) {
+        let Some(snapshot) = &self.display else {
+            return;
+        };
+        let Some(viewer) = snapshot.tanks.iter().find(|t| t.id == self.player) else {
+            return;
+        };
+        let mut candidates: Vec<_> = snapshot
+            .tanks
+            .iter()
+            .filter(|target| tankyard_core::can_spectate(viewer, target, snapshot.config.mode))
+            .map(|t| t.id)
+            .collect();
+        candidates.sort_unstable();
+        if candidates.is_empty() {
+            self.set_spectating(None);
+            return;
+        }
+        let index = candidates
+            .iter()
+            .position(|id| Some(*id) == self.spectating)
+            .unwrap_or(0);
+        let next = if direction < 0 {
+            (index + candidates.len() - 1) % candidates.len()
+        } else {
+            (index + 1) % candidates.len()
+        };
+        self.set_spectating(Some(candidates[next]));
     }
     pub fn flush_network(&mut self) {
         if let Engine::Online { client, .. } = &mut self.engine
@@ -1076,6 +1138,7 @@ mod tests {
         tank.input = PlayerInput {
             movement: V2::new(1.0, 0.0),
             fire: true,
+            steer_return: true,
             alt_fire: true,
             ability: true,
             ..Default::default()
@@ -1085,6 +1148,7 @@ mod tests {
         assert_eq!(input.aim, 1.75);
         assert_eq!(input.movement, V2::ZERO);
         assert!(!input.fire && !input.alt_fire && !input.ability);
+        assert!(!input.steer_return);
     }
 
     #[test]

@@ -17,6 +17,10 @@ pub(crate) struct Peer {
     pub last_sequence: Option<u32>,
     pub control_tokens: f32,
     pub input_tokens: f32,
+    pub voice_tokens: f32,
+    pub last_voice_sequence: Option<u32>,
+    pub voice_muted: bool,
+    pub spectating: Option<EntityId>,
     pub disconnect_at: Option<Duration>,
 }
 #[derive(Default, Clone, Debug)]
@@ -215,6 +219,7 @@ impl UdpServer {
             if let Some(peer) = self.peers.get_mut(&client) {
                 peer.control_tokens = (peer.control_tokens + elapsed.as_secs_f32() * 12.).min(24.);
                 peer.input_tokens = (peer.input_tokens + elapsed.as_secs_f32() * 120.).min(256.);
+                peer.voice_tokens = (peer.voice_tokens + elapsed.as_secs_f32() * 50.).min(8.);
             }
             self.receive_client(client);
         }
@@ -391,6 +396,10 @@ impl UdpServer {
                             last_sequence: None,
                             control_tokens: 24.,
                             input_tokens: 256.,
+                            voice_tokens: 8.,
+                            last_voice_sequence: None,
+                            voice_muted: false,
+                            spectating: None,
                             disconnect_at: None,
                         },
                     );
@@ -512,6 +521,85 @@ impl UdpServer {
                 peer.last_input_at = self.elapsed;
             }
         }
+        self.receive_voice(client);
+    }
+
+    fn receive_voice(&mut self, client: u64) {
+        for _ in 0..16 {
+            let Some(bytes) = self.server.receive_message(client, VOICE_CHANNEL) else {
+                break;
+            };
+            let Some(peer) = self.peers.get_mut(&client) else {
+                return;
+            };
+            if peer.voice_tokens < 1. {
+                self.metrics.rejected_packets += 1;
+                continue;
+            }
+            peer.voice_tokens -= 1.;
+            let Ok(frame) = decode_voice(&bytes) else {
+                self.metrics.rejected_packets += 1;
+                continue;
+            };
+            if !self.settings.voice_enabled
+                || peer.disconnect_at.is_some()
+                || self.session.world.match_state.finished
+                || frame.round != self.session.world.match_state.round
+                || peer
+                    .last_voice_sequence
+                    .is_some_and(|last| !sequence_newer(frame.sequence, last))
+            {
+                continue;
+            }
+            peer.last_voice_sequence = Some(frame.sequence);
+            let Some(player) = peer.entity else { continue };
+            if self.access.muted(client, unix_time().as_secs()) {
+                continue;
+            }
+            let Some(speaker) = self
+                .session
+                .world
+                .tanks
+                .iter()
+                .find(|t| t.id == player && t.alive && t.health > 0.)
+            else {
+                continue;
+            };
+            let position = speaker.pos;
+            // Voice position and sender identity come exclusively from the server.
+            // Dead players cannot relay scouting information to living players.
+            let recipients: Vec<_> = self
+                .peers
+                .iter()
+                .filter_map(|(&id, peer)| {
+                    if id == client || peer.disconnect_at.is_some() {
+                        return None;
+                    }
+                    let listener = self
+                        .session
+                        .world
+                        .tanks
+                        .iter()
+                        .find(|t| Some(t.id) == peer.entity && t.alive && t.health > 0.)?;
+                    let volume = (voice_gain(position.distance(listener.pos)) * 255.).round() as u8;
+                    (volume > 0).then_some((id, volume))
+                })
+                .collect();
+            for (recipient, volume) in recipients {
+                let packet = VoicePacket {
+                    player,
+                    volume,
+                    frame: frame.clone(),
+                };
+                if let Ok(bytes) = encode(&packet, MAX_VOICE_BYTES)
+                    && self
+                        .server
+                        .can_send_message(recipient, VOICE_CHANNEL, bytes.len())
+                {
+                    self.server.send_message(recipient, VOICE_CHANNEL, bytes);
+                }
+            }
+        }
     }
 
     fn take_token(&mut self, client: u64, control: bool) -> bool {
@@ -618,6 +706,24 @@ impl UdpServer {
         let permitted =
             self.settings.allow_sandbox && self.session.world.config.mode == Mode::Sandbox;
         let accepted = match message {
+            ClientControl::Spectate { round, target } => {
+                let tanks = &self.session.world.tanks;
+                let valid = round == self.session.world.match_state.round
+                    && tanks.iter().any(|t| t.id == player && !t.alive)
+                    && target.is_none_or(|requested| {
+                        tankyard_core::spectator_target(
+                            tanks,
+                            player,
+                            target,
+                            self.session.world.config.mode,
+                        )
+                        .is_some_and(|t| t.id == requested)
+                    });
+                if valid && let Some(peer) = self.peers.get_mut(&client) {
+                    peer.spectating = target;
+                }
+                valid
+            }
             ClientControl::Chat { room, text } => {
                 let result = self.player_chat(client, room, text);
                 self.community_result(client, result);
@@ -732,6 +838,20 @@ impl UdpServer {
                 permissions: grant.permissions,
             },
         );
+        self.send_voice_status(client);
+    }
+    pub(crate) fn send_voice_status(&mut self, client: u64) {
+        let muted = self.access.muted(client, unix_time().as_secs());
+        if let Some(peer) = self.peers.get_mut(&client) {
+            peer.voice_muted = muted;
+        }
+        self.send_control(
+            client,
+            &ServerControl::VoiceStatus {
+                enabled: self.settings.voice_enabled,
+                muted,
+            },
+        );
     }
     pub fn reload_mods(&mut self) -> Result<(), NetError> {
         let loaded = tankyard_mods::load(&self.settings.mods).map_err(NetError)?;
@@ -770,6 +890,19 @@ impl UdpServer {
         let now = unix_time().as_secs();
         if self.elapsed.as_secs() != self.accounts_checked_at {
             self.accounts_checked_at = self.elapsed.as_secs();
+            let changed_mutes: Vec<_> = self
+                .peers
+                .iter()
+                .filter_map(|(&id, peer)| {
+                    (peer.entity.is_some()
+                        && peer.disconnect_at.is_none()
+                        && peer.voice_muted != self.access.muted(id, now))
+                    .then_some(id)
+                })
+                .collect();
+            for id in changed_mutes {
+                self.send_voice_status(id);
+            }
             if let Some(verifier) = &self.account_verifier {
                 let revoked: Vec<_> = self
                     .access
@@ -854,7 +987,13 @@ impl UdpServer {
             else {
                 continue;
             };
-            let center = tank.pos;
+            let center = tankyard_core::spectator_target(
+                &self.session.world.tanks,
+                entity,
+                peer.spectating,
+                self.session.world.config.mode,
+            )
+            .map_or(tank.pos, |target| target.pos);
             let snapshot = &mut self.snapshot_buffer;
             self.session
                 .world
@@ -1052,6 +1191,8 @@ impl UdpServer {
             if let Some(peer) = self.peers.get_mut(&client) {
                 peer.entity = Some(player);
                 peer.last_sequence = None;
+                peer.spectating = None;
+                peer.last_voice_sequence = None;
             }
             self.welcome(client, player);
         }

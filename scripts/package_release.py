@@ -45,6 +45,7 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
             shutil.copytree(ROOT / "mods" / mod, payload / "mods" / mod)
         shutil.copytree(ROOT / "docs", payload / "docs")
         shutil.copy2(ROOT / "assets/fonts/LICENSE-DejaVu.txt", payload / "licenses/DejaVu.txt")
+        shutil.copy2(ROOT / "assets/icons/lucide/LICENSE", payload / "licenses/Lucide.txt")
         shutil.copy2(ROOT / "assets/tankyard.svg", payload)
         for icon in ("tankyard.png", "tankyard.ico", "tankyard.icns"):
             shutil.copy2(ROOT / "assets/icons" / icon, payload)
@@ -67,6 +68,7 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
                     "CFBundleVersion": version.removeprefix("v").split("-")[0],
                     "LSMinimumSystemVersion": "11.0",
                     "NSHighResolutionCapable": True,
+                    "NSMicrophoneUsageDescription": "Tank Yard uses your microphone for proximity voice chat when you unmute it.",
                 }, stream)
             subprocess.run(["codesign", "--force", "--sign", "-", str(app.parent)], check=True)
             subprocess.run(["codesign", "--verify", "--strict", str(app.parent)], check=True)

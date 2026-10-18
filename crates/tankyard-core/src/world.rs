@@ -358,6 +358,9 @@ impl World {
                 if p.owner != id || !p.kind.is_drone() {
                     return true;
                 }
+                if p.is_return_drone() {
+                    return class.ability.is_parry();
+                }
                 if !class
                     .barrels
                     .iter()
@@ -1392,7 +1395,26 @@ impl World {
                     continue;
                 }
                 let impact = start.lerp(end, time);
-                if let Body::Tank(defender) = body
+                let parrying = match body {
+                    Body::Tank(defender) => Some(defender),
+                    // The first captured body must not destroy the rest of a
+                    // swarm before it reaches the still-active parry. This
+                    // extension only applies beside the defending tank.
+                    Body::Deployable(j)
+                        if kind.is_drone() && self.projectiles[j].is_return_drone() =>
+                    {
+                        let guard = &self.projectiles[j];
+                        self.tanks.iter().position(|tank| {
+                            tank.id == guard.owner
+                                && tank.alive
+                                && tank.shield > 0.
+                                && tank.pos.distance(impact)
+                                    <= tank.radius + guard.radius + radius + 8.
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(defender) = parrying
                     && self.parry_projectile(i, defender, impact)
                 {
                     break;
@@ -1512,7 +1534,7 @@ impl World {
         self.projectiles.extend(spawned.into_iter().take(room));
         self.collision_hits = hits;
     }
-    fn steer_projectile(&mut self, i: usize) {
+    pub(crate) fn steer_projectile(&mut self, i: usize) {
         if self.projectiles[i].kind == ProjectileKind::Homing {
             self.steer_homing(i);
             return;
@@ -1523,9 +1545,19 @@ impl World {
         };
         if kind.is_drone() {
             let desired = if let Some(t) = self.tanks.iter().find(|t| t.id == owner && t.alive) {
-                if t.input.alt_fire {
+                let returning = self.projectiles[i].is_return_drone();
+                let commanded = if returning {
+                    t.input.steer_return
+                } else {
+                    t.input.fire
+                };
+                if returning && !commanded && !t.input.alt_fire {
+                    let target = self.projectiles[i].homing_target;
+                    self.homing_position(target, team, owner)
+                        .or_else(|| self.minion_target(pos, team, owner, 900.))
+                } else if t.input.alt_fire {
                     Some(t.pos + V2::from_angle(drone_phase(id)) * 90.)
-                } else if t.input.fire {
+                } else if commanded {
                     let cursor = t.pos + V2::from_angle(t.aim) * t.input.aim_distance.min(1600.);
                     if kind == ProjectileKind::Minion {
                         // Stable slots leave each minion room to aim and fire.

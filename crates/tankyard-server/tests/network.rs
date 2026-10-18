@@ -43,6 +43,220 @@ fn ready(server: &mut UdpServer, clients: &mut [&mut NetworkClient]) {
     panic!("localhost clients failed to become ready");
 }
 
+fn voice_frame(client: &NetworkClient, sequence: u32) -> tankyard_protocol::VoiceFrame {
+    tankyard_protocol::VoiceFrame {
+        round: client.player_round.unwrap(),
+        sequence,
+        samples: vec![
+            tankyard_protocol::encode_voice_sample(0.3);
+            tankyard_protocol::VOICE_FRAME_SAMPLES
+        ],
+    }
+}
+
+#[test]
+fn proximity_voice_routes_only_to_nearby_living_players_and_rejects_replays() {
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let address = server.address.to_string();
+    let mut speaker = NetworkClient::connect(&address, "Speaker", "").unwrap();
+    let mut near = NetworkClient::connect(&address, "Nearby", "").unwrap();
+    let mut far = NetworkClient::connect(&address, "Distant", "").unwrap();
+    let mut dead = NetworkClient::connect(&address, "Spectator", "").unwrap();
+    ready(
+        &mut server,
+        &mut [&mut speaker, &mut near, &mut far, &mut dead],
+    );
+    for (client, pos, alive) in [
+        (&speaker, V2::new(500., 600.), true),
+        (&near, V2::new(750., 600.), true),
+        (&far, V2::new(2400., 600.), true),
+        (&dead, V2::new(520., 600.), false),
+    ] {
+        let tank = server
+            .session
+            .world
+            .tanks
+            .iter_mut()
+            .find(|t| Some(t.id) == client.player_id)
+            .unwrap();
+        tank.pos = pos;
+        tank.alive = alive;
+    }
+    assert!(speaker.voice_enabled);
+    assert!(speaker.send_voice(voice_frame(&speaker, u32::MAX)));
+    pump(
+        &mut server,
+        &mut [&mut speaker, &mut near, &mut far, &mut dead],
+        8,
+    );
+    let packet = near
+        .voice_packets
+        .pop_front()
+        .expect("nearby player must hear the speaker");
+    assert_eq!(packet.player, speaker.player_id.unwrap());
+    assert!(packet.volume > 0 && packet.volume < 255);
+    assert!(
+        speaker.voice_packets.is_empty()
+            && far.voice_packets.is_empty()
+            && dead.voice_packets.is_empty()
+    );
+    assert!(speaker.send_voice(voice_frame(&speaker, u32::MAX)));
+    pump(&mut server, &mut [&mut speaker, &mut near], 4);
+    assert!(
+        near.voice_packets.is_empty(),
+        "duplicate frames must be discarded"
+    );
+    assert!(speaker.send_voice(voice_frame(&speaker, 0)));
+    pump(&mut server, &mut [&mut speaker, &mut near], 4);
+    assert_eq!(near.voice_packets.pop_front().unwrap().frame.sequence, 0);
+    server
+        .session
+        .world
+        .tanks
+        .iter_mut()
+        .find(|t| Some(t.id) == speaker.player_id)
+        .unwrap()
+        .alive = false;
+    assert!(speaker.send_voice(voice_frame(&speaker, 1)));
+    pump(&mut server, &mut [&mut speaker, &mut near], 4);
+    assert!(
+        near.voice_packets.is_empty(),
+        "spectators must not transmit to live players"
+    );
+}
+
+#[test]
+fn server_mute_and_voice_disable_are_enforced_even_if_a_client_bypasses_its_ui() {
+    use tankyard_protocol::ServerCommand;
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let address = server.address.to_string();
+    let mut owner = NetworkClient::connect(&address, "Owner", "").unwrap();
+    let mut speaker = NetworkClient::connect(&address, "Speaker", "").unwrap();
+    ready(&mut server, &mut [&mut owner, &mut speaker]);
+    for (index, tank) in server.session.world.tanks.iter_mut().enumerate() {
+        tank.pos = V2::new(500. + index as f32 * 90., 500.);
+    }
+    let reply = server.admin_command(&format!("owner-client {}", owner.client_id()));
+    assert!(!reply.message.starts_with("Error:"));
+    pump(&mut server, &mut [&mut owner, &mut speaker], 8);
+    assert!(owner.admin(ServerCommand::Mute {
+        player: speaker.player_id.unwrap(),
+        minutes: 1
+    }));
+    pump(&mut server, &mut [&mut owner, &mut speaker], 8);
+    assert!(speaker.voice_muted);
+    assert!(!speaker.send_voice(voice_frame(&speaker, 1)));
+    speaker.voice_muted = false;
+    assert!(speaker.send_voice(voice_frame(&speaker, 1)));
+    pump(&mut server, &mut [&mut owner, &mut speaker], 4);
+    assert!(owner.voice_packets.is_empty());
+    assert!(owner.admin(ServerCommand::Mute {
+        player: speaker.player_id.unwrap(),
+        minutes: 0
+    }));
+    pump(&mut server, &mut [&mut owner, &mut speaker], 8);
+    assert!(!speaker.voice_muted);
+    assert!(speaker.send_voice(voice_frame(&speaker, 2)));
+    pump(&mut server, &mut [&mut owner, &mut speaker], 4);
+    assert_eq!(owner.voice_packets.pop_front().unwrap().frame.sequence, 2);
+    server.settings.voice_enabled = false;
+    assert!(speaker.send_voice(voice_frame(&speaker, 3)));
+    pump(&mut server, &mut [&mut owner, &mut speaker], 4);
+    assert!(owner.voice_packets.is_empty());
+}
+
+#[test]
+fn spectator_interest_follows_the_watched_player_and_stops_on_respawn() {
+    let mut config = settings();
+    config.interest_radius = 400.;
+    let mut server = UdpServer::bind(config).unwrap();
+    let address = server.address.to_string();
+    let mut viewer = NetworkClient::connect(&address, "Viewer", "").unwrap();
+    let mut first = NetworkClient::connect(&address, "First", "").unwrap();
+    let mut second = NetworkClient::connect(&address, "Second", "").unwrap();
+    ready(&mut server, &mut [&mut viewer, &mut first, &mut second]);
+    let (viewer_id, first_id, second_id) = (
+        viewer.player_id.unwrap(),
+        first.player_id.unwrap(),
+        second.player_id.unwrap(),
+    );
+    for (id, pos) in [
+        (viewer_id, V2::new(400., 400.)),
+        (first_id, V2::new(1600., 1600.)),
+        (second_id, V2::new(3000., 2100.)),
+    ] {
+        server
+            .session
+            .world
+            .tanks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .unwrap()
+            .pos = pos;
+    }
+    let dead = server
+        .session
+        .world
+        .tanks
+        .iter_mut()
+        .find(|t| t.id == viewer_id)
+        .unwrap();
+    dead.alive = false;
+    dead.last_attacker = first_id;
+    assert!(server.session.world.sandbox_class(first_id, "anchor"));
+    assert!(server.session.world.sandbox_class(second_id, "anchor"));
+    assert!(first.send_input(PlayerInput {
+        sequence: 1,
+        fire: true,
+        ..Default::default()
+    }));
+    assert!(second.send_input(PlayerInput {
+        sequence: 1,
+        fire: true,
+        ..Default::default()
+    }));
+    assert!(viewer.spectate(Some(second_id)));
+    pump(&mut server, &mut [&mut viewer, &mut first, &mut second], 12);
+    let snapshot = viewer.snapshot.as_ref().unwrap();
+    assert!(snapshot.projectiles.iter().any(|p| p.owner == second_id));
+    assert!(snapshot.projectiles.iter().all(|p| p.owner != first_id));
+    // Removing the selected target must immediately restore an eligible view.
+    server
+        .session
+        .world
+        .tanks
+        .iter_mut()
+        .find(|t| t.id == second_id)
+        .unwrap()
+        .alive = false;
+    pump(&mut server, &mut [&mut viewer, &mut first, &mut second], 8);
+    assert!(
+        viewer
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .projectiles
+            .iter()
+            .any(|p| p.owner == first_id)
+    );
+    let tank = server
+        .session
+        .world
+        .tanks
+        .iter_mut()
+        .find(|t| t.id == viewer_id)
+        .unwrap();
+    tank.alive = true;
+    pump(&mut server, &mut [&mut viewer, &mut first, &mut second], 8);
+    assert!(
+        viewer.snapshot.as_ref().unwrap().projectiles.is_empty(),
+        "living players must receive their own camera interest again"
+    );
+    assert!(viewer.spectate(Some(first_id)));
+    pump(&mut server, &mut [&mut viewer, &mut first], 8);
+    assert!(viewer.snapshot.as_ref().unwrap().projectiles.is_empty());
+}
+
 #[test]
 fn websocket_disconnect_reaches_the_game_server_before_the_bridge_closes() {
     use std::net::TcpListener;
@@ -173,6 +387,7 @@ fn delayed_click_and_ability_taps_survive_input_coalescing() {
     assert!(client.send_input(PlayerInput {
         sequence: 1,
         fire: true,
+        steer_return: true,
         ability: true,
         ..Default::default()
     }));
@@ -190,6 +405,10 @@ fn delayed_click_and_ability_taps_survive_input_coalescing() {
         .find(|tank| Some(tank.id) == client.player_id)
         .unwrap();
     assert_eq!(tank.last_input, 2);
+    assert!(
+        !tank.input.steer_return,
+        "drone steering must follow the newest held-button state"
+    );
     assert!(
         tank.shot_count > 0,
         "a queued release must not swallow a short click"

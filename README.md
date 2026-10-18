@@ -17,7 +17,7 @@ cargo build --locked --release --workspace
 ./target/release/tankyard
 ```
 
-Linux needs a C linker and X11/OpenGL. On Debian or Ubuntu, install `build-essential libx11-dev libxi-dev libgl1-mesa-dev`.
+Linux needs a C linker, X11/OpenGL, and ALSA. On Debian or Ubuntu, install `build-essential libx11-dev libxi-dev libgl1-mesa-dev libasound2-dev`.
 
 For a Linux binary to share across distributions, use `scripts/build_linux_compatible.sh` with Zig installed. It targets glibc 2.31 and baseline x86-64 CPUs. The client uses the desktop's shared glibc and graphics drivers; static glibc causes a reproduced NVIDIA startup crash. See [Linux builds and startup diagnostics](docs/linux-builds.md).
 
@@ -28,6 +28,10 @@ Hold Shift with a skill key or click to fill that stat. While firing, drones fol
 Random Events adds timed arena modifiers. Co-op PvE pits your squad against ten waves of raiders and bosses, with revives between waves. Riposte, a level 30 Destroyer upgrade, parries shots into homing returns with Space. Spawn protection lasts up to 30 seconds and ends when you move or attack. In Sandbox, PgUp/PgDn changes your level; hold Shift for 15 levels.
 
 Tank upgrades unlock at levels 15, 30, 45, and 55. Riposte leads to Counterguard, then Reprisal. Their parry windows get tighter, with stronger returns and a small heal on success. Normal cannon damage stays the same. A bar below your tank shows when its next shot is ready. A quick click fires once when the gun is ready, while holding the button keeps firing at the weapon's reload rate. Eliminations show the opponent's name at the top of the screen.
+
+Parried drones and minions merge into one large drone. Hold left click to guide it toward the cursor, release to send it back at the attacker, and right-click to recall it. Each parry upgrade captures a stronger swarm. Reprisal also heals more and has a shorter ability cooldown.
+
+Online proximity voice fades with distance. Your microphone starts muted; press M or click the microphone icon at the bottom right to toggle it. Settings → Audio controls voice playback volume. Recent text chat stays visible outside the chatbox. After death, follow living tanks and use Left/Right or the spectator buttons to switch; team modes only show teammates. Enter still respawns when permitted. Clients and servers must update together to protocol 12.
 
 Your first launch shows both themes side by side. Pick Dark or Light; F9 changes it later.
 

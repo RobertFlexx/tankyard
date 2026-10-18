@@ -13,4 +13,7 @@ Macroquad retains its own bundled fallback font and upstream notices.
 Macroquad, Miniquad, Renet, renet_netcode, Serde, Postcard, Clap and the other
 Cargo dependencies retain their licenses. The project's MIT/Apache-2.0 license
 covers Tank Yard's source and does not replace dependency or font licenses.
-The client has no audio engine or audio assets.
+Voice capture and playback use CPAL. The microphone and muted microphone icons
+are from [Lucide](https://lucide.dev), under the ISC license. Their unmodified
+SVG sources, rasterized HUD copies, and full license are in
+`assets/icons/lucide`; release archives also include `licenses/Lucide.txt`.

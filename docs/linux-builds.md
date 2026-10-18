@@ -4,6 +4,8 @@ The 0.2.5 client keeps Rust dependencies and built-in assets in one executable a
 
 Build the release with Rust, Zig, and the locked Cargo dependencies available:
 
+Native voice uses ALSA. Install its development package (`libasound2-dev` on Debian/Ubuntu) to build the client; players need the shared `libasound.so.2` runtime. The headless server has no audio dependency. `--no-audio` disables device access while keeping gameplay available.
+
 ```sh
 scripts/build_linux_compatible.sh
 ./target/linux-compatible/x86_64-unknown-linux-gnu/release/tankyard --version
@@ -11,6 +13,8 @@ scripts/build_linux_compatible.sh
 ```
 
 The linker wrapper selects `x86_64-linux-gnu.2.31` using [Zig's versioned glibc targets](https://github.com/ziglang/zig/blob/master/lib/libc/glibc/README.md). It keeps its caches inside `target`. A native build with the host's current glibc may require newer symbols than the destination distribution provides.
+
+When linking ALSA, the wrapper permits unresolved references inside the build host's shared library: the destination loads its own `libasound.so.2`. Undefined symbols in the executable still fail linking. The release workflow runs `scripts/check_linux_abi.py` to reject executable imports newer than glibc 2.31 or ALSA 1.2.2.
 
 The old static 0.2.2 client crashed inside NVIDIA GLX initialization: a TLS lookup returned an invalid pointer in `libnvidia-gpucomp`. A small test loading `libGLX_nvidia.so.0` reproduced SIGSEGV with static glibc and initialized successfully with shared glibc. The normal host build also imported `GLIBC_2.43`. Both issues are addressed by the compatibility build. The crash records from the older launch paths were distinguished from the replacement using executable paths and version output.
 

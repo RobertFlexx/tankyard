@@ -31,8 +31,9 @@ pub struct CommunityUi {
     chat_revision: u64,
     chat_scale: u32,
     cached_room: String,
-    text_lines: Vec<(String, u64)>,
+    text_lines: Vec<String>,
     scroll: usize,
+    docked: bool,
 }
 impl Default for CommunityUi {
     fn default() -> Self {
@@ -63,6 +64,7 @@ impl Default for CommunityUi {
             cached_room: String::new(),
             text_lines: vec![],
             scroll: 0,
+            docked: false,
         }
     }
 }
@@ -111,11 +113,11 @@ impl CommunityUi {
             return true;
         }
         if client.chat_enabled
-            && alive
             && !self.admin_open
-            && (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Slash))
+            && ((alive && is_key_pressed(KeyCode::Enter)) || is_key_pressed(KeyCode::Slash))
         {
             self.typing = true;
+            self.scroll = 0;
             while get_char_pressed().is_some() {}
             return true;
         }
@@ -125,14 +127,19 @@ impl CommunityUi {
         (client.kind == ServerKind::Community
             && !client.permissions.is_empty()
             && contains(Self::server_button(s)))
-            || (self.typing && contains(Self::chat_rect(s)))
+            || (self.typing && contains(self.chat_rect(s)))
             || self.admin_open
     }
     fn server_button(s: f32) -> Rect {
         Rect::new(254.0 * s, 54.0 * s, 110.0 * s, 24.0 * s)
     }
-    fn chat_rect(s: f32) -> Rect {
-        Rect::new(22.0 * s, 87.0 * s, 358.0 * s, 224.0 * s)
+    fn chat_rect(&self, s: f32) -> Rect {
+        if self.docked {
+            // Keep chat readable beside upgrades and the Sandbox panel.
+            Rect::new(screen_width() - 380. * s, 270. * s, 358. * s, 224. * s)
+        } else {
+            Rect::new(22.0 * s, 87.0 * s, 358.0 * s, 224.0 * s)
+        }
     }
     fn submit(&mut self, client: &mut NetworkClient, command: ServerCommand) {
         self.notice = if client.admin(command) {
@@ -147,11 +154,12 @@ impl CommunityUi {
         client: &mut NetworkClient,
         snapshot: &Snapshot,
         s: f32,
-        hide_chat: bool,
+        dock_chat: bool,
     ) {
         if client.kind != ServerKind::Community {
             return;
         }
+        self.docked = dock_chat;
         if self.round != Some(snapshot.match_state.round) {
             self.round = Some(snapshot.match_state.round);
             self.selected = None;
@@ -178,7 +186,7 @@ impl CommunityUi {
             self.typing = false;
             self.notice.clear();
         }
-        if client.chat_enabled && !self.admin_open && (!hide_chat || self.typing) {
+        if client.chat_enabled && !self.admin_open {
             self.chat(client, s);
         }
         if self.admin_open {
@@ -192,7 +200,7 @@ impl CommunityUi {
         if !client.rooms.iter().any(|r| r.id == self.room) {
             self.room = "lobby".into();
         }
-        let r = Self::chat_rect(s);
+        let r = self.chat_rect(s);
         if self.typing {
             panel(r);
             if !client.rooms.is_empty() {
@@ -245,10 +253,6 @@ impl CommunityUi {
                 false,
             );
         }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
         if self.chat_revision != client.chat_revision
             || self.chat_scale != s.to_bits()
             || self.cached_room != self.room
@@ -262,7 +266,7 @@ impl CommunityUi {
                     r.w - 16.0 * s,
                     13.0 * s,
                 ) {
-                    self.text_lines.push((line, message.time));
+                    self.text_lines.push(line);
                 }
             }
             self.scroll = if changed_room {
@@ -276,7 +280,7 @@ impl CommunityUi {
             self.chat_revision = client.chat_revision;
             self.chat_scale = s.to_bits();
         }
-        let count = if self.typing { 8 } else { 3 };
+        let count = if self.typing { 8 } else { 5 };
         let maximum = self.text_lines.len().saturating_sub(count);
         if self.typing && contains(r) {
             let wheel = mouse_wheel().1;
@@ -288,19 +292,28 @@ impl CommunityUi {
             }
         }
         self.scroll = self.scroll.min(maximum);
-        let visible = self.typing
-            || self
-                .text_lines
-                .last()
-                .is_some_and(|(_, time)| now.saturating_sub(*time) < 12);
-        let end = if visible {
-            self.text_lines
-                .len()
-                .saturating_sub(if self.typing { self.scroll } else { 0 })
-        } else {
-            0
-        };
-        for (i, (line, _)) in self.text_lines[end.saturating_sub(count)..end]
+        let end = self
+            .text_lines
+            .len()
+            .saturating_sub(if self.typing { self.scroll } else { 0 });
+        if !self.typing && end > 0 {
+            draw_rectangle(
+                r.x,
+                r.y,
+                r.w,
+                (49. + end.min(count) as f32 * 16.) * s,
+                alpha(surface_color(), 0.88),
+            );
+            draw_rectangle_lines(
+                r.x,
+                r.y,
+                r.w,
+                (49. + end.min(count) as f32 * 16.) * s,
+                s,
+                alpha(muted_color(), 0.28),
+            );
+        }
+        for (i, line) in self.text_lines[end.saturating_sub(count)..end]
             .iter()
             .enumerate()
         {
@@ -314,7 +327,7 @@ impl CommunityUi {
         }
         if !self.typing {
             label(
-                "Enter to chat",
+                "Enter / Slash to chat",
                 r.x + 8.0 * s,
                 r.y + 15.0 * s,
                 12.0 * s,

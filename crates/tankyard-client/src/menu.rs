@@ -751,15 +751,17 @@ impl Menu {
             ("Fullscreen", "F11"),
             ("Next / previous field", "Tab / Shift + Tab"),
             ("Retry a practice result", "R or F5"),
+            ("Microphone mute / unmute", "M or mic button"),
+            ("Spectate previous / next", "Left / Right (when dead)"),
         ];
         for (column, rows) in [movement.as_slice(), shortcuts.as_slice()]
             .iter()
             .enumerate()
         {
             let x = margin + column as f32 * (width + gap);
-            panel(Rect::new(x, 222.0 * s, width, 425.0 * s));
+            panel(Rect::new(x, 222.0 * s, width, 440.0 * s));
             for (index, (action, key)) in rows.iter().enumerate() {
-                let y = (252.0 + index as f32 * 39.0) * s;
+                let y = (247.0 + index as f32 * 38.0) * s;
                 label(action, x + 18.0 * s, y, 15.0 * s, text_color());
                 right_label(
                     key,
@@ -1231,9 +1233,16 @@ impl Menu {
         let x = 40.0 * s;
         let y = 158.0 * s;
         let tab_w = 155.0 * s;
-        for (index, name) in ["Display", "Style", "Controls", "Accessibility", "Profile"]
-            .iter()
-            .enumerate()
+        for (index, name) in [
+            "Display",
+            "Style",
+            "Controls",
+            "Accessibility",
+            "Profile",
+            "Audio",
+        ]
+        .iter()
+        .enumerate()
         {
             if button(
                 Rect::new(x + index as f32 * (tab_w + 8.0 * s), y, tab_w, 38.0 * s),
@@ -1592,6 +1601,41 @@ impl Menu {
                     text_color(),
                 );
             }
+            5 => {
+                label("Proximity voice", x, by + 20. * s, 25. * s, text_color());
+                wrap(
+                    "Nearby players become quieter as they move away. Your microphone starts muted. Use M or the microphone button to talk, and headphones to avoid feedback.",
+                    x,
+                    by + 60. * s,
+                    col,
+                    18. * s,
+                    muted_color(),
+                );
+                slider(
+                    Rect::new(rx, by + 30. * s, col, 48. * s),
+                    "Master volume",
+                    &mut settings.master_volume,
+                    0.,
+                    1.,
+                    s,
+                );
+                slider(
+                    Rect::new(rx, by + 120. * s, col, 48. * s),
+                    "Nearby voices",
+                    &mut settings.voice_volume,
+                    0.,
+                    1.,
+                    s,
+                );
+                wrap(
+                    "Voice is available online while alive. Microphone and speaker devices follow your operating system's defaults. Server mutes also apply to voice.",
+                    rx,
+                    by + 220. * s,
+                    col,
+                    18. * s,
+                    muted_color(),
+                );
+            }
             _ => {
                 label("PLAYER NAME", x, by + 15.0 * s, 13.0 * s, muted_color());
                 text_field(
@@ -1711,7 +1755,7 @@ impl Menu {
         );
         label("BUILT WITH", x, y + 168.0 * s, 13.0 * s, CYAN);
         label(
-            "Rust  /  Macroquad  /  Renet + Netcode",
+            "Rust  /  Macroquad  /  Renet + Netcode  /  CPAL audio",
             x,
             y + 204.0 * s,
             23.0 * s,
@@ -1726,7 +1770,7 @@ impl Menu {
             text_color(),
         );
         wrap(
-            "DejaVu Sans Bold font. Third-party licenses are in NOTICE.md.",
+            "DejaVu Sans Bold font; Lucide microphone icons (ISC). Third-party licenses are in NOTICE.md.",
             x,
             y + 355.0 * s,
             width.min(900.0 * s),

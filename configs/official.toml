@@ -4,6 +4,7 @@ server_id = "official-ffa"
 name = "Tank Yard FFA"
 bind = "0.0.0.0:5000"
 chat_enabled = false
+voice_enabled = true
 require_accounts = false
 bot_count = 12
 adaptive_bots = true # Fill to six tanks; no bots with six or more players.

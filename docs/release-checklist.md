@@ -33,6 +33,9 @@ Check at 800×600, 1024×768, 1280×800, 1600×900, 1920×1080, ultrawide, and w
 
 - Factory/Fabricator: six-mini-tank cap, minion respawn after one is destroyed, cursor orbit, right-click recall, independent minion shooting, bullets blocked by walls, correct ownership/damage scoring.
 - Other drone classes: cap and movement independent of Factory, no drone/projectile duplication on evolution, server and HUD showing consistent deployed counts.
+- Timed parries: incoming drones merge through real collisions into one return, left-click steering and release targeting work, and each parry upgrade improves the capture without renewing an already-returned drone's lifetime.
+- Voice: microphone begins muted, both icons and M/click controls agree, missing devices fail gracefully, nearby speakers fade with distance, server mutes apply, and dead players cannot talk to living players. Test real headsets on each desktop platform, including macOS microphone permission prompts.
+- Spectating/chat: cycle living targets after death, restrict team modes to teammates, stream the watched location's projectiles, restore the player's view after respawn, and keep chat visible alongside upgrades and Sandbox tools.
 - Mixed projectile classes: stats are context-aware, and upgrade point spending actually changes the behavior described by its tooltip.
 - Tank progression: buy points, evolve, die/respawn, keep/depreciate scores correctly, reset on a new round, and rejoin mid-match. Check bots around obstacles and against protected/friendly targets.
 - Network: packet loss and latency, high event bursts, join/leave spam, malformed input, unauthorized sandbox/admin requests, disconnect during a kill, and slow clients. Confirm important events arrive in order or slow clients are explicitly disconnected, not silently lost.

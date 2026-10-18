@@ -33,6 +33,7 @@ pub struct Settings {
     pub effects_volume: f32,
     pub ui_volume: f32,
     pub music_volume: f32,
+    pub voice_volume: f32,
     pub auto_fire: bool,
     pub bot_difficulty: usize,
     pub show_fps: bool,
@@ -73,6 +74,7 @@ impl Default for Settings {
             effects_volume: 0.7,
             ui_volume: 0.6,
             music_volume: 0.0,
+            voice_volume: 0.8,
             auto_fire: false,
             bot_difficulty: 1,
             show_fps: false,
@@ -175,6 +177,7 @@ impl Settings {
             &mut self.effects_volume,
             &mut self.ui_volume,
             &mut self.music_volume,
+            &mut self.voice_volume,
         ] {
             *value = finite_clamp(*value, 0.0, 1.0, 0.5);
         }

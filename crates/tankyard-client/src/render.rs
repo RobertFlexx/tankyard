@@ -452,8 +452,14 @@ pub fn world(
             }
             ProjectileKind::Drone => {
                 let angle = effects.drone_angle(projectile);
+                if projectile.is_return_drone() {
+                    draw_circle_lines(p.x, p.y, r + 5.0 * z, 2.0 * z, alpha(CYAN, opacity * 0.7));
+                }
                 polygon(p, 3, r + 2.0 * z, angle, alpha(OUTLINE, opacity));
                 polygon(p, 3, r, angle, alpha(c, opacity));
+                if projectile.is_return_drone() {
+                    polygon(p, 3, r * 0.45, angle, alpha(WHITE, opacity * 0.6));
+                }
             }
             ProjectileKind::Trap | ProjectileKind::Mine => {
                 polygon(

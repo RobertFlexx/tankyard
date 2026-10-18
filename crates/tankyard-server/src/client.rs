@@ -38,6 +38,9 @@ pub struct NetworkClient {
     pub rooms: Vec<RoomInfo>,
     pub chat_messages: std::collections::VecDeque<ChatMessage>,
     pub chat_revision: u64,
+    pub voice_enabled: bool,
+    pub voice_muted: bool,
+    pub voice_packets: std::collections::VecDeque<VoicePacket>,
     pub audit_lines: Vec<String>,
     client: RenetClient,
     transport: NetcodeClientTransport,
@@ -175,6 +178,9 @@ impl NetworkClient {
             rooms: vec![],
             chat_messages: std::collections::VecDeque::with_capacity(64),
             chat_revision: 0,
+            voice_enabled: false,
+            voice_muted: false,
+            voice_packets: std::collections::VecDeque::with_capacity(32),
             audit_lines: Vec::new(),
         })
     }
@@ -212,6 +218,10 @@ impl NetworkClient {
                 Err(e) => return self.fail(e.to_string()),
             };
             match control {
+                ServerControl::VoiceStatus { enabled, muted } => {
+                    self.voice_enabled = enabled;
+                    self.voice_muted = muted;
+                }
                 ServerControl::Audit { lines } => {
                     if lines.len() > 32
                         || lines
@@ -315,6 +325,7 @@ impl NetworkClient {
                         self.previous_snapshot = None;
                         self.event_queue.clear();
                         self.events.clear();
+                        self.voice_packets.clear();
                     }
                     self.player_id = Some(player);
                     self.input_history = InputBundle::default();
@@ -403,7 +414,46 @@ impl NetworkClient {
             self.previous_snapshot = self.snapshot.take();
             self.snapshot = Some(snapshot);
         }
+        for _ in 0..64 {
+            let Some(bytes) = self.client.receive_message(VOICE_CHANNEL) else {
+                break;
+            };
+            if let Ok(packet) = decode_voice_packet(&bytes)
+                && self.voice_enabled
+                && self.player_round == Some(packet.frame.round)
+                && self.player_id != Some(packet.player)
+            {
+                if self.voice_packets.len() >= 32 {
+                    self.voice_packets.pop_front();
+                }
+                self.voice_packets.push_back(packet);
+            }
+        }
         self.flush()
+    }
+    pub fn send_voice(&mut self, frame: VoiceFrame) -> bool {
+        if !self.is_ready()
+            || !self.voice_enabled
+            || self.voice_muted
+            || self.player_round != Some(frame.round)
+            || frame.samples.len() != VOICE_FRAME_SAMPLES
+        {
+            return false;
+        }
+        let Ok(bytes) = encode(&frame, MAX_VOICE_BYTES) else {
+            return false;
+        };
+        if !self.client.can_send_message(VOICE_CHANNEL, bytes.len()) {
+            return false;
+        }
+        self.client.send_message(VOICE_CHANNEL, bytes);
+        true
+    }
+    pub fn spectate(&mut self, target: Option<EntityId>) -> bool {
+        let Some(round) = self.player_round else {
+            return false;
+        };
+        self.queue_control(ClientControl::Spectate { round, target })
     }
     /// Send inputs and UI commands queued after this frame's network update.
     pub fn flush(&mut self) -> Result<(), NetError> {

@@ -370,6 +370,7 @@ fn stat_hints(class: Option<&ClassDef>) -> [StatHint; 8] {
 
 pub enum HudAction {
     Respawn,
+    Spectate(i8),
     Stat(usize),
     Evolve(String),
     ToggleTheme,
@@ -386,6 +387,7 @@ pub enum HudAction {
     Speed(f32),
 }
 pub struct Hud {
+    pub spectating: Option<EntityId>,
     pub practice: bool,
     pub evolution: bool,
     pub sandbox: bool,
@@ -401,6 +403,7 @@ pub struct Hud {
 impl Hud {
     pub fn new() -> Self {
         Self {
+            spectating: None,
             practice: false,
             evolution: false,
             sandbox: false,
@@ -750,127 +753,129 @@ impl Hud {
         }
         let leader_score = self.leaderboard(snapshot, local, settings, s);
         self.minimap(snapshot, local, settings, s, view);
-        let xp_width = (w * 0.36).min(430.0 * s);
-        let xp_x = (w - xp_width) * 0.5;
-        let next = xp_for_level((tank.level + 1).min(tankyard_core::MAX_LEVEL));
-        let prev = xp_for_level(tank.level);
-        let fraction = if tank.level >= tankyard_core::MAX_LEVEL {
-            1.0
-        } else {
-            tank.xp.saturating_sub(prev) as f32 / (next - prev).max(1) as f32
-        };
-        let xp_y = h - 33.0 * s;
-        arcade_center(
-            &fitted_label(&tank.name, 27.0 * s, xp_width - 12.0 * s),
-            w * 0.5,
-            xp_y - 45.0 * s,
-            27.0 * s,
-        );
-        arcade_track(
-            Rect::new(
-                xp_x + 18.0 * s,
-                xp_y - 32.0 * s,
-                xp_width - 36.0 * s,
-                22.0 * s,
-            ),
-            tank.score as f32 / leader_score as f32,
-            Color::new(0.55, 0.87, 0.37, 1.0),
-        );
-        arcade_center(
-            &format!("Score: {}", tank.score),
-            w * 0.5,
-            xp_y - 16.0 * s,
-            14.0 * s,
-        );
-        arcade_track(Rect::new(xp_x, xp_y, xp_width, 24.0 * s), fraction, AMBER);
-        arcade_center(
-            &fitted_label(
-                &format!(
-                    "Lvl {} {}",
-                    tank.level,
-                    class.map(|c| c.name.as_str()).unwrap_or("Tank")
-                ),
-                16.0 * s,
-                xp_width - 16.0 * s,
-            ),
-            w * 0.5,
-            xp_y + 17.0 * s,
-            16.0 * s,
-        );
-        // Stack status lines above the name, clear of both progress bars.
-        let mut status_y = xp_y - 74.0 * s;
-        if let Some(class) = class
-            && class.ability != Ability::None
-        {
-            let ready = tank.ability_cooldown <= 0.0;
-            let parrying = class.ability.is_parry() && tank.shield > 0.0;
-            center_label(
-                &format!(
-                    "[{}] {}  {}",
-                    settings.bindings[4],
-                    class.ability.name(),
-                    if parrying {
-                        "ACTIVE".into()
-                    } else if ready {
-                        "READY".into()
-                    } else {
-                        format!("{:.1}s", tank.ability_cooldown)
-                    }
-                ),
-                w * 0.5,
-                status_y,
-                15.0 * s,
-                if parrying {
-                    AMBER
-                } else if ready {
-                    CYAN
-                } else {
-                    muted_color()
-                },
-            );
-            status_y -= 24.0 * s;
-        }
-        if let Some(class) = class.filter(|class| class.has_drones()) {
-            let name = if class
-                .barrels
-                .iter()
-                .any(|barrel| barrel.projectile == tankyard_content::ProjectileKind::Minion)
-            {
-                "Minions"
+        if tank.alive {
+            let xp_width = (w * 0.36).min(430.0 * s);
+            let xp_x = (w - xp_width) * 0.5;
+            let next = xp_for_level((tank.level + 1).min(tankyard_core::MAX_LEVEL));
+            let prev = xp_for_level(tank.level);
+            let fraction = if tank.level >= tankyard_core::MAX_LEVEL {
+                1.0
             } else {
-                "Drones"
+                tank.xp.saturating_sub(prev) as f32 / (next - prev).max(1) as f32
             };
-            center_label(
-                &format!("{name}: {} / {}", tank.deployed_drones, class.drone_limit),
+            let xp_y = h - 33.0 * s;
+            arcade_center(
+                &fitted_label(&tank.name, 27.0 * s, xp_width - 12.0 * s),
                 w * 0.5,
-                status_y,
-                12.0 * s,
-                if tank.deployed_drones == class.drone_limit {
-                    CYAN
+                xp_y - 45.0 * s,
+                27.0 * s,
+            );
+            arcade_track(
+                Rect::new(
+                    xp_x + 18.0 * s,
+                    xp_y - 32.0 * s,
+                    xp_width - 36.0 * s,
+                    22.0 * s,
+                ),
+                tank.score as f32 / leader_score as f32,
+                Color::new(0.55, 0.87, 0.37, 1.0),
+            );
+            arcade_center(
+                &format!("Score: {}", tank.score),
+                w * 0.5,
+                xp_y - 16.0 * s,
+                14.0 * s,
+            );
+            arcade_track(Rect::new(xp_x, xp_y, xp_width, 24.0 * s), fraction, AMBER);
+            arcade_center(
+                &fitted_label(
+                    &format!(
+                        "Lvl {} {}",
+                        tank.level,
+                        class.map(|c| c.name.as_str()).unwrap_or("Tank")
+                    ),
+                    16.0 * s,
+                    xp_width - 16.0 * s,
+                ),
+                w * 0.5,
+                xp_y + 17.0 * s,
+                16.0 * s,
+            );
+            // Stack status lines above the name, clear of both progress bars.
+            let mut status_y = xp_y - 74.0 * s;
+            if let Some(class) = class
+                && class.ability != Ability::None
+            {
+                let ready = tank.ability_cooldown <= 0.0;
+                let parrying = class.ability.is_parry() && tank.shield > 0.0;
+                center_label(
+                    &format!(
+                        "[{}] {}  {}",
+                        settings.bindings[4],
+                        class.ability.name(),
+                        if parrying {
+                            "ACTIVE".into()
+                        } else if ready {
+                            "READY".into()
+                        } else {
+                            format!("{:.1}s", tank.ability_cooldown)
+                        }
+                    ),
+                    w * 0.5,
+                    status_y,
+                    15.0 * s,
+                    if parrying {
+                        AMBER
+                    } else if ready {
+                        CYAN
+                    } else {
+                        muted_color()
+                    },
+                );
+                status_y -= 24.0 * s;
+            }
+            if let Some(class) = class.filter(|class| class.has_drones()) {
+                let name = if class
+                    .barrels
+                    .iter()
+                    .any(|barrel| barrel.projectile == tankyard_content::ProjectileKind::Minion)
+                {
+                    "Minions"
                 } else {
-                    muted_color()
-                },
-            );
-            status_y -= 21.0 * s;
-        }
-        if settings.auto_fire {
-            center_label(
-                &format!("Auto-fire [{}]", settings.bindings[5]),
-                w * 0.5,
-                status_y,
-                12.0 * s,
-                muted_color(),
-            );
-            status_y -= 21.0 * s;
-        }
-        if tank.spawn_immunity && tank.protection > 0.0 {
-            center_label(
-                &format!("Spawn protection · {}s", tank.protection.ceil() as u32),
-                w * 0.5,
-                status_y,
-                12.0 * s,
-                CYAN,
-            );
+                    "Drones"
+                };
+                center_label(
+                    &format!("{name}: {} / {}", tank.deployed_drones, class.drone_limit),
+                    w * 0.5,
+                    status_y,
+                    12.0 * s,
+                    if tank.deployed_drones == class.drone_limit {
+                        CYAN
+                    } else {
+                        muted_color()
+                    },
+                );
+                status_y -= 21.0 * s;
+            }
+            if settings.auto_fire {
+                center_label(
+                    &format!("Auto-fire [{}]", settings.bindings[5]),
+                    w * 0.5,
+                    status_y,
+                    12.0 * s,
+                    muted_color(),
+                );
+                status_y -= 21.0 * s;
+            }
+            if tank.spawn_immunity && tank.protection > 0.0 {
+                center_label(
+                    &format!("Spawn protection · {}s", tank.protection.ceil() as u32),
+                    w * 0.5,
+                    status_y,
+                    12.0 * s,
+                    CYAN,
+                );
+            }
         }
         if settings.show_fps {
             label(
@@ -910,7 +915,15 @@ impl Hud {
             self.sandbox_overlay(content, &mut actions, s);
         }
         if !tank.alive && !snapshot.match_state.finished {
-            self.death(tank, snapshot.config.mode, &mut actions, s);
+            if let Some(watched) = snapshot
+                .tanks
+                .iter()
+                .find(|t| Some(t.id) == self.spectating && t.alive)
+            {
+                self.spectator_bar(tank, watched, snapshot.config.mode, &mut actions, s);
+            } else {
+                self.death(tank, snapshot.config.mode, &mut actions, s);
+            }
         }
         if snapshot.match_state.finished {
             draw_rectangle(0.0, 0.0, w, h, alpha(bg_color(), 0.77));
@@ -1010,7 +1023,7 @@ impl Hud {
         let width = 184.0 * s;
         let height = 132.0 * s;
         let x = screen_width() - width - 22.0 * s;
-        let y = screen_height() - height - 22.0 * s;
+        let y = screen_height() - height - 78.0 * s;
         draw_rectangle(x, y, width, height, alpha(surface_color(), 0.55));
         draw_rectangle_lines(
             x,
@@ -1400,6 +1413,72 @@ impl Hud {
             s,
         ) {
             actions.push(HudAction::Menu);
+        }
+    }
+    fn spectator_bar(
+        &self,
+        tank: &Tank,
+        watched: &Tank,
+        mode: Mode,
+        actions: &mut Vec<HudAction>,
+        s: f32,
+    ) {
+        let width = 440. * s;
+        let x = (screen_width() - width) * 0.5;
+        let y = screen_height() - 140. * s;
+        panel(Rect::new(x, y, width, 118. * s));
+        center_label(
+            &fitted_label(
+                &format!("Spectating {}", watched.name),
+                18. * s,
+                width - 28. * s,
+            ),
+            x + width * 0.5,
+            y + 27. * s,
+            18. * s,
+            CYAN,
+        );
+        let status = if mode == Mode::CoopPve {
+            "Reviving after this wave".to_owned()
+        } else if mode == Mode::Survival && tank.lives == 0 {
+            "Out of lives".to_owned()
+        } else if tank.respawn_timer > 0. {
+            format!("Respawn in {:.1}s", tank.respawn_timer)
+        } else {
+            "Enter to respawn".to_owned()
+        };
+        center_label(
+            &format!("Left / Right to switch  ·  {status}"),
+            x + width * 0.5,
+            y + 49. * s,
+            13. * s,
+            text_color(),
+        );
+        if small_button(
+            Rect::new(x + 14. * s, y + 66. * s, 92. * s, 34. * s),
+            "< Previous",
+            s * 0.75,
+        ) {
+            actions.push(HudAction::Spectate(-1));
+        }
+        let can_respawn = mode != Mode::CoopPve
+            && !(mode == Mode::Survival && tank.lives == 0)
+            && tank.respawn_timer <= 0.;
+        if button(
+            Rect::new(x + 116. * s, y + 66. * s, 208. * s, 34. * s),
+            "Respawn",
+            true,
+            can_respawn,
+            s * 0.8,
+        ) {
+            actions.push(HudAction::Respawn);
+        }
+        if small_button(
+            Rect::new(x + width - 106. * s, y + 66. * s, 92. * s, 34. * s),
+            "Next >",
+            s * 0.75,
+        ) {
+            actions.push(HudAction::Spectate(1));
         }
     }
 }

@@ -19,6 +19,7 @@ mod startup;
 use tankyard_client::achievements;
 use tankyard_client::tank_model;
 mod ui;
+mod voice;
 
 use clap::Parser;
 use hud::{Hud, HudAction};
@@ -70,6 +71,7 @@ struct Cli {
     #[arg(long, default_value = "")]
     password: String,
     #[arg(long)]
+    /// Disable microphone access and voice playback.
     no_audio: bool,
     #[arg(long)]
     smoke_frames: Option<u64>,
@@ -144,12 +146,11 @@ struct App {
     match_claims: achievements::Claims,
     bundle_revision: u64,
     community: community_ui::CommunityUi,
+    voice: voice::VoiceChat,
     catalog_paths: Vec<String>,
 }
 impl App {
     async fn new(cli: Cli, dark_theme: bool) -> Self {
-        // Older launch scripts still pass this flag.
-        let _ = cli.no_audio;
         let mut settings = Settings::load();
         settings.dark_arena = dark_theme;
         settings.theme_chosen = true;
@@ -227,6 +228,7 @@ impl App {
             match_claims: achievements::Claims::default(),
             bundle_revision: 0,
             community: community_ui::CommunityUi::default(),
+            voice: voice::VoiceChat::new(cli.no_audio),
             catalog_paths,
         };
         if let Some(id) = cli.practice {
@@ -304,6 +306,7 @@ impl App {
             self.settings.anisotropic_filtering,
         );
         self.session = Some(session);
+        self.voice.reset();
         self.match_claims = achievements::Claims::default();
         self.achievement_feed = achievements::Feed::default();
         self.menu_over_game = false;
@@ -487,6 +490,7 @@ impl App {
         }
     }
     fn finish_session(&mut self) {
+        self.voice.reset();
         self.save_progress();
         self.community = community_ui::CommunityUi::default();
         self.restore_menu();
@@ -676,36 +680,38 @@ impl App {
         let over_ui = self.pointer_over_ui(s);
         // A click accepted over the arena stays accepted until the next tick,
         // even if the cursor crosses a HUD button after the press.
-        let fire = self.settings.auto_fire
-            || manual_fire(
-                is_mouse_button_down(MouseButton::Left),
-                self.fire_queued,
-                over_ui,
-            );
+        let steer_return = manual_fire(
+            is_mouse_button_down(MouseButton::Left),
+            self.fire_queued,
+            over_ui,
+        );
+        let fire = self.settings.auto_fire || steer_return;
         PlayerInput {
             sequence: self.sequence,
             movement: movement.normalized(),
             aim,
             aim_distance: cursor.length().min(5000.),
             fire,
+            steer_return,
             alt_fire: is_mouse_button_down(MouseButton::Right),
             ability: is_key_down(self.settings.key(4)) || self.ability_queued,
         }
     }
     fn pointer_over_ui(&self, s: f32) -> bool {
-        self.session.as_ref().is_some_and(|session| {
-            let community = match &session.engine {
-                session::Engine::Online { client, .. } => {
-                    self.community.captures_pointer(client, s)
-                }
-                _ => false,
-            };
-            community
-                || session.display.as_ref().is_some_and(|snapshot| {
-                    self.hud
-                        .captures_pointer(snapshot, &self.content, session.player, s)
-                })
-        })
+        self.voice.captures_pointer(s)
+            || self.session.as_ref().is_some_and(|session| {
+                let community = match &session.engine {
+                    session::Engine::Online { client, .. } => {
+                        self.community.captures_pointer(client, s)
+                    }
+                    _ => false,
+                };
+                community
+                    || session.display.as_ref().is_some_and(|snapshot| {
+                        self.hud
+                            .captures_pointer(snapshot, &self.content, session.player, s)
+                    })
+            })
     }
     fn update(&mut self, dt: f32, s: f32) {
         if self.session.is_none() && self.catalog_paths != self.settings.enabled_mods {
@@ -741,6 +747,23 @@ impl App {
             if let Some(message) = session.notice.take() {
                 self.community.message(&message);
                 self.effects.notice(&message);
+            }
+            let playing = session.failure.is_none()
+                && !self.paused
+                && !self.menu_over_game
+                && session.display.as_ref().is_some_and(|snapshot| {
+                    !snapshot.match_state.finished
+                        && snapshot
+                            .tanks
+                            .iter()
+                            .any(|t| t.id == session.player && t.alive)
+                });
+            if let session::Engine::Online { client, .. } = &mut session.engine {
+                self.voice.update(
+                    client,
+                    playing,
+                    self.settings.master_volume * self.settings.voice_volume,
+                );
             }
         }
         if self.pending_join.is_some() {
@@ -796,6 +819,14 @@ impl App {
                 self.hud.sandbox = false;
             }
             if !self.paused && !community_key && !self.community.focused() {
+                if is_key_pressed(KeyCode::M) {
+                    self.voice.toggle();
+                }
+                if (is_key_pressed(KeyCode::Left) || is_key_pressed(KeyCode::Right))
+                    && let Some(session) = &mut self.session
+                {
+                    session.cycle_spectating(if is_key_pressed(KeyCode::Left) { -1 } else { 1 });
+                }
                 if is_key_pressed(self.settings.key(5)) {
                     self.settings.auto_fire = !self.settings.auto_fire;
                 }
@@ -941,6 +972,8 @@ impl App {
         }
         if let Some(session) = &mut self.session {
             session.present_prediction(self.accumulator / DT);
+            session.sync_spectating();
+            self.hud.spectating = session.spectating;
         }
         if let Some(session) = &self.session
             && let Some(snapshot) = &session.display
@@ -951,20 +984,11 @@ impl App {
             } else {
                 self.effects.shake * self.settings.shake
             };
-            let followed = if !tank.alive && snapshot.config.mode == Mode::CoopPve {
-                snapshot
-                    .tanks
-                    .iter()
-                    .filter(|ally| ally.alive && ally.team == tank.team)
-                    .min_by(|a, b| {
-                        a.pos
-                            .distance(tank.pos)
-                            .total_cmp(&b.pos.distance(tank.pos))
-                    })
-                    .unwrap_or(tank)
-            } else {
-                tank
-            };
+            let followed = snapshot
+                .tanks
+                .iter()
+                .find(|t| Some(t.id) == session.spectating && t.alive)
+                .unwrap_or(tank);
             let position = session.position(followed.id, followed.pos, self.accumulator / DT);
             self.view.follow(
                 position,
@@ -1247,6 +1271,20 @@ impl App {
         for action in actions {
             self.hud_action(action);
         }
+        if !self.paused
+            && !self.menu_over_game
+            && let Some(session) = &self.session
+            && session.failure.is_none()
+            && session.display.is_some()
+        {
+            let (online, muted) = match &session.engine {
+                session::Engine::Online { client, .. } => {
+                    (client.voice_enabled, client.voice_muted)
+                }
+                _ => (false, false),
+            };
+            self.voice.draw(s, online, muted);
+        }
         if self.paused
             && !self.menu_over_game
             && self
@@ -1278,6 +1316,11 @@ impl App {
     }
     fn hud_action(&mut self, action: HudAction) {
         match action {
+            HudAction::Spectate(direction) => {
+                if let Some(session) = &mut self.session {
+                    session.cycle_spectating(direction);
+                }
+            }
             HudAction::Respawn => {
                 self.respawn_requested = true;
             }
@@ -1455,7 +1498,7 @@ async fn run(cli: Cli) {
                     .as_ref()?
                     .tanks
                     .iter()
-                    .find(|t| t.id == session.player)
+                    .find(|t| t.id == session.spectating.unwrap_or(session.player))
             })
             .map_or(1, |tank| tank.level);
         let target_zoom = (screen_height() / 900.0).clamp(0.7, 2.75)

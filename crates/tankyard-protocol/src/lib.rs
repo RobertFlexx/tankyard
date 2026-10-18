@@ -8,12 +8,15 @@ use tankyard_content::Content;
 use tankyard_core::{BossKind, EntityId, GameEvent, PlayerInput, Snapshot};
 mod community;
 pub use community::*;
+mod voice;
+pub use voice::*;
 
-pub const PROTOCOL_VERSION: u32 = 11;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000b;
+pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000c;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
+pub const VOICE_CHANNEL: u8 = 3;
 pub const MAX_CONTROL_BYTES: usize = 2048;
 pub const MAX_SERVER_CONTROL_BYTES: usize = tankyard_mods::MAX_PACK_BYTES + 8192;
 pub const MAX_INPUT_BYTES: usize = 128;
@@ -40,12 +43,22 @@ pub fn connection_config() -> ConnectionConfig {
             reliable(CONTROL_CHANNEL, MAX_SERVER_CONTROL_BYTES * 2),
             reliable(EVENT_CHANNEL, 256 * 1024),
             realtime(),
+            ChannelConfig {
+                channel_id: VOICE_CHANNEL,
+                max_memory_usage_bytes: 64 * 1024,
+                send_type: SendType::Unreliable,
+            },
         ],
         client_channels_config: vec![
             reliable(CONTROL_CHANNEL, MAX_CONTROL_BYTES * 64),
             ChannelConfig {
                 channel_id: REALTIME_CHANNEL,
                 max_memory_usage_bytes: 16 * 1024,
+                send_type: SendType::Unreliable,
+            },
+            ChannelConfig {
+                channel_id: VOICE_CHANNEL,
+                max_memory_usage_bytes: 8 * 1024,
                 send_type: SendType::Unreliable,
             },
         ],
@@ -92,6 +105,10 @@ pub enum ClientControl {
         round: u32,
         command: ServerCommand,
     },
+    Spectate {
+        round: u32,
+        target: Option<EntityId>,
+    },
 }
 
 impl ClientControl {
@@ -119,6 +136,7 @@ impl ClientControl {
             }
             Self::JoinRoom { room } => tankyard_mods::identifier(room),
             Self::Admin { command, .. } => command.valid(),
+            Self::Spectate { round, target } => *round > 0 && target.is_none_or(|id| id > 0),
         }
     }
 }
@@ -171,6 +189,10 @@ pub enum ServerControl {
     },
     MatchSettings {
         settings: MatchSettings,
+    },
+    VoiceStatus {
+        enabled: bool,
+        muted: bool,
     },
 }
 
@@ -282,9 +304,9 @@ pub fn decode_input(bytes: &[u8]) -> Result<PlayerInput, DecodeError> {
 }
 
 pub fn decode_inputs(bytes: &[u8]) -> Result<InputBundle, DecodeError> {
-    // A single frame occupies at most 24 bytes (five-byte sequence, four
-    // four-byte floats, three booleans). A fixed three-frame bundle is >=61.
-    if bytes.len() <= 24 {
+    // A single frame occupies at most 25 bytes (five-byte sequence, four
+    // four-byte floats, four booleans). A fixed three-frame bundle is >=64.
+    if bytes.len() <= 25 {
         let mut bundle = InputBundle::default();
         bundle.push(decode_input(bytes)?);
         return Ok(bundle);
@@ -532,6 +554,7 @@ mod tests {
             history.push(PlayerInput {
                 sequence,
                 fire: sequence == u32::MAX,
+                steer_return: sequence == u32::MAX,
                 ability: sequence == 0,
                 movement: V2::new(0.5, -0.5),
                 ..Default::default()
@@ -545,6 +568,7 @@ mod tests {
             [u32::MAX, 0, 1]
         );
         assert!(decoded.inputs[0].fire && decoded.inputs[1].ability);
+        assert!(decoded.inputs[0].steer_return && !decoded.inputs[2].steer_return);
         for count in [0, 4, 255] {
             history.count = count;
             assert!(decode_inputs(&encode(&history, MAX_INPUT_BYTES).unwrap()).is_err());
@@ -888,6 +912,8 @@ mod tests {
             let _ = decode_control(&bytes);
             let _ = decode_input(&bytes);
             let _ = decode_snapshot(&bytes);
+            let _ = decode_voice(&bytes);
+            let _ = decode_voice_packet(&bytes);
         }
     }
 }
