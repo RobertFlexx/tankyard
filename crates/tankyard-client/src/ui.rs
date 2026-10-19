@@ -85,6 +85,7 @@ pub fn achievement_badge(p: Vec2, radius: f32, color: Color, earned: bool) {
 type HoverStates = std::collections::HashMap<(i32, i32, i32, i32), (f32, f64)>;
 thread_local! {
     static UI_FONT: std::cell::RefCell<Option<Font>> = const { std::cell::RefCell::new(None) };
+    static TEXT_CACHE: std::cell::RefCell<crate::ui_text::TextCache> = std::cell::RefCell::new(Default::default());
     static INTERACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 pub fn init_font() {
@@ -95,6 +96,7 @@ pub fn init_font() {
 }
 pub fn unload_font() {
     UI_FONT.with(|font| font.borrow_mut().take());
+    TEXT_CACHE.with(|cache| *cache.borrow_mut() = Default::default());
 }
 pub fn set_interactive(value: bool) -> bool {
     INTERACTIVE.with(|state| state.replace(value))
@@ -172,8 +174,8 @@ fn hover_ease(rect: Rect, hovered: bool) -> f32 {
     let time = get_time();
     HOVER_STATE.with(|state| {
         let mut state = state.borrow_mut();
-        if state.len() > 512 {
-            state.retain(|_, (_, last)| time - *last < 2.0);
+        if state.len() >= 512 && !state.contains_key(&key) {
+            state.clear();
         }
         let (value, last) = state.entry(key).or_insert((0.0, time));
         let dt = (time - *last).clamp(0.0, 0.05) as f32;
@@ -196,21 +198,8 @@ pub fn mix(a: Color, b: Color, t: f32) -> Color {
         a.a + (b.a - a.a) * t,
     )
 }
-// Rasterize glyphs at their displayed size to keep scaled text sharp.
-fn text_raster_size(size: f32) -> u16 {
-    size.round().clamp(1.0, 256.0) as u16
-}
 pub(crate) fn label_width(value: &str, size: f32) -> f32 {
-    let pixels = text_raster_size(size);
-    UI_FONT.with(|font| {
-        measure_text(
-            value,
-            font.borrow().as_ref(),
-            pixels,
-            size / f32::from(pixels),
-        )
-        .width
-    })
+    TEXT_CACHE.with(|cache| cache.borrow_mut().width(value, size, screen_dpi_scale()))
 }
 // Keep long names, paths and server addresses out of their neighbors.
 pub(crate) fn fitted_label(value: &str, size: f32, width: f32) -> Cow<'_, str> {
@@ -238,6 +227,10 @@ pub(crate) fn fitted_label(value: &str, size: f32, width: f32) -> Cow<'_, str> {
 }
 
 pub fn label(value: &str, x: f32, y: f32, size: f32, color: Color) {
+    let position = crate::ui_layout::position(vec2(x, y));
+    if !crate::ui_layout::visible_y(position.y - size * 1.2, position.y + size * 0.4) {
+        return;
+    }
     let mut color = crate::accessibility::palette(color);
     if crate::accessibility::contrast() && !value.is_empty() {
         let padding = (size * 0.12).max(1.);
@@ -253,10 +246,24 @@ pub fn label(value: &str, x: f32, y: f32, size: f32, color: Color) {
     raw_label(value, x, y, size, color);
 }
 fn raw_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
-    let pixels = text_raster_size(size);
+    let pixels = crate::ui_text::raster_size(size);
     let p = crate::ui_layout::position(vec2(x, y));
+    if TEXT_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .needs_glyphs(value, pixels, screen_dpi_scale())
+    }) {
+        UI_FONT.with(|font| {
+            if let Some(font) = font.borrow_mut().as_mut() {
+                font.populate_font_cache(
+                    &value.chars().collect::<Vec<_>>(),
+                    (f32::from(pixels) * screen_dpi_scale()).ceil() as u16,
+                );
+            }
+        });
+    }
     UI_FONT.with(|font| {
-        draw_text_ex(
+        let rendered = draw_text_ex(
             value,
             p.x.round(),
             p.y.round(),
@@ -267,7 +274,11 @@ fn raw_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
                 color,
                 ..Default::default()
             },
-        )
+        );
+        debug_assert!(
+            (rendered.width - label_width(value, size)).abs() < 0.05,
+            "UI text measurement differs from rendering: {value}"
+        );
     });
 }
 pub fn right_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
@@ -445,20 +456,26 @@ pub fn slider_value(
     let hit = Rect::new(rect.x, rect.y + 24. * s, rect.w, 24. * s);
     let scope = POINTER_SCOPE.with(Cell::get);
     let interactive = INTERACTIVE.with(|state| state.get());
+    let down = is_mouse_button_down(MouseButton::Left);
+    let pressed = is_mouse_button_pressed(MouseButton::Left);
+    let released = is_mouse_button_released(MouseButton::Left);
     let dragged = ACTIVE_SLIDER.with(|active| {
         let mut active = active.borrow_mut();
-        if !is_mouse_button_down(MouseButton::Left) {
+        if !down && !pressed && !released {
             *active = None;
         }
-        if interactive && contains(hit) && is_mouse_button_pressed(MouseButton::Left) {
+        if interactive && contains(hit) && pressed {
             *active = Some((scope, text.to_owned()));
         }
-        interactive
+        let mine = interactive
             && active
                 .as_ref()
-                .is_some_and(|(id, label)| *id == scope && label == text)
-            && (is_mouse_button_down(MouseButton::Left)
-                || is_mouse_button_pressed(MouseButton::Left))
+                .is_some_and(|(id, label)| *id == scope && label == text);
+        let dragged = mine && (down || pressed || released);
+        if mine && !down {
+            *active = None;
+        }
+        dragged
     });
     if dragged {
         *value = slider_amount(

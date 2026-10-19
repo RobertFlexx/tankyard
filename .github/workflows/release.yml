@@ -193,7 +193,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco upgrade nsis --version=3.11.0 --allow-downgrade --yes --no-progress
+          for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
+            choco upgrade nsis --version=3.11.0 --allow-downgrade --yes --no-progress
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($Attempt -lt 3) { Start-Sleep -Seconds (10 * $Attempt) }
+          }
           if ($LASTEXITCODE -ne 0) { throw "NSIS installation failed." }
           python scripts/build_windows_installer.py --version $env:RELEASE_TAG
           if ($LASTEXITCODE -ne 0) { throw "Graphical installer compilation failed." }

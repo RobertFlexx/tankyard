@@ -1,3 +1,9 @@
+# v0.3.3 checks (2026-10-19)
+
+378 public Rust tests, ten installer tests, formatting, and Clippy with warnings denied pass on Linux. The compatible release build passes ABI checks for all five public executables, with no glibc imports newer than 2.30. Three private real-key integration tests pass against the regular server, including host consent, impersonation/replay rejection, revocation, and Bastion's treatment of signed creator powers.
+
+Native GUI checks at 800×600 and 1280×800, including 200% desktop DPI, verify saved filter preferences without a texture pack, a steady layout during scale drags, the exact release position, cancelled edits when navigating away, and readable settings errors above the footer. A loaded checker texture verifies all five filter levels from 1× through 16×, with mipmaps generated exactly once. The moved private executable authenticates and sends signed commands after two relocations and renames, from an unrelated working directory, with no adjacent key file and a nonexistent key environment path. Its embedded credential and private source remain excluded from GitHub and public packages. Captures and logs are in `artifacts/v033-review`. Cross-platform builds and installed-package checks run in the tagged release workflow; publishing does not deploy the central Pi/Docker process.
+
 # v0.3.2 checks (2026-10-19)
 
 374 public Rust tests and ten installer tests pass on Linux, with formatting, Clippy with warnings denied, all 103 tank profiles, both bundled mods, and the compatible Linux release build. Linux executables import no glibc newer than 2.30. Three private real-key integration tests verify the ordinary official server, impersonation/tampering rejection, revocation, and signed god mode, 6× movement/reload, 8× damage, unlimited abilities, and teleporting during real network input. The private client and credentials remain excluded from Git and public packages.

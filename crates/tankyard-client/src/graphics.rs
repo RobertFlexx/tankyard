@@ -10,6 +10,7 @@ thread_local! {
     static FILTER:Cell<u8>=const {Cell::new(1)};
     static MAX_ANISOTROPY:Cell<u8>=const {Cell::new(1)};
     static MAX_SAMPLES:Cell<u8>=const {Cell::new(1)};
+    static MIPMAPS_READY:Cell<bool>=const {Cell::new(false)};
 }
 pub fn set_quality(quality: u8) {
     QUALITY.with(|q| q.set(quality.min(2)));
@@ -23,6 +24,7 @@ fn sides_for(radius: f32, quality: u8) -> u8 {
     (count.clamp(24, 128).div_ceil(8) * 8).min(128) as u8
 }
 pub fn load(textures: &[TextureData], filter: u8) {
+    MIPMAPS_READY.with(|ready| ready.set(false));
     TEXTURES.with(|cache| {
         let mut cache = cache.borrow_mut();
         cache.clear();
@@ -37,6 +39,7 @@ pub fn load(textures: &[TextureData], filter: u8) {
 }
 pub fn unload() {
     TEXTURES.with(|cache| cache.borrow_mut().clear());
+    MIPMAPS_READY.with(|ready| ready.set(false));
 }
 
 pub struct Resources;
@@ -78,23 +81,30 @@ pub fn refresh_capabilities(filter: u8) {
             1
         } else {
             use miniquad::graphics::raw_gl::*;
-            let extensions = glGetString(GL_EXTENSIONS);
-            if extensions.is_null() {
-                1
+            let supported = if is_gl2() {
+                let extensions = glGetString(GL_EXTENSIONS);
+                !extensions.is_null()
+                    && std::ffi::CStr::from_ptr(extensions.cast())
+                        .to_string_lossy()
+                        .split_whitespace()
+                        .any(anisotropy_extension)
             } else {
-                let extensions = std::ffi::CStr::from_ptr(extensions.cast()).to_string_lossy();
-                if extensions.split_whitespace().any(|name| {
-                    matches!(
-                        name,
-                        "GL_EXT_texture_filter_anisotropic" | "GL_ARB_texture_filter_anisotropic"
-                    )
-                }) {
-                    let mut limit = 1;
-                    glGetIntegerv(0x84FF, &mut limit);
-                    limit.clamp(1, 16) as u8
-                } else {
-                    1
-                }
+                let mut count = 0;
+                glGetIntegerv(GL_NUM_EXTENSIONS, &mut count);
+                (0..count.clamp(0, 4096)).any(|index| {
+                    let extension = glGetStringi(GL_EXTENSIONS, index as u32);
+                    !extension.is_null()
+                        && anisotropy_extension(
+                            &std::ffi::CStr::from_ptr(extension.cast()).to_string_lossy(),
+                        )
+                })
+            };
+            if supported {
+                let mut limit = 1;
+                glGetIntegerv(0x84FF, &mut limit);
+                limit.clamp(1, 16) as u8
+            } else {
+                1
             }
         }
     };
@@ -112,22 +122,27 @@ pub fn samples(requested: u8) -> u8 {
 pub fn supports_samples(samples: u8) -> bool {
     samples == 1 || samples <= MAX_SAMPLES.with(Cell::get)
 }
+fn anisotropy_extension(name: &str) -> bool {
+    matches!(
+        name,
+        "GL_EXT_texture_filter_anisotropic" | "GL_ARB_texture_filter_anisotropic"
+    )
+}
 pub fn set_filter(filter: u8) {
-    if FILTER.with(|v| {
-        if v.get() == filter {
-            true
-        } else {
-            v.set(filter);
-            false
-        }
-    }) {
+    let maximum = max_anisotropy();
+    let filter = filter.clamp(1, maximum);
+    let initialize = maximum > 1 && MIPMAPS_READY.with(|ready| !ready.replace(true));
+    if FILTER.with(|v| v.replace(filter) == filter) && !initialize {
         return;
     }
-    let maximum = max_anisotropy();
     if maximum <= 1 {
         return;
     }
     TEXTURES.with(|cache| {
+        log::debug!(
+            "Texture filtering: {filter}x for {} textures; initialize mipmaps: {initialize}",
+            cache.borrow().len()
+        );
         for texture in cache.borrow().values() {
             // Restore the binding so Miniquad's cached GL state stays correct.
             unsafe {
@@ -142,13 +157,15 @@ pub fn set_filter(filter: u8) {
                 };
                 {
                     use miniquad::graphics::raw_gl::*;
-                    gl.quad_context
-                        .texture_generate_mipmaps(texture.raw_miniquad_id());
-                    gl.quad_context.texture_set_min_filter(
-                        texture.raw_miniquad_id(),
-                        miniquad::FilterMode::Linear,
-                        miniquad::MipmapFilterMode::Linear,
-                    );
+                    if initialize {
+                        gl.quad_context
+                            .texture_generate_mipmaps(texture.raw_miniquad_id());
+                        gl.quad_context.texture_set_min_filter(
+                            texture.raw_miniquad_id(),
+                            miniquad::FilterMode::Linear,
+                            miniquad::MipmapFilterMode::Linear,
+                        );
+                    }
                     let mut previous = 0;
                     glGetIntegerv(0x8069, &mut previous);
                     glBindTexture(GL_TEXTURE_2D, id);

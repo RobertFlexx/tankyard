@@ -77,6 +77,8 @@ pub struct Menu {
     motion_time: f32,
     scroll_panel: crate::ui_layout::ScrollPanel,
     scroll_page: Option<(Page, usize)>,
+    scale_edit: crate::ui_layout::ScaleEdit,
+    scale_anchor: Option<f32>,
     pub maps: Vec<tankyard_content::MapDef>,
     mod_catalog: Vec<(String, tankyard_mods::ModInfo)>,
     mods_scanned: bool,
@@ -112,6 +114,8 @@ impl Menu {
             motion_time: 0.0,
             scroll_panel: Default::default(),
             scroll_page: None,
+            scale_edit: Default::default(),
+            scale_anchor: None,
             maps: tankyard_content::builtin_maps(),
             mod_catalog: vec![],
             mods_scanned: false,
@@ -126,6 +130,8 @@ impl Menu {
     }
     pub fn clear_focus(&mut self) {
         cancel_pointer_capture();
+        self.scale_edit.cancel();
+        self.scale_anchor = None;
         self.name_active = false;
         self.address_active = false;
         self.password_active = false;
@@ -300,12 +306,9 @@ impl Menu {
         } else {
             144.
         } * s;
-        let bottom = h - if self.page == Page::Main { 12. } else { 78. } * s;
-        let anchor = if self.page == Page::Settings && active_slider("Interface scale") {
-            Some(if self.settings_tab == 0 { 558. } else { 442. })
-        } else {
-            None
-        };
+        let footer = if self.page == Page::Main { 12. } else { 78. };
+        let bottom = h - (footer + if self.error.is_empty() { 0. } else { 38. }) * s;
+        let anchor = self.scale_anchor.take();
         let canvas = self.scroll_panel.begin(s, top, bottom, anchor);
         let mut action = match self.page {
             Page::Main => self.main(content, settings, s),
@@ -347,12 +350,13 @@ impl Menu {
             action = footer;
         }
         if !self.error.is_empty() {
-            let x = margin + 140. * s;
+            let y = h - if self.page == Page::Main { 46. } else { 112. } * s;
+            panel(Rect::new(margin, y, w - margin * 2., 32. * s));
             label(
-                &fitted_label(&self.error, 17. * s, (w - 270. * s - x).max(1.)),
-                x,
-                h - 40. * s,
-                17. * s,
+                &fitted_label(&self.error, 14. * s, (w - margin * 2. - 24. * s).max(1.)),
+                margin + 12. * s,
+                y + 22. * s,
+                14. * s,
                 RED,
             );
         }
@@ -1447,6 +1451,33 @@ impl Menu {
             }
         }
     }
+    fn interface_scale(&mut self, rect: Rect, settings: &mut Settings, s: f32, anchor: f32) {
+        let mut preview = self.scale_edit.preview(settings.ui_scale);
+        if slider_value(
+            rect,
+            "Interface scale",
+            &mut preview,
+            [0.8, 1.4],
+            0.01,
+            s,
+            |value| format!("{:.0}%", value * 100.),
+        ) {
+            self.scale_edit.stage(preview);
+        }
+        if self
+            .scale_edit
+            .commit(&mut settings.ui_scale, active_slider("Interface scale"))
+        {
+            self.scale_anchor = Some(anchor);
+        }
+        label(
+            "Release to apply",
+            rect.x,
+            rect.y + 67. * s,
+            11. * s,
+            muted_color(),
+        );
+    }
     fn settings(&mut self, settings: &mut Settings, s: f32) -> Action {
         let x = 40.0 * s;
         let y = 158.0 * s;
@@ -1500,13 +1531,11 @@ impl Menu {
                     1.0,
                     s,
                 );
-                slider(
+                self.interface_scale(
                     Rect::new(x, by + 304.0 * s, col, 48.0 * s),
-                    "Interface scale",
-                    &mut settings.ui_scale,
-                    0.8,
-                    1.4,
+                    settings,
                     s,
+                    558.,
                 );
                 label(
                     "RESOLUTION · render size in fullscreen",
@@ -1650,8 +1679,7 @@ impl Menu {
                         ),
                         &format!("{level}x"),
                         settings.anisotropic_filtering == level,
-                        crate::graphics::texture_count() > 0
-                            && level <= crate::graphics::max_anisotropy(),
+                        level <= crate::graphics::max_anisotropy(),
                         s * 0.72,
                     ) {
                         settings.anisotropic_filtering = level;
@@ -1659,7 +1687,7 @@ impl Menu {
                 }
                 label(
                     if crate::graphics::texture_count() == 0 {
-                        "Filtering applies to mod textures; current tanks use geometry."
+                        "Saved for textured tanks; built-in tanks use geometry."
                     } else if crate::graphics::max_anisotropy() <= 1 {
                         "This graphics device supports standard filtering."
                     } else {
@@ -1796,13 +1824,11 @@ impl Menu {
                     &mut settings.high_contrast,
                     s,
                 );
-                slider(
+                self.interface_scale(
                     Rect::new(x, by + 188.0 * s, col, 48.0 * s),
-                    "Interface scale",
-                    &mut settings.ui_scale,
-                    0.8,
-                    1.4,
+                    settings,
                     s,
+                    442.,
                 );
                 wrap(
                     "Reduced motion stops decorative animation, particles, camera easing and shake. Combat movement and attack warnings stay visible.",

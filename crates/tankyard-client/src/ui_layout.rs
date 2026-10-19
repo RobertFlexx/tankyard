@@ -27,8 +27,42 @@ pub fn pointer_visible() -> bool {
 pub fn scrolling() -> bool {
     CANVAS.with(|c| c.get().is_some_and(|c| c.scrollable))
 }
+pub fn visible_y(top: f32, bottom: f32) -> bool {
+    CANVAS.with(|c| {
+        c.get()
+            .is_none_or(|canvas| bottom >= canvas.clip.y && top <= canvas.clip.bottom())
+    })
+}
 pub fn scale(width: f32, height: f32, preference: f32) -> f32 {
     ((width / 1280.).min(height / 800.) * preference).clamp(0.1, 8.)
+}
+
+/// Keep the layout fixed while its own scale slider is being dragged.
+#[derive(Default)]
+pub struct ScaleEdit {
+    pending: Option<f32>,
+}
+impl ScaleEdit {
+    pub fn preview(&self, applied: f32) -> f32 {
+        self.pending.unwrap_or(applied)
+    }
+    pub fn stage(&mut self, value: f32) {
+        self.pending = Some(value.clamp(0.8, 1.4));
+    }
+    pub fn commit(&mut self, applied: &mut f32, holding: bool) -> bool {
+        if holding {
+            return false;
+        }
+        let Some(value) = self.pending.take() else {
+            return false;
+        };
+        let changed = *applied != value;
+        *applied = value;
+        changed
+    }
+    pub fn cancel(&mut self) {
+        self.pending = None;
+    }
 }
 
 #[derive(Default)]
@@ -132,6 +166,26 @@ impl Drop for CanvasGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scale_drag_commits_once_on_release_and_cancellation_keeps_the_applied_scale() {
+        let mut edit = ScaleEdit::default();
+        let mut applied = 1.;
+        for step in 80..=140 {
+            edit.stage(step as f32 / 100.);
+            assert!(!edit.commit(&mut applied, true));
+            assert_eq!(applied, 1.);
+        }
+        assert!(edit.commit(&mut applied, false));
+        assert_eq!(applied, 1.4);
+        assert!(!edit.commit(&mut applied, false));
+        edit.stage(0.8);
+        edit.cancel();
+        assert!(!edit.commit(&mut applied, false));
+        assert_eq!(edit.preview(applied), 1.4);
+        edit.stage(0.8);
+        assert!(edit.commit(&mut applied, false), "fast clicks also apply");
+        assert_eq!(applied, 0.8);
+    }
     #[test]
     fn interface_scale_has_headroom_in_both_directions_at_every_supported_size() {
         for (w, h) in [

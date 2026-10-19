@@ -21,6 +21,7 @@ mod session;
 mod settings;
 mod startup;
 mod ui_layout;
+mod ui_text;
 use tankyard_client::achievements;
 use tankyard_client::tank_model;
 mod ui;
