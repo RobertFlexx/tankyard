@@ -8,7 +8,7 @@ curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/inst
 
 The installer downloads a precompiled build, checks its SHA-256 checksum, installs it for your user, and adds an application shortcut with the Tank Yard icon. Run the same command to update. Your settings and progress stay where they are.
 
-Windows: download **tankyard-v0.2.16-windows-x86_64-setup.exe** from [Releases](https://github.com/RobertFlexx/tankyard/releases/latest), then open it and follow the installer. It installs for your Windows account without administrator access, creates a Start menu shortcut, offers a desktop shortcut, and appears in Windows Installed apps for removal. Run a newer setup to update. Player settings, progress, host configurations, and unrelated files survive updates and removal.
+Windows: download the **Windows setup (.exe)** from [Releases](https://github.com/RobertFlexx/tankyard/releases/latest), then open it and follow the installer. It installs for your Windows account without administrator access, creates a Start menu shortcut, offers a desktop shortcut, and appears in Windows Installed apps for removal. Run a newer setup to update. Player settings, progress, host configurations, and unrelated files survive updates and removal.
 
 PowerShell is also available:
 

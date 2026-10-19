@@ -10,6 +10,8 @@ A tank arena by RobertFlexx, inspired by Diep.io and Arras.io. Play online, host
 
 Choose **Play** for the public server or **Play offline** for a local game.
 
+Windows (64-bit): [NSIS installer (.exe)](https://github.com/RobertFlexx/tankyard/releases/download/v0.3.2/tankyard-v0.3.2-windows-x86_64-setup.exe) · [Portable ZIP](https://github.com/RobertFlexx/tankyard/releases/download/v0.3.2/tankyard-v0.3.2-windows-x86_64.zip). For the portable version, extract the ZIP and open `tankyard.exe`.
+
 Install or update on Linux and macOS:
 
 ```sh
