@@ -189,6 +189,14 @@ jobs:
         env:
           BUILD_PLATFORM: ${{ matrix.platform }}
         run: python scripts/package_release.py --platform "$BUILD_PLATFORM" --version "$RELEASE_TAG" --binary-dir "$BINARY_DIR"
+      - name: Build graphical Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco upgrade nsis --version=3.11.0 --allow-downgrade --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "NSIS installation failed." }
+          python scripts/build_windows_installer.py --version $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { throw "Graphical installer compilation failed." }
       - name: Test Windows installation before publishing
         if: runner.os == 'Windows'
         shell: pwsh
@@ -234,6 +242,7 @@ jobs:
           names = [f"tankyard-{tag}-{platform}.{extension}" for platform, extension in
               (("linux-x86_64", "tar.gz"), ("linux-aarch64", "tar.gz"),
                ("macos-universal", "tar.gz"), ("windows-x86_64", "zip"))]
+          names.append(f"tankyard-{tag}-windows-x86_64-setup.exe")
           for name in ("install.sh", "install.ps1"):
               shutil.copyfile(name, directory / name)
           lines = []
@@ -255,7 +264,7 @@ jobs:
           else
             gh release create "$RELEASE_TAG" --verify-tag --draft --title "Tank Yard $RELEASE_TAG" --generate-notes
           fi
-          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/install.sh dist/install.ps1 dist/SHA256SUMS --clobber
+          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/*-setup.exe dist/install.sh dist/install.ps1 dist/SHA256SUMS --clobber
           gh release edit "$RELEASE_TAG" --draft=false --latest
 
   install:

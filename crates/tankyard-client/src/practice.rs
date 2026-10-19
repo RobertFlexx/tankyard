@@ -6,6 +6,7 @@ pub enum Goal {
     Score(u32),
     Kills(u32),
     Survive,
+    Boss,
 }
 #[derive(Clone, Copy)]
 pub struct Challenge {
@@ -19,7 +20,7 @@ pub struct Challenge {
     pub seconds: u32,
     pub goal: Goal,
 }
-pub const CHALLENGES: [Challenge; 4] = [
+pub const CHALLENGES: [Challenge; 8] = [
     Challenge {
         id: "shape_sprint",
         title: "Shape sprint",
@@ -64,6 +65,50 @@ pub const CHALLENGES: [Challenge; 4] = [
         seconds: 120,
         goal: Goal::Survive,
     },
+    Challenge {
+        id: "parry_lab",
+        title: "Counter school",
+        description: "Counter three rushers in two minutes with the Counterguard.",
+        tip: "Time the ability just before a Smasher touches your hull. A counter removes half its health.",
+        class: "counterguard",
+        level: 45,
+        bots: 3,
+        seconds: 120,
+        goal: Goal::Kills(3),
+    },
+    Challenge {
+        id: "stasis_lab",
+        title: "Frozen front",
+        description: "Win four duels in three minutes with the Chronarch.",
+        tip: "Catch a volley, move the field toward your opponent, and let the outward wave do the work.",
+        class: "chronarch",
+        level: 55,
+        bots: 5,
+        seconds: 180,
+        goal: Goal::Kills(4),
+    },
+    Challenge {
+        id: "boss_hunt",
+        title: "Sentinel hunt",
+        description: "Defeat the Sentinel in four minutes. One life, a complete Reprisal build.",
+        tip: "Watch the boss's white warning ring. Parry the heavy shots and dodge the second attack.",
+        class: "reprisal",
+        level: 55,
+        bots: 0,
+        seconds: 240,
+        goal: Goal::Boss,
+    },
+    Challenge {
+        id: "trap_fort",
+        title: "Hold the line",
+        description: "Stop three rushers in three minutes with the Triple Trapper.",
+        tip: "Build a field before engaging. Your tougher traps protect several approaches at once.",
+        class: "tri_bastion",
+        level: 45,
+        bots: 4,
+        seconds: 180,
+        goal: Goal::Kills(3),
+    },
 ];
 impl Challenge {
     pub fn config(self, seed: u64) -> WorldConfig {
@@ -76,6 +121,7 @@ impl Challenge {
             mode_name: Some(self.title.into()),
             map: match self.goal {
                 Goal::Kills(_) => "competitive",
+                Goal::Boss => "boss",
                 Goal::Survive => "survival",
                 _ => "open",
             }
@@ -86,7 +132,7 @@ impl Challenge {
             width: 2400.,
             height: 1800.,
             target_count: 130,
-            spawn_protection: 30.,
+            spawn_protection: 15.,
             time_limit: self.seconds as f32,
             ..Default::default()
         }
@@ -96,6 +142,7 @@ impl Challenge {
             Goal::Score(score) => score,
             Goal::Kills(kills) => kills,
             Goal::Survive => self.seconds * 60,
+            Goal::Boss => 1,
         }
     }
 }
@@ -116,6 +163,7 @@ pub struct Run {
     start: u64,
     score: u32,
     kills: u32,
+    boss: Option<EntityId>,
 }
 impl Run {
     pub fn new(index: usize, snapshot: &Snapshot, player: EntityId) -> Option<Self> {
@@ -135,6 +183,7 @@ impl Run {
             start: snapshot.tick,
             score: tank.score,
             kills: tank.kills,
+            boss: snapshot.bosses.first().map(|boss| boss.id),
         })
     }
     pub fn challenge(&self) -> Challenge {
@@ -165,6 +214,10 @@ impl Run {
             Goal::Score(_) => tank.score.saturating_sub(self.score),
             Goal::Kills(_) => tank.kills.saturating_sub(self.kills),
             Goal::Survive => self.ticks,
+            Goal::Boss => u32::from(
+                self.boss
+                    .is_some_and(|id| !snapshot.bosses.iter().any(|b| b.id == id && b.health > 0.)),
+            ),
         };
         self.progress = self.progress.max(progress).min(challenge.target());
         if !tank.alive {

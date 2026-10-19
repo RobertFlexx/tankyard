@@ -170,7 +170,7 @@ pub fn sweep_polygon(start: V2, end: V2, r: f32, vertices: &[V2]) -> Option<f32>
 }
 pub fn tank_speed(tank: &Tank, content: &Content) -> f32 {
     let mult = content.class(&tank.class).map_or(1., |c| c.multipliers[7]);
-    210. * mult * stat_scale(tank.stats[7])
+    210. * mult * stat_scale(tank.stats[7]) * tank.speed_scale.clamp(0.25, 6.)
 }
 /// Uses the same acceleration/drag and wall constraints for client prediction.
 pub fn move_tank(
@@ -190,7 +190,9 @@ pub fn move_tank(
     let desired = tank.input.movement.clamp_length(1.) * speed;
     // Acceleration and coast are exponential, so prediction and the server
     // agree at every frame rate. Keep enough inertia for recoil and dodging.
-    let rate = if desired.length_squared() > 0.1 {
+    let rate = if tank.knockback > 0. {
+        1.6
+    } else if desired.length_squared() > 0.1 {
         config.rules.acceleration
     } else {
         config.rules.coast
@@ -198,7 +200,11 @@ pub fn move_tank(
     tank.vel = tank
         .vel
         .lerp(desired, 1. - (-rate * dt).exp())
-        .clamp_length(speed * 3.);
+        .clamp_length(if tank.knockback > 0. {
+            1200.
+        } else {
+            speed * 3.
+        });
     // Resolve initial penetrations first (spawns, map edits, remote correction).
     // Keeping the simulation finite prevents one bad collision from affecting
     // all clients and makes prediction use identical authoritative rules.
@@ -343,10 +349,15 @@ pub fn predict_tank(
         return;
     }
     tank.boost = (tank.boost - dt).max(0.0);
+    tank.knockback = (tank.knockback - dt).max(0.);
+    tank.stasis = (tank.stasis - dt).max(0.);
     tank.ability_cooldown = (tank.ability_cooldown - dt).max(0.0);
     tank.shield = (tank.shield - dt).max(0.0);
     update_protection(tank, dt);
     move_tank(tank, content, config, walls, dt);
+    if tank.spawn_immunity && tank.protection > 0. {
+        return;
+    }
     let Some(class) = content.class(&tank.class) else {
         return;
     };
@@ -462,6 +473,7 @@ pub(crate) fn apply_personal_ability(
             tank.boost = 0.6;
         }
         Ability::Shield => tank.shield = 3.5,
+        Ability::Stasis => tank.stasis = crate::STASIS_SECONDS,
         Ability::Parry | Ability::CounterParry | Ability::VolleyParry => {
             tank.shield = ability.parry_window().unwrap_or(0.)
         }
@@ -495,8 +507,8 @@ pub(crate) fn apply_personal_ability(
 
 pub(crate) fn update_protection(tank: &mut Tank, dt: f32) {
     let moving = tank.input.movement.length_squared() > 0.0;
-    if tank.input.fire
-        || (tank.spawn_immunity && (moving || tank.input.ability))
+    if (tank.spawn_immunity && moving)
+        || (!tank.spawn_immunity && tank.input.fire)
         || tank.protection <= dt + 0.001
     {
         tank.protection = 0.0;
@@ -580,7 +592,37 @@ impl<T: Copy> SpatialGrid<T> {
 mod tests {
     use super::*;
     #[test]
-    fn spawn_immunity_lasts_thirty_idle_seconds_and_prediction_agrees() {
+    fn aiming_auto_fire_and_abilities_cannot_spend_or_cancel_stationary_spawn_immunity() {
+        let mut world = crate::World::new(
+            WorldConfig {
+                target_count: 0,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        let player = world.add_player("Stationary", false);
+        world.tanks[0].class = "riposte".into();
+        for tick in 1..120 {
+            world.tanks[0].input = crate::PlayerInput {
+                fire: true,
+                ability: true,
+                aim: tick as f32 * 0.7,
+                ..Default::default()
+            };
+            world.step();
+            world.damage_tank(0, 999., player + 1, V2::new(100., 0.));
+            assert_eq!(world.tanks[0].health, world.tanks[0].max_health);
+            assert!(world.tanks[0].spawn_immunity && world.tanks[0].protection > 12.9);
+            assert_eq!(world.tanks[0].ability_cooldown, 0.);
+            assert!(world.projectiles.is_empty());
+        }
+        world.tanks[0].input.movement = V2::new(1., 0.);
+        world.step();
+        assert!(!world.tanks[0].spawn_immunity);
+        assert!(!world.projectiles.is_empty());
+    }
+    #[test]
+    fn spawn_immunity_lasts_fifteen_idle_seconds_and_prediction_agrees() {
         let content = Content::builtin();
         let config = WorldConfig {
             target_count: 0,
@@ -589,8 +631,8 @@ mod tests {
         let mut world = crate::World::new(config, content);
         world.add_player("Idle", false);
         let mut predicted = world.tanks[0].clone();
-        assert_eq!(predicted.protection, 30.0);
-        for tick in 1..=1800 {
+        assert_eq!(predicted.protection, 15.0);
+        for tick in 1..=900 {
             predicted.aim = tick as f32 * 0.01;
             predict_tank(
                 &mut predicted,
@@ -604,7 +646,7 @@ mod tests {
             let actual = &world.tanks[0];
             assert_eq!(predicted.protection, actual.protection);
             assert_eq!(predicted.spawn_immunity, actual.spawn_immunity);
-            if tick < 1800 {
+            if tick < 900 {
                 assert!(actual.protection > 0.0);
             }
         }
@@ -613,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_or_attacking_ends_spawn_immunity_immediately_but_moving_keeps_cloak() {
+    fn movement_ends_spawn_immunity_immediately_but_keeps_cloak() {
         for input in [
             crate::PlayerInput {
                 movement: V2::new(1.0, 0.0),
@@ -621,14 +663,6 @@ mod tests {
             },
             crate::PlayerInput {
                 movement: V2::new(0.001, 0.0),
-                ..Default::default()
-            },
-            crate::PlayerInput {
-                fire: true,
-                ..Default::default()
-            },
-            crate::PlayerInput {
-                ability: true,
                 ..Default::default()
             },
         ] {

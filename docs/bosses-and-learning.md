@@ -41,3 +41,7 @@ To inspect actual boss geometry without a GPU:
 ```sh
 cargo run --locked -p tankyard-client --bin tankyard-models -- --bosses --columns 4 --output artifacts/models/bosses.svg
 ```
+
+## v0.2.16 combat update
+
+Bosses now start at roughly 4,590–6,885 health before higher waves and participant scaling, with larger health reserves for defensive hulls. All eleven bosses add a secondary attack cycle with a 0.9-second white-ring windup. The new attacks complement their primary weapons: drone bosses add suppression fans, defensive bosses place trap rings with gaps, pursuers launch seeking volleys and charges, Sentinel fires an aimed piercing fan, Prism/Eclipse alternate patterned rings, and Foundry combines explosive fans with mine screens. The recognizable broad classic silhouettes now have original reactor cores and armor inlays. All shots retain normal wall collision, finite lifetime, projectile caps, and applicable parry/stasis counterplay. The aggregate random encounter chance remains 0.25% per simulation second.

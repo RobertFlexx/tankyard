@@ -226,6 +226,47 @@ pub fn boss_model_geometry(
             poly(emit, p, 0, r * 0.09, 0., color);
         }
     }
+    if matches!(
+        kind,
+        BossKind::Guardian
+            | BossKind::Summoner
+            | BossKind::Defender
+            | BossKind::FallenOverlord
+            | BossKind::FallenBooster
+    ) {
+        // Familiar broad silhouettes, with original reactor assemblies and
+        // precisely spaced armor inlays specific to Tank Yard's machines.
+        let (segments, angle, reach) = match kind {
+            BossKind::Guardian => (3, aim, 0.54),
+            BossKind::Summoner => (4, aim + FRAC_PI_4, 0.61),
+            BossKind::Defender => (3, rotate, 0.29),
+            BossKind::FallenOverlord => (4, aim + FRAC_PI_4, 0.72),
+            _ => (5, aim + PI, 0.70),
+        };
+        for i in 0..segments {
+            let a = angle + i as f32 * TAU / segments as f32;
+            let pos = p + direction(a) * r * reach;
+            hull(
+                emit,
+                pos,
+                4,
+                r * 0.065,
+                a + FRAC_PI_4,
+                tint(color, 0.74),
+                edge * 0.25,
+            );
+        }
+        hull(
+            emit,
+            p,
+            if kind == BossKind::Summoner { 4 } else { 3 },
+            r * 0.18,
+            angle,
+            tint(color, 0.58),
+            edge * 0.42,
+        );
+        poly(emit, p, 0, r * 0.075, 0., Color::new(0.91, 0.97, 1., 1.));
+    }
 }
 
 #[cfg(test)]

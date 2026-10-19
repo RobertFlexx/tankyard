@@ -449,6 +449,10 @@ pub fn world(
                     settings.colorblind,
                 )
             });
+        if projectile.frozen.is_some() {
+            draw_circle_lines(p.x, p.y, r + 4. * z, 1.5 * z, alpha(CYAN, 0.8));
+            draw_line(p.x - r * 0.5, p.y, p.x + r * 0.5, p.y, z, WHITE);
+        }
         // The lifetime field counts down on the authoritative simulation.
         let fade = (projectile.lifetime / 0.18).clamp(0.0, 1.0);
         let appear = (projectile.age / 0.045).clamp(0.45, 1.0);
@@ -517,6 +521,17 @@ pub fn world(
         }
         let p = view.screen(position);
         let r = boss.radius * z;
+        if boss.attack_windup > 0. {
+            let progress = 1. - boss.attack_windup / 0.9;
+            draw_circle_lines(
+                p.x,
+                p.y,
+                r * (1.65 - progress * 0.35),
+                2.5 * z,
+                alpha(WHITE, 0.65),
+            );
+            draw_circle_lines(p.x, p.y, r * 1.12, 1.5 * z, alpha(AMBER, 0.6));
+        }
         if boss.tactic == tankyard_core::BossTactic::Windup {
             let end = p + vec2(boss.aim.cos(), boss.aim.sin()) * r * 4.;
             draw_line(p.x, p.y, end.x, end.y, r * 0.55, alpha(RED, 0.12));
@@ -571,9 +586,40 @@ pub fn world(
         } else {
             0.0
         };
+        if tank.stasis > 0. {
+            let field = tankyard_core::STASIS_RADIUS * z;
+            draw_circle(p.x, p.y, field, alpha(CYAN, 0.035));
+            let time = if settings.reduced_motion {
+                0.
+            } else {
+                animation_time * 0.3
+            };
+            for arc in 0..48 {
+                if arc % 6 == 0 {
+                    continue;
+                }
+                let a = time + arc as f32 * std::f32::consts::TAU / 48.;
+                let b = a + std::f32::consts::TAU / 56.;
+                draw_line(
+                    p.x + a.cos() * field,
+                    p.y + a.sin() * field,
+                    p.x + b.cos() * field,
+                    p.y + b.sin() * field,
+                    1.7 * z,
+                    alpha(CYAN, 0.38),
+                );
+            }
+            draw_circle_lines(p.x, p.y, r * 1.55, 2. * z, alpha(WHITE, 0.7));
+        }
         let parrying = class.ability.is_parry() && tank.shield > 0.0;
         if tank.protection > 0.0 || tank.shield > 0.0 {
-            let aura = if parrying { AMBER } else { color };
+            let aura = if tank.spawn_immunity {
+                WHITE
+            } else if parrying {
+                AMBER
+            } else {
+                color
+            };
             draw_circle(
                 p.x,
                 p.y,
@@ -626,7 +672,7 @@ pub fn world(
             Some(z),
         );
         if tank.id != local {
-            arcade_center(&tank.name, p.x, p.y - r - 14.0 * z, 15.0 * z);
+            arcade_player_label(tank, "", vec2(p.x, p.y - r - 14. * z), 320. * z, 15. * z);
         }
         health_bar(
             p,
@@ -649,6 +695,23 @@ pub fn world(
                 (particle.size + (1.0 - particle.life / particle.total) * 60.0) * z,
                 2.0 * z,
                 c,
+            );
+        } else if particle.spark {
+            let direction = particle.vel.normalized();
+            let length = (particle.vel.length() * 0.035).clamp(4., 24.) * z;
+            draw_line(
+                p.x,
+                p.y,
+                p.x - direction.x * length,
+                p.y - direction.y * length,
+                (particle.size * 0.4 * z).max(0.6),
+                c,
+            );
+            draw_circle(
+                p.x,
+                p.y,
+                (particle.size * 0.32 * z).max(0.5),
+                alpha(WHITE, c.a),
             );
         } else {
             draw_poly(

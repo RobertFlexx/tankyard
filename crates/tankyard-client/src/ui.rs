@@ -765,7 +765,62 @@ pub fn progress(rect: Rect, ratio: f32, color: Color) {
     );
 }
 
-/// Outlined arcade lettering for names and headings. Each outline adds draw calls.
+/// Reserve the badge and score before fitting a long player name. Creator
+/// identity must remain legible even on a narrow leaderboard row.
+pub fn fitted_player_name(tank: &tankyard_core::Tank, size: f32, width: f32) -> String {
+    let badge = if tank.game_creator {
+        " [Game Creator]"
+    } else {
+        ""
+    };
+    let name = fitted_label(
+        &tank.name,
+        size,
+        (width - label_width(badge, size)).max(size),
+    );
+    format!("{name}{badge}")
+}
+
+pub fn arcade_player_label(
+    tank: &tankyard_core::Tank,
+    suffix: &str,
+    at: Vec2,
+    width: f32,
+    size: f32,
+) {
+    let suffix_width = label_width(suffix, size);
+    let badge_size = size * 0.66;
+    let badge_width = if tank.game_creator {
+        label_width("Game Creator", badge_size) + size * 0.6
+    } else {
+        0.
+    };
+    let gap = if tank.game_creator { size * 0.35 } else { 0. };
+    let name = fitted_label(
+        &tank.name,
+        size,
+        (width - suffix_width - badge_width - gap).max(size),
+    );
+    let name_width = label_width(&name, size);
+    let left = at.x - (name_width + gap + badge_width + suffix_width) * 0.5;
+    arcade_label(&name, left, at.y, size);
+    if tank.game_creator {
+        let x = left + name_width + gap;
+        let rect = Rect::new(x, at.y - size * 0.78, badge_width, size * 0.94);
+        draw_rectangle(rect.x, rect.y, rect.w, rect.h, AMBER);
+        draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, (size * 0.05).max(0.5), TEXT);
+        center_label(
+            "Game Creator",
+            rect.center().x,
+            at.y - size * 0.09,
+            badge_size,
+            TEXT,
+        );
+    }
+    arcade_label(suffix, left + name_width + gap + badge_width, at.y, size);
+}
+
+/// Outlined arcade lettering for names and headings.
 pub fn arcade_center(value: &str, x: f32, y: f32, size: f32) {
     let width = label_width(value, size);
     let px = x - width * 0.5;

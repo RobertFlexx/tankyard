@@ -1,6 +1,6 @@
 # Tank Yard
 
-Tank Yard is a tank arena made by RobertFlexx, inspired by Diep.io and Arras.io. It has 102 tanks, fourteen modes, offline play, practice challenges, and player-hosted multiplayer.
+Tank Yard is a tank arena made by RobertFlexx, inspired by Diep.io and Arras.io. It has 103 tanks, fourteen modes, offline play, practice challenges, and player-hosted multiplayer.
 
 Install or update on Linux and macOS:
 
@@ -8,7 +8,7 @@ Install or update on Linux and macOS:
 curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh | sh
 ```
 
-Windows downloads and PowerShell installation are in the [installation guide](docs/installing.md). **Play** or Enter joins **tankyard.kokonico.me**; **Play offline** is beside it. Custom servers are still available through Join server.
+Windows graphical setup, portable downloads, and PowerShell installation are in the [installation guide](docs/installing.md). **Play** or Enter joins **tankyard.kokonico.me**; **Play offline** is beside it. Custom servers are still available through Join server.
 
 Build from source with Rust 1.88 or newer:
 
@@ -25,9 +25,9 @@ Use WASD to move, the mouse to aim, left click to fire, E for auto-fire, Space f
 
 Hold Shift with a skill key or click to fill that stat. While firing, drones follow the cursor; right click recalls them. Friendly drones bunch together with physical contact, slide along walls, and keep their individual shapes and headings when resting.
 
-Random Events adds timed arena modifiers. Co-op PvE pits your squad against ten waves of raiders and bosses, with revives between waves. Riposte, a level 30 Destroyer upgrade, parries shots into homing returns with Space. Spawn protection lasts up to 30 seconds and ends when you move or attack. In Sandbox, PgUp/PgDn changes your level; hold Shift for 15 levels.
+Random Events adds timed arena modifiers. Co-op PvE pits your squad against ten waves of raiders and bosses, with revives between waves. Riposte, a level 30 Destroyer upgrade, parries shots into homing returns with Space. Spawn protection lasts 15 seconds while stationary; aiming is free. Move to engage. In Sandbox, PgUp/PgDn changes your level; hold Shift for 15 levels.
 
-Tank upgrades unlock at levels 15, 30, 45, and 55. Riposte leads to Counterguard, then Reprisal. Their parry windows get tighter, with stronger returns and a small heal on success. Normal cannon damage stays the same. A bar below your tank shows when its next shot is ready. A quick click fires once when the gun is ready, while holding the button keeps firing at the weapon's reload rate. Eliminations show the opponent's name at the top of the screen.
+Tank upgrades unlock at levels 15, 30, 45, and 55. Riposte leads to Counterguard, then Reprisal. Their parry windows get tighter, with stronger returns and a small heal on success. Each parry upgrade also has a faster, stronger cannon. A timed Smasher counter removes half its maximum health and launches it away. Chronarch at level 55 freezes nearby rounds for three seconds and releases them in an outward wave. A bar below your tank shows when its next shot is ready. A quick click fires once when the gun is ready, while holding the button keeps firing at the weapon's reload rate. Eliminations show the opponent's name at the top of the screen.
 
 Parried drones and minions merge into one large drone. Hold left click to guide it toward the cursor, release to send it back at the attacker, and right-click to recall it. Each parry upgrade captures a stronger swarm. Reprisal also heals more and has a shorter ability cooldown.
 

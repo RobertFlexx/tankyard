@@ -44,6 +44,7 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
         for mod in ("fast_arena", "vampire"):
             shutil.copytree(ROOT / "mods" / mod, payload / "mods" / mod)
         shutil.copytree(ROOT / "docs", payload / "docs")
+        shutil.copytree(ROOT / "licenses", payload / "licenses", dirs_exist_ok=True)
         shutil.copy2(ROOT / "assets/fonts/LICENSE-DejaVu.txt", payload / "licenses/DejaVu.txt")
         shutil.copy2(ROOT / "assets/icons/lucide/LICENSE", payload / "licenses/Lucide.txt")
         shutil.copy2(ROOT / "assets/tankyard.svg", payload)

@@ -102,7 +102,13 @@ impl World {
         if safety < 100. {
             return 0;
         }
-        let health = 1800. + f32::from(self.match_state.boss_wave.max(1)) * 350.;
+        let health = (4400. + f32::from(self.match_state.boss_wave.max(1)) * 700.)
+            * match kind {
+                BossKind::Bastion | BossKind::Defender => 1.35,
+                BossKind::Guardian | BossKind::Summoner => 1.15,
+                BossKind::Tempest | BossKind::FallenBooster => 0.9,
+                _ => 1.,
+            };
         let health = health * (1. + self.tanks.len().saturating_sub(4).min(16) as f32 * 0.045);
         let id = self.id();
         self.bosses.push(Boss {
@@ -124,12 +130,16 @@ impl World {
             tactic_time: 2.,
             last_attacker: 0,
             arrival: 2.,
+            attack_timer: 7.,
+            attack: 0,
+            attack_windup: 0.,
         });
         self.event(EventKind::BossSpawn, pos, id, kind as u32, 0);
         id
     }
     pub(crate) fn update_bosses(&mut self) {
         let mut volleys = Vec::new();
+        let mut warnings = Vec::new();
         for i in 0..self.bosses.len() {
             let b = &self.bosses[i];
             if b.health <= 0. {
@@ -287,7 +297,20 @@ impl World {
                 b.vel *= 0.6;
             }
             b.timer -= DT;
-            if b.timer > 0. || target.is_none() {
+            let primary = b.timer <= 0. && b.arrival <= 0.;
+            let previous_windup = b.attack_windup;
+            b.attack_windup = (b.attack_windup - DT).max(0.);
+            let secondary = previous_windup > 0. && b.attack_windup <= 0. && target.is_some();
+            if b.arrival <= 0. && target.is_some() && previous_windup <= 0. {
+                b.attack_timer -= DT;
+                if b.attack_timer <= 0. {
+                    b.attack = (b.attack + 1) % 3;
+                    b.attack_windup = 0.9;
+                    b.attack_timer = 9.5 - f32::from(b.phase) * 1.5;
+                    warnings.push((b.pos, b.id, b.attack as u32, b.team));
+                }
+            }
+            if target.is_none() || (!primary && !secondary) {
                 continue;
             }
             let mut spawned_drones = owned;
@@ -327,6 +350,119 @@ impl World {
                     bounces,
                 ));
             };
+            if secondary {
+                // Distinct, telegraphed complements to each boss's normal arsenal.
+                // Every ring leaves a moving gap and every projectile uses normal
+                // wall collisions, parries, lifetime and resource limits.
+                let turn = f32::from(b.attack) * 0.33;
+                match b.kind {
+                    BossKind::Guardian | BossKind::Summoner | BossKind::FallenOverlord => {
+                        for n in 0..12 {
+                            let a = b.aim + turn + (n as f32 - 5.5) * 0.24;
+                            let kind = if b.kind == BossKind::FallenOverlord {
+                                ProjectileKind::Homing
+                            } else {
+                                ProjectileKind::Bullet
+                            };
+                            emit(a, kind, 340., 18., 8., 2.8, 1.3, 0);
+                        }
+                    }
+                    BossKind::Defender | BossKind::Bastion => {
+                        for n in 1..12 {
+                            emit(
+                                b.aim + turn + n as f32 * std::f32::consts::TAU / 12.,
+                                ProjectileKind::Trap,
+                                320.,
+                                27.,
+                                12.,
+                                5.,
+                                3.5,
+                                0,
+                            );
+                        }
+                        emit(b.aim, ProjectileKind::Shell, 460., 38., 14., 2.5, 2., 0);
+                    }
+                    BossKind::FallenBooster | BossKind::Tempest => {
+                        for n in 0..5 {
+                            emit(
+                                b.aim + (n as f32 - 2.) * 0.22,
+                                ProjectileKind::Homing,
+                                350.,
+                                18.,
+                                8.,
+                                3.,
+                                1.2,
+                                0,
+                            );
+                        }
+                        if b.tactic != BossTactic::Charge {
+                            b.tactic = BossTactic::Windup;
+                            b.tactic_time = 0.7;
+                        }
+                    }
+                    BossKind::Sentinel => {
+                        for n in 0..7 {
+                            emit(
+                                b.aim + (n as f32 - 3.) * 0.13,
+                                ProjectileKind::Piercing,
+                                560.,
+                                28.,
+                                8.,
+                                2.5,
+                                2.,
+                                0,
+                            );
+                        }
+                    }
+                    BossKind::Prism | BossKind::Eclipse => {
+                        for n in 1..16 {
+                            emit(
+                                b.aim + turn + n as f32 * std::f32::consts::TAU / 16.,
+                                if b.attack == 1 {
+                                    ProjectileKind::Homing
+                                } else {
+                                    ProjectileKind::Piercing
+                                },
+                                300. + n as f32 * 8.,
+                                17.,
+                                7.,
+                                3.,
+                                1.5,
+                                1,
+                            );
+                        }
+                    }
+                    BossKind::Foundry => {
+                        for n in 0..5 {
+                            emit(
+                                b.aim + (n as f32 - 2.) * 0.35,
+                                ProjectileKind::Explosive,
+                                310.,
+                                32.,
+                                12.,
+                                3.,
+                                1.5,
+                                0,
+                            );
+                        }
+                        for n in 0..6 {
+                            emit(
+                                b.aim + n as f32 * std::f32::consts::TAU / 6.,
+                                ProjectileKind::Mine,
+                                240.,
+                                25.,
+                                11.,
+                                5.,
+                                2.5,
+                                0,
+                            );
+                        }
+                    }
+                }
+            }
+            if !primary {
+                continue;
+            }
             match b.kind {
                 BossKind::Guardian => {
                     for n in 0..4 {
@@ -516,6 +652,9 @@ impl World {
                 }
             }
         }
+        for (pos, id, attack, team) in warnings {
+            self.event(EventKind::BossAttack, pos, id, attack, team);
+        }
         let room = self
             .config
             .max_projectiles
@@ -550,6 +689,47 @@ mod tests {
         world.add_player("Pilot", false);
         world.tanks[0].level = 45;
         world
+    }
+
+    #[test]
+    fn every_boss_has_more_health_and_a_telegraphed_secondary_attack() {
+        for kind in BossKind::ALL {
+            let mut world = arena();
+            world.tanks[0].pos = V2::new(2450., 1300.);
+            world.spawn_boss(kind);
+            let boss = &mut world.bosses[0];
+            assert!(boss.max_health >= 4500.);
+            boss.pos = V2::new(1600., 1300.);
+            boss.arrival = 0.;
+            boss.timer = 1000.;
+            boss.attack_timer = 0.;
+            world.update_bosses();
+            assert!(world.bosses[0].attack_windup > 0.8);
+            assert!(
+                world.projectiles.is_empty(),
+                "{kind:?} attacked before its warning"
+            );
+            assert!(
+                world
+                    .events
+                    .iter()
+                    .any(|e| matches!(e.kind, EventKind::BossAttack))
+            );
+            for _ in 0..60 {
+                world.update_bosses();
+            }
+            assert!(
+                !world.projectiles.is_empty(),
+                "{kind:?} did not release its attack"
+            );
+            assert!(world.projectiles.len() <= 24);
+            assert!(
+                world
+                    .projectiles
+                    .iter()
+                    .all(|p| p.vel.finite() && p.owner == world.bosses[0].id)
+            );
+        }
     }
 
     #[test]

@@ -6,13 +6,15 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{fmt, time::Duration};
 use tankyard_content::Content;
 use tankyard_core::{BossKind, EntityId, GameEvent, PlayerInput, Snapshot};
+mod creator;
+pub use creator::*;
 mod community;
 pub use community::*;
 mod voice;
 pub use voice::*;
 
-pub const PROTOCOL_VERSION: u32 = 13;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000d;
+pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000e;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -67,6 +69,17 @@ pub fn connection_config() -> ConnectionConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ClientControl {
+    CreatorProof {
+        signature: Vec<u8>,
+    },
+    /// Optional host extension. Only a cryptographically verified creator may
+    /// invoke it; standard servers install no handler.
+    OwnerExtension {
+        round: u32,
+        sequence: u64,
+        payload: Vec<u8>,
+        signature: Vec<u8>,
+    },
     Hello {
         protocol: u32,
         content: u64,
@@ -114,6 +127,15 @@ pub enum ClientControl {
 impl ClientControl {
     pub fn valid(&self) -> bool {
         match self {
+            Self::CreatorProof { signature } => signature.len() == 64,
+            Self::OwnerExtension {
+                round,
+                payload,
+                signature,
+                ..
+            } => {
+                *round > 0 && !payload.is_empty() && payload.len() <= 1024 && signature.len() == 64
+            }
             Self::Hello {
                 name,
                 password,
@@ -143,6 +165,10 @@ impl ClientControl {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerControl {
+    CreatorChallenge {
+        nonce: [u8; 32],
+        owner_extension: bool,
+    },
     Access {
         kind: ServerKind,
         chat_enabled: bool,
@@ -455,6 +481,11 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && scalar(t.ability_cooldown)
                 && scalar(t.charge)
                 && scalar(t.boost)
+                && (0.25..=6.).contains(&t.speed_scale)
+                && (0.25..=6.).contains(&t.reload_scale)
+                && (0.25..=8.).contains(&t.damage_scale)
+                && (0.0..=1.).contains(&t.knockback)
+                && (0.0..=tankyard_core::STASIS_SECONDS).contains(&t.stasis)
                 && t.stats.iter().all(|stat| *stat <= 7)
                 && t.points <= 38
                 && t.team <= 4
@@ -481,6 +512,9 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && scalar(p.penetration)
                 && scalar(p.lifetime)
                 && scalar(p.age)
+                && p.frozen.is_none_or(|f| {
+                    f.anchor > 0 && p.stasis_used && vector(f.offset) && vector(f.velocity)
+                })
                 && p.hit.len() <= 24
         })
         && s.targets.iter().all(|t| {
@@ -508,6 +542,9 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && vector(b.goal)
                 && scalar(b.tactic_time)
                 && scalar(b.arrival)
+                && (0.0..=30.).contains(&b.attack_timer)
+                && (0.0..=0.91).contains(&b.attack_windup)
+                && b.attack <= 2
                 && (1..=3).contains(&b.phase)
                 && b.team <= 4
         })
@@ -633,6 +670,7 @@ mod tests {
         );
         let id = world.add_player("Riposte", false);
         assert!(world.sandbox_class(id, "riposte"));
+        world.tanks[0].input.movement = V2::new(1., 0.);
         world.tanks[0].input.fire = true;
         world.step();
         world.projectiles[0].kind = tankyard_content::ProjectileKind::Homing;

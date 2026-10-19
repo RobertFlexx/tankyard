@@ -2,7 +2,49 @@ use crate::ui::*;
 use macroquad::prelude::*;
 use tankyard_client::achievements::{ACHIEVEMENTS, Feed};
 
-pub fn draw(feed: &Feed, s: f32, reduced_motion: bool) {
+pub struct TopOverlays {
+    pub practice_y: f32,
+    pub kill_y: f32,
+    pub notice_y: f32,
+    pub achievement_y: f32,
+}
+
+/// Allocate one centered vertical stack for transient overlays. A new boss,
+/// practice objective, kill feed and achievement may all arrive on one frame.
+pub fn top_overlays(
+    height: f32,
+    s: f32,
+    boss: bool,
+    practice: bool,
+    kills: usize,
+    notice: bool,
+) -> TopOverlays {
+    let practice_y = if boss { 188. } else { 110. } * s;
+    let mut next = if boss { 188. } else { 119. } * s;
+    if practice {
+        next = next.max(practice_y + 73. * s);
+    }
+    let kill_y = if practice {
+        practice_y + 91. * s
+    } else {
+        (if boss { 208. } else { 132. }) * s
+    };
+    if kills > 0 {
+        next = next.max(kill_y + (kills - 1) as f32 * 28. * s + 26. * s);
+    }
+    let notice_y = (height * if kills == 0 { 0.25 } else { 0.36 }).max(next + 25. * s);
+    if notice {
+        next = next.max(notice_y + 26. * s);
+    }
+    TopOverlays {
+        practice_y,
+        kill_y,
+        notice_y,
+        achievement_y: next,
+    }
+}
+
+pub fn draw(feed: &Feed, s: f32, reduced_motion: bool, top: f32) {
     let Some((achievement, age)) = feed.current() else {
         return;
     };
@@ -18,7 +60,7 @@ pub fn draw(feed: &Feed, s: f32, reduced_motion: bool) {
     };
     let r = Rect::new(
         (screen_width() - 374.0 * s) * 0.5,
-        (119.0 - (1.0 - settle) * 16.0) * s,
+        top + (1.0 - settle) * 16.0 * s,
         374.0 * s,
         83.0 * s,
     );
@@ -70,4 +112,45 @@ pub fn draw(feed: &Feed, s: f32, reduced_motion: bool) {
         11.0 * s,
         alpha(muted_color(), fade),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn boss_practice_kills_notices_and_achievements_share_a_clear_centered_stack() {
+        for (height, scale) in [(600., 0.6), (800., 0.97), (1080., 1.32), (1440., 1.4)] {
+            for boss in [false, true] {
+                for practice in [false, true] {
+                    for kills in [0, 1, 3] {
+                        for notice in [false, true] {
+                            let layout = top_overlays(height, scale, boss, practice, kills, notice);
+                            if boss {
+                                assert!(layout.achievement_y >= 188. * scale);
+                            }
+                            if practice {
+                                if boss {
+                                    assert!(layout.practice_y >= 188. * scale);
+                                }
+                                assert!(layout.achievement_y >= layout.practice_y + 73. * scale);
+                                assert!(layout.kill_y >= layout.practice_y + 80. * scale);
+                            }
+                            if kills > 0 {
+                                assert!(
+                                    layout.achievement_y
+                                        >= layout.kill_y
+                                            + (kills - 1) as f32 * 28. * scale
+                                            + 26. * scale
+                                );
+                            }
+                            if notice {
+                                assert!(layout.achievement_y >= layout.notice_y + 26. * scale);
+                            }
+                            assert!(layout.achievement_y + 99. * scale < height - 100. * scale);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

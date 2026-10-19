@@ -143,6 +143,7 @@ case "$1" in -s) printf '%s\\n' Linux ;; -m) printenv TANKYARD_TEST_ARCH ;; esac
             names = archive.getnames()
             self.assertTrue(any(name.endswith("/licenses/DejaVu.txt") for name in names))
             self.assertTrue(any(name.endswith("/licenses/Lucide.txt") for name in names))
+            self.assertTrue(any(name.endswith("/licenses/Opus.txt") for name in names))
             self.assertTrue(any(name.endswith("/configs/server.toml") for name in names))
             self.assertFalse(any("/.git/" in name or "private" in name for name in names))
         for binary in packaging.BINARIES:
@@ -151,6 +152,7 @@ case "$1" in -s) printf '%s\\n' Linux ;; -m) printenv TANKYARD_TEST_ARCH ;; esac
         with zipfile.ZipFile(archive) as bundle:
             self.assertTrue(any(name.endswith("/tankyard.exe") for name in bundle.namelist()))
             self.assertTrue(any(name.endswith("/licenses/Lucide.txt") for name in bundle.namelist()))
+            self.assertTrue(any(name.endswith("/licenses/Opus.txt") for name in bundle.namelist()))
             self.assertTrue(any(name.endswith("/install.ps1") for name in bundle.namelist()))
 
 

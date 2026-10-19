@@ -22,6 +22,10 @@ pub(crate) struct Peer {
     pub voice_muted: bool,
     pub spectating: Option<EntityId>,
     pub disconnect_at: Option<Duration>,
+    pub creator_nonce: Option<[u8; 32]>,
+    pub creator: bool,
+    pub creator_session_nonce: Option<[u8; 32]>,
+    pub last_owner_sequence: Option<u64>,
 }
 #[derive(Default, Clone, Debug)]
 pub struct ServerMetrics {
@@ -76,6 +80,8 @@ impl ServerMetrics {
     }
 }
 
+pub type OwnerExtension = fn(&mut UdpServer, EntityId, &[u8]) -> Result<String, String>;
+
 pub struct UdpServer {
     pub session: LocalSession,
     pub settings: ServerSettings,
@@ -104,6 +110,7 @@ pub struct UdpServer {
     global_authority: Option<std::sync::Arc<dyn crate::access::GlobalAuthority>>,
     pub(crate) chat: crate::chat::Chat,
     accounts_checked_at: u64,
+    owner_extension: Option<OwnerExtension>,
 }
 
 #[derive(Clone, Debug)]
@@ -196,6 +203,7 @@ impl UdpServer {
             global_authority: None,
             chat,
             accounts_checked_at: 0,
+            owner_extension: None,
         })
     }
 
@@ -401,6 +409,10 @@ impl UdpServer {
                             voice_muted: false,
                             spectating: None,
                             disconnect_at: None,
+                            creator_nonce: None,
+                            creator: false,
+                            creator_session_nonce: None,
+                            last_owner_sequence: None,
                         },
                     );
                     let blocked = self
@@ -687,8 +699,22 @@ impl UdpServer {
             let player = self.session.world.add_player(&name, false);
             if let Some(peer) = self.peers.get_mut(&client) {
                 peer.entity = Some(player);
+                if let Some(tank) = self.session.world.tanks.iter_mut().find(|t| t.id == player) {
+                    tank.game_creator = peer.creator;
+                }
             }
             self.welcome(client, player);
+            let nonce = renet_netcode::generate_random_bytes::<32>();
+            if let Some(peer) = self.peers.get_mut(&client) {
+                peer.creator_nonce = Some(nonce);
+            }
+            self.send_control(
+                client,
+                &ServerControl::CreatorChallenge {
+                    nonce,
+                    owner_extension: self.owner_extension.is_some(),
+                },
+            );
             self.broadcast_control(&ServerControl::PlayerJoined {
                 player,
                 name: name.clone(),
@@ -706,6 +732,44 @@ impl UdpServer {
         let permitted =
             self.settings.allow_sandbox && self.session.world.config.mode == Mode::Sandbox;
         let accepted = match message {
+            ClientControl::CreatorProof { signature } => {
+                let proof = self
+                    .peers
+                    .get_mut(&client)
+                    .and_then(|p| p.creator_nonce.take());
+                let verified =
+                    proof.is_some_and(|nonce| verify_creator(client, &nonce, &signature));
+                if verified {
+                    if let Some(p) = self.peers.get_mut(&client) {
+                        p.creator = true;
+                        p.creator_session_nonce = proof;
+                    }
+                    if let Some(t) = self.session.world.tanks.iter_mut().find(|t| t.id == player) {
+                        t.game_creator = true;
+                    }
+                }
+                verified
+            }
+            ClientControl::OwnerExtension {
+                round,
+                sequence,
+                payload,
+                signature,
+            } => {
+                let result = self
+                    .apply_owner_extension(client, player, round, sequence, &payload, &signature);
+                match result {
+                    Ok(reason) => self.send_control(
+                        client,
+                        &ServerControl::Action {
+                            accepted: true,
+                            reason,
+                        },
+                    ),
+                    Err(error) => self.community_result(client, Err(error)),
+                }
+                return;
+            }
             ClientControl::Spectate { round, target } => {
                 let tanks = &self.session.world.tanks;
                 let valid = round == self.session.world.match_state.round
@@ -869,6 +933,84 @@ impl UdpServer {
         self.restart_round();
         Ok(())
     }
+    /// Install trusted, host-owned administration code before accepting peers.
+    /// Public builds have no handler; no gameplay role or username can enable it.
+    pub fn set_owner_extension(&mut self, handler: OwnerExtension) -> Result<(), NetError> {
+        if self.player_count() > 0 {
+            return Err(NetError(
+                "Install extensions before players connect.".into(),
+            ));
+        }
+        self.owner_extension = Some(handler);
+        Ok(())
+    }
+    fn apply_owner_extension(
+        &mut self,
+        client: u64,
+        player: EntityId,
+        round: u32,
+        sequence: u64,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<String, NetError> {
+        if !self
+            .peers
+            .get(&client)
+            .is_some_and(|p| p.creator && p.disconnect_at.is_none())
+        {
+            return Err(NetError("Verified creator identity required.".into()));
+        }
+        if round != self.session.world.match_state.round
+            || payload.is_empty()
+            || payload.len() > 1024
+        {
+            return Err(NetError("Invalid or outdated extension command.".into()));
+        }
+        let peer = self
+            .peers
+            .get_mut(&client)
+            .ok_or_else(|| NetError("Creator connection closed.".into()))?;
+        let nonce = peer
+            .creator_session_nonce
+            .ok_or_else(|| NetError("Creator verification required.".into()))?;
+        if peer
+            .last_owner_sequence
+            .is_some_and(|last| sequence <= last)
+            || !verify_creator_command(
+                &creator_command(client, &nonce, round, sequence, payload),
+                signature,
+            )
+        {
+            return Err(NetError(
+                "Invalid or replayed creator command signature.".into(),
+            ));
+        }
+        peer.last_owner_sequence = Some(sequence);
+        let handler = self
+            .owner_extension
+            .ok_or_else(|| NetError("This host has no owner extension installed.".into()))?;
+        if !self.access.take_admin_token(client, unix_time().as_secs()) {
+            return Err(NetError("Wait before sending another command.".into()));
+        }
+        crate::access::audit(
+            &self.settings.audit_file,
+            &crate::access::AuditRecord {
+                time: unix_time().as_secs(),
+                actor: &client.to_string(),
+                action: "owner_extension",
+                target: &player.to_string(),
+                reason: "Verified creator extension command",
+            },
+        )
+        .map_err(NetError)?;
+        self.session.world.config.modded = true;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            handler(self, player, payload)
+        }))
+        .map_err(|_| NetError("Owner extension failed.".into()))?
+        .map_err(NetError)
+    }
+
     /// Trusted Rust extensions are registered before accepting players. The
     /// factory recreates them for each round; data hooks use runtime manifests.
     pub fn register_plugin(
@@ -1041,7 +1183,10 @@ impl UdpServer {
                 | EventKind::Capture
                 | EventKind::Victory
                 | EventKind::BossSpawn
-                | EventKind::Kill => self.important_events.push(event),
+                | EventKind::Kill
+                | EventKind::BodyParry
+                | EventKind::StasisRelease
+                | EventKind::BossAttack => self.important_events.push(event),
                 _ if self.pending_effects.len() < 4096 => self.pending_effects.push(event),
                 _ => {}
             }
@@ -1189,6 +1334,9 @@ impl UdpServer {
             let player = self.session.world.add_player(&name, false);
             if let Some(peer) = self.peers.get_mut(&client) {
                 peer.entity = Some(player);
+                if let Some(tank) = self.session.world.tanks.iter_mut().find(|t| t.id == player) {
+                    tank.game_creator = peer.creator;
+                }
                 peer.last_sequence = None;
                 peer.spectating = None;
                 peer.last_voice_sequence = None;
@@ -1298,6 +1446,7 @@ mod tests {
         events[100].elimination = Some(tankyard_core::Elimination {
             victim: 5000,
             name: "Same-tick rival".into(),
+            game_creator: false,
         });
         let batches = encode_event_batches(7, &events).unwrap();
         assert!(batches.len() > 1);
@@ -1381,6 +1530,8 @@ mod snapshot_regressions {
                 hit: (0..24).map(|n| u64::MAX - n).collect(),
                 gun: None,
                 homing_target: 0,
+                frozen: None,
+                stasis_used: false,
             });
         }
         assert!(encode_snapshot(&snapshot).is_err());

@@ -42,6 +42,10 @@ pub struct NetworkClient {
     pub voice_muted: bool,
     pub voice_packets: std::collections::VecDeque<VoicePacket>,
     pub audit_lines: Vec<String>,
+    pub creator_challenge: Option<[u8; 32]>,
+    pub owner_extension_available: bool,
+    owner_nonce: Option<[u8; 32]>,
+    owner_sequence: u64,
     client: RenetClient,
     transport: NetcodeClientTransport,
     hello: ClientControl,
@@ -182,6 +186,10 @@ impl NetworkClient {
             voice_muted: false,
             voice_packets: std::collections::VecDeque::with_capacity(32),
             audit_lines: Vec::new(),
+            creator_challenge: None,
+            owner_extension_available: false,
+            owner_nonce: None,
+            owner_sequence: 0,
         })
     }
     pub fn update(&mut self, elapsed: Duration) -> Result<(), NetError> {
@@ -353,6 +361,15 @@ impl NetworkClient {
                         return self.fail("Invalid server match settings.".into());
                     }
                     self.match_settings = Some(settings);
+                }
+                ServerControl::CreatorChallenge {
+                    nonce,
+                    owner_extension,
+                } => {
+                    self.owner_extension_available = owner_extension;
+                    self.owner_nonce = Some(nonce);
+                    self.owner_sequence = 0;
+                    self.creator_challenge = Some(nonce);
                 }
                 ServerControl::PlayerJoined { .. } | ServerControl::PlayerLeft { .. } => {}
             }
@@ -537,6 +554,37 @@ impl NetworkClient {
     }
     pub fn is_connecting(&self) -> bool {
         self.client.is_connecting() || (self.client.is_connected() && self.player_id.is_none())
+    }
+    pub fn submit_creator_proof(&mut self, signature: Vec<u8>) -> bool {
+        self.queue_control(ClientControl::CreatorProof { signature })
+    }
+    pub fn owner_command_to_sign(&self, payload: &[u8]) -> Option<Vec<u8>> {
+        Some(creator_command(
+            self.client_id(),
+            &self.owner_nonce?,
+            self.player_round?,
+            self.owner_sequence,
+            payload,
+        ))
+    }
+    pub fn owner_extension(&mut self, payload: Vec<u8>, signature: Vec<u8>) -> bool {
+        let Some(round) = self.player_round else {
+            return false;
+        };
+        let Some(next) = self.owner_sequence.checked_add(1) else {
+            return false;
+        };
+        if self.queue_control(ClientControl::OwnerExtension {
+            round,
+            sequence: self.owner_sequence,
+            payload,
+            signature,
+        }) {
+            self.owner_sequence = next;
+            true
+        } else {
+            false
+        }
     }
     pub fn client_id(&self) -> u64 {
         self.transport.client_id()

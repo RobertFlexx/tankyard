@@ -17,6 +17,8 @@ pub mod progression;
 #[cfg(test)]
 mod scenarios;
 mod spectating;
+mod stasis;
+pub use stasis::{STASIS_RADIUS, STASIS_SECONDS};
 mod weapons;
 pub mod world;
 pub use arena::PVE_WAVES;

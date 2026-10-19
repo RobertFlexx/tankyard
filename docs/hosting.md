@@ -23,7 +23,7 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 
 Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
 
-Current clients and servers use protocol 12. Proximity voice, spectator controls, and captured drones require matching versions. Update clients and servers together. The sample configs use 30 seconds of spawn protection; existing configs keep their chosen duration.
+Current clients and servers use protocol 14. Proximity voice, spectator controls, and captured drones require matching versions. Update clients and servers together. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
 
 The process console is the host's administration interface:
 
@@ -92,3 +92,5 @@ Repeat these local workloads after server changes:
 ```
 
 The load process also simulates every client, so its CPU use and loopback packet loss differ from a deployed fleet. Check [measured results](status.md), then test the intended map, classes, and projectile population on the actual host. The central lobby and provisioning service remain separate integrations.
+
+Creator badges use a per-connection challenge and Ed25519 proof checked against the public creator key. Display names and community roles do not confer creator identity. Standard builds have no owner-extension handler. Trusted hosts can register their own extension before accepting players; every extension packet carries a fresh signature bound to the connection nonce, current round, monotonic sequence, and exact payload. Bounded payloads, replay checks, rate limits, and audit logging apply before host code runs. Modified matches disable regular arena achievements.

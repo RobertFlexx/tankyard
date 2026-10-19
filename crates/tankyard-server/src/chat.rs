@@ -168,6 +168,7 @@ mod tests {
             room: "lobby".into(),
             player: 1,
             name: "Pilot".into(),
+            game_creator: false,
             text: "Hello".into(),
             time: 1,
         }

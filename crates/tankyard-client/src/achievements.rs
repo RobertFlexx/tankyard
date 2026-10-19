@@ -21,6 +21,7 @@ pub enum Goal {
     Tier(u8),
     Points(u8),
     Survival(u64),
+    MeetCreator,
 }
 pub struct Achievement {
     pub id: &'static str,
@@ -119,6 +120,12 @@ pub static ACHIEVEMENTS: &[Achievement] = &[
         description: "Destroy 100 tanks.",
         goal: Goal::Kills(100),
     },
+    Achievement {
+        id: "meet_creator",
+        title: "Meet the game's creator",
+        description: "Share an arena with the verified Game Creator.",
+        goal: Goal::MeetCreator,
+    },
 ];
 #[derive(Default, Clone, Copy)]
 pub struct Progress {
@@ -129,6 +136,7 @@ pub struct Progress {
     pub tier: u8,
     pub points: u8,
     pub alive_ticks: u64,
+    pub met_creator: bool,
 }
 impl Achievement {
     pub fn available(&self, mode: AchievementMode) -> bool {
@@ -144,6 +152,7 @@ impl Achievement {
             Goal::Tier(n) => p.tier >= n,
             Goal::Points(n) => p.points >= n,
             Goal::Survival(n) => p.alive_ticks >= n,
+            Goal::MeetCreator => p.met_creator,
         }
     }
 }
@@ -161,6 +170,7 @@ pub struct Tracker {
     current_kills: u32,
     highest_score: u32,
     progress: Option<Progress>,
+    met_creator: bool,
 }
 impl Tracker {
     pub fn observe(
@@ -171,6 +181,11 @@ impl Tracker {
         games: u32,
         kills: u32,
     ) -> Option<Progress> {
+        self.met_creator |= snapshot
+            .tanks
+            .iter()
+            .any(|t| t.id != player && t.game_creator && !t.bot)
+            && snapshot.tanks.iter().any(|t| t.id == player && !t.bot);
         self.track(
             snapshot.tanks.iter().find(|tank| tank.id == player),
             &snapshot.config,
@@ -243,6 +258,7 @@ impl Tracker {
             level: tank.level,
             tier: content.class(&tank.class).map_or(0, |c| c.tier),
             points: tank.stats.iter().copied().fold(0, u8::saturating_add),
+            met_creator: self.met_creator,
             alive_ticks: if tank.alive {
                 tick.saturating_sub(self.born_at)
             } else {
@@ -303,16 +319,25 @@ impl Claims {
             self.mode = mode;
             *feed = Feed::default();
         }
+        let meeting = Progress {
+            met_creator: tracker.met_creator,
+            ..Default::default()
+        };
         match mode {
             AchievementMode::PerMatch => {
+                unlock(meeting, &mut self.unlocked, feed);
                 if let Some(progress) = tracker.match_progress() {
                     unlock(progress, &mut self.unlocked, feed);
                 }
                 false
             }
-            AchievementMode::Global => tracker
-                .progress(career.0, career.1)
-                .is_some_and(|progress| unlock(progress, global, feed)),
+            AchievementMode::Global => {
+                let met = unlock(meeting, global, feed);
+                tracker
+                    .progress(career.0, career.1)
+                    .is_some_and(|progress| unlock(progress, global, feed))
+                    || met
+            }
             AchievementMode::Off => false,
         }
     }
@@ -365,6 +390,61 @@ pub fn unlock(progress: Progress, unlocked: &mut Vec<String>, feed: &mut Feed) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn meeting_requires_another_verified_human_and_is_saved_only_once() {
+        let content = Content::builtin();
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                ..Default::default()
+            },
+            content.clone(),
+        );
+        let player = world.add_player("Pilot", false);
+        world.add_player("Game Creator", false);
+        let mut tracker = Tracker::default();
+        let mut claims = Claims::default();
+        let mut global = vec![];
+        let mut feed = Feed::default();
+        tracker.observe(&world.snapshot(), player, &content, 0, 0);
+        claims.update(
+            &tracker,
+            AchievementMode::Global,
+            (0, 0),
+            &mut global,
+            &mut feed,
+        );
+        assert!(!global.iter().any(|id| id == "meet_creator"));
+        world.tanks[1].game_creator = true;
+        world.tanks[1].bot = true;
+        tracker.observe(&world.snapshot(), player, &content, 0, 0);
+        claims.update(
+            &tracker,
+            AchievementMode::Global,
+            (0, 0),
+            &mut global,
+            &mut feed,
+        );
+        assert!(!global.iter().any(|id| id == "meet_creator"));
+        world.tanks[1].bot = false;
+        world.config.modded = true;
+        tracker.observe(&world.snapshot(), player, &content, 0, 0);
+        assert!(claims.update(
+            &tracker,
+            AchievementMode::Global,
+            (0, 0),
+            &mut global,
+            &mut feed
+        ));
+        assert_eq!(global.iter().filter(|id| *id == "meet_creator").count(), 1);
+        assert!(!claims.update(
+            &tracker,
+            AchievementMode::Global,
+            (0, 0),
+            &mut global,
+            &mut feed
+        ));
+    }
     use tankyard_core::{World, WorldConfig};
 
     #[test]

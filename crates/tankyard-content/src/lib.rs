@@ -60,6 +60,7 @@ pub enum Ability {
     Parry,
     CounterParry,
     VolleyParry,
+    Stasis,
 }
 
 impl Ability {
@@ -79,6 +80,7 @@ impl Ability {
             Self::Parry => "Parry",
             Self::CounterParry => "Counter",
             Self::VolleyParry => "Reprisal",
+            Self::Stasis => "Stasis wave",
         }
     }
 
@@ -181,6 +183,13 @@ pub struct ClassDef {
 }
 
 impl ClassDef {
+    pub fn is_smasher(&self) -> bool {
+        matches!(
+            self.body_style,
+            BodyStyle::Smasher | BodyStyle::Landmine | BodyStyle::Spike
+        ) || self.multipliers[2] >= 2.
+    }
+
     /// A behavior fingerprint deliberately ignores names, geometry and balance
     /// numbers. A cosmetic reskin or damage-only edit cannot count as a class.
     /// Mount positions, shot patterns, projectile composition, ricochets,
@@ -586,7 +595,7 @@ mod tests {
                     .contains(&id.to_owned())
             );
         }
-        assert_eq!(content.classes.len(), 102);
+        assert_eq!(content.classes.len(), 103);
         content.validate().unwrap();
     }
 

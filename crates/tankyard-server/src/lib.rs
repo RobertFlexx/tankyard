@@ -19,7 +19,7 @@ pub use client::{NetworkClient, NetworkDiagnostics};
 pub use config::{ServerSettings, difficulty_from_name, mode_from_name};
 pub use host::HostedServer;
 pub use session::LocalSession;
-pub use transport::{AdminReply, ServerMetrics, TickTiming, UdpServer};
+pub use transport::{AdminReply, OwnerExtension, ServerMetrics, TickTiming, UdpServer};
 
 use std::{
     fmt,

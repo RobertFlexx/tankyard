@@ -37,7 +37,10 @@ fn cadence_phase(seed: u64, cycle: u32) -> f32 {
 }
 
 pub(crate) fn reload_rate(tank: &Tank, class: &ClassDef) -> f32 {
-    stat_scale(tank.stats[6]) * class.multipliers[6] * if tank.boost > 0. { 1.45 } else { 1. }
+    stat_scale(tank.stats[6])
+        * class.multipliers[6]
+        * tank.reload_scale.clamp(0.25, 6.)
+        * if tank.boost > 0. { 1.45 } else { 1. }
 }
 
 pub(crate) fn reload_interval(
@@ -151,6 +154,8 @@ impl World {
                 shots: 0,
             }),
             homing_target: 0,
+            frozen: None,
+            stasis_used: false,
         }
     }
     pub(crate) fn fire_weapons(&mut self) {
@@ -202,14 +207,6 @@ impl World {
             let Some(class) = self.content.class(&tank.class) else {
                 continue;
             };
-            if tank.input.ability && tank.ability_cooldown <= 0. && class.ability != Ability::None {
-                tank.ability_cooldown = class.ability_cooldown;
-                abilities.push((index, class.ability));
-            }
-            if tank.input.fire {
-                tank.protection = 0.;
-                tank.spawn_immunity = false;
-            }
             let reload = reload_rate(tank, class);
             if tank.cooldowns.len() != class.barrels.len()
                 || tank.barrel_shots.len() != class.barrels.len()
@@ -218,6 +215,17 @@ impl World {
                 tank.cooldowns = class.barrels.iter().map(|b| b.delay / reload).collect();
                 tank.barrel_shots = vec![0; class.barrels.len()];
                 tank.barrel_aims = class.barrels.iter().map(|b| tank.aim + b.angle).collect();
+            }
+            if tank.spawn_immunity && tank.protection > 0. {
+                continue;
+            }
+            if tank.input.ability && tank.ability_cooldown <= 0. && class.ability != Ability::None {
+                tank.ability_cooldown = class.ability_cooldown;
+                abilities.push((index, class.ability));
+            }
+            if tank.input.fire {
+                tank.protection = 0.;
+                tank.spawn_immunity = false;
             }
             let previous_charge = tank.charge;
             if tank.input.fire {
@@ -332,7 +340,8 @@ impl World {
                         * stat_scale(tank.stats[5])
                         * class.multipliers[5]
                         * charge
-                        * self.config.rules.damage_multiplier;
+                        * self.config.rules.damage_multiplier
+                        * tank.damage_scale.clamp(0.25, 8.);
                     let penetration =
                         barrel.penetration * stat_scale(tank.stats[4]) * class.multipliers[4];
                     let velocity = V2::from_angle(aim + spread) * speed
@@ -485,7 +494,8 @@ impl World {
             | Ability::Shield
             | Ability::Cloak
             | Ability::Overdrive
-            | Ability::Blink => {}
+            | Ability::Blink
+            | Ability::Stasis => {}
             Ability::Parry | Ability::CounterParry | Ability::VolleyParry => {}
             Ability::Heal => {
                 let heal = self.tanks[index].max_health * 0.27;

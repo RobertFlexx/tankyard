@@ -8,7 +8,9 @@ curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/inst
 
 The installer downloads a precompiled build, checks its SHA-256 checksum, installs it for your user, and adds an application shortcut with the Tank Yard icon. Run the same command to update. Your settings and progress stay where they are.
 
-Windows, from PowerShell:
+Windows: download **tankyard-v0.2.16-windows-x86_64-setup.exe** from [Releases](https://github.com/RobertFlexx/tankyard/releases/latest), then open it and follow the installer. It installs for your Windows account without administrator access, creates a Start menu shortcut, offers a desktop shortcut, and appears in Windows Installed apps for removal. Run a newer setup to update. Player settings, progress, host configurations, and unrelated files survive updates and removal.
+
+PowerShell is also available:
 
 ~~~powershell
 irm https://github.com/RobertFlexx/tankyard/releases/latest/download/install.ps1 | iex
@@ -39,6 +41,6 @@ Linux x86-64 builds need glibc 2.31 or newer; ARM64 builds need glibc 2.35 or ne
 
 ## Release builds
 
-Pushing a tag matching Cargo's version, such as v0.2.8, runs the Release workflow. It checks the source and installers, builds all four packages, generates SHA256SUMS, and publishes the release after every package is ready. Each archive includes the game, server, relay, command-line tools, example configs, bundled mods, and licenses.
+Pushing a tag matching Cargo's version, such as v0.2.8, runs the Release workflow. It checks the source and installers, builds all four platform archives and the graphical Windows setup, generates SHA256SUMS, and publishes the release after every package is ready. Each archive includes the game, server, relay, command-line tools, example configs, bundled mods, and licenses. Windows CI compiles the NSIS graphical installer and tests silent install, update, and uninstall against the real game before publication.
 
 The workflow then installs the published game into a temporary directory on Linux, macOS, and Windows. This checks the same downloads and installer paths players use. A failed build leaves the release unpublished. To retry an interrupted run, use Re-run jobs or dispatch Release with the existing tag. Use a new version tag to change an already published release.

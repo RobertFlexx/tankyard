@@ -41,6 +41,40 @@ fn ready(server: &mut UdpServer, clients: &mut [&mut NetworkClient]) {
     panic!("handshake did not finish");
 }
 #[test]
+fn names_roles_and_forged_proofs_cannot_enable_private_creator_tools() {
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let mut player =
+        NetworkClient::connect(&server.address.to_string(), "Game Creator", "").unwrap();
+    ready(&mut server, &mut [&mut player]);
+    pump(&mut server, &mut [&mut player], 12);
+    assert!(player.creator_challenge.is_some());
+    assert!(!player.owner_extension_available);
+    let id = player.player_id.unwrap();
+    server.admin_command(&format!("role {id} owner"));
+    pump(&mut server, &mut [&mut player], 8);
+    assert_eq!(player.role, Role::Owner);
+    assert!(player.submit_creator_proof(vec![0; 64]));
+    assert!(player.owner_extension(br#"{"action":"god","enabled":true}"#.to_vec(), vec![0; 64]));
+    pump(&mut server, &mut [&mut player], 12);
+    assert!(
+        !server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .game_creator
+    );
+    assert!(
+        player
+            .last_action
+            .as_deref()
+            .is_some_and(|message| message.contains("Verified creator"))
+    );
+    assert!(!server.session.world.config.modded);
+}
+#[test]
 fn match_controls_preserve_connections_roles_and_report_authoritative_settings() {
     let mut config = settings();
     config.world.mode = Mode::Ffa;

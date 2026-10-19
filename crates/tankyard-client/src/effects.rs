@@ -13,6 +13,7 @@ pub struct Particle {
     pub color: Color,
     pub ring: bool,
     pub spin: f32,
+    pub spark: bool,
 }
 #[derive(Clone, Copy)]
 struct LastProjectile {
@@ -167,7 +168,10 @@ impl Effects {
                 EventKind::Capture => (AMBER, 6, true),
                 EventKind::BossSpawn => (RED, 10, true),
                 EventKind::Victory => (AMBER, 10, true),
-                EventKind::Parry => (CYAN, 5, true),
+                EventKind::Parry => (CYAN, 8, true),
+                EventKind::BodyParry => (AMBER, 30, true),
+                EventKind::StasisRelease => (CYAN, 24, true),
+                EventKind::BossAttack => (RED, 3, true),
             };
             let count = (count as f32 * intensity) as usize;
             for _ in 0..count {
@@ -175,7 +179,15 @@ impl Effects {
                     break;
                 }
                 let angle = self.rand() * std::f32::consts::TAU;
-                let speed = 40.0 + self.rand() * 150.0;
+                let spark = matches!(
+                    event.kind,
+                    EventKind::BodyParry | EventKind::Parry | EventKind::StasisRelease
+                );
+                let speed = if spark {
+                    160. + self.rand() * 460.
+                } else {
+                    40. + self.rand() * 150.
+                };
                 let life = 0.25 + self.rand() * 0.5;
                 let size = 2.0 + self.rand() * 4.0;
                 self.particles.push(Particle {
@@ -187,6 +199,7 @@ impl Effects {
                     color,
                     ring: false,
                     spin: angle,
+                    spark,
                 });
             }
             if ring && self.particles.len() < 2048 {
@@ -199,6 +212,7 @@ impl Effects {
                     color,
                     ring: true,
                     spin: 0.0,
+                    spark: false,
                 });
             }
             if matches!(event.kind, EventKind::Kill) && event.subject == local {
@@ -210,7 +224,10 @@ impl Effects {
                         self.kills.remove(0);
                     }
                     self.kills.push(KillNotice {
-                        name: sanitize_name(&elimination.name),
+                        name: tankyard_core::display_player_name(
+                            &sanitize_name(&elimination.name),
+                            elimination.game_creator,
+                        ),
                         life: 3.5,
                     });
                 }
@@ -221,10 +238,18 @@ impl Effects {
                     EventKind::Evolve => Some("Tank upgraded".into()),
                     EventKind::Kill => None, // The name belongs in the top-screen feed.
                     EventKind::Parry => Some("Parried".into()),
+                    EventKind::BodyParry => Some("SMASHER COUNTERED".into()),
+                    EventKind::StasisRelease => Some("RELEASE".into()),
                     _ => None,
                 };
                 if let Some(text) = text {
-                    if matches!(event.kind, EventKind::Kill | EventKind::Parry) {
+                    if matches!(
+                        event.kind,
+                        EventKind::Kill
+                            | EventKind::Parry
+                            | EventKind::BodyParry
+                            | EventKind::StasisRelease
+                    ) {
                         if self.popups.len() < 32 {
                             self.popups.push(Popup {
                                 pos: event.pos,
@@ -629,6 +654,8 @@ mod tests {
             hit: Vec::new(),
             gun: None,
             homing_target: 0,
+            frozen: None,
+            stasis_used: false,
         };
         effects.sync_projectiles(100, &[projectile], 1.0, 1.0 / 60.0, false);
         effects.sync_projectiles(100, &[], 1.0, 1.0 / 60.0, false); // Same tick: no phantom collision.
@@ -662,6 +689,8 @@ mod tests {
             hit: Vec::new(),
             gun: None,
             homing_target: 0,
+            frozen: None,
+            stasis_used: false,
         };
         effects.sync_projectiles(
             100,
@@ -684,6 +713,7 @@ mod tests {
             tankyard_core::WorldConfig {
                 mode: tankyard_core::Mode::Sandbox,
                 target_count: 0,
+                spawn_protection: 0.,
                 ..Default::default()
             },
             tankyard_content::Content::builtin(),
@@ -725,6 +755,7 @@ mod tests {
         let mut world = tankyard_core::World::new(
             tankyard_core::WorldConfig {
                 target_count: 0,
+                spawn_protection: 0.,
                 ..Default::default()
             },
             tankyard_content::Content::builtin(),
@@ -837,6 +868,7 @@ mod elimination_regressions {
             elimination: Some(Elimination {
                 victim,
                 name: format!("Rival {victim}"),
+                game_creator: false,
             }),
         };
         let batch = vec![make(8), make(9)];
@@ -862,6 +894,7 @@ mod elimination_regressions {
                 elimination: Some(Elimination {
                     victim: 50,
                     name: "A".repeat(200) + "\nBAD",
+                    game_creator: false,
                 }),
             }],
             7,

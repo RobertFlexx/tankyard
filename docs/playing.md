@@ -33,9 +33,9 @@ On your first launch, choose Dark or Light from two live arena previews. The cho
 
 F1 shows your current bindings. Controls can be rebound in Settings, with a button to restore their defaults. Esc cancels a pending rebind; Back and Esc return to the previous menu. Settings save when you leave their screen. F1, F6, and F10 also close their screen when pressed again. Chat input and Sandbox controls take priority over these shortcuts.
 
-You spawn protected for up to 30 seconds. Moving, firing, or using an ability ends that protection immediately. The HUD shows the time left.
+You spawn protected for 15 seconds while stationary. Looking around keeps protection active; movement ends it immediately. A subtle white pulse and the HUD countdown show when you are protected. Weapons and abilities wait until you move or protection expires, including when auto-fire is saved.
 
-Riposte upgrades from Destroyer at level 30. Press Space just before a shot hits to parry it. The window lasts 0.18 seconds, with a 4.2-second cooldown. A successful parry boosts returned damage and heals 8% of your maximum health. Counterguard unlocks at 45 with a 0.16-second window, a 4-second cooldown, a stronger return, and 12% healing. Reprisal unlocks at 55 with a 0.14-second window, a 3.8-second cooldown, two extra return shots, and 15% healing. Ordinary cannon damage stays at 18 throughout the branch. Its cannon reloads in 0.62 seconds. Returned shots home toward the shooter and count as your damage and kills. Mines, traps, and other placed defenses cannot be parried.
+Riposte upgrades from Destroyer at level 30. Press Space just before a shot hits to parry it. The window lasts 0.18 seconds, with a 4.2-second cooldown. A successful parry boosts returned damage and heals 8% of your maximum health. Counterguard unlocks at 45 with a 0.16-second window, a 4-second cooldown, a stronger return, and 12% healing. Reprisal unlocks at 55 with a 0.14-second window, a 3.8-second cooldown, two extra return shots, and 15% healing. Their ordinary cannons improve too: Riposte deals 23 damage every 0.44 seconds, Counterguard 27 every 0.36 seconds, and Reprisal 32 every 0.31 seconds, before skill modifiers. A timed parry against a Smasher launches it away and removes half its full health bar, with normal kill credit. Returned shots home toward the shooter and count as your damage and kills. Mines, traps, and other placed defenses cannot be parried.
 
 Parry drones or Factory minions to capture them into a single large drone. Additional captures merge into it, increasing its size, contact damage, and durability up to a tier-dependent cap. Hold left click to steer it toward your cursor; let go to chase the original attacker, even while auto-fire is on. Right click recalls it. If the attacker is gone, it seeks nearby enemies. Riposte's capture lasts six seconds, Counterguard's seven, and Reprisal's eight; it expires when you die. Re-parrying cannot renew a returned drone's remaining lifetime. Captured minions lose their cannons.
 
@@ -53,7 +53,7 @@ In a text field, use arrows or Home/End to place the caret. Hold Shift to select
 
 Levels 15, 30, and 45 need 1,020, 8,644, and 35,304 XP. The final upgrade tier unlocks at level 55, with 72,734 XP. Each level-45 class has a route into the new tier. Skills arrive at three points per four levels: 10 points at level 15, 21 at level 30, and 33 at level 45. After level 45, you earn one point every two levels, ending at 38 points at level 55. Each skill still caps at seven points. Sandbox level controls use the same point budget.
 
-Trapper reloads in 1.25 seconds and its traps deal 23 damage with 4.5 penetration. The Trapper branch also has modest damage, penetration, or reload improvements. Traps launch farther and settle more gradually. The Trap Range skill increases launch distance, up to about 2.15 times the base range at seven points. Mixed weapons show Speed / Trap Range in the same skill slot. Trap lifetimes and the 24-trap limit stay the same. Automatic mounts only fire at targets their shots can reach. Auto Smasher bullets last 2.2 seconds.
+Trapper reloads in one second and its traps deal 27.6 damage with 5.49 penetration. Every trap launcher has 20% shorter reloads, 20% more damage, 22% more penetration and 30% faster launch speed compared with v0.2.15. Traps launch farther and settle more gradually. The Trap Range skill increases launch distance, up to about 2.15 times the base range at seven points. Mixed weapons show Speed / Trap Range in the same skill slot. Trap lifetimes and the 24-trap limit stay the same. Automatic mounts only fire at targets their shots can reach. Auto Smasher bullets last 2.2 seconds.
 
 ## Modes
 
@@ -84,7 +84,7 @@ Sight ranges are 420 / 500 / 560 / 620 units from Beginner through Expert, inclu
 
 Online arenas fill to six tanks by default: 1–5 players get 5–1 bots, and 6 or more get none. Bots return as players leave. Co-op wave enemies are counted separately. Empty servers pause the arena until someone joins. Offline games keep your chosen bot count.
 
-Spawn protection lasts up to 30 seconds while idle. Protected tanks pulse white; Reduced motion uses a steady tint. Moving, firing, or using an ability ends protection. Reconnect on the disconnect screen retries the same server.
+Spawn protection lasts up to 15 seconds while stationary. Protected tanks pulse white; Reduced motion uses a steady tint. Aiming keeps protection; moving ends it. Weapons and abilities are inactive until then. Reconnect on the disconnect screen retries the same server.
 
 When you die, the camera follows a living tank. Use Left/Right or the Previous/Next buttons to switch. Team modes and Co-op PvE only allow watching teammates. The view automatically changes when the watched tank dies or leaves, and returns to your own tank after respawning. If nobody can be watched, the death screen stays open. Survival elimination and Co-op wave revives keep their normal rules.
 
@@ -97,3 +97,11 @@ On community servers, Enter opens chat while alive and Slash opens it even while
 Per match is the default. Each achievement can be claimed once in a round, including across deaths and respawns; starting another game or a new round resets claims. Global keeps claims and kill totals across matches on this device. Off disables claims and popups without deleting saved global records. Select the mode on the Achievements page. The ten-round achievement is available in Global. Sandbox, Practice, and modded games do not count.
 
 Choose Host server to play with friends or Join server to enter an address. A local match pauses when you open its menu; a shared server keeps running. The [hosting guide](hosting.md) covers LAN and internet connections, moderation, and match controls.
+
+## New combat trials and Chronarch
+
+Practice (F6) now has Foundations and Combat trials pages. Counter school teaches body parries, Frozen front introduces the Chronarch, Sentinel hunt is a one-life boss duel, and Hold the line tests trap placement. Each challenge saves its own personal best and supports Retry. Offline modes also offer a bot-count slider, level 1/30/45 starts, arena-size presets, and an adaptive-border toggle. Preset levels disable arena achievements.
+
+Chronarch is a level-55 evolution from Counterguard or Relay. Its Stasis wave ability has an 18-second cooldown: for three seconds it catches your own and hostile kinetic rounds within 330 units, up to 96 rounds. They move with the tank without aging, then release radially as your shots. Rounds cannot be captured repeatedly. Friendly teammates' rounds, drones, traps, mines, and melee bypass the field; cover blocks it. Killing the caster cancels conversion and restores the original rounds.
+
+The verified creator has a gold **Game Creator** badge. Sharing an arena with another verified human creator unlocks **Meet the game's creator** according to your achievement preference, including modified arenas. A matching display name or server moderation role cannot grant the badge.

@@ -16,6 +16,7 @@ fn firing_trace(class: &str, seed: u64, reload: u8, ticks: u64) -> Vec<Vec<u64>>
     let mut world = World::new(
         WorldConfig {
             seed,
+            spawn_protection: 0.,
             target_count: 0,
             mode: Mode::Sandbox,
             ..Default::default()
@@ -793,7 +794,16 @@ fn later_boss_rush_rounds_still_have_six_waves() {
                 .iter_mut()
                 .find(|boss| boss.health > 0.0)
                 .unwrap();
-            assert_eq!(boss.max_health, 1800.0 + f32::from(wave) * 350.0);
+            assert_eq!(
+                boss.max_health,
+                (4400.0 + f32::from(wave) * 700.0)
+                    * match boss.kind {
+                        BossKind::Bastion | BossKind::Defender => 1.35,
+                        BossKind::Guardian | BossKind::Summoner => 1.15,
+                        BossKind::Tempest | BossKind::FallenBooster => 0.9,
+                        _ => 1.,
+                    }
+            );
             boss.health = 0.0;
             for _ in 0..250 {
                 world.step();
@@ -1091,8 +1101,7 @@ fn trapper_can_set_up_a_defensive_field_without_exceeding_the_deployable_cap() {
     assert!(world.sandbox_class(owner, "anchor"));
     world.tanks[0].pos = V2::new(1000., 1000.);
     world.tanks[0].input.fire = true;
-    // Eight traps in ten seconds leaves room to defend a position before the
-    // first traps expire. The old 1.5-second reload could only place seven.
+    // The faster launcher establishes ten durable traps in ten seconds.
     for _ in 0..600 {
         world.step();
     }
@@ -1101,7 +1110,7 @@ fn trapper_can_set_up_a_defensive_field_without_exceeding_the_deployable_cap() {
         .iter()
         .filter(|p| p.owner == owner)
         .collect();
-    assert_eq!(traps.len(), 8);
+    assert_eq!(traps.len(), 10);
     assert!(
         traps
             .iter()

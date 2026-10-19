@@ -8,21 +8,17 @@ pub enum Action {
     Browse,
 }
 
-pub fn draw(run: &Run, records: &[Record], s: f32) -> Action {
+pub fn draw(run: &Run, records: &[Record], s: f32, top: f32) -> Action {
     let challenge = run.challenge();
     let remaining = challenge.seconds * 60 - run.ticks;
     let goal = match challenge.goal {
         Goal::Score(target) => format!("Score  {} / {}", run.progress, target),
         Goal::Kills(target) => format!("Tanks  {} / {}", run.progress, target),
         Goal::Survive => format!("Survived  {}", clock(run.ticks)),
+        Goal::Boss => "Defeat the Sentinel".into(),
     };
     if !run.done() {
-        let r = Rect::new(
-            screen_width() * 0.5 - 180.0 * s,
-            110.0 * s,
-            360.0 * s,
-            59.0 * s,
-        );
+        let r = Rect::new(screen_width() * 0.5 - 180.0 * s, top, 360.0 * s, 59.0 * s);
         panel(r);
         label(
             &goal,

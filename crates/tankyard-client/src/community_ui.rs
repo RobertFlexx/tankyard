@@ -262,7 +262,11 @@ impl CommunityUi {
             self.text_lines.clear();
             for message in client.chat_messages.iter().filter(|m| m.room == self.room) {
                 for line in chat_lines(
-                    &format!("{}: {}", message.name, message.text),
+                    &format!(
+                        "{}: {}",
+                        tankyard_core::display_player_name(&message.name, message.game_creator),
+                        message.text
+                    ),
                     r.w - 16.0 * s,
                     13.0 * s,
                 ) {
@@ -402,7 +406,7 @@ impl CommunityUi {
         let pages = players.len().div_ceil(10).max(1);
         self.page = self.page.min(pages - 1);
         for (i, tank) in players.iter().skip(self.page * 10).take(10).enumerate() {
-            let name: String = tank.name.chars().take(18).collect();
+            let name = fitted_player_name(tank, 13. * s, 185. * s);
             if button(
                 Rect::new(
                     r.x + 20.0 * s,

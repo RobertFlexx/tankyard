@@ -69,6 +69,7 @@ impl UdpServer {
             room,
             player,
             name: tank.name.clone(),
+            game_creator: tank.game_creator,
             text: text.trim().replace('\u{2014}', "-"),
             time: now,
         };

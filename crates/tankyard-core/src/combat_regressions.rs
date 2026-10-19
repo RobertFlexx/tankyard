@@ -69,7 +69,7 @@ fn late_upgrades_require_their_level_and_every_final_branch_can_reach_fifty_five
 }
 
 #[test]
-fn perfect_parries_reward_timing_without_increasing_normal_cannon_damage() {
+fn perfect_parries_reward_timing_without_multiplying_the_improved_cannon_damage() {
     for (class, shots, minimum) in [
         ("riposte", 1, 45.),
         ("counterguard", 1, 55.),
@@ -81,8 +81,9 @@ fn perfect_parries_reward_timing_without_increasing_normal_cannon_damage() {
         world.tanks[0].input.fire = true;
         world.fire_weapons();
         assert_eq!(
-            world.projectiles[0].damage, 18.,
-            "ordinary {class} cannon stays unchanged"
+            world.projectiles[0].damage,
+            world.content.class(class).unwrap().barrels[0].damage,
+            "ordinary {class} cannon uses its class baseline"
         );
         world.projectiles.clear();
         world.tanks[0].input.fire = false;
@@ -117,7 +118,8 @@ fn perfect_parries_reward_timing_without_increasing_normal_cannon_damage() {
             world
                 .projectiles
                 .iter()
-                .any(|p| p.kind == ProjectileKind::Bullet && p.damage == 18.)
+                .any(|p| p.kind == ProjectileKind::Bullet
+                    && p.damage == world.content.class(class).unwrap().barrels[0].damage)
         );
     }
 }

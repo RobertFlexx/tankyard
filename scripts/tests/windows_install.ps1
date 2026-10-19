@@ -38,6 +38,30 @@ try {
     catch { $Rejected = $_.Exception.Message -match 'Checksum mismatch' }
     if (-not $Rejected) { throw "Corrupt download was accepted." }
     if ((Get-FileHash "$Destination/tankyard.exe").Hash -ne $Before) { throw "Failed update changed the game." }
-    Write-Host "Windows install, reinstall, server install, icon and checksum checks passed."
+    $Setup = (Resolve-Path (Join-Path $PackageDir "tankyard-$Version-windows-x86_64-setup.exe")).Path
+    $GraphicalDir = Join-Path $Work "graphical installation"
+    $Process = Start-Process -FilePath $Setup -ArgumentList @("/S", "/D=$GraphicalDir") -Wait -PassThru
+    if ($Process.ExitCode -ne 0) { throw "Graphical install failed: $($Process.ExitCode)" }
+    & "$GraphicalDir/tankyard.exe" --version
+    if ($LASTEXITCODE -ne 0) { throw "Graphically installed game failed to start." }
+    foreach ($File in @("VERSION", "LICENSE-MIT", "LICENSE-APACHE", "licenses/Opus.txt")) {
+        if (-not (Test-Path (Join-Path $GraphicalDir $File))) { throw "Graphical install omitted $File." }
+    }
+    Set-Content (Join-Path $GraphicalDir "keep-my-file.txt") "Keep this user file"
+    Set-Content (Join-Path $GraphicalDir "configs/server.toml") 'name = "My private server"'
+    $Process = Start-Process -FilePath $Setup -ArgumentList @("/S", "/D=$GraphicalDir") -Wait -PassThru
+    if ($Process.ExitCode -ne 0) { throw "Graphical update failed." }
+    if ((Get-Content "$GraphicalDir/configs/server.toml") -ne 'name = "My private server"') { throw "Graphical update replaced the host configuration." }
+    if (-not (Test-Path "$GraphicalDir/Uninstall.exe")) { throw "Uninstaller missing." }
+    # Copying the uninstaller avoids NSIS's detached temporary self-copy and
+    # makes completion deterministic for CI.
+    $Uninstaller = Join-Path $Work "remove-tankyard.exe"
+    Copy-Item "$GraphicalDir/Uninstall.exe" $Uninstaller
+    $Process = Start-Process -FilePath $Uninstaller -ArgumentList @("/S", "_?=$GraphicalDir") -Wait -PassThru
+    if ($Process.ExitCode -ne 0) { throw "Graphical uninstall failed." }
+    if (Test-Path "$GraphicalDir/tankyard.exe") { throw "Uninstall left the game executable." }
+    if (-not (Test-Path "$GraphicalDir/configs/server.toml")) { throw "Uninstall removed the host configuration." }
+    if (-not (Test-Path "$GraphicalDir/keep-my-file.txt")) { throw "Uninstall removed an unrelated file." }
+    Write-Host "Windows command-line and graphical install, update, uninstall, icon and checksum checks passed."
 }
 finally { if (Test-Path $Work) { Remove-Item -Recurse -Force $Work } }

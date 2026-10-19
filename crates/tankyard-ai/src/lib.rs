@@ -17,7 +17,7 @@ use navigation::{Navigation, clear_line};
 use perception::{Perception, Seen};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use tankyard_content::{Ability, ClassDef};
+use tankyard_content::{Ability, ClassDef, ProjectileKind};
 use tankyard_core::{EntityId, Mode, PlayerInput, Tank, V2, World, physics};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1163,6 +1163,9 @@ fn projectile_avoidance(world: &World, tank: &Tank, seen: &[Seen]) -> (V2, f32, 
             continue;
         };
         let projectile = &world.projectiles[index];
+        if projectile.frozen.is_some() {
+            continue;
+        }
         if projectile.owner == tank.id
             || !hostile(tank.team, projectile.team)
             || projectile.damage <= 0.
@@ -1215,45 +1218,66 @@ fn parry_opportunity(world: &World, tank: &Tank, seen: &[Seen]) -> Option<f32> {
 fn parry_threat(world: &World, tank: &Tank, seen: &[Seen]) -> Option<(EntityId, f32)> {
     seen.iter()
         .filter_map(|item| {
-            let Seen::Projectile(index) = *item else {
-                return None;
+            let (id, pos, vel, radius, lifetime) = match *item {
+                Seen::Projectile(index) => {
+                    let shot = &world.projectiles[index];
+                    if shot.owner == tank.id
+                        || !hostile(tank.team, shot.team)
+                        || shot.damage <= 0.
+                        || shot.lifetime <= 0.
+                        || shot.penetration <= 0.
+                        || shot.frozen.is_some()
+                        || matches!(
+                            shot.kind,
+                            ProjectileKind::Trap
+                                | ProjectileKind::Mine
+                                | ProjectileKind::Barrier
+                                | ProjectileKind::Turret
+                        )
+                    {
+                        return None;
+                    }
+                    (shot.id, shot.pos, shot.vel, shot.radius, shot.lifetime)
+                }
+                Seen::Tank(index) => {
+                    let attacker = &world.tanks[index];
+                    if attacker.id == tank.id
+                        || !attacker.alive
+                        || attacker.health <= 0.
+                        || attacker.protection > 0.
+                        || attacker.knockback > 0.
+                        || !hostile(tank.team, attacker.team)
+                        || !world
+                            .content
+                            .class(&attacker.class)
+                            .is_some_and(ClassDef::is_smasher)
+                    {
+                        return None;
+                    }
+                    (attacker.id, attacker.pos, attacker.vel, attacker.radius, 1.)
+                }
+                _ => return None,
             };
-            let shot = &world.projectiles[index];
-            if shot.owner == tank.id
-                || !hostile(tank.team, shot.team)
-                || shot.damage <= 0.
-                || shot.lifetime <= 0.
-                || shot.penetration <= 0.
-                || matches!(
-                    shot.kind,
-                    tankyard_content::ProjectileKind::Trap
-                        | tankyard_content::ProjectileKind::Mine
-                        | tankyard_content::ProjectileKind::Barrier
-                        | tankyard_content::ProjectileKind::Turret
-                )
-            {
-                return None;
-            }
-            let delta = shot.pos - tank.pos;
+            let delta = pos - tank.pos;
             if delta.length_squared() > 340. * 340.
-                || !clear_line(tank.pos, shot.pos, shot.radius, &world.walls)
+                || !clear_line(tank.pos, pos, radius, &world.walls)
             {
                 return None;
             }
-            let velocity = shot.vel - tank.vel;
-            let safety = tank.radius + shot.radius + 2.;
+            let velocity = vel - tank.vel;
+            let safety = tank.radius + radius + 2.;
             let a = velocity.length_squared();
             let b = 2. * delta.dot(velocity);
             let c = delta.length_squared() - safety * safety;
             if c <= 0. {
-                return Some((shot.id, 0.));
+                return Some((id, 0.));
             }
             let discriminant = b * b - 4. * a * c;
             if a < 0.01 || b >= 0. || discriminant < 0. {
                 return None;
             }
             let eta = (-b - discriminant.sqrt()) / (2. * a);
-            ((0. ..=0.3).contains(&eta) && eta < shot.lifetime).then_some((shot.id, eta))
+            ((0. ..=0.3).contains(&eta) && eta < lifetime).then_some((id, eta))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
@@ -1303,6 +1327,7 @@ fn use_ability(class: &ClassDef, tank: &Tank, brain: &Brain, distance: f32) -> b
                     && tank.pos.distance(brain.goal) < 90.)
         }
         Ability::Magnet => distance < 280. || brain.danger > 0.4,
+        Ability::Stasis => brain.danger > 0.45 && distance < 650.,
     }
 }
 
@@ -1761,6 +1786,31 @@ mod tests {
     }
 
     #[test]
+    fn parry_bots_recognize_approaching_smashers_but_do_not_parry_retreating_hulls() {
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        world.add_player("Defender", true);
+        world.add_player("Smasher", false);
+        world.tanks[0].class = "riposte".into();
+        world.tanks[0].pos = V2::new(1000., 1000.);
+        world.tanks[1].class = "bulwark".into();
+        world.tanks[1].pos = V2::new(1080., 1000.);
+        world.tanks[1].vel = V2::new(-300., 0.);
+        assert!(
+            parry_opportunity(&world, &world.tanks[0], &[Seen::Tank(1)])
+                .is_some_and(|eta| eta < 0.18)
+        );
+        world.tanks[1].vel.x = 300.;
+        assert!(parry_opportunity(&world, &world.tanks[0], &[Seen::Tank(1)]).is_none());
+    }
+
+    #[test]
     fn projectile_dodge_anticipates_an_incoming_hit() {
         let mut world = World::new(
             WorldConfig {
@@ -1790,6 +1840,8 @@ mod tests {
             hit: vec![],
             gun: None,
             homing_target: 0,
+            frozen: None,
+            stasis_used: false,
         });
         let (dodge, danger, escape) =
             projectile_avoidance(&world, &world.tanks[0], &[Seen::Projectile(0)]);
@@ -1869,6 +1921,8 @@ mod tests {
             hit: vec![],
             gun: None,
             homing_target: 0,
+            frozen: None,
+            stasis_used: false,
         });
         world
     }

@@ -75,6 +75,9 @@ pub struct Menu {
     map_page: usize,
     history: Vec<Page>,
     practice_content: Content,
+    practice_page: usize,
+    pub offline_level: u8,
+    dynamic_arena: bool,
 }
 impl Menu {
     pub fn new() -> Self {
@@ -104,6 +107,9 @@ impl Menu {
             map_page: 0,
             history: Vec::new(),
             practice_content: Content::builtin(),
+            practice_page: 0,
+            offline_level: 1,
+            dynamic_arena: true,
         }
     }
     pub fn clear_focus(&mut self) {
@@ -194,6 +200,7 @@ impl Menu {
     pub fn config(&self) -> WorldConfig {
         WorldConfig {
             mode: self.mode,
+            dynamic_arena: self.dynamic_arena,
             map: self
                 .maps
                 .get(self.map)
@@ -431,9 +438,9 @@ impl Menu {
         let x = 40.0 * s;
         let y = 152.0 * s;
         label("Game modes", x, y + 12.0 * s, 25.0 * s, text_color());
-        let gap = 10.0 * s;
+        let gap = 6.0 * s;
         let width = (screen_width() - 80.0 * s - gap * 2.0) / 3.0;
-        let height = 72.0 * s;
+        let height = 64.0 * s;
         for (index, mode) in Mode::ALL.into_iter().enumerate() {
             let bx = x + (index % 3) as f32 * (width + gap);
             let by = y + 35.0 * s + (index / 3) as f32 * (height + gap);
@@ -445,7 +452,7 @@ impl Menu {
             label(
                 mode_blurb(mode),
                 bx + 16.0 * s,
-                by + 60.0 * s,
+                by + 56.0 * s,
                 13.0 * s,
                 muted_color(),
             );
@@ -492,64 +499,97 @@ impl Menu {
                 self.map = index;
             }
         }
-        label(
-            &format!(
-                "{}  {}",
-                if self.mode == Mode::CoopPve {
-                    "TEAMMATES"
-                } else {
-                    "AI TANKS"
-                },
-                self.bots
-            ),
-            x,
-            by + 99.0 * s,
-            18.0 * s,
-            text_color(),
+        let total = screen_width() - 80. * s;
+        let column = (total - 36. * s) / 3.;
+        let mut bots = self.bots as f32;
+        slider_value(
+            Rect::new(x, by + 80. * s, column, 48. * s),
+            if self.mode == Mode::CoopPve {
+                "AI teammates"
+            } else {
+                "AI tanks"
+            },
+            &mut bots,
+            [0., 64.],
+            1.,
+            s * 0.8,
+            |n| format!("{n:.0}"),
         );
-        if small_button(
-            Rect::new(x + 170.0 * s, by + 77.0 * s, 36.0 * s, 32.0 * s),
-            "−",
-            s,
-        ) {
-            self.bots = self.bots.saturating_sub(2);
-        }
-        if small_button(
-            Rect::new(x + 215.0 * s, by + 77.0 * s, 36.0 * s, 32.0 * s),
-            "+",
-            s,
-        ) {
-            self.bots = (self.bots + 2).min(64);
-        }
+        self.bots = bots as usize;
+        let middle = x + column + 18. * s;
         label(
-            &format!("WORLD  {:.0} × {:.0}", self.width, self.height),
-            x + 300.0 * s,
-            by + 99.0 * s,
-            16.0 * s,
+            "STARTING LEVEL",
+            middle,
+            by + 96. * s,
+            13. * s,
             muted_color(),
         );
-        for (index, (name, width, height)) in [
-            ("Compact", 2400.0, 1800.0),
-            ("Standard", 3600.0, 2600.0),
-            ("Large", 6000.0, 4000.0),
+        for (i, level) in [1, 30, 45].into_iter().enumerate() {
+            if button(
+                Rect::new(
+                    middle + i as f32 * column / 3.,
+                    by + 108. * s,
+                    column / 3. - 5. * s,
+                    28. * s,
+                ),
+                &format!("Level {level}"),
+                self.offline_level == level,
+                true,
+                s * 0.7,
+            ) {
+                self.offline_level = level;
+            }
+        }
+        let right = middle + column + 18. * s;
+        label("ARENA SIZE", right, by + 96. * s, 13. * s, muted_color());
+        for (i, (name, width, height)) in [
+            ("Compact", 2400., 1800.),
+            ("Standard", 3600., 2600.),
+            ("Large", 6000., 4000.),
         ]
         .into_iter()
         .enumerate()
         {
-            if small_button(
+            if button(
                 Rect::new(
-                    x + (520.0 + index as f32 * 110.0) * s,
-                    by + 77.0 * s,
-                    100.0 * s,
-                    32.0 * s,
+                    right + i as f32 * column / 3.,
+                    by + 108. * s,
+                    column / 3. - 5. * s,
+                    28. * s,
                 ),
                 name,
-                s * 0.85,
+                self.width == width,
+                true,
+                s * 0.65,
             ) {
                 self.width = width;
                 self.height = height;
             }
         }
+        if button(
+            Rect::new(x, by + 150. * s, column, 28. * s),
+            if self.dynamic_arena {
+                "Adaptive borders: On"
+            } else {
+                "Adaptive borders: Off"
+            },
+            self.dynamic_arena,
+            true,
+            s * 0.7,
+        ) {
+            self.dynamic_arena = !self.dynamic_arena;
+        }
+        label(
+            if self.offline_level > 1 {
+                "Preset start · arena achievements are off."
+            } else {
+                "Classic growth · choose your upgrades as you play."
+            },
+            middle,
+            by + 170. * s,
+            12. * s,
+            muted_color(),
+        );
         if button(
             Rect::new(180.0 * s, screen_height() - 62.0 * s, 230.0 * s, 34.0 * s),
             &format!("Difficulty: {} >", self.difficulty_name()),
@@ -586,25 +626,51 @@ impl Menu {
             .enumerate()
         {
             if is_key_pressed(key) {
-                return Action::Practice(index);
+                return Action::Practice(self.practice_page * 4 + index);
             }
         }
         let margin = 40.0 * s;
         label("Practice", margin, 164.0 * s, 26.0 * s, text_color());
         label(
-            "Four challenges. Personal bests are saved on this device.",
+            "Eight challenges. Personal bests are saved on this device.",
             margin,
             190.0 * s,
             15.0 * s,
             muted_color(),
         );
+        for page in 0..2 {
+            if button(
+                Rect::new(
+                    screen_width() - (330. - page as f32 * 145.) * s,
+                    153. * s,
+                    135. * s,
+                    32. * s,
+                ),
+                if page == 0 {
+                    "Foundations"
+                } else {
+                    "Combat trials"
+                },
+                self.practice_page == page,
+                true,
+                s * 0.75,
+            ) {
+                self.practice_page = page;
+            }
+        }
         let gap = 18.0 * s;
         let width = (screen_width() - margin * 2.0 - gap) * 0.5;
         let height = 213.0 * s;
-        for (index, challenge) in CHALLENGES.iter().enumerate() {
+        for (slot, challenge) in CHALLENGES
+            .iter()
+            .skip(self.practice_page * 4)
+            .take(4)
+            .enumerate()
+        {
+            let index = self.practice_page * 4 + slot;
             let r = Rect::new(
-                margin + (index % 2) as f32 * (width + gap),
-                216.0 * s + (index / 2) as f32 * (height + gap),
+                margin + (slot % 2) as f32 * (width + gap),
+                216.0 * s + (slot / 2) as f32 * (height + gap),
                 width,
                 height,
             );
@@ -671,6 +737,7 @@ impl Menu {
                                 format!("{}/{} tanks", record.best_progress, target)
                             }
                             Goal::Survive => clock(record.best_progress),
+                            Goal::Boss => "boss defeated".into(),
                         };
                         format!("Best {}  ·  {} attempts", progress, record.attempts)
                     }
@@ -690,7 +757,7 @@ impl Menu {
                     122.0 * s,
                     32.0 * s,
                 ),
-                &format!("Start [{}]", index + 1),
+                &format!("Start [{}]", slot + 1),
                 true,
                 true,
                 s * 0.85,

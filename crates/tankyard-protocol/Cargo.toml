@@ -13,3 +13,5 @@ tankyard-content.workspace = true
 tankyard-mods.workspace = true
 lz4_flex = "0.12"
 
+
+ring = "0.17"

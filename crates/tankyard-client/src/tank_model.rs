@@ -464,7 +464,7 @@ pub fn class_model_geometry(
             p,
             6,
             r * 1.16 + 3.0 * unit,
-            time * 0.12,
+            time * 2.4,
             alpha(OUTLINE, color.a),
         );
         polygon(
@@ -472,7 +472,7 @@ pub fn class_model_geometry(
             p,
             6,
             r * 1.16,
-            time * 0.12,
+            time * 2.4,
             Color::new(0.60, 0.60, 0.60, color.a),
         );
         if class.body_style == BodyStyle::Landmine
@@ -483,7 +483,7 @@ pub fn class_model_geometry(
                 p,
                 6,
                 r * 1.16 + 3.0 * unit,
-                -time * 0.06 + std::f32::consts::FRAC_PI_6,
+                -time * 1.8 + std::f32::consts::FRAC_PI_6,
                 alpha(OUTLINE, color.a),
             );
             polygon(
@@ -491,7 +491,7 @@ pub fn class_model_geometry(
                 p,
                 6,
                 r * 1.16,
-                -time * 0.06 + std::f32::consts::FRAC_PI_6,
+                -time * 1.8 + std::f32::consts::FRAC_PI_6,
                 Color::new(0.60, 0.60, 0.60, color.a),
             );
         }
@@ -549,6 +549,64 @@ pub fn class_model_geometry(
             r,
             body_angle,
             alpha(WHITE, (flash / 0.12 * 0.42).clamp(0.0, 0.42)),
+        );
+    }
+    if class.ability == tankyard_content::Ability::Stasis {
+        // A machined eight-segment chronometer with a recessed dial, clean
+        // tick marks and counter-rotating hands, all in the arena's vector style.
+        let cyan = Color::new(0.35, 0.94, 0.98, color.a);
+        let inset = Color::new(0.20, 0.32, 0.38, color.a);
+        for i in 0..8 {
+            let a = aim + std::f32::consts::FRAC_PI_4 * i as f32 + time * 0.45;
+            let d = vec2(a.cos(), a.sin());
+            polygon(
+                emit,
+                p + d * r * 0.91,
+                4,
+                r * 0.16,
+                a,
+                alpha(OUTLINE, color.a),
+            );
+            polygon(emit, p + d * r * 0.91, 4, r * 0.10, a, cyan);
+        }
+        polygon(emit, p, 0, r * 0.75, 0., alpha(OUTLINE, color.a));
+        polygon(emit, p, 0, r * 0.65, 0., inset);
+        for i in 0..12 {
+            let a = i as f32 * std::f32::consts::TAU / 12.;
+            cannon_profile(
+                emit,
+                p + vec2(a.cos(), a.sin()) * r * 0.49,
+                a,
+                r * 0.10,
+                r * 0.045,
+                cyan,
+                0.,
+                1.,
+                Some(0.),
+            );
+        }
+        for (a, length) in [(time * 1.4 + aim, 0.42), (-time * 0.55 + aim, 0.30)] {
+            let d = vec2(a.cos(), a.sin());
+            let n = vec2(-d.y, d.x);
+            quad(
+                emit,
+                [
+                    p + n * r * 0.035,
+                    p - n * r * 0.035,
+                    p + d * r * length - n * r * 0.025,
+                    p + d * r * length + n * r * 0.025,
+                ],
+                cyan,
+            );
+        }
+        polygon(emit, p, 0, r * 0.105, 0., alpha(OUTLINE, color.a));
+        polygon(
+            emit,
+            p,
+            0,
+            r * 0.065,
+            0.,
+            Color::new(0.98, 0.91, 0.65, color.a),
         );
     }
     // Automatic mounts sit above the hull and rotate independently.

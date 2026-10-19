@@ -10,3 +10,6 @@ configs/private*.toml
 /dist/
 __pycache__/
 *.pyc
+
+# Local creator edition and signing credentials never enter public source.
+/private-creator/

@@ -45,7 +45,7 @@ struct Cli {
     #[arg(long)]
     offline: bool,
     /// Open a practice challenge directly.
-    #[arg(long, value_parser = ["shape_sprint", "drone_drill", "skirmish", "last_stand"], conflicts_with_all = ["offline", "host", "join", "connect_token", "class", "level"])]
+    #[arg(long, value_parser = ["shape_sprint", "drone_drill", "skirmish", "last_stand", "parry_lab", "stasis_lab", "boss_hunt", "trap_fort"], conflicts_with_all = ["offline", "host", "join", "connect_token", "class", "level"])]
     practice: Option<String>,
     #[arg(long)]
     host: bool,
@@ -377,6 +377,14 @@ impl App {
                 match attempt {
                     Ok(mut session) => {
                         if let session::Engine::Offline(local) = &mut session.engine {
+                            if self.menu.offline_level > 1 {
+                                local.world.config.modded = true;
+                                let ids: Vec<_> = local.world.tanks.iter().map(|t| t.id).collect();
+                                for id in ids {
+                                    local.world.set_practice_level(id, self.menu.offline_level);
+                                }
+                                session.display = Some(local.world.snapshot());
+                            }
                             local.bots.difficulty =
                                 tankyard_server::difficulty_from_name(self.menu.difficulty_name())
                                     .unwrap_or_default();
@@ -716,6 +724,18 @@ impl App {
                     })
             })
     }
+    fn show_achievement_toasts(&self) -> bool {
+        !self.paused
+            && !self.menu_over_game
+            && !self.hud.sandbox
+            && !self.hud.evolution
+            && !self.community.admin_open
+            && self.session.as_ref().is_some_and(|session| {
+                session.display.is_some()
+                    && session.failure.is_none()
+                    && !session.practice.as_ref().is_some_and(|run| run.done())
+            })
+    }
     fn update(&mut self, dt: f32, s: f32) {
         if self.session.is_none() && self.catalog_paths != self.settings.enabled_mods {
             self.catalog_paths.clone_from(&self.settings.enabled_mods);
@@ -736,7 +756,9 @@ impl App {
         self.effects.update(dt);
         self.voice
             .effects_volume(self.settings.master_volume * self.settings.effects_volume);
-        self.achievement_feed.update(dt);
+        if self.show_achievement_toasts() {
+            self.achievement_feed.update(dt);
+        }
         let now = get_time();
         if let Some(session) = &mut self.session {
             session.update_network(dt, now, &self.content);
@@ -1129,9 +1151,26 @@ impl App {
                 menu_scale,
             );
             self.handle(action);
-            notifications::draw(&self.achievement_feed, s, self.settings.reduced_motion);
             return;
         }
+        let practice = self
+            .session
+            .as_ref()
+            .and_then(|session| session.practice.as_ref())
+            .is_some_and(|run| !run.done());
+        let unobscured = !self.hud.sandbox && !self.community.admin_open;
+        let overlays = notifications::top_overlays(
+            screen_height(),
+            s,
+            self.effects.boss_arrival.is_some(),
+            practice,
+            if unobscured {
+                self.effects.kills.len()
+            } else {
+                0
+            },
+            unobscured && self.effects.notice_life > 0.,
+        );
         let mut actions = Vec::new();
         if let Some(session) = &self.session {
             set_interactive(
@@ -1213,16 +1252,17 @@ impl App {
                     .enumerate()
                 {
                     let opacity = (kill.life / 0.45).min(1.0);
+                    let caption = format!("Eliminated {}", kill.name);
+                    let size = 19.
+                        * s
+                        * (hud::boss_banner_layout(screen_width(), s).w
+                            / label_width(&caption, 19. * s).max(1.))
+                        .min(1.);
                     center_label(
-                        &format!("Eliminated {}", kill.name),
+                        &caption,
                         screen_width() * 0.5,
-                        (if self.effects.boss_arrival.is_some() {
-                            208.0
-                        } else {
-                            132.0
-                        } + index as f32 * 28.0)
-                            * s,
-                        19.0 * s,
+                        overlays.kill_y + index as f32 * 28. * s,
+                        size,
                         alpha(text_color(), opacity),
                     );
                 }
@@ -1232,11 +1272,7 @@ impl App {
                     center_label(
                         &self.effects.notice,
                         screen_width() * 0.5,
-                        if self.effects.kills.is_empty() {
-                            screen_height() * 0.25
-                        } else {
-                            screen_height() * 0.36
-                        },
+                        overlays.notice_y,
                         25.0 * s,
                         alpha(AMBER, opacity),
                     );
@@ -1385,7 +1421,7 @@ impl App {
                 .as_ref()
                 .and_then(|session| session.practice.as_ref())
         {
-            match practice_ui::draw(run, &self.settings.practice_records, s) {
+            match practice_ui::draw(run, &self.settings.practice_records, s, overlays.practice_y) {
                 practice_ui::Action::None => {}
                 practice_ui::Action::Retry(index) => {
                     self.save_progress();
@@ -1397,7 +1433,14 @@ impl App {
                 }
             }
         }
-        notifications::draw(&self.achievement_feed, s, self.settings.reduced_motion);
+        if self.show_achievement_toasts() {
+            notifications::draw(
+                &self.achievement_feed,
+                s,
+                self.settings.reduced_motion,
+                overlays.achievement_y,
+            );
+        }
     }
     fn hud_action(&mut self, action: HudAction) {
         match action {

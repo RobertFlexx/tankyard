@@ -65,6 +65,8 @@ pub struct ChatMessage {
     pub room: String,
     pub player: u64,
     pub name: String,
+    #[serde(default)]
+    pub game_creator: bool,
     pub text: String,
     pub time: u64,
 }

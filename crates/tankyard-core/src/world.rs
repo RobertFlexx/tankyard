@@ -196,6 +196,9 @@ impl World {
                     | EventKind::Evolve
                     | EventKind::LevelUp
                     | EventKind::Parry
+                    | EventKind::BodyParry
+                    | EventKind::StasisRelease
+                    | EventKind::BossAttack
             ) && let Some(index) = self
                 .events
                 .iter()
@@ -269,6 +272,12 @@ impl World {
             deployed_drones: 0,
             deployed_defenses: [0; 4],
             spawn_immunity: protection > 0.0,
+            knockback: 0.,
+            speed_scale: 1.,
+            reload_scale: 1.,
+            damage_scale: 1.,
+            stasis: 0.,
+            game_creator: false,
         });
         if matches!(self.config.mode, Mode::Deathmatch | Mode::Sandbox) {
             self.set_level_unchecked(id, 30);
@@ -438,6 +447,14 @@ impl World {
         }
         true
     }
+    /// Trusted offline setup; modified loadouts cannot earn arena achievements.
+    pub fn set_practice_level(&mut self, id: EntityId, level: u8) -> bool {
+        if !self.config.modded || !(1..=MAX_LEVEL).contains(&level) {
+            return false;
+        }
+        self.set_level_unchecked(id, level);
+        true
+    }
     pub(crate) fn set_level_unchecked(&mut self, id: EntityId, level: u8) {
         let Some(t) = self.tanks.iter_mut().find(|t| t.id == id) else {
             return;
@@ -518,6 +535,7 @@ impl World {
         self.update_bosses();
         self.fire_weapons();
         self.rebuild_grid();
+        self.update_stasis();
         self.update_projectiles();
         self.drone_contacts
             .resolve(&mut self.projectiles, &self.config);
@@ -584,6 +602,8 @@ impl World {
             crate::physics::update_protection(tank, DT);
             tank.shield = (tank.shield - DT).max(0.);
             tank.boost = (tank.boost - DT).max(0.);
+            tank.knockback = (tank.knockback - DT).max(0.);
+            tank.stasis = (tank.stasis - DT).max(0.);
             tank.ability_cooldown = (tank.ability_cooldown - DT).max(0.);
             let def = self.content.class(&tank.class);
             let regen = 2. * stat_scale(tank.stats[1]) * def.map_or(1., |c| c.multipliers[1])
@@ -936,6 +956,8 @@ impl World {
                 // input could implicitly trigger redeployment after cooldown.
                 t.input = PlayerInput::default();
                 t.shield = 0.;
+                t.stasis = 0.;
+                t.knockback = 0.;
                 t.boost = 0.;
                 t.ability_cooldown = 0.;
                 t.carrying = false;
@@ -1002,6 +1024,7 @@ impl World {
             let elimination = Elimination {
                 victim: id,
                 name: self.tanks[i].name.clone(),
+                game_creator: self.tanks[i].game_creator,
             };
             self.event_detail(
                 EventKind::Kill,
@@ -1154,6 +1177,9 @@ impl World {
                 let team1 = a[i].team;
                 let team2 = b[0].team;
                 if self.hostile(team1, team2) {
+                    if self.parry_body(j, i, normal) || self.parry_body(i, j, normal * -1.) {
+                        continue;
+                    }
                     let da = self.body_damage(i) * DT;
                     let db = self.body_damage(j) * DT;
                     self.damage_tank(i, db, id2, normal * -5.);
@@ -1249,6 +1275,9 @@ impl World {
             .fold(0., f32::max);
         for i in 0..count {
             if self.projectiles[i].lifetime <= 0. || self.projectiles[i].penetration <= 0. {
+                continue;
+            }
+            if self.projectiles[i].frozen.is_some() {
                 continue;
             }
             self.steer_projectile(i);
@@ -1923,6 +1952,7 @@ mod important_event_regressions {
             Some(Elimination {
                 victim: 2,
                 name: "Target".into(),
+                game_creator: false,
             }),
         );
         assert_eq!(world.events.len(), 512);

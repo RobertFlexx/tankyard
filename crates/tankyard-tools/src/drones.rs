@@ -68,6 +68,8 @@ pub fn bench(
                 hit: Vec::new(),
                 gun: None,
                 homing_target: 0,
+                frozen: None,
+                stasis_used: false,
             });
         }
     }

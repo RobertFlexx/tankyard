@@ -778,11 +778,12 @@ impl Hud {
                 tank.xp.saturating_sub(prev) as f32 / (next - prev).max(1) as f32
             };
             let xp_y = h - 33.0 * s;
-            arcade_center(
-                &fitted_label(&tank.name, 27.0 * s, xp_width - 12.0 * s),
-                w * 0.5,
-                xp_y - 45.0 * s,
-                27.0 * s,
+            arcade_player_label(
+                tank,
+                "",
+                vec2(w * 0.5, xp_y - 45. * s),
+                xp_width - 12. * s,
+                27. * s,
             );
             arcade_track(
                 Rect::new(
@@ -883,7 +884,10 @@ impl Hud {
             }
             if tank.spawn_immunity && tank.protection > 0.0 {
                 center_label(
-                    &format!("Spawn protection · {}s", tank.protection.ceil() as u32),
+                    &format!(
+                        "Spawn protection · {}s · move to engage",
+                        tank.protection.ceil() as u32
+                    ),
                     w * 0.5,
                     status_y,
                     12.0 * s,
@@ -1012,16 +1016,12 @@ impl Hud {
                 color,
             );
             let score = format!(" - {}", tank.score);
-            let name = fitted_label(
-                &tank.name,
-                12.0 * s,
-                width - 12.0 * s - label_width(&score, 12.0 * s),
-            );
-            arcade_center(
-                &format!("{name}{score}"),
-                x + width * 0.5,
-                by + 14.0 * s,
-                12.0 * s,
+            arcade_player_label(
+                tank,
+                &score,
+                vec2(x + width * 0.5, by + 14. * s),
+                width - 12. * s,
+                12. * s,
             );
         }
         leading
@@ -1490,7 +1490,14 @@ impl Hud {
         panel(Rect::new(x, y, width, 118. * s));
         center_label(
             &fitted_label(
-                &format!("Spectating {}", watched.name),
+                &format!(
+                    "Spectating {}",
+                    fitted_player_name(
+                        watched,
+                        18. * s,
+                        width - 32. * s - label_width("Spectating ", 18. * s)
+                    )
+                ),
                 18. * s,
                 width - 28. * s,
             ),

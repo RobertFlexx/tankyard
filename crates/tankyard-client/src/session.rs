@@ -62,6 +62,35 @@ impl Session {
                 local.world.sandbox_level(id, challenge.level);
             }
         }
+        if matches!(challenge.id, "parry_lab" | "stasis_lab" | "trap_fort") {
+            let class = if challenge.id == "stasis_lab" {
+                "gunner"
+            } else {
+                "bulwark"
+            };
+            let bots: Vec<_> = local
+                .world
+                .tanks
+                .iter()
+                .filter(|t| t.bot)
+                .map(|t| t.id)
+                .collect();
+            for bot in bots {
+                local.world.sandbox_class(bot, class);
+                local.world.sandbox_level(bot, challenge.level);
+            }
+        }
+        if challenge.id == "boss_hunt" && local.world.spawn_boss(BossKind::Sentinel) == 0 {
+            return Err("Could not place the practice boss.".into());
+        }
+        if matches!(
+            challenge.id,
+            "parry_lab" | "stasis_lab" | "trap_fort" | "boss_hunt"
+        ) {
+            for index in [6, 5, 4, 3, 7, 0, 1, 2] {
+                while local.world.upgrade_stat(player, index) {}
+            }
+        }
         if challenge.id == "drone_drill" {
             for index in [6, 5, 4, 3, 7, 1, 0] {
                 while local.world.upgrade_stat(player, index) {}
@@ -572,6 +601,8 @@ impl Session {
             tank.ability_cooldown = predicted.ability_cooldown;
             tank.boost = predicted.boost;
             tank.shield = predicted.shield;
+            tank.stasis = predicted.stasis;
+            tank.knockback = predicted.knockback;
             tank.protection = predicted.protection;
             tank.spawn_immunity = predicted.spawn_immunity;
             tank.barrel_shots.clone_from(&predicted.barrel_shots);
@@ -884,6 +915,7 @@ mod tests {
         let content = Content::builtin();
         let config = WorldConfig {
             target_count: 0,
+            spawn_protection: 0.,
             ..Default::default()
         };
         let mut world = tankyard_core::World::new(config.clone(), content.clone());
@@ -968,7 +1000,8 @@ mod tests {
                         .world
                         .tanks
                         .iter()
-                        .all(|tank| tank.level == challenge.level && tank.class == challenge.class)
+                        .all(|tank| tank.level == challenge.level
+                            && (tank.bot || tank.class == challenge.class))
                 );
                 let human = local.world.tanks.iter().find(|tank| !tank.bot).unwrap();
                 if challenge.id == "drone_drill" {
@@ -983,13 +1016,18 @@ mod tests {
             session.add_bot();
             if let Engine::Offline(local) = &session.engine {
                 assert_eq!(local.world.tanks.len(), challenge.bots + 1);
-                assert!(local.world.bosses.is_empty());
+                assert_eq!(
+                    local.world.bosses.len(),
+                    usize::from(challenge.id == "boss_hunt")
+                );
                 let human = local.world.tanks.iter().find(|tank| !tank.bot).unwrap();
                 assert_eq!(human.level, challenge.level);
                 assert_eq!(human.class, challenge.class);
             }
         }
-        assert!(Session::practice(4, "Pilot", 42).is_err());
+        assert!(
+            Session::practice(tankyard_client::practice::CHALLENGES.len(), "Pilot", 42).is_err()
+        );
     }
     #[test]
     fn finished_practice_freezes_and_does_not_award_normal_achievements() {
@@ -1095,6 +1133,7 @@ mod tests {
     fn catchup_keeps_events_from_all_simulation_ticks() {
         let config = WorldConfig {
             target_count: 0,
+            spawn_protection: 0.,
             ..Default::default()
         };
         let content = Content::builtin();

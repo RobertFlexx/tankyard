@@ -111,7 +111,7 @@ impl Default for WorldConfig {
             target_count: 180,
             max_projectiles: 6000,
             friendly_fire: false,
-            spawn_protection: 30.,
+            spawn_protection: 15.,
             score_limit: 100,
             time_limit: 600.,
             lives: 1,
@@ -231,6 +231,33 @@ pub struct Tank {
     pub deployed_defenses: [u8; 4],
     #[serde(default)]
     pub spawn_immunity: bool,
+    /// Remaining forced recoil, shared with movement prediction.
+    #[serde(default)]
+    pub knockback: f32,
+    /// Authoritative movement effects; client input cannot change this value.
+    #[serde(default = "unit_scale")]
+    pub speed_scale: f32,
+    #[serde(default = "unit_scale")]
+    pub reload_scale: f32,
+    #[serde(default = "unit_scale")]
+    pub damage_scale: f32,
+    #[serde(default)]
+    pub stasis: f32,
+    /// Set only after the server verifies the creator's signing key.
+    #[serde(default)]
+    pub game_creator: bool,
+}
+impl Tank {
+    pub fn display_name(&self) -> String {
+        display_player_name(&self.name, self.game_creator)
+    }
+}
+pub fn display_player_name(name: &str, game_creator: bool) -> String {
+    if game_creator {
+        format!("{name} [Game Creator]")
+    } else {
+        name.to_owned()
+    }
 }
 // Reuse owned buffers when refreshing native client snapshots.
 impl Clone for Tank {
@@ -274,6 +301,12 @@ impl Clone for Tank {
             deployed_drones: self.deployed_drones,
             deployed_defenses: self.deployed_defenses,
             spawn_immunity: self.spawn_immunity,
+            knockback: self.knockback,
+            speed_scale: self.speed_scale,
+            reload_scale: self.reload_scale,
+            damage_scale: self.damage_scale,
+            stasis: self.stasis,
+            game_creator: self.game_creator,
         }
     }
     fn clone_from(&mut self, source: &Self) {
@@ -315,6 +348,12 @@ impl Clone for Tank {
         self.deployed_drones.clone_from(&source.deployed_drones);
         self.deployed_defenses.clone_from(&source.deployed_defenses);
         self.spawn_immunity.clone_from(&source.spawn_immunity);
+        self.knockback = source.knockback;
+        self.speed_scale = source.speed_scale;
+        self.reload_scale = source.reload_scale;
+        self.damage_scale = source.damage_scale;
+        self.stasis = source.stasis;
+        self.game_creator = source.game_creator;
     }
 }
 
@@ -349,6 +388,16 @@ pub struct Projectile {
     pub gun: Option<MinionGun>,
     #[serde(default)]
     pub homing_target: EntityId,
+    #[serde(default)]
+    pub frozen: Option<FrozenShot>,
+    #[serde(default)]
+    pub stasis_used: bool,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct FrozenShot {
+    pub anchor: EntityId,
+    pub offset: V2,
+    pub velocity: V2,
 }
 impl Projectile {
     /// Captured swarms use a drone body and remember the attacking owner.
@@ -377,6 +426,8 @@ impl Clone for Projectile {
             hit: self.hit.clone(),
             gun: self.gun,
             homing_target: self.homing_target,
+            frozen: self.frozen,
+            stasis_used: self.stasis_used,
         }
     }
     fn clone_from(&mut self, source: &Self) {
@@ -397,6 +448,8 @@ impl Clone for Projectile {
         self.hit.clone_from(&source.hit);
         self.gun.clone_from(&source.gun);
         self.homing_target.clone_from(&source.homing_target);
+        self.frozen = source.frozen;
+        self.stasis_used = source.stasis_used;
     }
 }
 
@@ -518,6 +571,12 @@ pub struct Boss {
     pub tactic_time: f32,
     pub last_attacker: EntityId,
     pub arrival: f32,
+    #[serde(default)]
+    pub attack_timer: f32,
+    #[serde(default)]
+    pub attack: u8,
+    #[serde(default)]
+    pub attack_windup: f32,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Objective {
@@ -593,11 +652,15 @@ pub enum EventKind {
     BossSpawn,
     Kill,
     Parry,
+    BodyParry,
+    StasisRelease,
+    BossAttack,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Elimination {
     pub victim: EntityId,
     pub name: String,
+    pub game_creator: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GameEvent {

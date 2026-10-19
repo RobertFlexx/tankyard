@@ -2,6 +2,55 @@ use crate::*;
 use tankyard_content::{Ability, ProjectileKind};
 
 impl World {
+    /// A timed hull counter stops a Smasher rush before either contact hit.
+    /// The recoil lockout prevents one overlap from charging the penalty twice.
+    pub(crate) fn parry_body(&mut self, attacker: usize, defender: usize, direction: V2) -> bool {
+        let a = &self.tanks[attacker];
+        let d = &self.tanks[defender];
+        let melee = self
+            .content
+            .class(&a.class)
+            .is_some_and(tankyard_content::ClassDef::is_smasher);
+        if !melee
+            || !a.alive
+            || !d.alive
+            || a.health <= 0.
+            || d.health <= 0.
+            || a.protection > 0.
+            || d.protection > 0.
+            || a.knockback > 0.
+            || self.sandbox_god.contains(&a.id)
+            || d.shield <= 0.
+            || !self
+                .content
+                .class(&d.class)
+                .is_some_and(|c| c.ability.is_parry())
+            || !self.hostile(a.team, d.team)
+        {
+            return false;
+        }
+        let (id, team, pos) = (d.id, d.team, d.pos);
+        let damage = a.max_health * 0.5;
+        // Cancel the attacker's defensive reduction: this counter always takes
+        // half a full health bar, with normal kill/assist accounting.
+        let reduction = if a.shield > 0. { 0.18 } else { 1. };
+        self.damage_tank(attacker, damage / reduction, id, V2::ZERO);
+        let a = &mut self.tanks[attacker];
+        a.knockback = 0.9;
+        a.vel = direction.normalized() * 1100.;
+        let defender = &mut self.tanks[defender];
+        defender.vel *= 0.25;
+        let healing = match self.content.class(&defender.class).map(|c| c.ability) {
+            Some(tankyard_content::Ability::CounterParry) => 0.12,
+            Some(tankyard_content::Ability::VolleyParry) => 0.15,
+            _ => 0.08,
+        };
+        defender.health =
+            (defender.health + defender.max_health * healing).min(defender.max_health);
+        self.event(EventKind::BodyParry, pos, id, 0, team);
+        true
+    }
+
     pub(crate) fn parry_projectile(
         &mut self,
         projectile: usize,
@@ -259,6 +308,52 @@ mod tests {
         let id = shot.id;
         world.projectiles.push(shot);
         id
+    }
+
+    #[test]
+    fn timed_smasher_counter_halves_health_once_and_launches_the_attacker() {
+        let (mut world, _, defender) = arena();
+        world.tanks[0].class = "bulwark".into();
+        world.refresh_stats(world.tanks[0].id, true);
+        world.tanks[0].pos = world.tanks[1].pos + V2::new(35., 0.);
+        world.tanks[0].input.movement = V2::new(-1., 0.);
+        world.tanks[1].input.ability = true;
+        let health = world.tanks[0].max_health;
+        world.tanks[1].health *= 0.5;
+        let defended = world.tanks[1].health + world.tanks[1].max_health * 0.08;
+        let start = world.tanks[0].pos;
+        world.step();
+        assert!((world.tanks[0].health - health * 0.5).abs() < 0.01);
+        assert_eq!(world.tanks[1].health, defended);
+        assert!(world.tanks[0].vel.x > 1000.);
+        assert!(
+            world
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::BodyParry) && e.subject == defender)
+        );
+        for _ in 0..20 {
+            world.step();
+        }
+        assert!(world.tanks[0].pos.x - start.x > 200.);
+        assert!((world.tanks[0].health - health * 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn body_counter_requires_a_melee_enemy_and_a_timed_window() {
+        let (mut world, _, _) = arena();
+        world.tanks[1].shield = 0.1;
+        assert!(!world.parry_body(0, 1, V2::new(-1., 0.)));
+        world.tanks[0].class = "bulwark".into();
+        world.tanks[1].shield = 0.;
+        assert!(!world.parry_body(0, 1, V2::new(-1., 0.)));
+        world.tanks[1].shield = 0.1;
+        world.tanks[0].team = 1;
+        world.tanks[1].team = 1;
+        assert!(!world.parry_body(0, 1, V2::new(-1., 0.)));
+        world.tanks[0].team = 0;
+        world.tanks[0].protection = 1.;
+        assert!(!world.parry_body(0, 1, V2::new(-1., 0.)));
     }
 
     #[test]
