@@ -30,3 +30,5 @@ See [Linux build requirements](docs/linux-builds.md) and [third-party notices](N
 ## Tank you!
 
 Tank Yard has been years in the making. Thank you to everyone who’s played, shared ideas, and supported it.
+
+> dual licensed, pick what you wanna abide by :D
