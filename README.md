@@ -2,7 +2,7 @@
 
 Tank Yard is a tank arena made by RobertFlexx, inspired by Diep.io and Arras.io. It has 103 tanks, fourteen modes, offline play, practice challenges, and player-hosted multiplayer.
 
-[v0.3.1](docs/releases/v0.3.1.md) fixes resolution changes, monitor placement, cursor scaling, and sliders, and hardens public relays. Official public servers include signed creator tools; community hosts must opt in, and private hosting stays disabled. See [creator administration](docs/creator-administration.md) for the public policy, auditing, revocation, and central Docker update steps. The creator client and signing credentials stay private.
+[v0.3.2](docs/releases/v0.3.2.md) makes accessibility settings visible throughout the game, fixes interface scaling and enlarged menus, and adds the Rust [Bastion Anticheat](docs/bastion-anticheat.md) validation layer. Official public servers include signed creator tools; community hosts must opt in, and private hosting stays disabled. See [creator administration](docs/creator-administration.md) for the public policy, auditing, revocation, and central Docker update steps. The creator client and signing credentials stay private.
 
 Install or update on Linux and macOS:
 
@@ -33,7 +33,7 @@ Tank upgrades unlock at levels 15, 30, 45, and 55. Riposte leads to Counterguard
 
 Parried drones and minions merge into one large drone. Hold left click to guide it toward the cursor, release to send it back at the attacker, and right-click to recall it. Each parry upgrade captures a stronger swarm. Reprisal also heals more and has a shorter ability cooldown.
 
-Online proximity voice uses full-band 48 kHz, 96 kbps Opus with loss recovery and fades with distance. Your microphone starts muted; press M or click the microphone icon at the bottom right to toggle it. Settings → Audio controls voice playback volume. Recent text chat stays visible outside the chatbox. After death, follow living tanks and use Left/Right or the spectator buttons to switch; team modes only show teammates. Enter still respawns when permitted. Clients and servers must update together to protocol 13.
+Online proximity voice uses full-band 48 kHz, 96 kbps Opus with loss recovery and fades with distance. Your microphone starts muted; press M or click the microphone icon at the bottom right to toggle it. Settings → Audio controls voice playback volume. Recent text chat stays visible outside the chatbox. After death, follow living tanks and use Left/Right or the spectator buttons to switch; team modes only show teammates. Enter still respawns when permitted. Clients and servers must support protocol 15.
 
 Your first launch shows both themes side by side. Pick Dark or Light; F9 changes it later.
 

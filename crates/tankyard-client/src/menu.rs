@@ -1,4 +1,9 @@
 use crate::ui::RED;
+use crate::ui::{
+    ui_line as draw_line, ui_rectangle as draw_rectangle,
+    ui_rectangle_lines as draw_rectangle_lines,
+};
+use crate::ui_layout::height as screen_height;
 use crate::{
     render,
     settings::{CENTRAL_SERVER, Settings, bindable_pressed},
@@ -47,6 +52,7 @@ pub enum Action {
     Join,
     Quit,
     Save,
+    PreviewAlarm,
     Practice(usize),
 }
 pub struct Menu {
@@ -69,6 +75,8 @@ pub struct Menu {
     pub binding: Option<usize>,
     pub error: String,
     motion_time: f32,
+    scroll_panel: crate::ui_layout::ScrollPanel,
+    scroll_page: Option<(Page, usize)>,
     pub maps: Vec<tankyard_content::MapDef>,
     mod_catalog: Vec<(String, tankyard_mods::ModInfo)>,
     mods_scanned: bool,
@@ -102,6 +110,8 @@ impl Menu {
             binding: None,
             error: String::new(),
             motion_time: 0.0,
+            scroll_panel: Default::default(),
+            scroll_page: None,
             maps: tankyard_content::builtin_maps(),
             mod_catalog: vec![],
             mods_scanned: false,
@@ -250,7 +260,54 @@ impl Menu {
         {
             return Action::Back;
         }
-        let action = match self.page {
+        if self.page == Page::Main
+            && small_button(
+                Rect::new(w - 120.0 * s, 35.0 * s, 80.0 * s, 26.0 * s),
+                "Credits",
+                s * 0.7,
+            )
+        {
+            return Action::Page(Page::Credits);
+        }
+        if settings.show_fps {
+            right_label(
+                &format!("{} FPS", get_fps()),
+                w - 18. * s,
+                20. * s,
+                13. * s,
+                muted_color(),
+            );
+        }
+        if self.page == Page::Settings {
+            self.settings_tabs(s);
+        }
+        let key = (
+            self.page,
+            if self.page == Page::Settings {
+                self.settings_tab
+            } else {
+                0
+            },
+        );
+        if self.scroll_page != Some(key) {
+            self.scroll_panel.reset();
+            self.scroll_page = Some(key);
+        }
+        let top = if self.page == Page::Settings {
+            210.
+        } else if self.page == Page::Main {
+            118.
+        } else {
+            144.
+        } * s;
+        let bottom = h - if self.page == Page::Main { 12. } else { 78. } * s;
+        let anchor = if self.page == Page::Settings && active_slider("Interface scale") {
+            Some(if self.settings_tab == 0 { 558. } else { 442. })
+        } else {
+            None
+        };
+        let canvas = self.scroll_panel.begin(s, top, bottom, anchor);
+        let mut action = match self.page {
             Page::Main => self.main(content, settings, s),
             Page::Modes => self.modes(settings, s),
             Page::Join => self.connection(settings, false, s),
@@ -263,8 +320,41 @@ impl Menu {
             Page::Practice => self.practice(settings, s),
             Page::Controls => self.controls(settings, s),
         };
+        drop(canvas);
+        let footer = match self.page {
+            Page::Modes => self.modes_footer(settings, s),
+            Page::Controls => self.controls_footer(s),
+            Page::Settings => {
+                if button(
+                    Rect::new(
+                        screen_width() - 260.0 * s,
+                        screen_height() - 62.0 * s,
+                        220.0 * s,
+                        35.0 * s,
+                    ),
+                    "Save settings",
+                    true,
+                    true,
+                    s * 0.85,
+                ) {
+                    return Action::Save;
+                }
+                Action::None
+            }
+            _ => Action::None,
+        };
+        if !matches!(footer, Action::None) {
+            action = footer;
+        }
         if !self.error.is_empty() {
-            label(&self.error, margin + 140.0 * s, h - 40.0 * s, 17.0 * s, RED);
+            let x = margin + 140. * s;
+            label(
+                &fitted_label(&self.error, 17. * s, (w - 270. * s - x).max(1.)),
+                x,
+                h - 40. * s,
+                17. * s,
+                RED,
+            );
         }
         action
     }
@@ -286,7 +376,7 @@ impl Menu {
                 -0.4 + (self.motion_time * 0.26).sin() * 0.16,
                 0.0,
                 0.0,
-                CYAN,
+                player_color(),
                 self.motion_time,
             );
         }
@@ -407,13 +497,6 @@ impl Menu {
             return Action::Quit;
         }
         if small_button(
-            Rect::new(w - 120.0 * s, 35.0 * s, 80.0 * s, 26.0 * s),
-            "Credits",
-            s * 0.7,
-        ) {
-            return Action::Page(Page::Credits);
-        }
-        if small_button(
             Rect::new(x, t_y, 131.0 * s, 30.0 * s),
             if settings.dark_arena {
                 "Dark  [F9]"
@@ -438,7 +521,7 @@ impl Menu {
         );
         Action::None
     }
-    fn modes(&mut self, settings: &mut Settings, s: f32) -> Action {
+    fn modes(&mut self, _settings: &mut Settings, s: f32) -> Action {
         let x = 40.0 * s;
         let y = 152.0 * s;
         label("Game modes", x, y + 12.0 * s, 25.0 * s, text_color());
@@ -594,6 +677,9 @@ impl Menu {
             12. * s,
             muted_color(),
         );
+        Action::None
+    }
+    fn modes_footer(&mut self, settings: &mut Settings, s: f32) -> Action {
         if button(
             Rect::new(180.0 * s, screen_height() - 62.0 * s, 230.0 * s, 34.0 * s),
             &format!("Difficulty: {} >", self.difficulty_name()),
@@ -707,7 +793,7 @@ impl Menu {
                     -0.4,
                     0.0,
                     0.0,
-                    CYAN,
+                    player_color(),
                     self.motion_time,
                 );
             }
@@ -854,6 +940,9 @@ impl Menu {
             14.0 * s,
             muted_color(),
         );
+        Action::None
+    }
+    fn controls_footer(&mut self, s: f32) -> Action {
         if button(
             Rect::new(
                 screen_width() - 270.0 * s,
@@ -1072,7 +1161,11 @@ impl Menu {
         let count = (((screen_height() - 290.0 * s) / item_h).floor() as usize).max(1) * 4;
         let max_page = content.classes.len().saturating_sub(1) / count.max(1);
         self.class_page = self.class_page.min(max_page);
-        let scroll = mouse_wheel().1;
+        let scroll = if crate::ui_layout::scrolling() {
+            0.
+        } else {
+            mouse_wheel().1
+        };
         if scroll < 0.0 {
             self.class_page = (self.class_page + 1).min(max_page);
         } else if scroll > 0.0 {
@@ -1270,9 +1363,65 @@ impl Menu {
         }
         Action::None
     }
-    fn settings(&mut self, settings: &mut Settings, s: f32) -> Action {
-        let x = 40.0 * s;
-        let y = 158.0 * s;
+    fn accessibility_preview(&self, r: Rect, settings: &Settings, s: f32) {
+        panel(r);
+        label(
+            "LIVE PREVIEW",
+            r.x + 14. * s,
+            r.y + 22. * s,
+            12. * s,
+            muted_color(),
+        );
+        let time = crate::accessibility::motion_time(get_time() as f32);
+        for team in 1..=4 {
+            let x = r.x + r.w * (team as f32 - 0.5) / 4.;
+            let color = render::team_color(team, false, settings.colorblind);
+            if let Some(class) = self.practice_content.class("vector") {
+                render::class_model(
+                    class,
+                    vec2(x, r.y + 65. * s),
+                    15. * s,
+                    -0.4 + (time * 0.7).sin() * 0.2,
+                    0.,
+                    0.,
+                    color,
+                    time,
+                );
+            }
+            if settings.colorblind {
+                render::team_marker(team, false, vec2(x, r.y + 70. * s), 3. * s);
+            }
+            center_label(&format!("Team {team}"), x, r.y + 104. * s, 11. * s, color);
+        }
+        label(
+            "Your tank",
+            r.x + 14. * s,
+            r.y + 140. * s,
+            13. * s,
+            render::team_color(0, true, settings.colorblind),
+        );
+        right_label(
+            "Opponent",
+            r.x + r.w - 14. * s,
+            r.y + 140. * s,
+            13. * s,
+            render::team_color(0, false, settings.colorblind),
+        );
+        center_label(
+            if settings.reduced_motion {
+                "Motion paused"
+            } else {
+                "Motion preview"
+            },
+            r.center().x,
+            r.y + 167. * s,
+            11. * s,
+            muted_color(),
+        );
+    }
+    fn settings_tabs(&mut self, s: f32) {
+        let x = 40. * s;
+        let y = 158. * s;
         let tab_w = (screen_width() - 2. * x - 6. * 8. * s) / 7.;
         for (index, name) in [
             "Display",
@@ -1297,6 +1446,10 @@ impl Menu {
                 self.clear_focus();
             }
         }
+    }
+    fn settings(&mut self, settings: &mut Settings, s: f32) -> Action {
+        let x = 40.0 * s;
+        let y = 158.0 * s;
         let col = (screen_width() - 110.0 * s) * 0.5;
         let rx = x + col + 30.0 * s;
         let by = y + 64.0 * s;
@@ -1450,7 +1603,7 @@ impl Menu {
                         ),
                         title,
                         settings.anti_aliasing == samples,
-                        true,
+                        crate::graphics::supports_samples(samples),
                         s * 0.73,
                     ) {
                         settings.anti_aliasing = samples;
@@ -1497,12 +1650,26 @@ impl Menu {
                         ),
                         &format!("{level}x"),
                         settings.anisotropic_filtering == level,
-                        level <= crate::graphics::max_anisotropy(),
+                        crate::graphics::texture_count() > 0
+                            && level <= crate::graphics::max_anisotropy(),
                         s * 0.72,
                     ) {
                         settings.anisotropic_filtering = level;
                     }
                 }
+                label(
+                    if crate::graphics::texture_count() == 0 {
+                        "Filtering applies to mod textures; current tanks use geometry."
+                    } else if crate::graphics::max_anisotropy() <= 1 {
+                        "This graphics device supports standard filtering."
+                    } else {
+                        "Filtering sharpens textured tanks viewed at an angle."
+                    },
+                    rx,
+                    by + 480. * s,
+                    11. * s,
+                    muted_color(),
+                );
             }
             1 => {
                 label("Appearance", x, by + 20.0 * s, 25.0 * s, text_color());
@@ -1638,12 +1805,22 @@ impl Menu {
                     s,
                 );
                 wrap(
-                    "Reduced motion turns off camera easing, shake, and menu animation.",
+                    "Reduced motion stops decorative animation, particles, camera easing and shake. Combat movement and attack warnings stay visible.",
                     rx,
                     by + 20.0 * s,
                     col,
-                    21.0 * s,
+                    17.0 * s,
                     text_color(),
+                );
+                crate::accessibility::configure(
+                    settings.colorblind,
+                    settings.high_contrast,
+                    settings.reduced_motion,
+                );
+                self.accessibility_preview(
+                    Rect::new(rx, by + 112. * s, col, 180. * s),
+                    settings,
+                    s,
                 );
                 label("LOCAL PROFILE", rx, by + 310.0 * s, 13.0 * s, CYAN);
                 label(
@@ -1683,10 +1860,27 @@ impl Menu {
                     1.,
                     s,
                 );
+                slider(
+                    Rect::new(rx, by + 210. * s, col, 48. * s),
+                    "Boss alarm",
+                    &mut settings.effects_volume,
+                    0.,
+                    1.,
+                    s,
+                );
+                if button(
+                    Rect::new(rx, by + 294. * s, col, 34. * s),
+                    "Preview boss alarm",
+                    false,
+                    true,
+                    s * 0.8,
+                ) {
+                    return Action::PreviewAlarm;
+                }
                 wrap(
                     "Voice is available online while alive. Microphone and speaker devices follow your operating system's defaults. Server mutes also apply to voice.",
                     rx,
-                    by + 220. * s,
+                    by + 352. * s,
                     col,
                     18. * s,
                     muted_color(),
@@ -1750,20 +1944,6 @@ impl Menu {
                 );
             }
         }
-        if button(
-            Rect::new(
-                screen_width() - 260.0 * s,
-                screen_height() - 62.0 * s,
-                220.0 * s,
-                35.0 * s,
-            ),
-            "Save settings",
-            true,
-            true,
-            s * 0.85,
-        ) {
-            return Action::Save;
-        }
         Action::None
     }
     fn credits(&self, s: f32) -> Action {
@@ -1816,6 +1996,37 @@ impl Menu {
             y + 411.0 * s,
             width.min(900.0 * s),
             18.0 * s,
+            muted_color(),
+        );
+        tankyard_client::boss_model::boss_model_geometry(
+            tankyard_core::BossKind::Bastion,
+            vec2(x + 28. * s, y + 488. * s),
+            22. * s,
+            -0.2,
+            crate::accessibility::motion_time(get_time() as f32),
+            0,
+            None,
+            &mut render::draw_model_primitive,
+        );
+        label(
+            &fitted_label(
+                &format!(
+                    "Preventing cheaters thanks to {}",
+                    tankyard_server::bastion::NAME
+                ),
+                13. * s,
+                (width - 80. * s).max(1.),
+            ),
+            x + 68. * s,
+            y + 480. * s,
+            13. * s,
+            text_color(),
+        );
+        label(
+            tankyard_server::bastion::TAGLINE,
+            x + 68. * s,
+            y + 505. * s,
+            11. * s,
             muted_color(),
         );
         Action::None
@@ -2109,7 +2320,7 @@ fn class_card(class: &ClassDef, r: Rect, selected: bool, index: usize, s: f32) -
         Rect::new(r.x + 7.0 * s, r.y + 5.0 * s, r.w - 14.0 * s, r.h - 38.0 * s),
         19.0 * s,
         -0.45,
-        CYAN,
+        player_color(),
     );
     let size = (14.0 * s).min((r.w - 10.0 * s) / (class.name.chars().count().max(1) as f32 * 0.65));
     arcade_center(&class.name, r.x + r.w * 0.5, r.y + r.h - 19.0 * s, size);

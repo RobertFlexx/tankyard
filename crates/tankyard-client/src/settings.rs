@@ -59,8 +59,6 @@ pub struct Settings {
     pub theme_chosen: bool,
     pub master_volume: f32,
     pub effects_volume: f32,
-    pub ui_volume: f32,
-    pub music_volume: f32,
     pub voice_volume: f32,
     pub auto_fire: bool,
     pub bot_difficulty: usize,
@@ -104,8 +102,6 @@ impl Default for Settings {
             theme_chosen: false,
             master_volume: 0.65,
             effects_volume: 0.7,
-            ui_volume: 0.6,
-            music_volume: 0.0,
             voice_volume: 0.8,
             auto_fire: false,
             bot_difficulty: 1,
@@ -215,8 +211,6 @@ impl Settings {
             &mut self.shake,
             &mut self.master_volume,
             &mut self.effects_volume,
-            &mut self.ui_volume,
-            &mut self.music_volume,
             &mut self.voice_volume,
         ] {
             *value = finite_clamp(*value, 0.0, 1.0, 0.5);

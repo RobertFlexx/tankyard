@@ -3,12 +3,13 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.88"
 
 [workspace.dependencies]
+bastion-anticheat = { path = "crates/bastion-anticheat" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"

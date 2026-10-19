@@ -56,24 +56,64 @@ impl View {
     }
 }
 pub fn team_color(team: u8, local: bool, colorblind: bool) -> Color {
+    if colorblind {
+        use crate::accessibility::{BLUE, GREEN, ORANGE, PURPLE};
+        return match team {
+            0 if local => BLUE,
+            0 => ORANGE,
+            1 => BLUE,
+            2 => ORANGE,
+            3 => PURPLE,
+            _ => GREEN,
+        };
+    }
     if team == 0 {
         if local { PLAYER_BLUE } else { RED }
     } else {
         match team {
             1 => PLAYER_BLUE,
-            2 => {
-                if colorblind {
-                    AMBER
-                } else {
-                    RED
-                }
-            }
+            2 => RED,
             3 => VIOLET,
             _ => AMBER,
         }
     }
 }
+/// Geometric team marks retain identity independently of hue.
+pub fn team_marker(team: u8, local: bool, p: Vec2, radius: f32) {
+    let radius = radius.max(2.);
+    let edge = (radius * 0.4).max(1.);
+    let sides = match team {
+        1 => 0,
+        2 => 4,
+        3 => 3,
+        _ => 4,
+    };
+    let angle = if team >= 4 {
+        std::f32::consts::FRAC_PI_4
+    } else {
+        0.
+    };
+    if team == 0 && !local {
+        let p = crate::ui_layout::position(p);
+        for c in [BLACK, WHITE] {
+            let w = if c == BLACK { edge * 2.2 } else { edge };
+            draw_line(p.x - radius, p.y - radius, p.x + radius, p.y + radius, w, c);
+            draw_line(p.x - radius, p.y + radius, p.x + radius, p.y - radius, w, c);
+        }
+    } else {
+        polygon(p, sides, radius + edge, angle, BLACK);
+        polygon(p, sides, radius, angle, WHITE);
+        polygon(
+            p,
+            sides,
+            (radius - edge).max(0.),
+            angle,
+            team_color(team, local, true),
+        );
+    }
+}
 pub(crate) fn polygon(center: Vec2, sides: u8, radius: f32, angle: f32, color: Color) {
+    let center = crate::ui_layout::position(center);
     if sides < 3 {
         draw_poly(
             center.x,
@@ -116,6 +156,12 @@ fn class_model_animated(
     barrel_aims: Option<&[f32]>,
     world_zoom: Option<f32>,
 ) {
+    let time = crate::accessibility::motion_time(time);
+    let recoil = if crate::accessibility::reduced_motion() {
+        0.
+    } else {
+        recoil
+    };
     crate::tank_model::class_model_geometry(
         class,
         p,
@@ -147,7 +193,7 @@ fn class_model_animated(
         },
     );
 }
-fn draw_model_primitive(primitive: crate::tank_model::Primitive) {
+pub(crate) fn draw_model_primitive(primitive: crate::tank_model::Primitive) {
     match primitive {
         crate::tank_model::Primitive::Polygon {
             center,
@@ -155,13 +201,33 @@ fn draw_model_primitive(primitive: crate::tank_model::Primitive) {
             radius,
             angle,
             color,
-        } => polygon(center, sides, radius, angle, color),
-        crate::tank_model::Primitive::Triangle { vertices, color } => {
-            draw_triangle(vertices[0], vertices[1], vertices[2], color)
-        }
+        } => polygon(
+            center,
+            sides,
+            radius,
+            angle,
+            crate::accessibility::palette(color),
+        ),
+        crate::tank_model::Primitive::Triangle { vertices, color } => draw_triangle(
+            crate::ui_layout::position(vertices[0]),
+            crate::ui_layout::position(vertices[1]),
+            crate::ui_layout::position(vertices[2]),
+            crate::accessibility::palette(color),
+        ),
         crate::tank_model::Primitive::Quad { vertices, color } => {
-            draw_triangle(vertices[0], vertices[1], vertices[2], color);
-            draw_triangle(vertices[0], vertices[2], vertices[3], color);
+            let vertices = vertices.map(crate::ui_layout::position);
+            draw_triangle(
+                vertices[0],
+                vertices[1],
+                vertices[2],
+                crate::accessibility::palette(color),
+            );
+            draw_triangle(
+                vertices[0],
+                vertices[2],
+                vertices[3],
+                crate::accessibility::palette(color),
+            );
         }
     }
 }
@@ -343,7 +409,15 @@ pub fn world(
         let c = team_color(objective.team, true, settings.colorblind);
         draw_circle(p.x, p.y, objective.radius * z, alpha(c, 0.07));
         draw_circle_lines(p.x, p.y, objective.radius * z, 2.0, alpha(c, 0.45));
-        draw_poly_lines(p.x, p.y, 6, 24.0 * z, get_time() as f32 * 8.0, 2.0 * z, c);
+        draw_poly_lines(
+            p.x,
+            p.y,
+            6,
+            24.0 * z,
+            crate::accessibility::motion_time(get_time() as f32) * 8.0,
+            2.0 * z,
+            c,
+        );
         if objective.contested {
             center_label(
                 "CONTESTED",
@@ -388,9 +462,23 @@ pub fn world(
                 previous + (target.angle - previous) * interpolation
             });
         polygon(p, sides, radius + 2.5 * z, angle, OUTLINE);
-        polygon(p, sides, radius, angle, color);
-        if let Some(flash) = effects.flashes.get(&target.id) {
-            polygon(p, sides, radius, angle, alpha(WHITE, flash / 0.12 * 0.5));
+        polygon(
+            p,
+            sides,
+            radius,
+            angle,
+            crate::accessibility::palette(color),
+        );
+        if !settings.reduced_motion
+            && let Some(flash) = effects.flashes.get(&target.id)
+        {
+            polygon(
+                p,
+                sides,
+                radius,
+                angle,
+                alpha(WHITE, flash / 0.12 * 0.5 * settings.effects),
+            );
         }
         if target.health < target.max_health {
             health_bar(p, radius, target.health / target.max_health, z, AMBER);
@@ -399,6 +487,9 @@ pub fn world(
     // Ghosts are short-lived render-only echoes of expired / impacted bullets.
     // They never modify simulation state or require network protocol changes.
     for ghost in &effects.projectile_fades {
+        if settings.reduced_motion || settings.effects <= 0. {
+            break;
+        }
         if !view.visible(ghost.pos, ghost.radius + 10.0) {
             continue;
         }
@@ -542,7 +633,7 @@ pub fn world(
             p,
             r,
             boss.aim,
-            snapshot.tick as f32 / 60.,
+            crate::accessibility::motion_time(snapshot.tick as f32 / 60.),
             boss.phase,
             boss.mothership
                 .then(|| team_color(boss.team, false, settings.colorblind)),
@@ -647,12 +738,12 @@ pub fn world(
             r,
             *effects.display_aim.get(&tank.id).unwrap_or(&tank.aim),
             *effects.recoil.get(&tank.id).unwrap_or(&0.0),
-            effects
-                .flashes
-                .get(&tank.id)
-                .copied()
-                .unwrap_or(0.0)
-                .max(spawn_flash),
+            if settings.reduced_motion {
+                spawn_flash
+            } else {
+                (effects.flashes.get(&tank.id).copied().unwrap_or(0.) * settings.effects)
+                    .max(spawn_flash)
+            },
             color,
             if tank.id == local {
                 local_animation_time
@@ -674,6 +765,14 @@ pub fn world(
         if tank.id != local {
             arcade_player_label(tank, "", vec2(p.x, p.y - r - 14. * z), 320. * z, 15. * z);
         }
+        if settings.colorblind {
+            team_marker(
+                tank.team,
+                tank.id == local,
+                vec2(p.x, p.y + r * 0.5),
+                r * 0.19,
+            );
+        }
         health_bar(
             p,
             r,
@@ -683,11 +782,14 @@ pub fn world(
         );
     }
     for particle in &effects.particles {
+        if settings.reduced_motion || settings.effects <= 0. {
+            break;
+        }
         if !view.visible(particle.pos, 40.0) {
             continue;
         }
         let p = view.screen(particle.pos);
-        let c = Effects::particle_color(particle);
+        let c = crate::accessibility::palette(Effects::particle_color(particle));
         if particle.ring {
             draw_circle_lines(
                 p.x,
@@ -749,6 +851,7 @@ fn health_bar(p: Vec2, r: f32, ratio: f32, z: f32, color: Color) {
 }
 
 pub fn menu_background(time: f32) {
+    let time = crate::accessibility::motion_time(time);
     clear_background(bg_color());
     let grid = if is_dark() {
         Color::new(0.17, 0.20, 0.23, 1.0)
@@ -797,6 +900,7 @@ pub fn menu_background(time: f32) {
         let drift = (time * 0.23 + i as f32).sin() * 5.0;
         let x = nx * w + drift;
         let y = ny * h + drift * 0.5;
+        let c = crate::accessibility::palette(c);
         let fill = if is_dark() {
             mix(c, bg_color(), 0.54)
         } else {
@@ -804,5 +908,30 @@ pub fn menu_background(time: f32) {
         };
         polygon(vec2(x, y), sides, r + 3.0, angle, border);
         polygon(vec2(x, y), sides, r, angle, fill);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn colorblind_palette_distinguishes_ffa_and_every_team() {
+        assert_ne!(team_color(0, true, true), team_color(0, false, true));
+        for first in 1..=4 {
+            assert_eq!(
+                team_color(first, true, true),
+                team_color(first, false, true)
+            );
+            for second in 1..=4 {
+                if first != second {
+                    assert_ne!(
+                        team_color(first, false, true),
+                        team_color(second, false, true)
+                    );
+                }
+            }
+        }
+        assert_ne!(team_color(0, true, true), team_color(0, true, false));
+        assert_ne!(team_color(0, false, true), team_color(0, false, false));
     }
 }

@@ -337,6 +337,23 @@ impl VoiceChat {
             mixer.alarm_volume = volume.clamp(0., 1.);
         }
     }
+    pub fn preview_alarm(&mut self, volume: f32) -> Result<(), String> {
+        if self.disabled {
+            return Err("Audio is disabled by --no-audio.".into());
+        }
+        if volume <= 0. {
+            return Err("Raise Master volume and Boss alarm to hear the preview.".into());
+        }
+        self.boss_alarm(volume);
+        if self.output.is_none() {
+            Err(self
+                .error
+                .clone()
+                .unwrap_or_else(|| "No audio output device is available.".into()))
+        } else {
+            Ok(())
+        }
+    }
 
     fn output_stream<T>(
         &self,

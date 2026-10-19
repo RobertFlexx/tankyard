@@ -9,6 +9,7 @@ thread_local! {
     static QUALITY:Cell<u8>=const {Cell::new(2)};
     static FILTER:Cell<u8>=const {Cell::new(1)};
     static MAX_ANISOTROPY:Cell<u8>=const {Cell::new(1)};
+    static MAX_SAMPLES:Cell<u8>=const {Cell::new(1)};
 }
 pub fn set_quality(quality: u8) {
     QUALITY.with(|q| q.set(quality.min(2)));
@@ -54,7 +55,23 @@ impl Drop for Resources {
 pub fn max_anisotropy() -> u8 {
     MAX_ANISOTROPY.with(Cell::get)
 }
+pub fn texture_count() -> usize {
+    TEXTURES.with(|cache| cache.borrow().len())
+}
 pub fn refresh_capabilities(filter: u8) {
+    let samples = unsafe {
+        let gl = get_internal_gl();
+        if gl.quad_context.info().backend == miniquad::Backend::OpenGl
+            && gl.quad_context.info().features.resolve_attachments
+        {
+            let mut maximum = 1;
+            miniquad::graphics::raw_gl::glGetIntegerv(0x8D57, &mut maximum);
+            maximum.clamp(1, 8) as u8
+        } else {
+            1
+        }
+    };
+    MAX_SAMPLES.with(|s| s.set(samples));
     let maximum = unsafe {
         let gl = get_internal_gl();
         if gl.quad_context.info().backend != miniquad::Backend::OpenGl {
@@ -84,6 +101,16 @@ pub fn refresh_capabilities(filter: u8) {
     MAX_ANISOTROPY.with(|v| v.set(maximum));
     FILTER.with(|v| v.set(0));
     set_filter(filter);
+}
+pub fn samples(requested: u8) -> u8 {
+    let maximum = MAX_SAMPLES.with(Cell::get);
+    [8, 4, 1]
+        .into_iter()
+        .find(|&n| n <= requested && n <= maximum)
+        .unwrap_or(1)
+}
+pub fn supports_samples(samples: u8) -> bool {
+    samples == 1 || samples <= MAX_SAMPLES.with(Cell::get)
 }
 pub fn set_filter(filter: u8) {
     if FILTER.with(|v| {
@@ -133,6 +160,7 @@ pub fn set_filter(filter: u8) {
     });
 }
 pub fn body(id: &str, center: Vec2, radius: f32, angle: f32, opacity: f32) {
+    let center = crate::ui_layout::position(center);
     TEXTURES.with(|cache| {
         if let Some(texture) = cache.borrow().get(id) {
             draw_texture_ex(

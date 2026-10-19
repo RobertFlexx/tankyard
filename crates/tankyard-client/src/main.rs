@@ -4,6 +4,7 @@ compile_error!(
     "The Linux graphical client cannot use static glibc with runtime-loaded GPU drivers. Use scripts/build_linux_compatible.sh; headless binaries can still be built statically."
 );
 
+mod accessibility;
 mod community_ui;
 mod effects;
 mod first_run;
@@ -19,6 +20,7 @@ mod server_browser;
 mod session;
 mod settings;
 mod startup;
+mod ui_layout;
 use tankyard_client::achievements;
 use tankyard_client::tank_model;
 mod ui;
@@ -292,12 +294,7 @@ impl App {
         app
     }
     fn scale(&self) -> f32 {
-        // Keep the HUD inside the window after applying the user's scale setting.
-        let fit = (screen_width() / 1280.0).min(screen_height() / 800.0);
-        (fit * self.settings.ui_scale)
-            .min((screen_width() - 24.0).max(320.0) / 1280.0)
-            .min((screen_height() - 24.0).max(240.0) / 800.0)
-            .clamp(0.35, 2.75)
+        ui_layout::scale(screen_width(), screen_height(), self.settings.ui_scale)
     }
     fn launch(&mut self, session: Session) {
         if self.session.is_some() {
@@ -449,6 +446,15 @@ impl App {
                 match self.settings.save() {
                     Ok(()) => self.menu.error.clear(),
                     Err(error) => self.menu.error = format!("Could not save: {error}"),
+                }
+            }
+            Action::PreviewAlarm => {
+                match self
+                    .voice
+                    .preview_alarm(self.settings.master_volume * self.settings.effects_volume)
+                {
+                    Ok(()) => self.menu.error.clear(),
+                    Err(error) => self.menu.error = error,
                 }
             }
         }
@@ -760,7 +766,7 @@ impl App {
                 Err(error) => self.menu.error = error,
             }
         }
-        self.effects.update(dt);
+        self.effects.update(dt, self.settings.reduced_motion);
         self.voice
             .effects_volume(self.settings.master_volume * self.settings.effects_volume);
         if self.show_achievement_toasts() {
@@ -1081,9 +1087,15 @@ impl App {
                 dt,
                 self.settings.reduced_motion,
             );
-            let sounds =
-                self.effects
-                    .ingest(&session.events, session.player, self.settings.effects);
+            let sounds = self.effects.ingest(
+                &session.events,
+                session.player,
+                if self.settings.reduced_motion {
+                    0.
+                } else {
+                    self.settings.effects
+                },
+            );
             if sounds
                 .iter()
                 .any(|event| matches!(event.kind, tankyard_core::EventKind::BossSpawn))
@@ -1118,7 +1130,7 @@ impl App {
     }
     fn draw(&mut self, s: f32) {
         if let Some(pending) = &self.pending_join {
-            render::menu_background(get_time() as f32);
+            render::menu_background(accessibility::motion_time(get_time() as f32));
             center_label(
                 "Connecting…",
                 screen_width() * 0.5,
@@ -1150,7 +1162,7 @@ impl App {
             return;
         }
         if self.session.is_none() || self.menu_over_game {
-            let menu_scale = s.min(screen_height() / 800.0).min(screen_width() / 1180.0);
+            let menu_scale = s;
             let action = self.menu.draw(
                 &self.content,
                 &mut self.settings,
@@ -1285,7 +1297,7 @@ impl App {
                     );
                 }
             } else {
-                render::menu_background(get_time() as f32);
+                render::menu_background(accessibility::motion_time(get_time() as f32));
                 center_label(
                     "Connecting…",
                     screen_width() * 0.5,
@@ -1644,7 +1656,11 @@ async fn run(cli: Cli) {
         let target_zoom = (screen_height() / 900.0).clamp(0.7, 2.75)
             / (1.0 + (f32::from(level.saturating_sub(1)) * 0.006));
         let ease = 1.0 - (-dt * 9.0).exp();
-        app.view.zoom += (target_zoom - app.view.zoom) * ease;
+        app.view.zoom = if app.settings.reduced_motion {
+            target_zoom
+        } else {
+            app.view.zoom + (target_zoom - app.view.zoom) * ease
+        };
         if is_key_pressed(KeyCode::F9) {
             app.settings.dark_arena = !app.settings.dark_arena;
             let _ = app.settings.save();
@@ -1661,6 +1677,11 @@ async fn run(cli: Cli) {
             graphics::refresh_capabilities(app.settings.anisotropic_filtering);
         }
         set_reduced_motion(app.settings.reduced_motion);
+        accessibility::configure(
+            app.settings.colorblind,
+            app.settings.high_contrast,
+            app.settings.reduced_motion,
+        );
         let s = app.scale();
         app.update(dt, s);
         presentation.begin(&app.settings);

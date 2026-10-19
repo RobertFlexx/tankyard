@@ -202,7 +202,7 @@ impl Effects {
                     spark,
                 });
             }
-            if ring && self.particles.len() < 2048 {
+            if ring && intensity > 0. && self.particles.len() < 2048 {
                 self.particles.push(Particle {
                     pos: event.pos,
                     vel: V2::ZERO,
@@ -452,7 +452,11 @@ impl Effects {
             }
         }
     }
-    pub fn update(&mut self, dt: f32) {
+    pub fn update(&mut self, dt: f32, reduced_motion: bool) {
+        if reduced_motion {
+            self.particles.clear();
+            self.projectile_fades.clear();
+        }
         if let Some((_, life)) = &mut self.boss_arrival {
             *life -= dt;
             if *life <= 0. {
@@ -472,7 +476,9 @@ impl Effects {
         self.particles.retain(|p| p.life > 0.0);
         for p in &mut self.popups {
             p.life -= dt;
-            p.pos.y -= dt * 30.0;
+            if !reduced_motion {
+                p.pos.y -= dt * 30.0;
+            }
         }
         self.popups.retain(|p| p.life > 0.0);
         for kill in &mut self.kills {
@@ -535,7 +541,7 @@ mod tests {
         tank.barrel_shots[0] += 1;
         effects.sync_barrels(std::slice::from_ref(&tank), 1. / 60., false);
         let kick = effects.barrels[&tank.id].recoil[0];
-        effects.update(1. / 60.);
+        effects.update(1. / 60., false);
         assert!(effects.barrels[&tank.id].recoil[0] > kick);
         let mut slow = (0.035, 14.);
         let mut fast = slow;
@@ -548,7 +554,7 @@ mod tests {
         assert!((slow.0 - fast.0).abs() < 0.001);
         effects.sync_barrels(std::slice::from_ref(&tank), 1. / 60., true);
         assert_eq!(effects.barrels[&tank.id].recoil[0], 0.);
-        effects.update(1.);
+        effects.update(1., false);
         assert_eq!(effects.barrels[&tank.id].recoil[0], 0.);
     }
 
@@ -589,18 +595,44 @@ mod tests {
             elimination: None,
         };
         assert_eq!(effects.ingest(std::slice::from_ref(&event), 1, 0.).len(), 1);
-        effects.update(4.9);
+        assert!(
+            effects.particles.is_empty(),
+            "zero intensity must suppress rings too"
+        );
+        effects.update(4.9, false);
         assert!(effects.boss_arrival.is_some());
         assert!(
             effects
                 .ingest(std::slice::from_ref(&event), 1, 0.)
                 .is_empty()
         );
-        effects.update(0.11);
+        effects.update(0.11, false);
         assert!(effects.boss_arrival.is_none());
         effects.sync_arena(1., 0.016);
         effects.sync_arena(0.9, 0.016);
         assert!((0.9..1.).contains(&effects.arena_scale.unwrap()));
+    }
+    #[test]
+    fn reduced_motion_stops_particles_and_popup_drift_without_removing_feedback() {
+        let mut effects = Effects::new();
+        let event = GameEvent {
+            tick: 1,
+            kind: EventKind::BodyParry,
+            pos: V2::new(100., 200.),
+            subject: 7,
+            value: 0,
+            team: 0,
+            elimination: None,
+        };
+        effects.ingest(&[event], 7, 1.);
+        assert!(!effects.particles.is_empty());
+        let position = effects.popups[0].pos;
+        effects.update(0.2, true);
+        assert!(effects.particles.is_empty());
+        assert_eq!(effects.popups[0].pos, position);
+        assert!(effects.popups[0].life < 1.5);
+        effects.update(2., true);
+        assert!(effects.popups.is_empty());
     }
 
     #[test]
@@ -664,7 +696,7 @@ mod tests {
         assert_eq!(effects.projectile_fades.len(), 1);
         effects.sync_projectiles(102, &[], 1.0, 1.0 / 60.0, false);
         assert_eq!(effects.projectile_fades.len(), 1);
-        effects.update(0.2);
+        effects.update(0.2, false);
         assert!(effects.projectile_fades.is_empty());
     }
 
@@ -774,7 +806,7 @@ mod tests {
         let id = tank.id;
         tank.barrel_shots[0] = 27;
         effects.sync_barrels(std::slice::from_ref(&tank), 0.016, false);
-        effects.update(1.0);
+        effects.update(1.0, false);
 
         tank.barrel_shots[0] = 0;
         effects.sync_barrels(std::slice::from_ref(&tank), 0.016, false);
@@ -785,7 +817,7 @@ mod tests {
 
         tank.barrel_shots[0] = u32::MAX;
         effects.sync_barrels(std::slice::from_ref(&tank), 0.016, false);
-        effects.update(1.0);
+        effects.update(1.0, false);
         tank.barrel_shots[0] = 0;
         effects.sync_barrels(&[tank], 0.016, false);
         assert!(effects.barrels[&id].recoil[0] > 0.0);
@@ -845,7 +877,7 @@ mod tests {
             );
         }
         assert!(effects.particles.len() <= 2048);
-        effects.update(3.0);
+        effects.update(3.0, false);
         assert!(effects.particles.is_empty());
     }
 }
@@ -881,7 +913,7 @@ mod elimination_regressions {
         }
         assert_eq!(effects.kills.len(), 3);
         assert_eq!(effects.kills[2].name, "Rival 14");
-        effects.update(4.);
+        effects.update(4., false);
         assert!(effects.kills.is_empty());
         effects.ingest(
             &[GameEvent {

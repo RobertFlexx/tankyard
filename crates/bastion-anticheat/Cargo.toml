@@ -1,0 +1,12 @@
+[package]
+name = "bastion-anticheat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tankyard-core.workspace = true
+tankyard-protocol.workspace = true
+
+[dev-dependencies]
+ring = "0.17"

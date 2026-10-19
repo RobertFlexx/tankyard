@@ -1,6 +1,33 @@
 use macroquad::prelude::*;
 use std::{borrow::Cow, cell::Cell};
 
+// Translate vertices and hit testing in the same logical space. Keeping this
+// out of the GPU model stack preserves fixed navigation and font batching.
+pub(crate) fn ui_rectangle(x: f32, y: f32, w: f32, h: f32, color: Color) {
+    let p = crate::ui_layout::position(vec2(x, y));
+    macroquad::shapes::draw_rectangle(p.x, p.y, w, h, color);
+}
+pub(crate) fn ui_rectangle_lines(x: f32, y: f32, w: f32, h: f32, thickness: f32, color: Color) {
+    let p = crate::ui_layout::position(vec2(x, y));
+    macroquad::shapes::draw_rectangle_lines(p.x, p.y, w, h, thickness, color);
+}
+pub(crate) fn ui_line(x: f32, y: f32, to_x: f32, to_y: f32, thickness: f32, color: Color) {
+    let p = crate::ui_layout::position(vec2(x, y));
+    let to = crate::ui_layout::position(vec2(to_x, to_y));
+    macroquad::shapes::draw_line(p.x, p.y, to.x, to.y, thickness, color);
+}
+use ui_line as draw_line;
+use ui_rectangle as draw_rectangle;
+use ui_rectangle_lines as draw_rectangle_lines;
+fn draw_circle(x: f32, y: f32, radius: f32, color: Color) {
+    let p = crate::ui_layout::position(vec2(x, y));
+    macroquad::shapes::draw_circle(p.x, p.y, radius, color);
+}
+fn draw_poly(x: f32, y: f32, sides: u8, radius: f32, rotation: f32, color: Color) {
+    let p = crate::ui_layout::position(vec2(x, y));
+    macroquad::shapes::draw_poly(p.x, p.y, sides, radius, rotation, color);
+}
+
 // Shared colors for the light arcade theme.
 pub const BG: Color = Color::new(0.804, 0.804, 0.804, 1.0);
 pub const SURFACE: Color = Color::new(0.985, 0.987, 0.99, 1.0);
@@ -13,7 +40,15 @@ pub const RED: Color = Color::new(0.988, 0.463, 0.467, 1.0);
 pub const VIOLET: Color = Color::new(0.749, 0.498, 0.961, 1.0);
 pub const STAT_ORDER: [usize; 8] = [1, 0, 2, 3, 4, 5, 6, 7];
 pub fn card_color(index: usize) -> Color {
-    [CYAN, Color::new(0.66, 0.94, 0.46, 1.0), RED, VIOLET, AMBER][index % 5]
+    crate::accessibility::palette(
+        [CYAN, Color::new(0.66, 0.94, 0.46, 1.0), RED, VIOLET, AMBER][index % 5],
+    )
+}
+pub fn accent_color() -> Color {
+    crate::accessibility::palette(CYAN)
+}
+pub fn player_color() -> Color {
+    crate::render::team_color(0, true, crate::accessibility::colorblind())
 }
 pub fn achievement_badge(p: Vec2, radius: f32, color: Color, earned: bool) {
     draw_poly(
@@ -203,12 +238,28 @@ pub(crate) fn fitted_label(value: &str, size: f32, width: f32) -> Cow<'_, str> {
 }
 
 pub fn label(value: &str, x: f32, y: f32, size: f32, color: Color) {
+    let mut color = crate::accessibility::palette(color);
+    if crate::accessibility::contrast() && !value.is_empty() {
+        let padding = (size * 0.12).max(1.);
+        draw_rectangle(
+            x - padding,
+            y - size * 0.86 - padding,
+            label_width(value, size) + padding * 2.,
+            size * 1.16 + padding * 2.,
+            alpha(crate::accessibility::LABEL_BACK, color.a),
+        );
+        color = crate::accessibility::label_ink(color);
+    }
+    raw_label(value, x, y, size, color);
+}
+fn raw_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
     let pixels = text_raster_size(size);
+    let p = crate::ui_layout::position(vec2(x, y));
     UI_FONT.with(|font| {
         draw_text_ex(
             value,
-            x.round(),
-            y.round(),
+            p.x.round(),
+            p.y.round(),
             TextParams {
                 font: font.borrow().as_ref(),
                 font_size: pixels,
@@ -235,8 +286,7 @@ pub fn contains(rect: Rect) -> bool {
     if !INTERACTIVE.with(|state| state.get()) {
         return false;
     }
-    let (x, y) = mouse_position();
-    rect.contains(vec2(x, y))
+    crate::ui_layout::pointer_visible() && rect.contains(crate::ui_layout::pointer())
 }
 pub fn button(rect: Rect, text: &str, selected: bool, enabled: bool, s: f32) -> bool {
     let hovered = enabled && contains(rect);
@@ -365,6 +415,13 @@ pub fn pointer_scope(scope: u64) {
 pub fn cancel_pointer_capture() {
     ACTIVE_SLIDER.with(|value| value.borrow_mut().take());
 }
+pub fn pointer_captured() -> bool {
+    is_mouse_button_down(MouseButton::Left) && ACTIVE_SLIDER.with(|s| s.borrow().is_some())
+}
+pub fn active_slider(label: &str) -> bool {
+    pointer_captured()
+        && ACTIVE_SLIDER.with(|s| s.borrow().as_ref().is_some_and(|(_, name)| name == label))
+}
 fn slider_amount(x: f32, origin: f32, width: f32, limits: [f32; 2], step: f32) -> f32 {
     let [lo, hi] = limits;
     let raw = lo + (hi - lo) * ((x - origin) / width.max(1.)).clamp(0., 1.);
@@ -404,7 +461,13 @@ pub fn slider_value(
                 || is_mouse_button_pressed(MouseButton::Left))
     });
     if dragged {
-        *value = slider_amount(mouse_position().0, track.x, track.w, limits, step);
+        *value = slider_amount(
+            crate::ui_layout::pointer().x,
+            track.x,
+            track.w,
+            limits,
+            step,
+        );
     }
     let display = format(*value);
     let available = (rect.w - label_width(&display, 16. * s) - 12. * s).max(0.);
@@ -561,7 +624,12 @@ pub fn text_field(
             let shown = field_text(value, secret);
             let caret = field_offset(value, field.editor.cursor, secret);
             let visible = field_view(&shown, caret, &mut field.scroll, width, size);
-            let hit = field_hit(&shown, visible, mouse_position().0 - rect.x - padding, size);
+            let hit = field_hit(
+                &shown,
+                visible,
+                crate::ui_layout::pointer().x - rect.x - padding,
+                size,
+            );
             let hit = if secret {
                 value
                     .char_indices()
@@ -834,27 +902,19 @@ pub fn arcade_player_label(
 
 /// Outlined arcade lettering for names and headings.
 pub fn arcade_center(value: &str, x: f32, y: f32, size: f32) {
-    let width = label_width(value, size);
-    let px = x - width * 0.5;
-    let ink = if is_dark() {
-        Color::new(0.07, 0.09, 0.11, 1.0)
-    } else {
-        Color::new(0.22, 0.22, 0.23, 1.0)
-    };
-    let edge = (size * 0.065).clamp(1.0, 2.7);
-    for (dx, dy) in [(-edge, 0.0), (edge, 0.0), (0.0, -edge), (0.0, edge)] {
-        label(value, px + dx, y + dy, size, ink);
-    }
-    label(value, px, y, size, WHITE);
+    arcade_label(value, x - label_width(value, size) * 0.5, y, size);
 }
-
 pub fn arcade_label(value: &str, x: f32, y: f32, size: f32) {
-    let ink = Color::new(0.15, 0.15, 0.16, 1.0);
-    let edge = (size * 0.06).clamp(1.0, 2.3);
-    for (dx, dy) in [(-edge, 0.0), (edge, 0.0), (0.0, -edge), (0.0, edge)] {
-        label(value, x + dx, y + dy, size, ink);
+    if crate::accessibility::contrast() {
+        label(value, x, y, size, WHITE);
+        return;
     }
-    label(value, x, y, size, WHITE);
+    let ink = Color::new(0.15, 0.15, 0.16, 1.);
+    let edge = (size * 0.06).clamp(1., 2.3);
+    for (dx, dy) in [(-edge, 0.), (edge, 0.), (0., -edge), (0., edge)] {
+        raw_label(value, x + dx, y + dy, size, ink);
+    }
+    raw_label(value, x, y, size, WHITE);
 }
 
 pub fn capsule(rect: Rect, color: Color) {

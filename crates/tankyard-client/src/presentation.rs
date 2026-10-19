@@ -12,7 +12,7 @@ fn bounded_size(size: (u32, u32)) -> (u32, u32) {
 }
 #[derive(Default)]
 pub struct Presentation {
-    target: Option<((u32, u32), RenderTarget)>,
+    target: Option<((u32, u32, u8), RenderTarget)>,
     active: bool,
 }
 impl Presentation {
@@ -24,21 +24,29 @@ impl Presentation {
             bounded_size((settings.width, settings.height))
         };
         self.active = requested != (physical.0 as u32, physical.1 as u32);
+        let key = (
+            requested.0,
+            requested.1,
+            crate::graphics::samples(settings.anti_aliasing),
+        );
         if !self.active {
             self.target = None;
             set_default_camera();
             return;
         }
-        if self
-            .target
-            .as_ref()
-            .is_none_or(|(size, _)| *size != requested)
-        {
-            // Native MSAA remains on the window. A single-sample intermediate
-            // works on GL2 as well and bounds memory use on smaller GPUs.
-            let target = render_target(requested.0, requested.1);
+        if self.target.as_ref().is_none_or(|(size, _)| *size != key) {
+            // Preserve selected antialiasing when fullscreen resolution uses
+            // an intermediate target; GL2 safely falls back to one sample.
+            let target = render_target_ex(
+                requested.0,
+                requested.1,
+                RenderTargetParams {
+                    sample_count: i32::from(key.2),
+                    ..Default::default()
+                },
+            );
             target.texture.set_filter(FilterMode::Linear);
-            self.target = Some((requested, target));
+            self.target = Some((key, target));
             log::info!(
                 "Render resolution: {}x{} (window {}x{})",
                 requested.0,

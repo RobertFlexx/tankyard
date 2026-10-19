@@ -861,6 +861,68 @@ fn multiplayer_sandbox_is_server_permission_controlled() {
 }
 
 #[test]
+fn bastion_accepts_resumed_sequence_gaps_without_advancing_movement_or_weapon_time() {
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let mut client =
+        NetworkClient::connect(&server.address.to_string(), "Resumed pilot", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    let id = client.player_id.unwrap();
+    let tank = server
+        .session
+        .world
+        .tanks
+        .iter_mut()
+        .find(|t| t.id == id)
+        .unwrap();
+    tank.pos = V2::new(1800., 1300.);
+    tank.vel = V2::ZERO;
+    for sequence in [1, 90_000, 90_001, 1_000_000] {
+        let before = server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .pos;
+        let tick = server.session.world.tick;
+        assert!(client.send_input(PlayerInput {
+            sequence,
+            movement: V2::new(1., 1.),
+            fire: true,
+            ..Default::default()
+        }));
+        pump(&mut server, &mut [&mut client], 2);
+        let tank = server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap();
+        assert_eq!(tank.last_input, sequence);
+        assert!(
+            tank.pos.distance(before) < 20.,
+            "client sequence advanced movement"
+        );
+        assert!(server.session.world.tick - tick <= 3);
+        assert!(client.is_ready());
+    }
+    assert_eq!(server.bastion.counters().invalid_inputs, 0);
+    assert!(
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .shot_count
+            <= 2
+    );
+}
+
+#[test]
 fn input_packets_cannot_speed_up_weapons_and_stale_input_becomes_neutral() {
     let mut server = UdpServer::bind(settings()).unwrap();
     let mut client =

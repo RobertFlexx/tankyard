@@ -456,10 +456,22 @@ impl Hud {
             && let Some(class) = content.class(&tank.class)
         {
             let cards = evolution_cards(class.upgrades.len(), screen_width(), screen_height(), s);
+            let card_scale =
+                evolution_scale(class.upgrades.len(), screen_width(), screen_height(), s);
             if cards.iter().any(|r| contains(*r))
-                || contains(Rect::new(m, 77.0 * s, 290.0 * s, 29.0 * s))
+                || contains(Rect::new(
+                    m,
+                    110. * s - 29. * card_scale,
+                    290. * card_scale,
+                    29. * card_scale,
+                ))
                 || cards.last().is_some_and(|r| {
-                    contains(Rect::new(m, r.y + r.h + 8.0 * s, 134.0 * s, 24.0 * s))
+                    contains(Rect::new(
+                        m,
+                        r.y + r.h + 8. * card_scale,
+                        134. * card_scale,
+                        24. * card_scale,
+                    ))
                 })
             {
                 return true;
@@ -1131,7 +1143,6 @@ impl Hud {
         actions: &mut Vec<HudAction>,
         s: f32,
     ) {
-        let s = s.min(screen_height() / 760.0).min(screen_width() / 920.0);
         let Some(current) = content.class(&tank.class) else {
             return;
         };
@@ -1142,7 +1153,8 @@ impl Hud {
             .collect();
         let cards = evolution_cards(next.len(), screen_width(), screen_height(), s);
         let x = 22.0 * s;
-        let y = 106.0 * s;
+        let y = 110.0 * s;
+        let s = evolution_scale(next.len(), screen_width(), screen_height(), s);
         arcade_label(
             if next.is_empty() {
                 "No more upgrades"
@@ -1552,35 +1564,52 @@ impl Hud {
     }
 }
 pub(crate) fn boss_banner_layout(width: f32, s: f32) -> Rect {
-    let left = 402. * s;
-    let right = width - 402. * s;
+    let left = 320. * s;
+    let right = width - 320. * s;
     let available = (right - left).max(1.);
     let w = (600. * s).min(available);
     Rect::new((left + right - w) * 0.5, 112. * s, w, 62. * s)
 }
 fn sandbox_layout(width: f32, height: f32, scale: f32) -> (Rect, f32) {
-    let s = scale.min(height / 1000.).min(width / 640.);
+    let left = (22. + 246. + 8.) * scale;
+    let right = width - (380. + 8.) * scale;
+    let top = 178. * scale;
+    let available = (right - left).max(1.);
+    let vertical = (height - top - 16.).max(1.);
+    let s = scale.min(available / 420.).min(vertical / 744.);
     let w = 420. * s;
     let h = 744. * s;
     (
-        Rect::new((width - w) * 0.5, (height - h) * 0.5 + 96. * s, w, h),
+        Rect::new(
+            left + (available - w) * 0.5,
+            top + (vertical - h) * 0.5,
+            w,
+            h,
+        ),
         s,
     )
 }
 
-fn evolution_cards(count: usize, width: f32, height: f32, s: f32) -> Vec<Rect> {
+fn evolution_scale(count: usize, width: f32, height: f32, requested: f32) -> f32 {
+    let rows = count.div_ceil(3).max(1) as f32;
+    let available = (height - 370. * requested).max(1.);
+    requested
+        .min(width / 920.)
+        .min(available / (rows * 99. + 25.))
+}
+fn evolution_cards(count: usize, width: f32, height: f32, requested: f32) -> Vec<Rect> {
     if count == 0 {
         return Vec::new();
     }
-    let s = s.min(width / 920.0).min(height / 760.0);
+    let s = evolution_scale(count, width, height, requested);
     let columns = 3;
     let gap = 7.0 * s;
     let size = 92.0 * s;
     (0..count)
         .map(|index| {
             Rect::new(
-                22.0 * s + (index % columns) as f32 * (size + gap),
-                106.0 * s + (index / columns) as f32 * (size + gap),
+                22.0 * requested + (index % columns) as f32 * (size + gap),
+                110.0 * requested + (index / columns) as f32 * (size + gap),
                 size,
                 size,
             )
@@ -1605,9 +1634,7 @@ mod tests {
             (800., 1200.),
         ] {
             for scale in [0.8, 1., 1.4] {
-                let s = ((width / 1280.).min(height / 800.) * scale)
-                    .min((width - 24.) / 1280.)
-                    .min((height - 24.) / 800.);
+                let s = crate::ui_layout::scale(width, height, scale);
                 let (sandbox, _) = sandbox_layout(width, height, s);
                 let boss = boss_banner_layout(width, s);
                 assert!(
@@ -1617,14 +1644,14 @@ mod tests {
                         && sandbox.y + sandbox.h <= height - 16.
                 );
                 assert!(
-                    sandbox.y >= boss.y + boss.h + 4. * s,
+                    sandbox.y + 0.001 >= boss.y + boss.h + 4. * s,
                     "{width}x{height} at {scale}"
                 );
                 assert!((boss.x + boss.w * 0.5 - width * 0.5).abs() < 0.001);
-                assert!(boss.x >= 380. * s + 12. * s);
+                assert!(boss.x >= 312. * s + 4. * s);
                 assert!(boss.x + boss.w <= width - 242. * s - 12. * s);
-                assert!(sandbox.x >= (22. + 246.) * s + 8. * s);
-                assert!(sandbox.x + sandbox.w <= width - 380. * s - 8. * s);
+                assert!(sandbox.x + 0.001 >= (22. + 246.) * s + 8. * s);
+                assert!(sandbox.x + sandbox.w <= width - 380. * s - 8. * s + 0.001);
             }
         }
     }
@@ -1702,19 +1729,30 @@ mod tests {
 
     #[test]
     fn class_choices_fit_small_and_large_windows() {
-        for (width, height, scale) in [(800., 600., 0.7), (1280., 800., 1.), (3840., 2160., 2.6)] {
-            let cards = evolution_cards(8, width, height, scale);
-            assert_eq!(cards.len(), 8);
-            for card in &cards {
-                assert!(
-                    card.x >= 0.
-                        && card.y >= 0.
-                        && card.x + card.w < width
-                        && card.y + card.h < height * 0.64
-                );
-            }
-            for pair in cards.windows(2) {
-                assert!(!pair[0].overlaps(&pair[1]));
+        for (width, height) in [
+            (800., 600.),
+            (1280., 800.),
+            (1920., 1080.),
+            (3840., 2160.),
+            (800., 1200.),
+        ] {
+            for preference in [0.8, 1., 1.4] {
+                let scale = crate::ui_layout::scale(width, height, preference);
+                let card_scale = evolution_scale(8, width, height, scale);
+                let cards = evolution_cards(8, width, height, scale);
+                assert_eq!(cards.len(), 8);
+                for card in &cards {
+                    assert!(
+                        card.x >= 0.
+                            && card.y >= 0.
+                            && card.x + card.w < width
+                            && card.y - 29. * card_scale >= 78. * scale
+                            && card.y + card.h + 32. * card_scale <= height - 260. * scale + 0.001
+                    );
+                }
+                for pair in cards.windows(2) {
+                    assert!(!pair[0].overlaps(&pair[1]));
+                }
             }
         }
     }

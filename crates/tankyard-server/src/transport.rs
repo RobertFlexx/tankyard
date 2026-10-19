@@ -87,6 +87,7 @@ pub type OwnerExtension = fn(&mut UdpServer, EntityId, &[u8]) -> Result<String, 
 mod creator_tests;
 
 pub struct UdpServer {
+    pub bastion: bastion_anticheat::Bastion,
     pub session: LocalSession,
     pub settings: ServerSettings,
     pub address: SocketAddr,
@@ -184,6 +185,7 @@ impl UdpServer {
             );
         }
         Ok(Self {
+            bastion: Default::default(),
             session,
             settings,
             address,
@@ -508,7 +510,7 @@ impl UdpServer {
                     return;
                 }
             };
-            for mut input in inputs.iter() {
+            for input in inputs.iter() {
                 let Some(peer) = self.peers.get(&client) else {
                     return;
                 };
@@ -518,12 +520,9 @@ impl UdpServer {
                 let baseline = newest
                     .map(|i: PlayerInput| i.sequence)
                     .or(peer.last_sequence);
-                if baseline.is_some_and(|last| {
-                    !sequence_newer(input.sequence, last)
-                        || input.sequence.wrapping_sub(last) > 4096
-                }) {
+                let Some(mut input) = self.bastion.input(input, baseline) else {
                     continue;
-                }
+                };
                 if let Some(previous) = newest {
                     // A short click can share a delayed packet batch with its
                     // release. Keep the tap while using the newest movement/aim.
@@ -538,7 +537,7 @@ impl UdpServer {
             && let Some(entity) = peer.entity
         {
             // A fresh connection may start anywhere in the u32 sequence space.
-            // Subsequent inputs still obey the wrap-aware bounded forward gap.
+            // Later sequence gaps establish order without advancing game time.
             if peer.last_sequence.is_none()
                 && let Some(tank) = self.session.world.tanks.iter_mut().find(|t| t.id == entity)
             {
@@ -755,7 +754,12 @@ impl UdpServer {
                     .get_mut(&client)
                     .and_then(|p| p.creator_nonce.take());
                 let verified = proof.is_some_and(|nonce| {
-                    verify_creator(client, &nonce, &self.settings.server_id, &signature)
+                    bastion_anticheat::creator_proof(
+                        client,
+                        &nonce,
+                        &self.settings.server_id,
+                        &signature,
+                    )
                 });
                 if verified {
                     if let Some(p) = self.peers.get_mut(&client) {
@@ -1001,21 +1005,17 @@ impl UdpServer {
         let nonce = peer
             .creator_session_nonce
             .ok_or_else(|| NetError("Creator verification required.".into()))?;
-        if peer
-            .last_owner_sequence
-            .is_some_and(|last| sequence <= last)
-            || !verify_creator_command(
-                &creator_command(
-                    client,
-                    &nonce,
-                    &self.settings.server_id,
-                    round,
-                    sequence,
-                    payload,
-                ),
-                signature,
-            )
-        {
+        if !bastion_anticheat::creator_command(bastion_anticheat::CreatorCommand {
+            client,
+            nonce: &nonce,
+            server: &self.settings.server_id,
+            round,
+            current_round: self.session.world.match_state.round,
+            sequence,
+            previous_sequence: peer.last_owner_sequence,
+            payload,
+            signature,
+        }) {
             return Err(NetError(
                 "Invalid or replayed creator command signature.".into(),
             ));
