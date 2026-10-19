@@ -43,6 +43,27 @@ fn ready(server: &mut UdpServer, clients: &mut [&mut NetworkClient]) {
     panic!("localhost clients failed to become ready");
 }
 
+#[test]
+fn banning_one_loopback_relay_client_keeps_other_and_new_players_connected() {
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let address = server.address.to_string();
+    let mut offender = NetworkClient::connect(&address, "Offender", "").unwrap();
+    let mut bystander = NetworkClient::connect(&address, "Bystander", "").unwrap();
+    ready(&mut server, &mut [&mut offender, &mut bystander]);
+    let result = server.admin_command(&format!("ban {} 5", offender.player_id.unwrap()));
+    assert!(
+        result.message.contains("shared relay address preserved"),
+        "{}",
+        result.message
+    );
+    pump(&mut server, &mut [&mut bystander], 8);
+    assert!(bystander.is_ready());
+    let mut newcomer = NetworkClient::connect(&address, "Newcomer", "").unwrap();
+    ready(&mut server, &mut [&mut bystander, &mut newcomer]);
+    assert!(newcomer.is_ready());
+    assert!(bystander.is_ready());
+}
+
 fn voice_frame(client: &NetworkClient, sequence: u32) -> tankyard_protocol::VoiceFrame {
     tankyard_protocol::VoiceFrame {
         round: client.player_round.unwrap(),

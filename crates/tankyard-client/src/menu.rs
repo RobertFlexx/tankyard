@@ -115,6 +115,7 @@ impl Menu {
         }
     }
     pub fn clear_focus(&mut self) {
+        cancel_pointer_capture();
         self.name_active = false;
         self.address_active = false;
         self.password_active = false;
@@ -221,6 +222,7 @@ impl Menu {
         match_claims: &[String],
         s: f32,
     ) -> Action {
+        pointer_scope(1 + self.page as u64);
         if is_key_pressed(KeyCode::Tab) && self.binding.is_none() {
             self.focus_next(is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift));
         }
@@ -1315,8 +1317,7 @@ impl Menu {
                     &mut settings.fullscreen,
                     s,
                 ) {
-                    set_fullscreen(settings.fullscreen);
-                    let _ = settings.save();
+                    return Action::Save;
                 }
                 toggle(
                     Rect::new(x, by + 47.0 * s, col, 33.0 * s),
@@ -1355,7 +1356,7 @@ impl Menu {
                     s,
                 );
                 label(
-                    "RESOLUTION",
+                    "RESOLUTION · render size in fullscreen",
                     rx,
                     by + DISPLAY_RESOLUTION_LABEL * s,
                     13.0 * s,
@@ -1373,7 +1374,7 @@ impl Menu {
                     s * 0.85,
                 ) {
                     settings.native_resolution = true;
-                    let _ = settings.save();
+                    return Action::Save;
                 }
                 for (index, (width, height)) in
                     [(1024, 768), (1280, 800), (1600, 900), (1920, 1080)]
@@ -1399,10 +1400,7 @@ impl Menu {
                         settings.native_resolution = false;
                         settings.width = width;
                         settings.height = height;
-                        if !settings.fullscreen {
-                            request_new_screen_size(width as f32, height as f32);
-                        }
-                        let _ = settings.save();
+                        return Action::Save;
                     }
                 }
                 label(

@@ -1,12 +1,16 @@
 # Creator administration
 
-The regular v0.3.0 `tankyard-server` supports the separate creator client. A creator-server executable is no longer necessary. The creator client, menu, signing implementation, and secret key are maintained privately and excluded from this repository and public release packages. Public server handlers and their authorization checks are deliberately reviewable.
+The regular v0.3.1 `tankyard-server` supports the separate creator client. A creator-server executable is no longer necessary. The creator client, menu, signing implementation, and secret key are maintained privately and excluded from this repository and public release packages. Public server handlers and their authorization checks are deliberately reviewable.
 
-## Host consent
+## Host policy
 
-`creator_admin` defaults to **false**, including when loading an older configuration. Changing a server name, marking it Official, granting an ordinary Owner role, or connecting with a creator badge does not enable it. Personal **Host server** games use the disabled default. No remote packet can enable the policy.
+Official public arenas (`kind = "Official"`) enable key-verified creator administration by default in the **regular server**. Use `tankyard-server --central` for the included central profile, even in a container without a configs directory. No separate creator server or additional creator opt-in is required. A top-level `creator_admin = false` always overrides the official default and is preserved with custom configurations.
 
-Official operators can use `configs/official.toml` or `configs/central.toml`; those templates explicitly opt in. An independently operated public community arena may opt in with these top-level fields:
+Community servers, older community configurations, personal **Host server** games, and password-protected arenas have creator tools disabled by default. A password disables the automatic official policy too; explicitly enabling tools on a password-protected host is rejected. No client URL, claimed hostname, username, badge, ordinary Owner role, or remote packet can change this policy. Official status is chosen by the operator's local configuration, never inferred from where a client claims to connect.
+
+The official/central templates include a stable server ID and persistent audit location. Without an explicit audit path, official servers use `creator-audit.jsonl` in their working directory; tools fail closed if that file cannot be written. Mount this storage persistently in Docker.
+
+An independently operated public community arena may opt in with these top-level fields:
 
 ```toml
 creator_admin = true
@@ -14,13 +18,13 @@ server_id = "my-public-arena"
 audit_file = "configs/creator-audit.jsonl"
 ```
 
-The ID must contain 1–64 ASCII letters, digits, underscores, or hyphens. The server must have no password, and an audit path must be configured. Password-protected matches cannot enable creator tools. Leave the flag disabled on personal/private hosts. Public reachability is not inferred from an IP address: the operator's explicit configuration is the consent boundary.
+The ID must contain 1–64 ASCII letters, digits, underscores, or hyphens. A community opt-in requires no password and an explicit audit path. Password-protected matches cannot enable creator tools. Leave the flag disabled on personal/private hosts. Public reachability is not inferred from an IP address: the operator's explicit configuration is the consent boundary.
 
 The process console reports `creator-admin status`. `creator-admin off` immediately removes invulnerability, unlimited abilities, movement/damage/reload modifiers, and bot freezing. It invalidates command authorization and updates connected clients. It still revokes powers when the audit disk is unavailable. `creator-admin on` validates the host policy, writes an audit entry, and requires fresh authorization. Use `save <configuration-path>` to persist a console change, or edit the configuration before restarting. Gameplay edits already made, such as a spawned boss or granted level, remain until changed or the round restarts.
 
 ## Authorization and boundaries
 
-Creator identity uses Ed25519 and the published verification key in `tankyard-protocol/src/creator.rs`. Each connection receives a fresh random 256-bit challenge. Proofs bind the server ID, connection ID, and nonce. A badge alone is cosmetic on a host that has not opted in.
+Creator identity uses Ed25519 and the published verification key in `tankyard-protocol/src/creator.rs`. Each connection receives a fresh random 256-bit challenge. Proofs bind the server ID, connection ID, and nonce. A badge alone is cosmetic on a host whose policy disables tools.
 
 Every administration request carries a separate signature over a distinct domain, server ID, session nonce, connection ID, round, monotonically increasing sequence, payload length, and exact payload. The server rechecks host policy on every action and rejects replayed, stale, forged, or modified commands. Revocation rotates the challenge; old authorization cannot become valid again when a host re-enables the policy. Commands are limited to 1024 bytes and share a budget of two per second with a burst of six. Ordinary packet limits also apply.
 
@@ -36,9 +40,9 @@ Command signatures protect request authenticity, not transport confidentiality o
 
 The live process must be upgraded; publishing a GitHub release does not deploy it. Check the Pi's architecture first: the Linux ARM64 release package is for an `aarch64` system. Keep the current Docker configuration, persistent volumes, ports, Cloudflare tunnel, and WebSocket relay route.
 
-1. Download the matching v0.3.0 package, verify it against the release's `SHA256SUMS`, and update the regular `tankyard-server` and `tankyard-relay` binaries in the container image or existing binary mount. Both must use protocol 15.
-2. Preserve the operator's world settings, bans, and other configuration. Set `creator_admin = true`, choose a stable `server_id`, and configure a writable persistent `audit_file` outside the disposable container layer. The included `configs/central.toml` is a starting template; its relative audit and ban paths must resolve into the existing persistent configuration mount.
-3. Start the ordinary server with `tankyard-server --config <mounted-config-path>`. Keep the existing relay and Cloudflare routing configuration. Restart or recreate through the deployment's normal Docker procedure.
-4. Join with a regular v0.3.0 client to check connectivity, then join with the private creator client. Verify the badge, one bounded command, and its request/result audit records. Test `creator-admin off` from the local process console when enabled. With `--no-console`, edit the flag in the persistent configuration and restart to revoke instead.
+1. Download the matching v0.3.1 package, verify it against the release's `SHA256SUMS`, and update the regular `tankyard-server` and `tankyard-relay` binaries in the container image or existing binary mount. Both must use protocol 15.
+2. Preserve the operator's world settings, bans, and other configuration. Use `kind = "Official"`, choose a stable `server_id`, and configure a writable persistent `audit_file` outside the disposable container layer. Omit `creator_admin` to use the official default; an existing explicit false remains a deliberate override. The included `configs/central.toml` is a starting template; its relative audit and ban paths must resolve into the existing persistent configuration mount.
+3. Start the ordinary server with `tankyard-server --central --config <mounted-config-path>`, or `tankyard-server --central` with the shipped profile. No creator-server binary is involved. Keep the existing relay and Cloudflare routing configuration. Restart or recreate through the deployment's normal Docker procedure.
+4. Join with a regular v0.3.1 client to check connectivity, then join with the private creator client. Verify the badge, one bounded command, and its request/result audit records. Test `creator-admin off` from the local process console when enabled. With `--no-console`, edit the flag in the persistent configuration and restart to revoke instead.
 
 The private client and key belong on the creator's computer. Neither is needed in the Pi's container. This repository contains no deployment connection to the live Pi.

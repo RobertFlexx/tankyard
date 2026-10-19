@@ -4,6 +4,7 @@
 configs/*bans.json
 configs/access.json
 configs/*.jsonl*
+/creator-audit.jsonl*
 *.token
 configs/private*.toml
 

@@ -32,7 +32,7 @@ impl Arena {
         let suffix = u64::from_le_bytes(renet_netcode::generate_random_bytes());
         let audit = std::env::temp_dir().join(format!("tankyard-creator-{suffix:x}.jsonl"));
         let mut server = UdpServer::bind(ServerSettings {
-            creator_admin: enabled,
+            creator_admin: Some(enabled),
             kind,
             server_id: SERVER.into(),
             audit_file: audit.to_string_lossy().into(),
@@ -117,6 +117,27 @@ fn valid_creator_identity_is_cosmetic_on_hosts_that_have_not_consented() {
         assert_eq!(arena.server.session.world.tanks[0].speed_scale, 1.);
         assert!(!arena.server.session.world.config.modded);
         assert!(!arena.audit.exists());
+    }
+}
+
+#[test]
+fn official_default_authorizes_signed_tools_while_community_and_private_defaults_do_not() {
+    for (kind, password, expected) in [
+        (ServerKind::Official, "", true),
+        (ServerKind::Community, "", false),
+        (ServerKind::Official, "private", false),
+        (ServerKind::Community, "private", false),
+    ] {
+        let mut arena = Arena::new(false, kind);
+        arena.server.settings.creator_admin = None;
+        arena.server.settings.password = password.into();
+        arena.verify();
+        assert_eq!(arena.server.creator_admin_available(), expected);
+        assert_eq!(arena.command("speed").is_ok(), expected);
+        assert_eq!(arena.audit.exists(), expected);
+        if expected {
+            assert_eq!(arena.server.session.world.tanks[0].speed_scale, 3.);
+        }
     }
 }
 
@@ -266,7 +287,7 @@ fn operator_revocation_is_immediate_and_old_commands_cannot_survive_reenable() {
             .message
             .contains("revoked")
     );
-    assert!(!arena.server.settings.creator_admin);
+    assert_eq!(arena.server.settings.creator_admin, Some(false));
 }
 
 #[test]

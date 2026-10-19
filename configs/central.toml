@@ -1,13 +1,12 @@
 # Public central arena. Use the regular tankyard-server binary.
-# This operator explicitly consents to signed creator tools. Private hosts
-# should use server.toml, which disables them. Preserve config across updates.
+# Official public arenas include key-verified, audited creator administration.
+# creator_admin = false overrides that policy. Private hosts use server.toml.
 kind = "Official"
 server_id = "tankyard-central"
 name = "Tank Yard Central Arena"
 bind = "0.0.0.0:5000"
 chat_enabled = false
 voice_enabled = true
-creator_admin = true
 audit_file = "configs/creator-audit.jsonl"
 require_accounts = false
 bot_count = 12

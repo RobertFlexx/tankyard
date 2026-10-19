@@ -176,11 +176,11 @@ impl UdpServer {
         let bans = crate::admin::load_bans(&settings.ban_file)?;
         let snapshot_buffer = session.world.snapshot();
         let client_ids = Vec::with_capacity(settings.max_players);
-        if settings.creator_admin {
+        if settings.creator_admin_enabled() {
             log::info!(
                 "Operator enabled signed creator administration for {} (audit: {}).",
                 settings.server_id,
-                settings.audit_file
+                settings.creator_audit_file()
             );
         }
         Ok(Self {
@@ -431,7 +431,12 @@ impl UdpServer {
                         .client_addr(client_id)
                         .is_some_and(|address| {
                             self.bans.iter().any(|ban| {
-                                ban.ip == address.ip() && ban.expires_at > unix_time().as_secs()
+                                ban.matches(
+                                    address.ip(),
+                                    client_id,
+                                    self.settings.shared_relay(address.ip()),
+                                    unix_time().as_secs(),
+                                )
                             })
                         });
                     if blocked {
@@ -947,7 +952,7 @@ impl UdpServer {
         Ok(())
     }
     /// Install trusted, host-owned administration code before accepting peers.
-    /// Host policy must also opt in; no gameplay role or username can enable it.
+    /// Host policy must allow it; no gameplay role or username can enable it.
     pub fn set_owner_extension(&mut self, handler: OwnerExtension) -> Result<(), NetError> {
         if !self.creator_admin_available() {
             return Err(NetError(
@@ -1021,7 +1026,7 @@ impl UdpServer {
             return Err(NetError("Wait before sending another command.".into()));
         }
         crate::access::audit(
-            &self.settings.audit_file,
+            self.settings.creator_audit_file(),
             &crate::access::AuditRecord {
                 time: unix_time().as_secs(),
                 actor: &client.to_string(),
@@ -1037,7 +1042,7 @@ impl UdpServer {
         }))
         .map_err(|_| NetError("Owner extension failed.".into()))
         .and_then(|result| result.map_err(NetError));
-        if result.is_ok() && self.owner_extension.is_some() {
+        if self.owner_extension.is_some() {
             self.session.world.config.modded = true;
         }
         if !was_modified && self.session.world.config.modded {
@@ -1047,7 +1052,7 @@ impl UdpServer {
             });
         }
         if let Err(error) = crate::access::audit(
-            &self.settings.audit_file,
+            self.settings.creator_audit_file(),
             &crate::access::AuditRecord {
                 time: unix_time().as_secs(),
                 actor: &client.to_string(),
@@ -1062,9 +1067,8 @@ impl UdpServer {
     }
 
     pub(crate) fn creator_admin_available(&self) -> bool {
-        self.settings.creator_admin
-            && self.settings.password.is_empty()
-            && !self.settings.audit_file.is_empty()
+        self.settings.creator_admin_enabled()
+            && !self.settings.creator_audit_file().is_empty()
             && !self.settings.server_id.is_empty()
     }
 
@@ -1073,7 +1077,7 @@ impl UdpServer {
     pub(crate) fn set_creator_admin(&mut self, enabled: bool) -> Result<String, NetError> {
         if enabled {
             let mut candidate = self.settings.clone();
-            candidate.creator_admin = true;
+            candidate.creator_admin = Some(true);
             candidate.validate()?;
         }
         let record = crate::access::AuditRecord {
@@ -1083,13 +1087,13 @@ impl UdpServer {
             target: &self.settings.server_id,
             reason: if enabled { "enabled" } else { "disabled" },
         };
-        let audit = crate::access::audit(&self.settings.audit_file, &record);
+        let audit = crate::access::audit(self.settings.creator_audit_file(), &record);
         if enabled {
             audit.map_err(NetError)?;
         } else if let Err(error) = audit {
             log::error!("Could not audit creator revocation: {error}");
         }
-        self.settings.creator_admin = enabled;
+        self.settings.creator_admin = Some(enabled);
         if !enabled {
             self.session.world.reset_administration();
         }

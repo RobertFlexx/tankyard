@@ -11,7 +11,7 @@ cargo build --locked --release -p tankyard-server --bin tankyard-server
 
 The port is UDP 5000. Local players join `127.0.0.1:5000`; LAN players use the host's local address. Internet players need a reachable public address and a forwarded UDP port. IPv6 addresses use brackets, such as `[2001:db8::1234]:5000`.
 
-Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default. Protocol 12 is required on both clients and servers. Validated mod data is sent when joining, so clients do not need to install server packs.
+Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default. Protocol 15 is required on both clients and servers. Validated mod data is sent when joining, so clients do not need to install server packs.
 
 Inputs and menu commands are flushed before the client finishes each frame. Movement abilities use shared prediction rules. Remote movement can bridge a packet gap for up to 75 ms, constrained by walls and the arena boundary; longer gaps freeze until a new snapshot arrives. The server reuses snapshot storage between viewers and bounds catch-up work during overload.
 
@@ -25,7 +25,7 @@ Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`
 
 Current clients and servers use protocol 15. Proximity voice, spectator controls, and captured drones require matching versions. Update clients and servers together. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
 
-The ordinary server supports signed creator tools only with explicit operator consent. Default/personal hosts are opted out; public community operators can opt in. See [creator administration](creator-administration.md) for policy, immediate revocation, auditing, and updating the central Raspberry Pi/Docker deployment.
+The ordinary server includes signed creator tools by default on official public arenas (`--central`); `creator_admin = false` overrides that policy. Default community/personal hosts are disabled; public community operators can explicitly opt in. Password-protected hosts cannot enable the tools. See [creator administration](creator-administration.md) for policy, immediate revocation, auditing, and updating the central Raspberry Pi/Docker deployment.
 
 The process console is the host's administration interface:
 
@@ -96,3 +96,11 @@ Repeat these local workloads after server changes:
 The load process also simulates every client, so its CPU use and loopback packet loss differ from a deployed fleet. Check [measured results](status.md), then test the intended map, classes, and projectile population on the actual host. The central lobby and provisioning service remain separate integrations.
 
 Creator badges use a per-connection challenge and Ed25519 proof checked against the public creator key. Display names and community roles do not confer creator identity. Standard builds have no owner-extension handler. Trusted hosts can register their own extension before accepting players; every extension packet carries a fresh signature bound to the connection nonce, current round, monotonic sequence, and exact payload. Bounded payloads, replay checks, rate limits, and audit logging apply before host code runs. Modified matches disable regular arena achievements.
+
+## Relay hardening and shared addresses
+
+Keep the Cloudflare route on WSS and leave the game UDP port unpublished when only the tunnel is needed. Run the server/relay as an unprivileged container user, preserve configuration and audit storage in writable volumes, and retain the existing tunnel credentials outside release packages. Guest transport remains supported; a game password does not establish a verified account. Secure netcode/account integration above is needed for authenticated persistent identity.
+
+The relay bounds connections to 1–1024 (default 256), the complete WebSocket upgrade to five seconds, datagrams to 2048 bytes, queued writes to 64 KiB, and each direction to 2048 datagrams/second with a 4096-packet burst. Either direction going silent for fifteen seconds releases the slot; text and ping traffic do not count as game activity. Existing UDP/WebSocket framing, backpressure, voice, and guest joining are preserved. Cloudflare IP headers are parsed as diagnostic IP addresses only when the direct TCP peer is loopback; they never grant identity or authority.
+
+Loopback bans target the connection ID and verified account, so banning one proxied guest cannot ban every player on the relay. Direct nonshared IP bans still cover that address. For a relay in another Docker container or host, add its exact source IP to the server's top-level `shared_relay_ips = ["172.18.0.2"]` before `[world]`. No client-supplied forwarding header is trusted for bans. Anonymous guests can change connection IDs when reconnecting; lasting individual bans behind a shared relay require verified accounts. Legacy address-wide bans on a configured shared relay are ignored rather than excluding all players.

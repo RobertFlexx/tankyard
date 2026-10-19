@@ -34,6 +34,35 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 const PUMP_BATCH: usize = 32;
 const WRITE_BUDGET: usize = 64 * 1024;
+// Well above normal snapshots, inputs, and simultaneous voice streams. Each
+// direction has its own budget, so a flood cannot sustain an unbounded pump.
+const DATAGRAMS_PER_SECOND: f64 = 2048.;
+const DATAGRAM_BURST: f64 = 4096.;
+struct DatagramBudget {
+    tokens: f64,
+    at: Instant,
+}
+impl DatagramBudget {
+    fn new() -> Self {
+        Self {
+            tokens: DATAGRAM_BURST,
+            at: Instant::now(),
+        }
+    }
+    fn take(&mut self, now: Instant) -> Result<(), tungstenite::Error> {
+        self.tokens = (self.tokens
+            + now.saturating_duration_since(self.at).as_secs_f64() * DATAGRAMS_PER_SECOND)
+            .min(DATAGRAM_BURST);
+        self.at = now;
+        if self.tokens < 1. {
+            return Err(
+                io::Error::new(io::ErrorKind::InvalidData, "relay datagram rate exceeded").into(),
+            );
+        }
+        self.tokens -= 1.;
+        Ok(())
+    }
+}
 
 /// Returns the WebSocket URL for a join address, or `None` for a plain UDP
 /// `host:port`. A bare hostname without a port means `wss://hostname`.
@@ -54,6 +83,48 @@ fn config() -> WebSocketConfig {
         .max_write_buffer_size(WRITE_BUDGET)
         .max_message_size(Some(MAX_DATAGRAM))
         .max_frame_size(Some(MAX_DATAGRAM))
+}
+
+// A per-read timeout alone lets a slow sender hold a handshake slot forever.
+// Bound the entire upgrade; remove the deadline once the sockets are nonblocking.
+struct RelayStream {
+    tcp: TcpStream,
+    deadline: Option<Instant>,
+}
+impl RelayStream {
+    fn remaining(&self) -> io::Result<Option<Duration>> {
+        self.deadline
+            .map(|end| {
+                end.checked_duration_since(Instant::now())
+                    .filter(|remaining| !remaining.is_zero())
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "WebSocket upgrade deadline exceeded",
+                        )
+                    })
+            })
+            .transpose()
+    }
+}
+impl Read for RelayStream {
+    fn read(&mut self, data: &mut [u8]) -> io::Result<usize> {
+        if let Some(remaining) = self.remaining()? {
+            self.tcp.set_read_timeout(Some(remaining))?;
+        }
+        self.tcp.read(data)
+    }
+}
+impl Write for RelayStream {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        if let Some(remaining) = self.remaining()? {
+            self.tcp.set_write_timeout(Some(remaining))?;
+        }
+        self.tcp.write(data)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
 }
 
 enum Stream {
@@ -168,8 +239,12 @@ fn pump<S: Read + Write>(
     mut peer: Option<SocketAddr>,
     stop: &AtomicBool,
 ) -> Result<(), tungstenite::Error> {
-    let mut buffer = [0u8; MAX_DATAGRAM];
-    let mut last_activity = Instant::now();
+    // The extra byte detects UDP truncation instead of forwarding corrupt data.
+    let mut buffer = [0u8; MAX_DATAGRAM + 1];
+    let mut udp_activity = Instant::now();
+    let mut ws_activity = udp_activity;
+    let mut udp_budget = DatagramBudget::new();
+    let mut ws_budget = DatagramBudget::new();
     let mut pending_ws = None;
     let mut pending_udp: Option<tungstenite::Bytes> = None;
     loop {
@@ -185,10 +260,15 @@ fn pump<S: Read + Write>(
             } else {
                 match udp.recv_from(&mut buffer) {
                     Ok((len, from)) => {
+                        if len == 0 || len > MAX_DATAGRAM {
+                            continue;
+                        }
                         if *peer.get_or_insert(from) != from {
                             continue;
                         }
                         active = true;
+                        udp_budget.take(Instant::now())?;
+                        udp_activity = Instant::now();
                         Message::binary(buffer[..len].to_vec())
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
@@ -220,7 +300,12 @@ fn pump<S: Read + Write>(
             } else {
                 match ws.read() {
                     Ok(Message::Binary(data)) => {
+                        ws_budget.take(Instant::now())?;
+                        if data.is_empty() {
+                            continue;
+                        }
                         active = true;
+                        ws_activity = Instant::now();
                         data
                     }
                     Ok(Message::Close(_)) => {
@@ -228,7 +313,7 @@ fn pump<S: Read + Write>(
                         return Ok(());
                     }
                     Ok(_) => {
-                        active = true;
+                        ws_budget.take(Instant::now())?;
                         continue;
                     }
                     Err(e) if would_block(&e) => break,
@@ -255,11 +340,11 @@ fn pump<S: Read + Write>(
         if finishing {
             break;
         }
-        if active {
-            last_activity = Instant::now();
-        } else if last_activity.elapsed() > IDLE_TIMEOUT {
+        // Both sides must stay alive. Ping/text spam or one-way junk cannot
+        // occupy a relay slot indefinitely after the game transport closes.
+        if udp_activity.elapsed() > IDLE_TIMEOUT || ws_activity.elapsed() > IDLE_TIMEOUT {
             break;
-        } else {
+        } else if !active {
             thread::sleep(Duration::from_millis(1));
         }
     }
@@ -322,6 +407,16 @@ impl Drop for ClientBridge {
 /// Accepts WebSocket connections on `listen` and bridges each one to the UDP
 /// game server at `server`. Runs until the listener fails.
 pub fn run_relay(listen: &str, server: SocketAddr, max_connections: usize) -> io::Result<()> {
+    if !(1..=1024).contains(&max_connections)
+        || server.port() == 0
+        || server.ip().is_unspecified()
+        || server.ip().is_multicast()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "relay requires 1–1024 connections and a unicast UDP destination with a nonzero port",
+        ));
+    }
     let listener = TcpListener::bind(listen)?;
     log::info!(
         "Relaying WebSocket {} to UDP {server}",
@@ -335,11 +430,12 @@ pub fn run_relay(listen: &str, server: SocketAddr, max_connections: usize) -> io
             Ok(stream) => stream,
             Err(e) => {
                 log::warn!("accept failed: {e}");
+                thread::sleep(Duration::from_millis(50));
                 continue;
             }
         };
         if active.load(Ordering::Relaxed) >= max_connections {
-            log::warn!("Refusing connection: {max_connections} relays already active");
+            log::debug!("Refusing connection: {max_connections} relays already active");
             continue;
         }
         active.fetch_add(1, Ordering::Relaxed);
@@ -347,8 +443,14 @@ pub fn run_relay(listen: &str, server: SocketAddr, max_connections: usize) -> io
         let spawned = thread::Builder::new()
             .name("websocket-relay".into())
             .spawn(move || {
+                struct Active(Arc<AtomicUsize>);
+                impl Drop for Active {
+                    fn drop(&mut self) {
+                        self.0.fetch_sub(1, Ordering::Relaxed);
+                    }
+                }
+                let _active = Active(finished);
                 relay_connection(stream, server, &NEVER);
-                finished.fetch_sub(1, Ordering::Relaxed);
             });
         if let Err(e) = spawned {
             active.fetch_sub(1, Ordering::Relaxed);
@@ -361,23 +463,29 @@ pub fn run_relay(listen: &str, server: SocketAddr, max_connections: usize) -> io
 // tungstenite's handshake callback signature fixes the large error type.
 #[allow(clippy::result_large_err)]
 fn relay_connection(stream: TcpStream, server: SocketAddr, stop: &AtomicBool) {
-    let from = stream
-        .peer_addr()
-        .map_or_else(|_| "unknown".into(), |a| a.to_string());
+    let peer = stream.peer_addr().ok();
+    let from = peer.map_or_else(|| "unknown".into(), |a| a.to_string());
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(CONNECT_TIMEOUT));
     let _ = stream.set_write_timeout(Some(CONNECT_TIMEOUT));
-    // Behind Cloudflare the TCP peer is cloudflared; the header has the player.
+    // This header is diagnostic only. Accept it only from a local proxy and
+    // parse a real IP so arbitrary headers cannot spoof or inject log lines.
     let mut client = from.clone();
     let callback = |request: &Request, response: Response| {
-        if let Some(ip) = request
-            .headers()
-            .get("cf-connecting-ip")
-            .and_then(|v| v.to_str().ok())
+        if peer.is_some_and(|address| address.ip().is_loopback())
+            && let Some(ip) = request
+                .headers()
+                .get("cf-connecting-ip")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|value| value.parse::<std::net::IpAddr>().ok())
         {
-            client = ip.to_owned();
+            client = ip.to_string();
         }
         Ok(response)
+    };
+    let stream = RelayStream {
+        tcp: stream,
+        deadline: Some(Instant::now() + CONNECT_TIMEOUT),
     };
     let mut ws = match tungstenite::accept_hdr_with_config(stream, callback, Some(config())) {
         Ok(ws) => ws,
@@ -386,13 +494,14 @@ fn relay_connection(stream: TcpStream, server: SocketAddr, stop: &AtomicBool) {
             return;
         }
     };
+    ws.get_mut().deadline = None;
     let udp = match UdpSocket::bind(if server.is_ipv4() {
         "0.0.0.0:0"
     } else {
         "[::]:0"
     })
     .and_then(|udp| udp.set_nonblocking(true).map(|()| udp))
-    .and_then(|udp| ws.get_ref().set_nonblocking(true).map(|()| udp))
+    .and_then(|udp| ws.get_ref().tcp.set_nonblocking(true).map(|()| udp))
     {
         Ok(udp) => udp,
         Err(e) => {
@@ -412,6 +521,52 @@ fn relay_connection(stream: TcpStream, server: SocketAddr, stop: &AtomicBool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_rate_budget_allows_bursts_refills_and_rejects_sustained_floods() {
+        let mut budget = DatagramBudget::new();
+        let now = budget.at;
+        for _ in 0..DATAGRAM_BURST as usize {
+            budget.take(now).unwrap();
+        }
+        assert!(budget.take(now).is_err());
+        let later = now + Duration::from_millis(500);
+        for _ in 0..1024 {
+            budget.take(later).unwrap();
+        }
+        assert!(budget.take(later).is_err());
+        budget.take(later + Duration::from_secs(1)).unwrap();
+    }
+
+    #[test]
+    fn relay_rejects_invalid_limits_before_opening_a_listener() {
+        for maximum in [0, 1025, usize::MAX] {
+            let error =
+                run_relay("127.0.0.1:0", "127.0.0.1:5000".parse().unwrap(), maximum).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
+    }
+
+    #[test]
+    fn partial_upgrade_cannot_extend_the_absolute_handshake_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (tcp, _) = listener.accept().unwrap();
+        let mut stream = RelayStream {
+            tcp,
+            deadline: Some(Instant::now() - Duration::from_millis(1)),
+        };
+        assert_eq!(
+            stream.read(&mut [0u8; 1]).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert_eq!(
+            stream.write(b"partial").unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        stream.deadline = None;
+        assert_eq!(stream.remaining().unwrap(), None);
+    }
 
     #[test]
     fn stalled_websocket_applies_backpressure_and_resumes_without_losing_datagrams() {
@@ -461,6 +616,10 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let worker = thread::spawn(move || pump(&mut ws, &udp, Some(peer), &flag));
+        // Neither a truncated datagram nor an empty packet may become a frame.
+        game.send_to(&vec![0x7b; MAX_DATAGRAM + 128], address)
+            .unwrap();
+        game.send_to(&[], address).unwrap();
         for i in 0..96u8 {
             game.send_to(&[i; 900], address).unwrap();
         }

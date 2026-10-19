@@ -5,9 +5,8 @@ name = "Tank Yard FFA"
 bind = "0.0.0.0:5000"
 chat_enabled = false
 voice_enabled = true
-# Explicit official-operator consent to key-verified creator administration.
-# Set false to disable. Community/private server.toml defaults to false.
-creator_admin = true
+# Official public arenas enable key-verified, audited creator administration.
+# Set creator_admin = false to override. Community hosts must explicitly opt in.
 audit_file = "configs/creator-audit.jsonl"
 require_accounts = false
 bot_count = 12

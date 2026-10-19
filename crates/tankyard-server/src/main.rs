@@ -17,6 +17,9 @@ use tankyard_server::{ServerSettings, UdpServer, difficulty_from_name, mode_from
 struct Args {
     #[arg(long)]
     config: Option<PathBuf>,
+    /// Run the official central arena with its built-in public server profile.
+    #[arg(long)]
+    central: bool,
     #[arg(long)]
     bind: Option<String>,
     #[arg(long)]
@@ -57,11 +60,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let mut settings = if let Some(path) = args.config {
         ServerSettings::load(path)?
+    } else if args.central {
+        if std::path::Path::new("configs/central.toml").exists() {
+            ServerSettings::load("configs/central.toml")?
+        } else {
+            ServerSettings::central()
+        }
     } else if std::path::Path::new("configs/server.toml").exists() {
         ServerSettings::load("configs/server.toml")?
     } else {
         ServerSettings::default()
     };
+    if args.central {
+        settings.kind = tankyard_protocol::ServerKind::Official;
+        if settings.server_id.is_empty() {
+            settings.server_id = "tankyard-central".into();
+        }
+    }
     if let Some(bind) = args.bind {
         settings.bind = bind;
     }

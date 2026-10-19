@@ -1,3 +1,11 @@
+# v0.3.1 checks (2026-10-19)
+
+366 public Rust tests and ten installer tests pass on Linux. Formatting, Clippy with warnings denied, all 103 tank profiles, both bundled mods, the compatible Linux workspace release build, and ABI checks pass. Public/private Linux clients require no glibc newer than 2.30. Native Windows and macOS window-control calls separately compile-check for their targets; full desktop builds and installed-package checks run in the tagged release workflow.
+
+A virtual two-monitor X11 session at 100% and 200% desktop DPI verifies remembered secondary-monitor placement, Native window fitting, fullscreen staying on that display, switching fullscreen render resolution, exact restored window dimensions, continuous slider positioning, fast clicks, and capture while interface scale reflows. Cursor images measure 32×32 and 64×64 respectively, replacing the tiny bitmap path. Captures and logs are in `artifacts/v031-review`.
+
+Creator policy tests cover official defaults, explicit official revocation, community/default opt-out, password-protected arenas, signed requests, identity impersonation, replay/tampering/round/rate checks, audit failure, and containment of trusted extension faults. Relay checks cover shared-address bans with bystanders/new connections, legacy bans, absolute upgrade deadlines, invalid limits, packet budgets, oversized/empty UDP drops, backpressure, and bidirectional forwarding. The private client and signing key remain excluded from public source and release assets. The Pi/Docker process requires an operator upgrade; publishing a release does not deploy it.
+
 # v0.3.0 checks (2026-10-18)
 
 356 public Rust tests and ten installer tests pass on Linux. Formatting, Clippy with warnings denied, workflow validation, all 103 tank profiles, both bundled mods, and the compatible Linux workspace release build pass. Public and private Linux client binaries import no glibc newer than 2.30. Additional private integration checks use the real signing key against the ordinary server: official opt-in, community/default opt-out, an impersonator, tampered requests, moderation, revocation/re-enable, invalidated old authorization, and round identity continuity. The private signing key and creator client source remain outside Git and public packages.

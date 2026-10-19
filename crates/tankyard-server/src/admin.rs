@@ -5,7 +5,20 @@ use std::{fs, io::Read, net::IpAddr, path::Path};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Ban {
     pub ip: IpAddr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<u64>,
     pub expires_at: u64,
+}
+impl Ban {
+    pub(crate) fn matches(&self, ip: IpAddr, client: u64, shared: bool, now: u64) -> bool {
+        self.ip == ip
+            && self.expires_at > now
+            && match self.client {
+                Some(id) => id == client,
+                // Ignore legacy address-wide bans on shared relay addresses.
+                None => !shared,
+            }
+    }
 }
 
 pub(crate) fn load_bans(path: &str) -> Result<Vec<Ban>, NetError> {
@@ -100,7 +113,7 @@ impl UdpServer {
                 let ip: IpAddr = args.next().ok_or_else(|| NetError("expected an IP address".into()))?.parse().map_err(|_| NetError("invalid IP address".into()))?;
                 self.bans.retain(|b| b.ip != ip); self.save_bans()?; Ok(format!("Removed ban for {ip}."))
             }
-            "bans" => Ok(self.bans.iter().filter(|b| b.expires_at > unix_time().as_secs()).map(|b| format!("{} expires at Unix time {}", b.ip, b.expires_at)).collect::<Vec<_>>().join("\n")),
+            "bans" => Ok(self.bans.iter().filter(|b| b.expires_at > unix_time().as_secs()).map(|b| format!("{}{} expires at Unix time {}", b.ip, b.client.map_or_else(String::new, |id| format!(" client {id}")), b.expires_at)).collect::<Vec<_>>().join("\n")),
             "bots" => {
                 let count: usize = args.next().ok_or_else(|| NetError("expected a bot count".into()))?.parse().map_err(|_| NetError("invalid bot count".into()))?;
                 if count > 128 || count + self.settings.max_players > 256 { return Err(NetError("bot count exceeds configured resource limits".into())); }
@@ -148,13 +161,15 @@ impl UdpServer {
             .client_addr(client)
             .ok_or_else(|| NetError("player address was not found".into()))?;
         let now = unix_time().as_secs();
+        let scope = self.settings.shared_relay(address.ip()).then_some(client);
         self.bans
-            .retain(|ban| ban.ip != address.ip() && ban.expires_at > now);
+            .retain(|ban| (ban.ip != address.ip() || ban.client != scope) && ban.expires_at > now);
         if self.bans.len() >= 4096 {
             return Err(NetError("ban list is full".into()));
         }
         self.bans.push(Ban {
             ip: address.ip(),
+            client: scope,
             expires_at: now.saturating_add(minutes * 60),
         });
         self.save_bans()?;
@@ -169,7 +184,13 @@ impl UdpServer {
                 reason
             },
         );
-        Ok(format!("Banned {} for {minutes} minutes.", address.ip()))
+        Ok(if scope.is_some() {
+            format!(
+                "Banned client {client} and its verified account for {minutes} minutes; shared relay address preserved."
+            )
+        } else {
+            format!("Banned {} for {minutes} minutes.", address.ip())
+        })
     }
     fn save_bans(&self) -> Result<(), NetError> {
         if self.settings.ban_file.is_empty() {
@@ -209,6 +230,26 @@ fn validate_arguments(verb: &str, count: usize) -> Result<(), NetError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_relay_bans_cannot_block_another_client_or_revive_legacy_blanket_bans() {
+        let ip = "127.0.0.1".parse().unwrap();
+        let ban = Ban {
+            ip,
+            client: Some(42),
+            expires_at: 200,
+        };
+        assert!(ban.matches(ip, 42, true, 100));
+        assert!(!ban.matches(ip, 43, true, 100));
+        assert!(!ban.matches(ip, 42, true, 201));
+        let legacy = Ban {
+            client: None,
+            ..ban
+        };
+        assert!(!legacy.matches(ip, 42, true, 100));
+        assert!(legacy.matches(ip, 42, false, 100));
+        let decoded: Ban = serde_json::from_str(r#"{"ip":"127.0.0.1","expires_at":200}"#).unwrap();
+        assert!(!decoded.matches(ip, 43, true, 100));
+    }
     #[test]
     fn admin_commands_reject_missing_and_trailing_arguments_before_mutation() {
         for (verb, count) in [

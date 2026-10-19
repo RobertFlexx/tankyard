@@ -947,6 +947,16 @@ checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
+name = "libloading"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
@@ -1916,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-ai"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "tankyard-content",
@@ -1925,15 +1935,19 @@ dependencies = [
 
 [[package]]
 name = "tankyard-client"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "cpal",
  "directories",
  "display-info",
  "env_logger",
+ "libloading 0.8.9",
  "log",
  "macroquad",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "opus",
  "serde",
  "serde_json",
@@ -1942,12 +1956,13 @@ dependencies = [
  "tankyard-mods",
  "tankyard-protocol",
  "tankyard-server",
+ "windows-sys 0.61.2",
  "xcb",
 ]
 
 [[package]]
 name = "tankyard-content"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1955,7 +1970,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "tankyard-content",
@@ -1964,7 +1979,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-mods"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "image",
  "serde",
@@ -1974,7 +1989,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-protocol"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "lz4_flex",
  "postcard",
@@ -1988,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-server"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "ctrlc",
@@ -2012,7 +2027,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-tools"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "postcard",
@@ -2762,7 +2777,7 @@ checksum = "a6c2ad15e0e922856ee89afe862b8992334bbe7953adad56cd1199358cb30566"
 dependencies = [
  "bitflags 2.13.2",
  "libc",
- "libloading",
+ "libloading 0.9.0",
  "quick-xml",
 ]
 

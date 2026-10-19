@@ -33,6 +33,8 @@ On your first launch, choose Dark or Light from two live arena previews. The cho
 | Sandbox level up / down | PgUp / PgDn; hold Shift for 15 levels |
 | Next / previous text field | Tab / Shift+Tab |
 
+Settings → Display applies window sizes immediately; Save settings reapplies the selected size. In fullscreen, resolution selects rendering detail while the desktop stays on the current monitor. Native uses that display’s pixels. F11 preserves the current monitor and restores the selected window size when leaving fullscreen.
+
 F1 shows your current bindings. Controls can be rebound in Settings, with a button to restore their defaults. Esc cancels a pending rebind; Back and Esc return to the previous menu. Settings save when you leave their screen. F1, F6, and F10 also close their screen when pressed again. Chat input and Sandbox controls take priority over these shortcuts.
 
 You spawn protected for 15 seconds while stationary. Looking around keeps protection active; movement ends it immediately. A subtle white pulse and the HUD countdown show when you are protected. Weapons and abilities wait until you move or protection expires, including when auto-fire is saved.

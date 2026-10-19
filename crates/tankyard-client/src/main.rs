@@ -13,6 +13,7 @@ mod menu;
 mod native_resolution;
 mod notifications;
 mod practice_ui;
+mod presentation;
 mod render;
 mod server_browser;
 mod session;
@@ -22,6 +23,7 @@ use tankyard_client::achievements;
 use tankyard_client::tank_model;
 mod ui;
 mod voice;
+mod window_control;
 
 use clap::Parser;
 use hud::{Hud, HudAction};
@@ -92,7 +94,7 @@ fn window_conf(cli: &Cli) -> Conf {
         settings.use_safe_graphics();
     }
     Conf {
-        window_title: "Tank Yard".into(),
+        window_title: window_control::bootstrap_title("Tank Yard"),
         window_width: settings.width as i32,
         window_height: settings.height as i32,
         high_dpi: true,
@@ -102,7 +104,8 @@ fn window_conf(cli: &Cli) -> Conf {
             4 => 4,
             _ => 1,
         },
-        fullscreen: settings.fullscreen,
+        // Enter fullscreen after the window's own monitor is known.
+        fullscreen: false,
         icon: Some(macroquad::miniquad::conf::Icon {
             small: *include_bytes!("../../../assets/icons/tankyard-16.rgba"),
             medium: *include_bytes!("../../../assets/icons/tankyard-32.rgba"),
@@ -123,6 +126,7 @@ struct PendingJoin {
 }
 struct App {
     settings: Settings,
+    display_revision: u64,
     content: Content,
     menu: Menu,
     hud: Hud,
@@ -205,6 +209,7 @@ impl App {
         let catalog_paths = settings.enabled_mods.clone();
         let mut app = Self {
             settings,
+            display_revision: 0,
             content,
             menu,
             hud: Hud::new(),
@@ -439,6 +444,7 @@ impl App {
                 self.quit = true;
             }
             Action::Save => {
+                self.display_revision = self.display_revision.wrapping_add(1);
                 self.achievement_feed = achievements::Feed::default();
                 match self.settings.save() {
                     Ok(()) => self.menu.error.clear(),
@@ -1603,21 +1609,24 @@ async fn run(cli: Cli) {
     prevent_quit();
     // Drop GPU resources before the window and its OpenGL library are closed.
     let _resources = graphics::Resources;
+    let mut initial_settings = Settings::load();
+    if cli.safe_graphics {
+        initial_settings.use_safe_graphics();
+    }
+    let mut native_resolution = native_resolution::NativeResolution::new(&initial_settings);
     ui::init_font();
     let Some(dark_theme) = first_run::choose_theme(cli.smoke_frames.is_some()).await else {
         ui::unload_font();
         return;
     };
     let mut app = App::new(cli, dark_theme).await;
-    let mut native_resolution = native_resolution::NativeResolution::new();
-    // Render directly at the window's drawable resolution.
+    let mut presentation = presentation::Presentation::default();
     macroquad::texture::set_default_filter_mode(FilterMode::Linear);
     loop {
         if is_quit_requested() {
             break;
         }
         let start = get_time();
-        native_resolution.update(&app.settings);
         let dt = get_frame_time().clamp(0.0, 0.15);
         // Recalculate camera zoom after resizing and as the tank levels up.
         let level = app
@@ -1642,9 +1651,9 @@ async fn run(cli: Cli) {
         }
         if is_key_pressed(KeyCode::F11) {
             app.settings.fullscreen = !app.settings.fullscreen;
-            set_fullscreen(app.settings.fullscreen);
             let _ = app.settings.save();
         }
+        native_resolution.update(&app.settings, app.display_revision);
         set_theme(app.settings.dark_arena);
         graphics::set_quality(app.settings.shape_quality);
         graphics::set_filter(app.settings.anisotropic_filtering);
@@ -1654,7 +1663,9 @@ async fn run(cli: Cli) {
         set_reduced_motion(app.settings.reduced_motion);
         let s = app.scale();
         app.update(dt, s);
+        presentation.begin(&app.settings);
         app.draw(s);
+        presentation.finish();
         // Discard characters that no field consumed this frame.
         while get_char_pressed().is_some() {}
         if let Some(session) = &mut app.session {
@@ -1689,6 +1700,7 @@ async fn run(cli: Cli) {
         }
         next_frame().await;
     }
+    native_resolution.remember(&mut app.settings);
     app.save_progress();
 }
 fn parse_mode(value: &str) -> Mode {

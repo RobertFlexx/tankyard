@@ -40,6 +40,7 @@ pub struct Settings {
     pub recent_sort: ServerSort,
     pub width: u32,
     pub height: u32,
+    pub window_position: Option<[i32; 2]>,
     pub native_resolution: bool,
     pub fullscreen: bool,
     pub vsync: bool,
@@ -84,6 +85,7 @@ impl Default for Settings {
             recent_sort: ServerSort::Saved,
             width: 1280,
             height: 800,
+            window_position: None,
             native_resolution: false,
             fullscreen: false,
             vsync: true,
@@ -191,6 +193,13 @@ impl Settings {
             .truncate(tankyard_client::practice::CHALLENGES.len());
         self.width = self.width.clamp(800, 7680);
         self.height = self.height.clamp(600, 4320);
+        if self.window_position.is_some_and(|position| {
+            position
+                .into_iter()
+                .any(|coordinate| !(-131072..=131072).contains(&coordinate))
+        }) {
+            self.window_position = None;
+        }
         self.frame_cap = self.frame_cap.min(1000);
         if !matches!(self.anti_aliasing, 1 | 4 | 8) {
             self.anti_aliasing = 4;

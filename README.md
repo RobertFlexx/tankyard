@@ -2,7 +2,7 @@
 
 Tank Yard is a tank arena made by RobertFlexx, inspired by Diep.io and Arras.io. It has 103 tanks, fourteen modes, offline play, practice challenges, and player-hosted multiplayer.
 
-[v0.3.0](docs/releases/v0.3.0.md) adds creator tools on the regular server with explicit host consent, saved-server sorting/deletion, and boss balance changes. Personal/private hosting stays opted out. See [creator administration](docs/creator-administration.md) for the public policy, auditing, revocation, and central Docker update steps. The creator client and signing credentials stay private.
+[v0.3.1](docs/releases/v0.3.1.md) fixes resolution changes, monitor placement, cursor scaling, and sliders, and hardens public relays. Official public servers include signed creator tools; community hosts must opt in, and private hosting stays disabled. See [creator administration](docs/creator-administration.md) for the public policy, auditing, revocation, and central Docker update steps. The creator client and signing credentials stay private.
 
 Install or update on Linux and macOS:
 

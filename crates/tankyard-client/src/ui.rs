@@ -356,7 +356,23 @@ pub fn slider(rect: Rect, text: &str, value: &mut f32, lo: f32, hi: f32, s: f32)
     })
 }
 thread_local! {
-    static ACTIVE_SLIDER: Cell<Option<[u32; 4]>> = const { Cell::new(None) };
+    static ACTIVE_SLIDER: std::cell::RefCell<Option<(u64, String)>> = const { std::cell::RefCell::new(None) };
+    static POINTER_SCOPE: Cell<u64> = const { Cell::new(0) };
+}
+pub fn pointer_scope(scope: u64) {
+    POINTER_SCOPE.with(|value| value.set(scope));
+}
+pub fn cancel_pointer_capture() {
+    ACTIVE_SLIDER.with(|value| value.borrow_mut().take());
+}
+fn slider_amount(x: f32, origin: f32, width: f32, limits: [f32; 2], step: f32) -> f32 {
+    let [lo, hi] = limits;
+    let raw = lo + (hi - lo) * ((x - origin) / width.max(1.)).clamp(0., 1.);
+    if step.is_finite() && step > 0. {
+        (lo + ((raw - lo) / step).round() * step).clamp(lo, hi)
+    } else {
+        raw
+    }
 }
 pub fn slider_value(
     rect: Rect,
@@ -370,29 +386,25 @@ pub fn slider_value(
     let [lo, hi] = limits;
     let track = Rect::new(rect.x, rect.y + 32. * s, rect.w, 5. * s);
     let hit = Rect::new(rect.x, rect.y + 24. * s, rect.w, 24. * s);
-    let id = [
-        rect.x.to_bits(),
-        rect.y.to_bits(),
-        rect.w.to_bits(),
-        rect.h.to_bits(),
-    ];
+    let scope = POINTER_SCOPE.with(Cell::get);
     let interactive = INTERACTIVE.with(|state| state.get());
     let dragged = ACTIVE_SLIDER.with(|active| {
+        let mut active = active.borrow_mut();
         if !is_mouse_button_down(MouseButton::Left) {
-            active.set(None);
+            *active = None;
         }
-        if contains(hit) && is_mouse_button_pressed(MouseButton::Left) {
-            active.set(Some(id));
+        if interactive && contains(hit) && is_mouse_button_pressed(MouseButton::Left) {
+            *active = Some((scope, text.to_owned()));
         }
-        interactive && active.get() == Some(id) && is_mouse_button_down(MouseButton::Left)
+        interactive
+            && active
+                .as_ref()
+                .is_some_and(|(id, label)| *id == scope && label == text)
+            && (is_mouse_button_down(MouseButton::Left)
+                || is_mouse_button_pressed(MouseButton::Left))
     });
     if dragged {
-        let raw = lo + (hi - lo) * ((mouse_position().0 - track.x) / track.w.max(1.)).clamp(0., 1.);
-        *value = if step > 0. {
-            (raw / step).round().clamp(lo, hi)
-        } else {
-            raw
-        };
+        *value = slider_amount(mouse_position().0, track.x, track.w, limits, step);
     }
     let display = format(*value);
     let available = (rect.w - label_width(&display, 16. * s) - 12. * s).max(0.);
@@ -880,5 +892,37 @@ pub fn arcade_track_tinted(rect: Rect, ratio: f32, fill: Color, back: Color) {
             Rect::new(inner.x, inner.y, width.max(inner.h).min(inner.w), inner.h),
             fill,
         );
+    }
+}
+
+#[cfg(test)]
+mod slider_tests {
+    use super::*;
+
+    #[test]
+    fn stepped_sliders_follow_the_pointer_instead_of_jumping_to_the_limit() {
+        for (fraction, expected) in [(0., 0.25), (0.5, 3.25), (0.62, 3.75), (1., 6.)] {
+            let actual = slider_amount(100. + 400. * fraction, 100., 400., [0.25, 6.], 0.25);
+            assert!((actual - expected).abs() < 0.0001, "{fraction}: {actual}");
+        }
+        assert_eq!(slider_amount(150., 100., 100., [1., 13.], 2.), 7.);
+        assert_eq!(slider_amount(-50., 100., 400., [2., 8.], 1.), 2.);
+        assert_eq!(slider_amount(900., 100., 400., [2., 8.], 1.), 8.);
+    }
+
+    #[test]
+    fn continuous_sliders_map_the_same_relative_pointer_at_any_ui_scale() {
+        for scale in [0.5, 1., 1.4, 2.] {
+            for fraction in [0., 0.25, 0.5, 0.75, 1.] {
+                let value = slider_amount(
+                    (40. + 360. * fraction) * scale,
+                    40. * scale,
+                    360. * scale,
+                    [0., 1.],
+                    0.,
+                );
+                assert!((value - fraction).abs() < 0.0001);
+            }
+        }
     }
 }

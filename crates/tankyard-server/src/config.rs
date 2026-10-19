@@ -11,8 +11,10 @@ pub struct ServerSettings {
     pub server_id: String,
     pub chat_enabled: bool,
     pub voice_enabled: bool,
-    /// Explicit operator consent to signed creator tools on a public arena.
-    pub creator_admin: bool,
+    /// Official public arenas enable signed creator tools by default. Community
+    /// hosts must explicitly opt in; false always overrides the official default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creator_admin: Option<bool>,
     pub access_file: String,
     pub audit_file: String,
     pub global_audit_file: String,
@@ -32,6 +34,8 @@ pub struct ServerSettings {
     pub handshake_timeout: f32,
     pub input_timeout: f32,
     pub ban_file: String,
+    /// Shared relay addresses must never receive an address-wide player ban.
+    pub shared_relay_ips: Vec<std::net::IpAddr>,
     pub round_restart_seconds: f32,
     pub world: WorldConfig,
     pub mods: Vec<std::path::PathBuf>,
@@ -43,7 +47,7 @@ impl Default for ServerSettings {
             server_id: String::new(),
             chat_enabled: true,
             voice_enabled: true,
-            creator_admin: false,
+            creator_admin: None,
             access_file: String::new(),
             audit_file: String::new(),
             global_audit_file: String::new(),
@@ -63,6 +67,7 @@ impl Default for ServerSettings {
             handshake_timeout: 8.,
             input_timeout: 0.5,
             ban_file: "bans.json".into(),
+            shared_relay_ips: vec![],
             round_restart_seconds: 10.,
             world: WorldConfig::default(),
             mods: vec![],
@@ -70,6 +75,27 @@ impl Default for ServerSettings {
     }
 }
 impl ServerSettings {
+    pub fn central() -> Self {
+        // Shipped defaults also work in minimal Docker images without configs/.
+        toml::from_str(include_str!("../../../configs/central.toml"))
+            .expect("built-in central server configuration")
+    }
+    pub fn creator_admin_enabled(&self) -> bool {
+        self.password.is_empty()
+            && self
+                .creator_admin
+                .unwrap_or(self.kind == tankyard_protocol::ServerKind::Official)
+    }
+    pub(crate) fn creator_audit_file(&self) -> &str {
+        if self.audit_file.is_empty() && self.kind == tankyard_protocol::ServerKind::Official {
+            "creator-audit.jsonl"
+        } else {
+            &self.audit_file
+        }
+    }
+    pub(crate) fn shared_relay(&self, ip: std::net::IpAddr) -> bool {
+        ip.is_loopback() || self.shared_relay_ips.contains(&ip)
+    }
     /// Fill quiet online arenas to six participants; humans always take priority.
     pub fn desired_bots(&self, humans: usize) -> usize {
         if self.adaptive_bots {
@@ -128,13 +154,13 @@ impl ServerSettings {
         Ok(())
     }
     pub fn validate(&self) -> Result<(), NetError> {
-        if self.creator_admin
+        if self.creator_admin == Some(true)
             && (!self.password.is_empty()
-                || self.audit_file.is_empty()
-                || self.server_id.is_empty())
+                || (self.kind != tankyard_protocol::ServerKind::Official
+                    && (self.audit_file.is_empty() || self.server_id.is_empty())))
         {
             return Err(NetError(
-                "creator administration requires a public, password-free arena, a server ID, and an audit_file; private hosts should leave creator_admin disabled".into(),
+                "creator administration requires a password-free public arena; community hosts must also set a server ID and audit_file".into(),
             ));
         }
         if self.kind == tankyard_protocol::ServerKind::Official && !self.access_file.is_empty() {
@@ -190,6 +216,14 @@ impl ServerSettings {
         }
         if self.password.len() > 128 {
             return invalid("password exceeds 128 bytes");
+        }
+        if self.shared_relay_ips.len() > 16
+            || self
+                .shared_relay_ips
+                .iter()
+                .any(|ip| ip.is_unspecified() || ip.is_multicast())
+        {
+            return invalid("shared_relay_ips must contain at most 16 unicast addresses");
         }
         if !(1..=30).contains(&self.snapshot_rate) {
             return invalid("snapshot_rate must be between 1 and 30");
@@ -362,29 +396,44 @@ mod tests {
         ] {
             let settings: ServerSettings = toml::from_str(text).unwrap();
             settings.validate().unwrap();
-            assert_eq!(settings.creator_admin, enabled);
+            assert_eq!(settings.creator_admin_enabled(), enabled);
         }
     }
     #[test]
-    fn creator_policy_is_explicit_and_never_available_to_password_protected_hosts() {
+    fn creator_policy_defaults_to_official_public_arenas_and_respects_revocation() {
         let mut settings = ServerSettings::default();
-        assert!(!settings.creator_admin);
-        // Marking a server Official or changing its name grants no authority.
+        assert!(!settings.creator_admin_enabled());
+        // Only operator-owned configuration chooses this policy. A client's
+        // URL, username, rank, or claimed hostname is never consulted.
         settings.kind = tankyard_protocol::ServerKind::Official;
-        assert!(!settings.creator_admin);
-        settings.creator_admin = true;
+        assert!(settings.creator_admin_enabled());
+        assert!(settings.validate().is_ok());
+        assert_eq!(settings.creator_audit_file(), "creator-audit.jsonl");
+        settings.password = "private-match".into();
+        assert!(!settings.creator_admin_enabled());
+        assert!(settings.validate().is_ok());
+        settings.creator_admin = Some(true);
+        assert!(settings.validate().is_err());
+        settings.password.clear();
+        settings.creator_admin = Some(false);
+        assert!(!settings.creator_admin_enabled());
+        settings.kind = tankyard_protocol::ServerKind::Community;
+        settings.creator_admin = Some(true);
         assert!(settings.validate().is_err());
         settings.server_id = "consenting-public-host".into();
         settings.audit_file = "creator-audit.jsonl".into();
         assert!(settings.validate().is_ok());
-        settings.kind = tankyard_protocol::ServerKind::Community;
-        assert!(settings.validate().is_ok());
+        assert!(settings.creator_admin_enabled());
         settings.password = "private-match".into();
         assert!(settings.validate().is_err());
-        settings.creator_admin = false;
+        settings.creator_admin = Some(false);
         assert!(settings.validate().is_ok());
         let legacy: ServerSettings = toml::from_str("name = 'Existing host'").unwrap();
-        assert!(!legacy.creator_admin);
+        assert!(!legacy.creator_admin_enabled());
+        let central = ServerSettings::central();
+        central.validate().unwrap();
+        assert_eq!(central.creator_admin, None);
+        assert!(central.creator_admin_enabled());
     }
     #[test]
     fn credentials_are_redacted_and_accounts_need_secure_transport() {

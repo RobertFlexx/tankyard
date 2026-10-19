@@ -504,6 +504,7 @@ impl Hud {
         s: f32,
         view: &render::View,
     ) -> Vec<HudAction> {
+        pointer_scope(100);
         let mut actions = Vec::new();
         let w = screen_width();
         let h = screen_height();

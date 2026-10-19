@@ -24,3 +24,7 @@ and is included in release archives. The boss arrival alarm is original audio,
 reproducible with `scripts/generate_boss_alarm.py`, covered by this project's license.
 Boss models are original procedural geometry; behavior references are documented
 in [bosses and learning](docs/bosses-and-learning.md).
+
+Linux window controls use `libloading` under the ISC license; its notice is in
+[licenses/libloading.txt](licenses/libloading.txt). X11 and Xcursor are loaded
+from the desktop to use its cursor theme and native monitor geometry.

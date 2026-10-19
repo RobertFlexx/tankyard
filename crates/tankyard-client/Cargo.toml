@@ -33,4 +33,13 @@ display-info = "0.5.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Load the desktop's XCB ABI at runtime, matching Miniquad's display handling.
-xcb = { version = "1.7", features = ["dl"] }
+xcb = { version = "1.7", features = ["dl", "randr"] }
+libloading = "0.8"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSWindow", "NSScreen", "NSResponder"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }
