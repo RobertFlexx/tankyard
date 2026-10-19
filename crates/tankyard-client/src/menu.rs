@@ -78,6 +78,7 @@ pub struct Menu {
     practice_page: usize,
     pub offline_level: u8,
     dynamic_arena: bool,
+    server_browser: crate::server_browser::ServerBrowser,
 }
 impl Menu {
     pub fn new() -> Self {
@@ -110,6 +111,7 @@ impl Menu {
             practice_page: 0,
             offline_level: 1,
             dynamic_arena: true,
+            server_browser: crate::server_browser::ServerBrowser::default(),
         }
     }
     pub fn clear_focus(&mut self) {
@@ -962,11 +964,14 @@ impl Menu {
                 Rect::new(x, y + 294.0 * s, 200.0 * s, 35.0 * s),
                 "☆  Save favorite",
                 s,
-            ) && !settings.favorites.contains(&settings.server_address)
-                && settings.favorites.len() < 32
-            {
-                settings.favorites.push(settings.server_address.clone());
-                let _ = settings.save();
+            ) {
+                let address = settings.server_address.clone();
+                if let Err(error) = settings
+                    .add_favorite(&address)
+                    .and_then(|()| settings.save())
+                {
+                    self.error = error;
+                }
             }
             wrap(
                 "Enter the server's IP address and port, or a web address such as tankyard.example.com, then connect.",
@@ -979,19 +984,15 @@ impl Menu {
         }
         let rx = x + width + 48.0 * s;
         let rw = screen_width() - rx - 40.0 * s;
-        panel(Rect::new(rx, y - 16.0 * s, rw, 438.0 * s));
-        label(
-            if host {
-                "SERVER DETAILS"
-            } else {
-                "YOUR SERVERS"
-            },
-            rx + 22.0 * s,
-            y + 20.0 * s,
-            15.0 * s,
-            CYAN,
-        );
         if host {
+            panel(Rect::new(rx, y - 16.0 * s, rw, 438.0 * s));
+            label(
+                "SERVER DETAILS",
+                rx + 22.0 * s,
+                y + 20.0 * s,
+                15.0 * s,
+                CYAN,
+            );
             wrap(
                 "Your friends can join using your IP address and port 5000.",
                 rx + 22.0 * s,
@@ -1022,40 +1023,11 @@ impl Menu {
                 18.0 * s,
                 muted_color(),
             );
-        } else {
-            let servers: Vec<String> = settings
-                .favorites
-                .iter()
-                .chain(settings.recent_servers.iter())
-                .take(8)
-                .cloned()
-                .collect();
-            if servers.is_empty() {
-                wrap(
-                    "Favorites and recent servers appear here.",
-                    rx + 22.0 * s,
-                    y + 77.0 * s,
-                    rw - 44.0 * s,
-                    20.0 * s,
-                    muted_color(),
-                );
-            }
-            for (index, address) in servers.iter().enumerate() {
-                if button(
-                    Rect::new(
-                        rx + 16.0 * s,
-                        y + 48.0 * s + index as f32 * 43.0 * s,
-                        rw - 32.0 * s,
-                        36.0 * s,
-                    ),
-                    address,
-                    settings.server_address == *address,
-                    true,
-                    s * 0.78,
-                ) {
-                    settings.server_address = address.clone();
-                }
-            }
+        } else if let Err(error) =
+            self.server_browser
+                .draw(settings, Rect::new(rx, y - 16.0 * s, rw, 438.0 * s), s)
+        {
+            self.error = error;
         }
         if button(
             Rect::new(x, screen_height() - 140.0 * s, width, 46.0 * s),
@@ -1299,7 +1271,7 @@ impl Menu {
     fn settings(&mut self, settings: &mut Settings, s: f32) -> Action {
         let x = 40.0 * s;
         let y = 158.0 * s;
-        let tab_w = 155.0 * s;
+        let tab_w = (screen_width() - 2. * x - 6. * 8. * s) / 7.;
         for (index, name) in [
             "Display",
             "Style",
@@ -1307,6 +1279,7 @@ impl Menu {
             "Accessibility",
             "Profile",
             "Audio",
+            "Servers",
         ]
         .iter()
         .enumerate()
@@ -1746,43 +1719,20 @@ impl Menu {
                     s,
                     false,
                 );
-                if small_button(
-                    Rect::new(x, by + 206.0 * s, col, 35.0 * s),
-                    "Clear recent server history",
+                wrap(
+                    "Choose Favorites or Recent. Sort by address, move favorites with the arrows, or remove individual entries with ×.",
+                    x,
+                    by + 220. * s,
+                    col,
+                    18. * s,
+                    muted_color(),
+                );
+                if let Err(error) = self.server_browser.draw(
+                    settings,
+                    Rect::new(rx, by, col, (card_height - 22. * s).max(300. * s)),
                     s,
                 ) {
-                    settings.recent_servers.clear();
-                }
-                label("FAVORITE SERVERS", rx, by + 15.0 * s, 13.0 * s, CYAN);
-                let favorites = settings.favorites.clone();
-                for (index, address) in favorites.iter().take(7).enumerate() {
-                    let fy = by + 32.0 * s + index as f32 * 43.0 * s;
-                    if button(
-                        Rect::new(rx, fy, col - 50.0 * s, 35.0 * s),
-                        address,
-                        settings.server_address == *address,
-                        true,
-                        s * 0.8,
-                    ) {
-                        settings.server_address = address.clone();
-                    }
-                    if small_button(
-                        Rect::new(rx + col - 41.0 * s, fy, 41.0 * s, 35.0 * s),
-                        "×",
-                        s,
-                    ) {
-                        settings.favorites.retain(|saved| saved != address);
-                    }
-                }
-                if favorites.is_empty() {
-                    wrap(
-                        "No favorites yet. Add one from Join server.",
-                        rx,
-                        by + 65.0 * s,
-                        col,
-                        20.0 * s,
-                        muted_color(),
-                    );
+                    self.error = error;
                 }
                 wrap(
                     "Settings file",

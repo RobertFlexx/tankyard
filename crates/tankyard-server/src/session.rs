@@ -66,7 +66,9 @@ impl LocalSession {
         Ok(())
     }
     pub fn step(&mut self) {
-        self.bots.update(&mut self.world);
+        if !self.world.bots_frozen {
+            self.bots.update(&mut self.world);
+        }
         self.world.step_with(|world| self.mods.before_step(world));
         self.mods.after_step(&mut self.world);
     }

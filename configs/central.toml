@@ -1,0 +1,31 @@
+# Public central arena. Use the regular tankyard-server binary.
+# This operator explicitly consents to signed creator tools. Private hosts
+# should use server.toml, which disables them. Preserve config across updates.
+kind = "Official"
+server_id = "tankyard-central"
+name = "Tank Yard Central Arena"
+bind = "0.0.0.0:5000"
+chat_enabled = false
+voice_enabled = true
+creator_admin = true
+audit_file = "configs/creator-audit.jsonl"
+require_accounts = false
+bot_count = 12
+adaptive_bots = true
+max_players = 64
+ban_file = "configs/official-bans.json"
+
+[world]
+dynamic_arena = true
+width = 3600.0
+height = 2600.0
+mode = "Ffa"
+seed = 42
+target_count = 180
+max_projectiles = 6000
+friendly_fire = false
+spawn_protection = 15.0
+score_limit = 100
+time_limit = 600.0
+lives = 1
+map = "open"

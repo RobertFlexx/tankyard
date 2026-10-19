@@ -13,8 +13,8 @@ pub use community::*;
 mod voice;
 pub use voice::*;
 
-pub const PROTOCOL_VERSION: u32 = 14;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000e;
+pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000f;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -168,6 +168,7 @@ pub enum ServerControl {
     CreatorChallenge {
         nonce: [u8; 32],
         owner_extension: bool,
+        server_id: String,
     },
     Access {
         kind: ServerKind,

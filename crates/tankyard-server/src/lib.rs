@@ -7,6 +7,7 @@ mod chat;
 mod client;
 mod community;
 mod config;
+pub mod creator;
 mod host;
 pub mod netem;
 mod session;

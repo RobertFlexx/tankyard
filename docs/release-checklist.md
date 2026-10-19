@@ -26,6 +26,8 @@ Check at 800×600, 1024×768, 1280×800, 1600×900, 1920×1080, ultrawide, and w
 - Interface Scale at its default value reads **100%**, not 33%. Frame limit highlights its selected option. An unsupported anisotropy option must remain disabled.
 - Cycle through Display/Style/Controls/Accessibility/Profile, then Back and into every other menu. There should be no ghost text, retained selection overlay, or clickable invisible old control.
 - Test long server addresses, Unicode player names, multiple favorites, and long config paths. Labels must stay inside buttons; wrapping must not spill into neighboring columns.
+- Fill all 32 favorites and 12 recents; page, delete, star/unstar, sort each direction, restore recency, and reorder favorites. Verify changes survive reopening. Host casing may deduplicate, but differently cased WebSocket paths/queries must remain distinct.
+- Check creator tools with official/public community opt-in, default opt-out, a valid private signature, an impostor, replay, tampering, failed audit writes, and immediate local revocation/re-enable. A badge and ordinary Owner role must not bypass host consent. Keep the creator client and key out of staged files and release packages.
 - Toggle fullscreen, change window size, save, restart, and verify the chosen settings survive. Check both light and dark theme, reduced motion, and colorblind/high-contrast settings.
 - Type, select, paste and delete text, click outside a field, rebind keys and hit Escape. The UI must not trigger unrelated shortcuts while capturing input.
 

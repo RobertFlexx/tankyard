@@ -23,7 +23,9 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 
 Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
 
-Current clients and servers use protocol 14. Proximity voice, spectator controls, and captured drones require matching versions. Update clients and servers together. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
+Current clients and servers use protocol 15. Proximity voice, spectator controls, and captured drones require matching versions. Update clients and servers together. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
+
+The ordinary server supports signed creator tools only with explicit operator consent. Default/personal hosts are opted out; public community operators can opt in. See [creator administration](creator-administration.md) for policy, immediate revocation, auditing, and updating the central Raspberry Pi/Docker deployment.
 
 The process console is the host's administration interface:
 

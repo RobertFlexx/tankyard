@@ -43,6 +43,7 @@ pub struct NetworkClient {
     pub voice_packets: std::collections::VecDeque<VoicePacket>,
     pub audit_lines: Vec<String>,
     pub creator_challenge: Option<[u8; 32]>,
+    pub creator_server_id: Option<String>,
     pub owner_extension_available: bool,
     owner_nonce: Option<[u8; 32]>,
     owner_sequence: u64,
@@ -187,6 +188,7 @@ impl NetworkClient {
             voice_packets: std::collections::VecDeque::with_capacity(32),
             audit_lines: Vec::new(),
             creator_challenge: None,
+            creator_server_id: None,
             owner_extension_available: false,
             owner_nonce: None,
             owner_sequence: 0,
@@ -365,7 +367,12 @@ impl NetworkClient {
                 ServerControl::CreatorChallenge {
                     nonce,
                     owner_extension,
+                    server_id,
                 } => {
+                    if !crate::access::account_id(&server_id) {
+                        return self.fail("Invalid creator challenge server ID.".into());
+                    }
+                    self.creator_server_id = Some(server_id);
                     self.owner_extension_available = owner_extension;
                     self.owner_nonce = Some(nonce);
                     self.owner_sequence = 0;
@@ -562,6 +569,7 @@ impl NetworkClient {
         Some(creator_command(
             self.client_id(),
             &self.owner_nonce?,
+            self.creator_server_id.as_deref()?,
             self.player_round?,
             self.owner_sequence,
             payload,

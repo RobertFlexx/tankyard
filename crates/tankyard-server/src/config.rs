@@ -11,6 +11,8 @@ pub struct ServerSettings {
     pub server_id: String,
     pub chat_enabled: bool,
     pub voice_enabled: bool,
+    /// Explicit operator consent to signed creator tools on a public arena.
+    pub creator_admin: bool,
     pub access_file: String,
     pub audit_file: String,
     pub global_audit_file: String,
@@ -41,6 +43,7 @@ impl Default for ServerSettings {
             server_id: String::new(),
             chat_enabled: true,
             voice_enabled: true,
+            creator_admin: false,
             access_file: String::new(),
             audit_file: String::new(),
             global_audit_file: String::new(),
@@ -125,6 +128,15 @@ impl ServerSettings {
         Ok(())
     }
     pub fn validate(&self) -> Result<(), NetError> {
+        if self.creator_admin
+            && (!self.password.is_empty()
+                || self.audit_file.is_empty()
+                || self.server_id.is_empty())
+        {
+            return Err(NetError(
+                "creator administration requires a public, password-free arena, a server ID, and an audit_file; private hosts should leave creator_admin disabled".into(),
+            ));
+        }
         if self.kind == tankyard_protocol::ServerKind::Official && !self.access_file.is_empty() {
             return Err(NetError(
                 "community access files cannot grant roles on official servers".into(),
@@ -248,6 +260,7 @@ impl std::fmt::Debug for ServerSettings {
             .field("max_players", &self.max_players)
             .field("bot_count", &self.bot_count)
             .field("adaptive_bots", &self.adaptive_bots)
+            .field("creator_admin", &self.creator_admin)
             .field("require_accounts", &self.require_accounts)
             .field("password", &"[redacted]")
             .field(
@@ -339,6 +352,39 @@ mod tests {
         assert!(decoded.validate().is_ok());
         decoded.world.width = f32::NAN;
         assert!(decoded.validate().is_err());
+    }
+    #[test]
+    fn shipped_public_and_private_host_policies_validate() {
+        for (text, enabled) in [
+            (include_str!("../../../configs/server.toml"), false),
+            (include_str!("../../../configs/official.toml"), true),
+            (include_str!("../../../configs/central.toml"), true),
+        ] {
+            let settings: ServerSettings = toml::from_str(text).unwrap();
+            settings.validate().unwrap();
+            assert_eq!(settings.creator_admin, enabled);
+        }
+    }
+    #[test]
+    fn creator_policy_is_explicit_and_never_available_to_password_protected_hosts() {
+        let mut settings = ServerSettings::default();
+        assert!(!settings.creator_admin);
+        // Marking a server Official or changing its name grants no authority.
+        settings.kind = tankyard_protocol::ServerKind::Official;
+        assert!(!settings.creator_admin);
+        settings.creator_admin = true;
+        assert!(settings.validate().is_err());
+        settings.server_id = "consenting-public-host".into();
+        settings.audit_file = "creator-audit.jsonl".into();
+        assert!(settings.validate().is_ok());
+        settings.kind = tankyard_protocol::ServerKind::Community;
+        assert!(settings.validate().is_ok());
+        settings.password = "private-match".into();
+        assert!(settings.validate().is_err());
+        settings.creator_admin = false;
+        assert!(settings.validate().is_ok());
+        let legacy: ServerSettings = toml::from_str("name = 'Existing host'").unwrap();
+        assert!(!legacy.creator_admin);
     }
     #[test]
     fn credentials_are_redacted_and_accounts_need_secure_transport() {

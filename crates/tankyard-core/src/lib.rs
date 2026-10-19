@@ -1,4 +1,5 @@
 //! Server authoritative fixed-step simulation, with no rendering dependencies.
+pub mod administration;
 mod arena;
 mod arena_size;
 mod bosses;

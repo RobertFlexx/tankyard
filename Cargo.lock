@@ -1916,7 +1916,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-ai"
-version = "0.2.16"
+version = "0.3.0"
 dependencies = [
  "serde",
  "tankyard-content",
@@ -1925,7 +1925,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-client"
-version = "0.2.16"
+version = "0.3.0"
 dependencies = [
  "clap",
  "cpal",
@@ -1947,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-content"
-version = "0.2.16"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1955,7 +1955,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-core"
-version = "0.2.16"
+version = "0.3.0"
 dependencies = [
  "serde",
  "tankyard-content",
@@ -1964,7 +1964,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-mods"
-version = "0.2.16"
+version = "0.3.0"
 dependencies = [
  "image",
  "serde",
@@ -1974,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-protocol"
-version = "0.2.16"
+version = "0.3.0"
 dependencies = [
  "lz4_flex",
  "postcard",
@@ -1988,7 +1988,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-server"
-version = "0.2.16"
+version = "0.3.0"
 dependencies = [
  "clap",
  "ctrlc",
@@ -2012,7 +2012,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-tools"
-version = "0.2.16"
+version = "0.3.0"
 dependencies = [
  "clap",
  "postcard",

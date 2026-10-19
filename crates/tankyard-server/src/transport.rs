@@ -82,6 +82,10 @@ impl ServerMetrics {
 
 pub type OwnerExtension = fn(&mut UdpServer, EntityId, &[u8]) -> Result<String, String>;
 
+#[cfg(test)]
+#[path = "creator_tests.rs"]
+mod creator_tests;
+
 pub struct UdpServer {
     pub session: LocalSession,
     pub settings: ServerSettings,
@@ -172,6 +176,13 @@ impl UdpServer {
         let bans = crate::admin::load_bans(&settings.ban_file)?;
         let snapshot_buffer = session.world.snapshot();
         let client_ids = Vec::with_capacity(settings.max_players);
+        if settings.creator_admin {
+            log::info!(
+                "Operator enabled signed creator administration for {} (audit: {}).",
+                settings.server_id,
+                settings.audit_file
+            );
+        }
         Ok(Self {
             session,
             settings,
@@ -712,7 +723,8 @@ impl UdpServer {
                 client,
                 &ServerControl::CreatorChallenge {
                     nonce,
-                    owner_extension: self.owner_extension.is_some(),
+                    owner_extension: self.creator_admin_available(),
+                    server_id: self.settings.server_id.clone(),
                 },
             );
             self.broadcast_control(&ServerControl::PlayerJoined {
@@ -737,8 +749,9 @@ impl UdpServer {
                     .peers
                     .get_mut(&client)
                     .and_then(|p| p.creator_nonce.take());
-                let verified =
-                    proof.is_some_and(|nonce| verify_creator(client, &nonce, &signature));
+                let verified = proof.is_some_and(|nonce| {
+                    verify_creator(client, &nonce, &self.settings.server_id, &signature)
+                });
                 if verified {
                     if let Some(p) = self.peers.get_mut(&client) {
                         p.creator = true;
@@ -934,8 +947,13 @@ impl UdpServer {
         Ok(())
     }
     /// Install trusted, host-owned administration code before accepting peers.
-    /// Public builds have no handler; no gameplay role or username can enable it.
+    /// Host policy must also opt in; no gameplay role or username can enable it.
     pub fn set_owner_extension(&mut self, handler: OwnerExtension) -> Result<(), NetError> {
+        if !self.creator_admin_available() {
+            return Err(NetError(
+                "The operator must enable creator_admin first.".into(),
+            ));
+        }
         if self.player_count() > 0 {
             return Err(NetError(
                 "Install extensions before players connect.".into(),
@@ -960,6 +978,11 @@ impl UdpServer {
         {
             return Err(NetError("Verified creator identity required.".into()));
         }
+        if !self.creator_admin_available() {
+            return Err(NetError(
+                "Creator administration is disabled by this host.".into(),
+            ));
+        }
         if round != self.session.world.match_state.round
             || payload.is_empty()
             || payload.len() > 1024
@@ -977,7 +1000,14 @@ impl UdpServer {
             .last_owner_sequence
             .is_some_and(|last| sequence <= last)
             || !verify_creator_command(
-                &creator_command(client, &nonce, round, sequence, payload),
+                &creator_command(
+                    client,
+                    &nonce,
+                    &self.settings.server_id,
+                    round,
+                    sequence,
+                    payload,
+                ),
                 signature,
             )
         {
@@ -986,9 +1016,7 @@ impl UdpServer {
             ));
         }
         peer.last_owner_sequence = Some(sequence);
-        let handler = self
-            .owner_extension
-            .ok_or_else(|| NetError("This host has no owner extension installed.".into()))?;
+        let handler = self.owner_extension.unwrap_or(crate::creator::handle);
         if !self.access.take_admin_token(client, unix_time().as_secs()) {
             return Err(NetError("Wait before sending another command.".into()));
         }
@@ -997,18 +1025,109 @@ impl UdpServer {
             &crate::access::AuditRecord {
                 time: unix_time().as_secs(),
                 actor: &client.to_string(),
-                action: "owner_extension",
+                action: "creator_request",
                 target: &player.to_string(),
-                reason: "Verified creator extension command",
+                reason: &String::from_utf8_lossy(payload),
             },
         )
         .map_err(NetError)?;
-        self.session.world.config.modded = true;
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let was_modified = self.session.world.config.modded;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             handler(self, player, payload)
         }))
-        .map_err(|_| NetError("Owner extension failed.".into()))?
-        .map_err(NetError)
+        .map_err(|_| NetError("Owner extension failed.".into()))
+        .and_then(|result| result.map_err(NetError));
+        if result.is_ok() && self.owner_extension.is_some() {
+            self.session.world.config.modded = true;
+        }
+        if !was_modified && self.session.world.config.modded {
+            self.broadcast_control(&ServerControl::Action {
+                accepted: true,
+                reason: "Creator tools changed this arena. Regular achievements are disabled for this round.".into(),
+            });
+        }
+        if let Err(error) = crate::access::audit(
+            &self.settings.audit_file,
+            &crate::access::AuditRecord {
+                time: unix_time().as_secs(),
+                actor: &client.to_string(),
+                action: "creator_result",
+                target: &player.to_string(),
+                reason: &format!("{result:?}"),
+            },
+        ) {
+            log::error!("Could not audit creator command outcome: {error}");
+        }
+        result
+    }
+
+    pub(crate) fn creator_admin_available(&self) -> bool {
+        self.settings.creator_admin
+            && self.settings.password.is_empty()
+            && !self.settings.audit_file.is_empty()
+            && !self.settings.server_id.is_empty()
+    }
+
+    /// Process-console policy only. Disabling always revokes active modifiers,
+    /// even if an audit disk is unavailable. Remote admin roles cannot call this.
+    pub(crate) fn set_creator_admin(&mut self, enabled: bool) -> Result<String, NetError> {
+        if enabled {
+            let mut candidate = self.settings.clone();
+            candidate.creator_admin = true;
+            candidate.validate()?;
+        }
+        let record = crate::access::AuditRecord {
+            time: unix_time().as_secs(),
+            actor: "console",
+            action: "creator_policy",
+            target: &self.settings.server_id,
+            reason: if enabled { "enabled" } else { "disabled" },
+        };
+        let audit = crate::access::audit(&self.settings.audit_file, &record);
+        if enabled {
+            audit.map_err(NetError)?;
+        } else if let Err(error) = audit {
+            log::error!("Could not audit creator revocation: {error}");
+        }
+        self.settings.creator_admin = enabled;
+        if !enabled {
+            self.session.world.reset_administration();
+        }
+        // Rotate session authorization on every policy change. Commands signed
+        // before revocation cannot execute later if the operator opts in again.
+        let clients: Vec<_> = self
+            .peers
+            .iter()
+            .filter_map(|(&client, peer)| peer.entity.map(|_| client))
+            .collect();
+        for client in clients {
+            let nonce = renet_netcode::generate_random_bytes::<32>();
+            if let Some(peer) = self.peers.get_mut(&client) {
+                peer.creator_nonce = Some(nonce);
+                peer.creator_session_nonce = None;
+                peer.last_owner_sequence = None;
+            }
+            self.send_control(
+                client,
+                &ServerControl::CreatorChallenge {
+                    nonce,
+                    owner_extension: enabled,
+                    server_id: self.settings.server_id.clone(),
+                },
+            );
+        }
+        log::info!(
+            "Operator {} creator administration.",
+            if enabled { "enabled" } else { "disabled" }
+        );
+        Ok(format!(
+            "Creator administration {}.",
+            if enabled {
+                "enabled"
+            } else {
+                "disabled; active powers revoked"
+            }
+        ))
     }
 
     /// Trusted Rust extensions are registered before accepting players. The
@@ -1174,7 +1293,7 @@ impl UdpServer {
             .max(self.metrics.last_snapshot_micros);
     }
 
-    fn replicate_events(&mut self) {
+    pub(crate) fn replicate_events(&mut self) {
         self.important_events.clear();
         for event in self.session.world.events.drain(..) {
             match event.kind {

@@ -3,6 +3,8 @@ kind = "Community"
 server_id = "tankyard-local"
 chat_enabled = true
 voice_enabled = true
+# Optional public-host consent. Leave disabled for personal/private hosting.
+creator_admin = false
 access_file = "configs/access.json"
 audit_file = "configs/audit.jsonl"
 require_accounts = false

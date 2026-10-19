@@ -39,7 +39,7 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
             shutil.copy2(ROOT / filename, payload)
         for directory_name in ("configs", "mods", "licenses"):
             (payload / directory_name).mkdir()
-        for filename in ("server.toml", "official.toml"):
+        for filename in ("server.toml", "official.toml", "central.toml"):
             shutil.copy2(ROOT / "configs" / filename, payload / "configs" / filename)
         for mod in ("fast_arena", "vampire"):
             shutil.copytree(ROOT / "mods" / mod, payload / "mods" / mod)

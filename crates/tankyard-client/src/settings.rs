@@ -5,6 +5,30 @@ use std::path::PathBuf;
 
 pub const CENTRAL_SERVER: &str = "tankyard.kokonico.me";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ServerSort {
+    #[default]
+    Saved,
+    Address,
+    ReverseAddress,
+}
+impl ServerSort {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Saved => Self::Address,
+            Self::Address => Self::ReverseAddress,
+            Self::ReverseAddress => Self::Saved,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum ServerList {
+    #[default]
+    Favorites,
+    Recent,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -12,6 +36,8 @@ pub struct Settings {
     pub server_address: String,
     pub favorites: Vec<String>,
     pub recent_servers: Vec<String>,
+    pub favorite_sort: ServerSort,
+    pub recent_sort: ServerSort,
     pub width: u32,
     pub height: u32,
     pub native_resolution: bool,
@@ -54,6 +80,8 @@ impl Default for Settings {
             server_address: CENTRAL_SERVER.into(),
             favorites: vec![],
             recent_servers: vec![],
+            favorite_sort: ServerSort::Saved,
+            recent_sort: ServerSort::Saved,
             width: 1280,
             height: 800,
             native_resolution: false,
@@ -194,13 +222,8 @@ impl Settings {
             self.player_name = "Pilot".into();
         }
         self.server_address = clean_address(&self.server_address);
-        self.favorites.truncate(32);
-        self.recent_servers.truncate(12);
-        for address in self.favorites.iter_mut().chain(&mut self.recent_servers) {
-            *address = clean_address(address);
-        }
-        self.favorites.retain(|address| !address.is_empty());
-        self.recent_servers.retain(|address| !address.is_empty());
+        clean_servers(&mut self.favorites, 32);
+        clean_servers(&mut self.recent_servers, 12);
         self.unlocked_achievements.retain(|id| {
             tankyard_client::achievements::ACHIEVEMENTS
                 .iter()
@@ -218,13 +241,99 @@ impl Settings {
         }
     }
     pub fn remember_server(&mut self, address: &str) {
-        self.recent_servers.retain(|s| s != address);
-        self.recent_servers.insert(0, address.to_owned());
+        let address = clean_address(address);
+        if address.is_empty() {
+            return;
+        }
+        self.recent_servers.retain(|s| !same_server(s, &address));
+        self.recent_servers.insert(0, address);
         self.recent_servers.truncate(12);
+    }
+    pub fn add_favorite(&mut self, address: &str) -> Result<(), String> {
+        let address = clean_address(address);
+        if address.is_empty() {
+            return Err("Enter a server address first.".into());
+        }
+        if self.favorites.iter().any(|s| same_server(s, &address)) {
+            return Ok(());
+        }
+        if self.favorites.len() >= 32 {
+            return Err("Favorites are full. Remove a saved server first.".into());
+        }
+        self.favorites.push(address);
+        Ok(())
+    }
+    pub fn server_sort(&self, list: ServerList) -> ServerSort {
+        match list {
+            ServerList::Favorites => self.favorite_sort,
+            ServerList::Recent => self.recent_sort,
+        }
+    }
+    pub fn cycle_server_sort(&mut self, list: ServerList) {
+        let sort = match list {
+            ServerList::Favorites => &mut self.favorite_sort,
+            ServerList::Recent => &mut self.recent_sort,
+        };
+        *sort = sort.next();
+    }
+    pub fn servers(&self, list: ServerList) -> &[String] {
+        match list {
+            ServerList::Favorites => &self.favorites,
+            ServerList::Recent => &self.recent_servers,
+        }
+    }
+    pub fn sorted_servers(&self, list: ServerList) -> Vec<String> {
+        let mut result = self.servers(list).to_vec();
+        match self.server_sort(list) {
+            ServerSort::Saved => {}
+            ServerSort::Address => result.sort_by_cached_key(|a| a.to_ascii_lowercase()),
+            ServerSort::ReverseAddress => {
+                result.sort_by_cached_key(|a| std::cmp::Reverse(a.to_ascii_lowercase()))
+            }
+        }
+        result
+    }
+    pub fn remove_server(&mut self, list: ServerList, address: &str) {
+        let servers = match list {
+            ServerList::Favorites => &mut self.favorites,
+            ServerList::Recent => &mut self.recent_servers,
+        };
+        servers.retain(|s| !same_server(s, address));
+    }
+    pub fn move_favorite(&mut self, address: &str, direction: isize) {
+        if let Some(index) = self.favorites.iter().position(|s| same_server(s, address)) {
+            let target = index
+                .saturating_add_signed(direction)
+                .min(self.favorites.len() - 1);
+            self.favorites.swap(index, target);
+            self.favorite_sort = ServerSort::Saved;
+        }
     }
     pub fn key(&self, index: usize) -> KeyCode {
         key_from_name(&self.bindings[index]).unwrap_or(KeyCode::Space)
     }
+}
+fn clean_servers(servers: &mut Vec<String>, limit: usize) {
+    let mut seen = std::collections::HashSet::new();
+    for address in servers.iter_mut() {
+        *address = clean_address(address);
+    }
+    servers.retain(|address| !address.is_empty() && seen.insert(server_key(address)));
+    servers.truncate(limit);
+}
+pub fn same_server(a: &str, b: &str) -> bool {
+    server_key(a) == server_key(b)
+}
+fn server_key(value: &str) -> String {
+    let value = value.trim();
+    let (scheme, rest) = value
+        .split_once("://")
+        .map_or((String::new(), value), |(scheme, rest)| {
+            (format!("{}://", scheme.to_ascii_lowercase()), rest)
+        });
+    let (authority, path) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
+    // Hosts are case insensitive; WebSocket paths and query strings are not.
+    format!("{scheme}{}{path}", authority.to_ascii_lowercase())
 }
 fn clean_address(value: &str) -> String {
     value
@@ -434,6 +543,108 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn saved_server_migration_deduplicates_before_limits_and_keeps_lists_independent() {
+        let mut settings: Settings = serde_json::from_str(
+            r#"{
+            "favorites":[" Arena.Example:5000 ","arena.example:5000","  ","other:5000"],
+            "recent_servers":["arena.example:5000"," recent:5000 ","RECENT:5000"]
+        }"#,
+        )
+        .unwrap();
+        settings.validate();
+        assert_eq!(settings.favorites, ["Arena.Example:5000", "other:5000"]);
+        assert_eq!(
+            settings.recent_servers,
+            ["arena.example:5000", "recent:5000"]
+        );
+        settings.remove_server(ServerList::Recent, "ARENA.EXAMPLE:5000");
+        assert_eq!(settings.favorites.len(), 2);
+        assert_eq!(settings.recent_servers, ["recent:5000"]);
+        settings.remove_server(ServerList::Favorites, "arena.example:5000");
+        assert_eq!(settings.favorites, ["other:5000"]);
+    }
+
+    #[test]
+    fn server_sorting_persists_without_rewriting_connection_recency() {
+        let mut settings = Settings::default();
+        for address in ["zeta:5000", "Alpha:5000", "beta:5000"] {
+            settings.add_favorite(address).unwrap();
+            settings.remember_server(address);
+        }
+        settings.cycle_server_sort(ServerList::Recent);
+        assert_eq!(
+            settings.sorted_servers(ServerList::Recent),
+            ["Alpha:5000", "beta:5000", "zeta:5000"]
+        );
+        assert_eq!(settings.recent_servers[0], "beta:5000");
+        settings.cycle_server_sort(ServerList::Favorites);
+        settings.cycle_server_sort(ServerList::Favorites);
+        assert_eq!(
+            settings.sorted_servers(ServerList::Favorites),
+            ["zeta:5000", "beta:5000", "Alpha:5000"]
+        );
+        let loaded: Settings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(loaded.favorite_sort, ServerSort::ReverseAddress);
+        assert_eq!(loaded.recent_sort, ServerSort::Address);
+        settings.remember_server(" ALPHA:5000 ");
+        assert_eq!(
+            settings.recent_servers,
+            ["ALPHA:5000", "beta:5000", "zeta:5000"]
+        );
+    }
+
+    #[test]
+    fn server_deduplication_preserves_case_sensitive_websocket_paths_and_queries() {
+        let mut settings = Settings::default();
+        for address in [
+            "wss://Arena.example/Room?room=A",
+            "wss://arena.EXAMPLE/Room?room=A",
+            "wss://arena.example/room?room=A",
+            "wss://arena.example/Room?room=a",
+        ] {
+            settings.add_favorite(address).unwrap();
+            settings.remember_server(address);
+        }
+        settings.validate();
+        assert_eq!(settings.favorites.len(), 3);
+        assert_eq!(settings.recent_servers.len(), 3);
+        settings.remove_server(ServerList::Favorites, "wss://ARENA.EXAMPLE/Room?room=A");
+        assert_eq!(settings.favorites.len(), 2);
+        assert!(
+            settings
+                .favorites
+                .iter()
+                .any(|s| s.ends_with("room?room=A"))
+        );
+        assert!(
+            settings
+                .favorites
+                .iter()
+                .any(|s| s.ends_with("Room?room=a"))
+        );
+    }
+
+    #[test]
+    fn favorite_reordering_handles_bounds_capacity_and_empty_addresses() {
+        let mut settings = Settings::default();
+        assert!(settings.add_favorite(" \n").is_err());
+        for i in 0..32 {
+            settings.add_favorite(&format!("arena-{i}:5000")).unwrap();
+        }
+        assert!(settings.add_favorite("extra:5000").is_err());
+        assert!(settings.add_favorite(" ARENA-0:5000 ").is_ok());
+        settings.move_favorite("arena-0:5000", -1);
+        settings.move_favorite("arena-31:5000", 1);
+        settings.move_favorite("arena-2:5000", -1);
+        assert_eq!(settings.favorites[1], "arena-2:5000");
+        assert_eq!(settings.favorite_sort, ServerSort::Saved);
+        settings.remove_server(ServerList::Favorites, "arena-31:5000");
+        settings.add_favorite("extra:5000").unwrap();
+        assert_eq!(settings.favorites.len(), 32);
     }
 
     #[test]

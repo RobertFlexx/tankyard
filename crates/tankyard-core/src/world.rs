@@ -8,6 +8,9 @@ use std::collections::BTreeMap;
 use tankyard_content::Content;
 use tankyard_content::ProjectileKind;
 pub struct World {
+    /// Trusted host state; never accepted from input packets or snapshots.
+    pub admin_modifiers: BTreeMap<EntityId, crate::administration::Modifiers>,
+    pub bots_frozen: bool,
     pub config: WorldConfig,
     pub content: Content,
     pub map: tankyard_content::MapDef,
@@ -104,6 +107,8 @@ impl World {
             .clone();
         config.map = map.id.clone();
         let mut world = Self {
+            admin_modifiers: BTreeMap::new(),
+            bots_frozen: false,
             grid: SpatialGrid::new(config.width, config.height),
             drone_contacts: DroneContacts::new(config.width, config.height),
             rng: config.seed,
@@ -291,7 +296,11 @@ impl World {
         id
     }
     pub fn remove_player(&mut self, id: EntityId) {
+        self.admin_modifiers.remove(&id);
         self.tanks.retain(|t| t.id != id);
+        if !self.tanks.iter().any(|tank| tank.game_creator && !tank.bot) {
+            self.bots_frozen = false;
+        }
         self.projectiles.retain(|p| p.owner != id);
         self.sandbox_god.retain(|&p| p != id);
         for o in &mut self.objectives {
@@ -600,6 +609,13 @@ impl World {
                 continue;
             }
             crate::physics::update_protection(tank, DT);
+            if self
+                .admin_modifiers
+                .get(&tank.id)
+                .is_some_and(|m| m.unlimited_ability)
+            {
+                tank.ability_cooldown = 0.;
+            }
             tank.shield = (tank.shield - DT).max(0.);
             tank.boost = (tank.boost - DT).max(0.);
             tank.knockback = (tank.knockback - DT).max(0.);
@@ -612,7 +628,12 @@ impl World {
                 tank.health = (tank.health + regen * DT * self.config.rules.regen_multiplier)
                     .min(tank.max_health);
             }
-            move_tank(tank, &self.content, &self.config, &self.walls, DT);
+            if self.bots_frozen && tank.bot {
+                tank.vel = V2::ZERO;
+                tank.input = PlayerInput::default();
+            } else {
+                move_tank(tank, &self.content, &self.config, &self.walls, DT);
+            }
         }
         for id in respawns {
             let team = self.tanks.iter().find(|t| t.id == id).map_or(0, |t| t.team);
@@ -908,7 +929,12 @@ impl World {
         knockback: V2,
     ) {
         let t = &mut self.tanks[index];
-        if !t.alive || t.health <= 0. || t.protection > 0. || self.sandbox_god.contains(&t.id) {
+        if !t.alive
+            || t.health <= 0.
+            || t.protection > 0.
+            || self.sandbox_god.contains(&t.id)
+            || self.admin_modifiers.get(&t.id).is_some_and(|m| m.god)
+        {
             return;
         }
         let reduction = if t.shield > 0. { 0.18 } else { 1. };
@@ -1652,8 +1678,7 @@ impl World {
                     ))
                 }
             } else if let Some(b) = self.bosses.iter().find(|b| b.id == owner && b.health > 0.) {
-                self.nearest_position(pos, team, owner, 1000.)
-                    .or(Some(b.pos))
+                Some(self.boss_drone_goal(b, id, pos, team))
             } else {
                 self.projectiles[i].lifetime = 0.;
                 None
@@ -1762,7 +1787,7 @@ impl World {
         self.event(EventKind::Destroy, pos, owner, radius as u32, team);
     }
 }
-fn drone_phase(id: EntityId) -> f32 {
+pub(crate) fn drone_phase(id: EntityId) -> f32 {
     // Stable across projectile removals and vector compaction.
     (id % 4096) as f32 * 2.399_963_1
 }

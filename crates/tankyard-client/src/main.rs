@@ -14,6 +14,7 @@ mod native_resolution;
 mod notifications;
 mod practice_ui;
 mod render;
+mod server_browser;
 mod session;
 mod settings;
 mod startup;

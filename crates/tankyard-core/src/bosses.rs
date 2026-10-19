@@ -1,4 +1,5 @@
 use crate::physics::{circle_rect, sweep_rect};
+use crate::world::drone_phase;
 use crate::*;
 use tankyard_content::ProjectileKind;
 
@@ -30,6 +31,42 @@ fn boss_clear_steering(pos: V2, desired: V2, radius: f32, bounds: Rect, walls: &
 }
 
 impl World {
+    pub(crate) fn boss_drone_goal(&self, boss: &Boss, drone: EntityId, pos: V2, team: u8) -> V2 {
+        let (acquisition, leash) = match boss.kind {
+            BossKind::Summoner => (820., 1050.),
+            BossKind::Guardian => (900., 1200.),
+            BossKind::FallenOverlord => (1000., 1350.),
+            _ => (760., 1000.),
+        };
+        let guard = boss.pos
+            + V2::from_angle(drone_phase(drone) + self.tick as f32 * DT * 0.25)
+                * (boss.radius + 55.);
+        if pos.distance(boss.pos) > leash {
+            return guard;
+        }
+        // Acquire from the drone, but never chain pursuit across the map. The
+        // owner leash and protected/new-player rules match the boss's awareness.
+        self.tanks
+            .iter()
+            .filter(|tank| {
+                tank.alive
+                    && tank.health > 0.
+                    && tank.protection <= 0.
+                    && self.hostile(team, tank.team)
+                    && (tank.level >= 15
+                        || tank.id == boss.last_attacker
+                        || tank.pos.distance(boss.pos) < 420.)
+                    && tank.pos.distance(pos) <= acquisition
+                    && tank.pos.distance(boss.pos) <= leash - 100.
+                    && self
+                        .walls
+                        .iter()
+                        .all(|&wall| sweep_rect(pos, tank.pos, 2., wall).is_none())
+            })
+            .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
+            .map_or(guard, |tank| tank.pos)
+    }
+
     pub(crate) fn random_boss_event(&mut self) {
         if self.tick < self.boss_roll_at {
             return;
@@ -220,7 +257,7 @@ impl World {
                 match b.kind {
                     BossKind::Tempest => 125.,
                     BossKind::Eclipse => 95.,
-                    BossKind::FallenBooster => 195.,
+                    BossKind::FallenBooster => 180.,
                     BossKind::Guardian => 90.,
                     BossKind::Summoner => 45.,
                     BossKind::FallenOverlord => 65.,
@@ -297,7 +334,7 @@ impl World {
                 b.vel *= 0.6;
             }
             b.timer -= DT;
-            let primary = b.timer <= 0. && b.arrival <= 0.;
+            let primary_due = b.timer <= 0. && b.arrival <= 0.;
             let previous_windup = b.attack_windup;
             b.attack_windup = (b.attack_windup - DT).max(0.);
             let secondary = previous_windup > 0. && b.attack_windup <= 0. && target.is_some();
@@ -309,6 +346,12 @@ impl World {
                     b.attack_timer = 9.5 - f32::from(b.phase) * 1.5;
                     warnings.push((b.pos, b.id, b.attack as u32, b.team));
                 }
+            }
+            // Let the warning and secondary pattern read clearly. A primary
+            // volley cannot land on the same frame as the special attack.
+            let primary = primary_due && b.attack_windup <= 0. && !secondary;
+            if secondary {
+                b.timer = b.timer.max(0.4);
             }
             if target.is_none() || (!primary && !secondary) {
                 continue;
@@ -485,14 +528,14 @@ impl World {
                             b.aim + n as f32 * std::f32::consts::FRAC_PI_2,
                             ProjectileKind::Drone,
                             220.,
-                            20.,
+                            18.,
                             19.,
                             11.,
                             4.,
                             0,
                         );
                     }
-                    b.timer = 0.6;
+                    b.timer = 0.72;
                 }
                 BossKind::FallenOverlord => {
                     for n in 0..4 {
@@ -528,7 +571,7 @@ impl World {
                     b.timer = 0.85;
                 }
                 BossKind::FallenBooster => {
-                    emit(b.aim, ProjectileKind::Bullet, 460., 21., 10., 2., 1.8, 0);
+                    emit(b.aim, ProjectileKind::Bullet, 460., 19., 10., 2., 1.8, 0);
                     for angle in [-0.45_f32, -0.2, 0.2, 0.45] {
                         emit(
                             b.aim + std::f32::consts::PI + angle,
@@ -569,12 +612,12 @@ impl World {
                             410.,
                             16.,
                             7.,
-                            5.,
+                            4.2,
                             2.,
-                            2,
+                            1,
                         );
                     }
-                    b.timer = 1.3;
+                    b.timer = 1.45;
                 }
                 BossKind::Foundry => {
                     for n in 0..(2 + b.phase) {
@@ -595,9 +638,10 @@ impl World {
                     b.timer = 1.8;
                 }
                 BossKind::Tempest => {
-                    for n in 0..(3 + b.phase) {
+                    let count = 3 + b.phase;
+                    for n in 0..count {
                         emit(
-                            b.aim + (n as f32 - 1.) * 0.45,
+                            b.aim + (n as f32 - (f32::from(count) - 1.) * 0.5) * 0.45,
                             ProjectileKind::Homing,
                             285.,
                             14.,
@@ -611,7 +655,7 @@ impl World {
                         b.tactic = BossTactic::Windup;
                         b.tactic_time = 0.7;
                     }
-                    b.timer = 0.9;
+                    b.timer = 1.05;
                 }
                 BossKind::Bastion => {
                     for n in 0..8 {
@@ -619,9 +663,9 @@ impl World {
                             n as f32 * std::f32::consts::TAU / 8. + self.tick as f32 * 0.005,
                             ProjectileKind::Mine,
                             220.,
-                            32.,
+                            27.,
                             13.,
-                            8.,
+                            6.5,
                             2.,
                             0,
                         );
@@ -689,6 +733,111 @@ mod tests {
         world.add_player("Pilot", false);
         world.tanks[0].level = 45;
         world
+    }
+
+    #[test]
+    fn summoner_drones_have_shorter_acquisition_and_return_to_their_owner() {
+        let mut world = arena();
+        assert_ne!(world.spawn_boss(BossKind::Summoner), 0);
+        world.bosses[0].pos = V2::new(1600., 1300.);
+        let boss = &world.bosses[0];
+        world.tanks[0].pos = boss.pos + V2::new(810., 0.);
+        assert_eq!(
+            world.boss_drone_goal(boss, 100, boss.pos, 0),
+            world.tanks[0].pos
+        );
+        world.tanks[0].pos = boss.pos + V2::new(850., 0.);
+        assert!(
+            world
+                .boss_drone_goal(boss, 100, boss.pos, 0)
+                .distance(boss.pos)
+                < 200.
+        );
+        // A drone near the player cannot extend its boss's pursuit across the map.
+        world.tanks[0].pos = boss.pos + V2::new(1100., 0.);
+        assert!(
+            world
+                .boss_drone_goal(boss, 100, boss.pos + V2::new(900., 0.), 0)
+                .distance(boss.pos)
+                < 200.
+        );
+        world.tanks[0].pos = boss.pos + V2::new(700., 0.);
+        assert!(
+            world
+                .boss_drone_goal(boss, 100, boss.pos + V2::new(1100., 0.), 0)
+                .distance(boss.pos)
+                < 200.
+        );
+    }
+
+    #[test]
+    fn boss_drones_observe_cover_protection_and_new_player_grace() {
+        let mut world = arena();
+        world.spawn_boss(BossKind::Summoner);
+        world.bosses[0].pos = V2::new(1600., 1300.);
+        world.tanks[0].pos = V2::new(2200., 1300.);
+        world.tanks[0].level = 1;
+        let boss = &world.bosses[0];
+        assert_ne!(
+            world.boss_drone_goal(boss, 100, boss.pos, 0),
+            world.tanks[0].pos
+        );
+        world.tanks[0].level = 45;
+        world.tanks[0].protection = 5.;
+        assert_ne!(
+            world.boss_drone_goal(boss, 100, boss.pos, 0),
+            world.tanks[0].pos
+        );
+        world.tanks[0].protection = 0.;
+        world.walls.push(Rect {
+            x: 1900.,
+            y: 1000.,
+            w: 50.,
+            h: 600.,
+        });
+        assert_ne!(
+            world.boss_drone_goal(boss, 100, boss.pos, 0),
+            world.tanks[0].pos
+        );
+        world.walls.clear();
+        assert_eq!(
+            world.boss_drone_goal(boss, 100, boss.pos, 0),
+            world.tanks[0].pos
+        );
+    }
+
+    #[test]
+    fn secondary_warnings_pause_primary_fire_and_leave_a_recovery_gap() {
+        for kind in BossKind::ALL {
+            let mut world = arena();
+            world.tanks[0].pos = V2::new(2450., 1300.);
+            world.spawn_boss(kind);
+            world.bosses[0].pos = V2::new(1600., 1300.);
+            world.bosses[0].arrival = 0.;
+            world.bosses[0].timer = 0.;
+            world.bosses[0].attack_timer = 0.;
+            world.update_bosses();
+            assert!(
+                world.projectiles.is_empty(),
+                "{kind:?} hid its windup behind a primary volley"
+            );
+            for _ in 0..55 {
+                world.update_bosses();
+            }
+            assert!(
+                !world.projectiles.is_empty(),
+                "{kind:?} did not release its secondary"
+            );
+            let shots = world.projectiles.len();
+            for _ in 0..20 {
+                world.update_bosses();
+            }
+            assert_eq!(
+                world.projectiles.len(),
+                shots,
+                "{kind:?} overlapped its recovery gap"
+            );
+        }
     }
 
     #[test]

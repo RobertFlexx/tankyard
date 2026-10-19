@@ -54,6 +54,12 @@ impl UdpServer {
         };
         validate_arguments(verb, args.clone().count())?;
         match verb {
+            "creator-admin" => match args.next().unwrap_or("status") {
+                "on" => self.set_creator_admin(true),
+                "off" => self.set_creator_admin(false),
+                "status" => Ok(format!("Creator administration: {}", if self.creator_admin_available() { "enabled by operator" } else { "disabled" })),
+                _ => Err(NetError("expected on, off, or status".into())),
+            },
             "owner-client"=>{
                 let client:u64=args.next().ok_or_else(||NetError("expected client ID".into()))?.parse().map_err(|_|NetError("invalid client ID".into()))?;
                 self.local_role(client,tankyard_protocol::ServerRole::Owner)?;Ok("Server owner assigned.".into())
@@ -65,7 +71,7 @@ impl UdpServer {
                 self.local_role(client,role)?;Ok("Server role updated.".into())
             },
             "reload-mods"=>{self.reload_mods()?;Ok("Mods reloaded; a new round has started.".into())},
-            "help" => Ok("Commands: status, players, maps, owner-client <client>, role <entity> <player|moderator|admin|owner>, kick <entity>, ban <entity> [minutes], unban <ip>, bans, bots <count>, difficulty <name>, mode <name>, map <id>, restart, reload-mods, save [path], shutdown".into()),
+            "help" => Ok("Commands: status, players, maps, owner-client <client>, role <entity> <player|moderator|admin|owner>, kick <entity>, ban <entity> [minutes], unban <ip>, bans, bots <count>, difficulty <name>, mode <name>, map <id>, restart, reload-mods, creator-admin [on|off|status], save [path], shutdown".into()),
             "status" => {
                 let timing = self.metrics.tick_timing();
                 Ok(format!("{} | {} on {} | round {} | {} humans + {} bots | {} AI | tick {} | tick average/p95/p99/max {:.1} / {} / {} / {} us | snapshot last/max {} / {} us | {} projectiles, {} targets | {} snapshots, {} KiB payload | {} skipped snapshots | {} dropped catch-up ticks",
@@ -186,7 +192,7 @@ fn validate_arguments(verb: &str, count: usize) -> Result<(), NetError> {
         "owner-client" | "kick" | "unban" | "bots" | "mode" | "map" | "difficulty" => count == 1,
         "role" => count == 2,
         "ban" => (1..=2).contains(&count),
-        "save" => count <= 1,
+        "save" | "creator-admin" => count <= 1,
         "help" | "status" | "players" | "maps" | "bans" | "reload-mods" | "restart"
         | "shutdown" | "quit" => count == 0,
         _ => true,
