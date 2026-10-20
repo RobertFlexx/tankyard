@@ -123,3 +123,11 @@ The verified creator has a gold **Game Creator** badge. Sharing an arena with an
 Server hosts can open moderation with the Server button or F8. Creator and central-owner menus require the matching private key; see [server administration](creator-administration.md). Warnings and announcements appear in a centered banner and can be dismissed.
 
 Owner tools also have a bottom-right toggle. If the server cannot authorize the central-owner identity, clicking it explains the missing setup. Creator tools → Maps applies a map from the server's catalog, preserving tank progress and clearing transient shots. A layout that cannot safely fit current tanks, bosses or objectives is rejected.
+
+## Parties, maps and the tank tree
+
+[Parties](parties.md) let friends join a private match on the leader's computer with a random IP invite. Play co-op waves, Boss Rush or other offline modes together; allied bots fill empty team slots. Internet play requires a reachable host and UDP port forwarding. Invite access never grants the leader's tools.
+
+Dedicated servers rotate to an appropriate map every two hours of process uptime, even while empty. The bottom-left timer continues through round changes. Hosts can set `map_rotation_seconds = 0` to disable rotation; private parties disable it by default.
+
+The Tank tree shows every upgrade connection. Scroll over the tree to zoom around the pointer. Drag empty space, or use the middle/right mouse button, to pan. Click a tank for its model, strengths and tradeoffs. Fit all restores the overview; Focus centers and enlarges the selected tank. Background gameplay on the main menu pauses with Reduced motion.

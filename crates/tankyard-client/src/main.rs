@@ -5,6 +5,7 @@ compile_error!(
 );
 
 mod accessibility;
+mod ambient;
 mod central_owner;
 mod community_ui;
 mod creator;
@@ -23,6 +24,7 @@ mod server_browser;
 mod session;
 mod settings;
 mod startup;
+mod tank_tree;
 mod ui_layout;
 mod ui_text;
 use tankyard_client::achievements;
@@ -124,6 +126,15 @@ fn window_conf(cli: &Cli) -> Conf {
         },
         ..Default::default()
     }
+}
+fn connection_label(address: &str) -> String {
+    address
+        .strip_prefix("tankyard://party/")
+        .and_then(|invite| invite.split_once('#'))
+        .map_or_else(
+            || address.to_owned(),
+            |(endpoint, _)| format!("Party at {endpoint}"),
+        )
 }
 struct PendingJoin {
     result: std::sync::mpsc::Receiver<Result<Session, String>>,
@@ -305,6 +316,11 @@ impl App {
         ui_layout::scale(screen_width(), screen_height(), self.settings.ui_scale)
     }
     fn launch(&mut self, mut session: Session) {
+        self.menu.party_invite = session.party_invite.clone();
+        self.menu.party_address = session
+            .party_invite
+            .as_ref()
+            .map_or_else(String::new, |invite| invite.address.to_string());
         self.creator.reset_controls();
         self.creator.authenticate(&mut session);
         self.central_owner.authenticate(&mut session);
@@ -353,6 +369,18 @@ impl App {
         match action {
             Action::None => {}
             Action::Page(page) => {
+                if page == Page::Modes && self.menu.page != Page::Party {
+                    self.menu.party_setup = false;
+                }
+                if page == Page::Party
+                    && self
+                        .session
+                        .as_ref()
+                        .is_none_or(|session| session.party_invite.is_none())
+                {
+                    self.menu.select_mode(Mode::CoopPve);
+                    self.menu.bots = 4;
+                }
                 self.save_menu_settings();
                 self.menu.go(page);
             }
@@ -406,6 +434,52 @@ impl App {
                         self.launch(session);
                     }
                     Err(error) => self.menu.error = error,
+                }
+            }
+            Action::CreateParty => {
+                match Session::party(
+                    self.menu.config(),
+                    self.menu.bots.clamp(2, 8),
+                    &self.settings.player_name,
+                    self.menu.difficulty_name(),
+                    self.settings
+                        .enabled_mods
+                        .iter()
+                        .map(std::path::PathBuf::from)
+                        .collect(),
+                ) {
+                    Ok(session) => {
+                        self.launch(session);
+                        self.open_menu(Page::Party);
+                    }
+                    Err(error) => self.menu.error = error,
+                }
+            }
+            Action::JoinParty => {
+                let invite = self.menu.party_input.trim().to_owned();
+                match tankyard_server::party::Invite::parse(&invite) {
+                    Ok(_) => self.begin_join(invite, String::new(), Page::Party),
+                    Err(error) => self.menu.error = error.to_string(),
+                }
+            }
+            Action::CopyParty => {
+                if let Some(invite) = &mut self.menu.party_invite {
+                    match self.menu.party_address.parse::<std::net::SocketAddr>() {
+                        Ok(address)
+                            if address.port() > 0
+                                && !address.ip().is_unspecified()
+                                && !address.ip().is_multicast() =>
+                        {
+                            invite.address = address;
+                            miniquad::window::clipboard_set(&invite.link());
+                            self.menu.error =
+                                "Invite copied. Share it privately with your friends.".into();
+                        }
+                        _ => {
+                            self.menu.error =
+                                "Enter a reachable IP:PORT, for example 192.168.1.8:5000.".into()
+                        }
+                    }
                 }
             }
             Action::Host => match Session::host(
@@ -517,18 +591,25 @@ impl App {
             let pending = self.pending_join.take().unwrap();
             match outcome {
                 Ok(session) => {
-                    self.settings.remember_server(&pending.address);
+                    if !pending.address.starts_with("tankyard://party/") {
+                        self.settings.remember_server(&pending.address);
+                    }
                     let _ = self.settings.save();
                     self.launch(session);
                 }
                 Err(error) => {
                     self.menu.reset(pending.return_page);
-                    self.menu.error = format!("Could not connect to {}: {error}", pending.address);
+                    self.menu.error = format!(
+                        "Could not connect to {}: {error}",
+                        connection_label(&pending.address)
+                    );
                 }
             }
         }
     }
     fn finish_session(&mut self) {
+        self.menu.party_invite = None;
+        self.menu.party_roster.clear();
         self.voice.reset();
         self.save_progress();
         self.community = community_ui::CommunityUi::default();
@@ -1221,7 +1302,11 @@ impl App {
                 CYAN,
             );
             center_label(
-                &pending.address,
+                &fitted_label(
+                    &connection_label(&pending.address),
+                    18. * s,
+                    screen_width() - 44. * s,
+                ),
                 screen_width() * 0.5,
                 screen_height() * 0.42 + 40.0 * s,
                 18.0 * s,
@@ -1245,6 +1330,18 @@ impl App {
         }
         if self.session.is_none() || self.menu_over_game {
             let menu_scale = s;
+            self.menu.party_roster = self
+                .session
+                .as_ref()
+                .and_then(|session| session.display.as_ref())
+                .map_or_else(Vec::new, |snapshot| {
+                    snapshot
+                        .tanks
+                        .iter()
+                        .filter(|tank| !tank.bot)
+                        .map(|tank| tank.display_name())
+                        .collect()
+                });
             let action = self.menu.draw(
                 &self.content,
                 &mut self.settings,
@@ -1270,7 +1367,13 @@ impl App {
         let server_height = server_notice.map_or(0., |notice| {
             notifications::server_notice_rect(notice, s, 0.).h + 8. * s
         });
-        let overlays = notifications::top_overlays(
+        let axiom = self
+            .session
+            .as_ref()
+            .and_then(|session| session.display.as_ref())
+            .and_then(|snapshot| snapshot.tanks.iter().find(|t| t.creator_boss && t.alive));
+        let axiom_height = if axiom.is_some() { 61. * s } else { 0. };
+        let mut overlays = notifications::top_overlays(
             screen_height(),
             s,
             self.effects.boss_arrival.is_some(),
@@ -1283,6 +1386,11 @@ impl App {
             },
             unobscured && self.effects.notice_life > 0.,
         );
+        overlays.server_y += axiom_height;
+        overlays.practice_y += axiom_height;
+        overlays.kill_y += axiom_height;
+        overlays.notice_y += axiom_height;
+        overlays.achievement_y += axiom_height;
         let mut actions = Vec::new();
         if let Some(session) = &self.session {
             set_interactive(
@@ -1343,12 +1451,38 @@ impl App {
                     session.player,
                     &self.settings,
                     session.diagnostics(),
+                    session.map_remaining(),
                     s,
                     &self.view,
                 );
+                if let Some(axiom) = axiom {
+                    let r = hud::boss_banner_layout(screen_width(), s);
+                    let r = Rect::new(r.x, 106. * s, r.w, 52. * s);
+                    panel(r);
+                    center_label(
+                        &fitted_label(tankyard_core::creator_boss::NAME, 16. * s, r.w - 20. * s),
+                        r.center().x,
+                        r.y + 20. * s,
+                        16. * s,
+                        AMBER,
+                    );
+                    arcade_track(
+                        Rect::new(r.x + 14. * s, r.y + 31. * s, r.w - 28. * s, 12. * s),
+                        axiom.health / axiom.max_health,
+                        CYAN,
+                    );
+                    center_label(
+                        &format!("{:.0} / {:.0}", axiom.health.max(0.), axiom.max_health),
+                        r.center().x,
+                        r.y + 41. * s,
+                        9. * s,
+                        text_color(),
+                    );
+                }
                 if let Some((kind, life)) = self.effects.boss_arrival {
                     let opacity = (life / 0.4).min(1.);
-                    let rect = hud::boss_banner_layout(screen_width(), s);
+                    let mut rect = hud::boss_banner_layout(screen_width(), s);
+                    rect.y += axiom_height;
                     let width = rect.w;
                     let y = rect.y;
                     panel(rect);
@@ -1412,7 +1546,11 @@ impl App {
                     CYAN,
                 );
                 center_label(
-                    &self.connecting_address,
+                    &fitted_label(
+                        &connection_label(&self.connecting_address),
+                        18. * s,
+                        screen_width() - 44. * s,
+                    ),
                     screen_width() * 0.5,
                     screen_height() * 0.45 + 38.0 * s,
                     18.0 * s,
@@ -1714,6 +1852,13 @@ impl App {
         if offline {
             items.push("Restart [F5]");
         }
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.party_invite.is_some())
+        {
+            items.push("Party invites");
+        }
         items.extend(["Return to menu", "Quit"]);
         for (index, name) in items.iter().enumerate() {
             if button(
@@ -1734,6 +1879,7 @@ impl App {
                     "Controls [F1]" => self.open_menu(Page::Controls),
                     "Practice [F6]" => self.open_menu(Page::Practice),
                     "Tank tree" => self.open_menu(Page::Encyclopedia),
+                    "Party invites" => self.open_menu(Page::Party),
                     "Restart [F5]" => self.restart_offline(),
                     "Return to menu" => self.finish_session(),
                     _ => self.quit = true,

@@ -159,6 +159,18 @@ impl World {
             if self.content.class(class).is_some() {
                 self.set_class(id, class);
             }
+            let priority = if class == "booster" {
+                [7, 2, 0, 1, 6, 5, 4, 3]
+            } else if matches!(class, "sentryweb" | "anchor") {
+                [6, 4, 5, 0, 3, 7, 1, 2]
+            } else {
+                [6, 5, 3, 4, 7, 0, 1, 2]
+            };
+            for stat in priority {
+                for _ in 0..(2 + wave / 3).min(7) {
+                    self.upgrade_stat(id, stat);
+                }
+            }
             if let Some(tank) = self.tanks.iter_mut().find(|tank| tank.id == id) {
                 tank.team = 2;
                 tank.pos = pos;

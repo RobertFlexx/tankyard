@@ -53,6 +53,27 @@ pub fn verify_creator_command(message: &[u8], signature: &[u8]) -> bool {
             .is_ok()
 }
 
+pub fn party_challenge(client: u64, nonce: &[u8; 32], server: &str, admin: &[u8; 32]) -> Vec<u8> {
+    let mut message = b"Tank Yard party entry v1\0".to_vec();
+    message.extend_from_slice(&creator_challenge(client, nonce, server));
+    message.extend_from_slice(admin);
+    message
+}
+
+pub fn verify_party(
+    public: &[u8; 32],
+    client: u64,
+    nonce: &[u8; 32],
+    server: &str,
+    admin: &[u8; 32],
+    signature: &[u8],
+) -> bool {
+    signature.len() == 64
+        && UnparsedPublicKey::new(&ED25519, public)
+            .verify(&party_challenge(client, nonce, server, admin), signature)
+            .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +105,49 @@ mod tests {
             assert_ne!(message, changed);
         }
         assert!(!verify_creator_command(&message, &[0; 64]));
+    }
+}
+
+#[cfg(test)]
+mod party_tests {
+    use super::*;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+    #[test]
+    fn party_proofs_cannot_replay_across_connections_or_replace_the_admin_key() {
+        let key = Ed25519KeyPair::from_seed_unchecked(&[11; 32]).unwrap();
+        let public: [u8; 32] = key.public_key().as_ref().try_into().unwrap();
+        let message = party_challenge(3, &[4; 32], "party", &[5; 32]);
+        let signature = key.sign(&message);
+        assert!(verify_party(
+            &public,
+            3,
+            &[4; 32],
+            "party",
+            &[5; 32],
+            signature.as_ref()
+        ));
+        for (id, nonce, server, admin) in [
+            (4, [4; 32], "party", [5; 32]),
+            (3, [7; 32], "party", [5; 32]),
+            (3, [4; 32], "other", [5; 32]),
+            (3, [4; 32], "party", [8; 32]),
+        ] {
+            assert!(!verify_party(
+                &public,
+                id,
+                &nonce,
+                server,
+                &admin,
+                signature.as_ref()
+            ));
+        }
+        assert!(!verify_party(
+            &[0; 32],
+            3,
+            &[4; 32],
+            "party",
+            &[5; 32],
+            signature.as_ref()
+        ));
     }
 }

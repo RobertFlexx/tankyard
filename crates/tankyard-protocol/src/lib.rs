@@ -15,8 +15,8 @@ pub use community::*;
 mod voice;
 pub use voice::*;
 
-pub const PROTOCOL_VERSION: u32 = 16;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0010;
+pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0011;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -89,6 +89,7 @@ pub enum ClientControl {
         password: String,
         account_token: Option<String>,
         admin_key: [u8; 32],
+        party_proof: Option<Vec<u8>>,
     },
     UpgradeStat {
         stat: u8,
@@ -150,11 +151,13 @@ impl ClientControl {
                 name,
                 password,
                 account_token,
+                party_proof,
                 ..
             } => {
                 name.len() <= 96
                     && password.len() <= 128
                     && account_token.as_ref().is_none_or(|s| s.len() <= 1024)
+                    && party_proof.as_ref().is_none_or(|s| s.len() == 64)
             }
             Self::UpgradeStat { stat, count } => *stat < 8 && (1..=7).contains(count),
             Self::Evolve { class } | Self::SandboxClass { class } => valid_class_id(class),
@@ -180,6 +183,13 @@ impl ClientControl {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerControl {
+    PartyChallenge {
+        nonce: [u8; 32],
+        server_id: String,
+    },
+    MapRotation {
+        remaining: u32,
+    },
     AdminChallenge {
         nonce: [u8; 32],
         server_id: String,
@@ -510,6 +520,10 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && (0.25..=8.).contains(&t.damage_scale)
                 && (0.0..=1.).contains(&t.knockback)
                 && (0.0..=tankyard_core::STASIS_SECONDS).contains(&t.stasis)
+                && (!t.creator_boss || t.game_creator)
+                && t.creator_attacks.iter().all(|v| {
+                    v.is_finite() && (0.0..=tankyard_core::creator_boss::MAX_COOLDOWN).contains(v)
+                })
                 && t.stats.iter().all(|stat| *stat <= 7)
                 && t.points <= 38
                 && t.team <= 4

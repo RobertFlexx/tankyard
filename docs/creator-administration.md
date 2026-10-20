@@ -1,8 +1,10 @@
 # Server administration
 
-Any v0.4.0 game client can use creator or central-owner tools when it holds the corresponding private signing key. Menu and verification code are public and reviewable. Public binaries and GitHub contain no private signing credentials. The optional self-contained credential editions remain private.
+Any current game client can use creator or central-owner tools when it holds the corresponding private signing key. Menu and verification code are public and reviewable. Public binaries and GitHub contain no private signing credentials. The optional self-contained credential editions remain private.
 
 Version 0.4.1 adds a bottom-right owner toggle with authorization diagnostics and a Maps tab in the creator panel. Map changes are signed, audited and checked against the server's catalog. They retain identities, roles, upgrades and scores, refresh map-dependent objects and projectiles, and roll back if current entities cannot fit safely.
+
+Version 0.5.0 expands the console and adds **Showtime → Become Axiom**. Axiom, the Worldshaper has an original model, 120,000 health and a shared top-screen health bar. Its 180-unit body radius exceeds every regular boss. Collapse the console to move and use twelve attacks in the grouped panel: Starfall, Sunburst, Comet Lance and Meteor Shower; Constellation, Repulse, Gravity Well and Rift Dash; Nova Mines, Star Lattice, Solar Turrets and Reforge. Hover an attack to see its effect. Rift Dash stops at walls and borders; Reforge heals eight percent with a thirty-second cooldown. The server enforces cooldowns, projectile limits and protected-player damage rules. Returning to the tank or resetting restores class stats; revocation also removes the form's shots. Death and a new round remove the form. This is a modified event round and does not record normal arena progress. The central-owner role has no access to this form.
 
 ## Roles and scope
 
@@ -53,4 +55,4 @@ Creator and central-owner access require writable request auditing before privil
 
 ## Central Pi deployment
 
-See [the Pi/Docker upgrade steps](central-pi-upgrade.md). Publishing a release does not replace the running server. Version 0.4.0 uses protocol **16**: clients, server and relay must update together. No creator-server binary or server-side private identity key is needed.
+See [the Pi/Docker upgrade steps](central-pi-upgrade.md). Publishing a release does not replace the running server. Version 0.5.0 uses protocol **17**: clients, server and relay must update together. No creator-server binary or server-side private identity key is needed.

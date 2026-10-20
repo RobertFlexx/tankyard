@@ -25,6 +25,9 @@ input_timeout = 0.5
 ban_file = "configs/bans.json"
 round_restart_seconds = 10.0
 
+# Uptime-based map rotation; zero disables it.
+map_rotation_seconds = 7200
+
 [world]
 dynamic_arena = true
 width = 3600.0

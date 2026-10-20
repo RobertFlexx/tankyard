@@ -269,6 +269,65 @@ pub fn boss_model_geometry(
     }
 }
 
+/// Axiom: six articulated cannon petals around an armored geometric astrolabe.
+pub fn axiom_geometry(p: Vec2, r: f32, aim: f32, time: f32, emit: &mut impl FnMut(Primitive)) {
+    let gold = Color::new(1., 0.79, 0.34, 1.);
+    let teal = Color::new(0.20, 0.80, 0.87, 1.);
+    let armor = Color::new(0.23, 0.31, 0.39, 1.);
+    let edge = (r * 0.035).max(0.7);
+    let phase = time * 0.17;
+    for i in 0..6 {
+        let a = aim + i as f32 * TAU / 6.;
+        let d = vec2(a.cos(), a.sin());
+        cannon_profile(
+            emit,
+            p + d * r * 0.47,
+            a,
+            r * 0.82,
+            r * 0.20,
+            armor,
+            0.,
+            1.25,
+            Some(edge),
+        );
+        hull(
+            emit,
+            p + d * r * 0.91,
+            4,
+            r * 0.16,
+            a + FRAC_PI_4,
+            gold,
+            edge * 0.6,
+        );
+    }
+    hull(emit, p, 12, r * 0.94, phase, armor, edge);
+    hull(emit, p, 6, r * 0.78, -phase, gold, edge);
+    hull(emit, p, 6, r * 0.66, -phase, armor, edge * 0.6);
+    for i in 0..6 {
+        let a = phase + i as f32 * TAU / 6.;
+        hull(
+            emit,
+            p + vec2(a.cos(), a.sin()) * r * 0.84,
+            4,
+            r * 0.08,
+            a + FRAC_PI_4,
+            teal,
+            edge * 0.5,
+        );
+    }
+    hull(emit, p, 6, r * 0.47, phase, teal, edge);
+    hull(emit, p, 6, r * 0.34, -phase, armor, edge * 0.7);
+    hull(emit, p, 4, r * 0.23, phase + FRAC_PI_4, gold, edge * 0.6);
+    poly(
+        emit,
+        p,
+        4,
+        r * 0.12,
+        phase + FRAC_PI_4,
+        Color::new(1., 0.96, 0.78, 1.),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

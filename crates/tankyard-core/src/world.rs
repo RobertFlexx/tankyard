@@ -285,6 +285,8 @@ impl World {
             damage_scale: 1.,
             stasis: 0.,
             game_creator: false,
+            creator_boss: false,
+            creator_attacks: [0.; crate::creator_boss::ATTACK_COUNT],
             server_badge: Default::default(),
         });
         if matches!(self.config.mode, Mode::Deathmatch | Mode::Sandbox) {
@@ -486,6 +488,16 @@ impl World {
         };
         let def = self.content.class(&t.class);
         let old = t.max_health;
+        if t.creator_boss {
+            t.max_health = crate::creator_boss::HEALTH;
+            t.radius = crate::creator_boss::RADIUS;
+            t.health = if heal {
+                t.max_health
+            } else {
+                t.health.min(t.max_health)
+            };
+            return;
+        }
         t.max_health = 100.
             * self.config.rules.health_multiplier
             * stat_scale(t.stats[0])
@@ -610,6 +622,9 @@ impl World {
                     respawns.push(tank.id);
                 }
                 continue;
+            }
+            for cooldown in &mut tank.creator_attacks {
+                *cooldown = (*cooldown - DT).max(0.);
             }
             crate::physics::update_protection(tank, DT);
             if self
@@ -1002,6 +1017,8 @@ impl World {
                 )
             };
             let killer_team = self.tanks.iter().find(|t| t.id == killer).map(|t| t.team);
+            self.tanks[i].creator_boss = false;
+            self.tanks[i].creator_attacks = [0.; crate::creator_boss::ATTACK_COUNT];
             self.tanks[i].last_attacker = 0;
             self.tanks[i].damaged_at = self.tick;
             if self.config.mode == Mode::Tag

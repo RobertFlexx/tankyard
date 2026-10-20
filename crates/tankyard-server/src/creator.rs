@@ -9,25 +9,58 @@ use tankyard_protocol::ServerCommand;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
-    Boss { kind: BossKind },
-    Bots { count: usize },
-    God { enabled: bool },
-    Ability { unlimited: bool },
-    Speed { value: f32 },
-    Damage { value: f32 },
-    Reload { value: f32 },
-    Level { value: u8 },
-    Class { id: String },
-    Map { id: String },
+    Boss {
+        kind: BossKind,
+    },
+    Form {
+        enabled: bool,
+    },
+    Attack {
+        kind: tankyard_core::creator_boss::Attack,
+    },
+    Bots {
+        count: usize,
+    },
+    God {
+        enabled: bool,
+    },
+    Ability {
+        unlimited: bool,
+    },
+    Speed {
+        value: f32,
+    },
+    Damage {
+        value: f32,
+    },
+    Reload {
+        value: f32,
+    },
+    Level {
+        value: u8,
+    },
+    Class {
+        id: String,
+    },
+    Map {
+        id: String,
+    },
     Heal,
     FullBuild,
     ClearProjectiles,
     ClearBosses,
-    FreezeBots { enabled: bool },
-    Teleport { x: f32, y: f32 },
+    FreezeBots {
+        enabled: bool,
+    },
+    Teleport {
+        x: f32,
+        y: f32,
+    },
     EliminateEnemies,
     Reset,
-    Moderate { command: ServerCommand },
+    Moderate {
+        command: ServerCommand,
+    },
 }
 
 pub(crate) fn handle(
@@ -166,6 +199,8 @@ pub fn apply(
         return Err("Invalid creator command or value outside its allowed range.".into());
     }
     match command {
+        Command::Form { enabled } => world.creator_form(player, enabled)?,
+        Command::Attack { kind } => world.creator_attack(player, kind)?,
         Command::Boss { kind } => {
             if world.spawn_boss(kind) == 0 {
                 return Err("No clear space for another boss.".into());
@@ -236,6 +271,7 @@ pub fn apply(
             }
         }
         Command::Reset => {
+            world.creator_form(player, false)?;
             world.admin_modifiers.remove(&player);
             world.bots_frozen = false;
             world.tanks[index].speed_scale = 1.;

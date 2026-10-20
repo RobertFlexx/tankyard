@@ -128,6 +128,10 @@ impl UdpServer {
             "bots" => {
                 let count: usize = args.next().ok_or_else(|| NetError("expected a bot count".into()))?.parse().map_err(|_| NetError("invalid bot count".into()))?;
                 if count > 128 || count + self.settings.max_players > 256 { return Err(NetError("bot count exceeds configured resource limits".into())); }
+                if let Some(party) = &mut self.settings.party {
+                    if !(2..=8).contains(&count) { return Err(NetError("Party team size must be between two and eight.".into())); }
+                    party.ally_slots = count;
+                }
                 self.settings.bot_count = count;
                 self.sync_bots();
                 self.broadcast_match_settings();

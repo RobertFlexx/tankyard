@@ -27,6 +27,8 @@ pub struct NetworkClient {
     pub error: Option<String>,
     pub last_action: Option<String>,
     pub match_settings: Option<MatchSettings>,
+    party_key: Option<Ed25519KeyPair>,
+    pub map_rotation: Option<(u32, std::time::Instant)>,
     pub server_name: String,
     pub sandbox_allowed: bool,
     pub address: SocketAddr,
@@ -67,6 +69,12 @@ pub struct NetworkClient {
 
 impl NetworkClient {
     pub fn connect(address: &str, name: &str, password: &str) -> Result<Self, NetError> {
+        if address.starts_with("tankyard://party/") {
+            let invite = crate::party::Invite::parse(address)?;
+            let mut client = Self::connect(&invite.address.to_string(), name, "")?;
+            client.party_key = Some(invite.key());
+            return Ok(client);
+        }
         if address.len() > 256 || password.len() > 128 {
             return Err(NetError("server address or password is too long".into()));
         }
@@ -167,6 +175,8 @@ impl NetworkClient {
             error: None,
             last_action: None,
             match_settings: None,
+            party_key: None,
+            map_rotation: None,
             server_name: String::new(),
             sandbox_allowed: false,
             address,
@@ -179,6 +189,7 @@ impl NetworkClient {
                 password: password.into(),
                 account_token,
                 admin_key: admin_public_key,
+                party_proof: None,
             },
             hello_sent: false,
             tick_rate: 60,
@@ -246,6 +257,34 @@ impl NetworkClient {
                 Err(e) => return self.fail(e.to_string()),
             };
             match control {
+                ServerControl::MapRotation { remaining } => {
+                    if remaining > 604800 {
+                        return self.fail("Invalid map rotation timer.".into());
+                    }
+                    self.map_rotation =
+                        (remaining > 0).then_some((remaining, std::time::Instant::now()));
+                }
+                ServerControl::PartyChallenge { nonce, server_id } => {
+                    let Some(key) = &self.party_key else {
+                        return self.fail(
+                            "A party invite is required. Paste the full invite link.".into(),
+                        );
+                    };
+                    if !crate::access::account_id(&server_id) {
+                        return self.fail("Invalid party identity.".into());
+                    }
+                    let message = party_challenge(
+                        self.client_id(),
+                        &nonce,
+                        &server_id,
+                        &self.admin_public_key(),
+                    );
+                    let signature = key.sign(&message).as_ref().to_vec();
+                    if let ClientControl::Hello { party_proof, .. } = &mut self.hello {
+                        *party_proof = Some(signature);
+                    }
+                    self.hello_sent = false;
+                }
                 ServerControl::VoiceStatus { enabled, muted } => {
                     self.voice_enabled = enabled;
                     self.voice_muted = muted;

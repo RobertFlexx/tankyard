@@ -7,7 +7,6 @@ struct Canvas {
     height: f32,
     offset: f32,
     clip: Rect,
-    scrollable: bool,
 }
 thread_local! { static CANVAS: Cell<Option<Canvas>> = const { Cell::new(None) }; }
 pub fn height() -> f32 {
@@ -23,9 +22,6 @@ pub fn position(p: Vec2) -> Vec2 {
 pub fn pointer_visible() -> bool {
     let (x, y) = mouse_position();
     CANVAS.with(|c| c.get().is_none_or(|c| c.clip.contains(vec2(x, y))))
-}
-pub fn scrolling() -> bool {
-    CANVAS.with(|c| c.get().is_some_and(|c| c.scrollable))
 }
 pub fn visible_y(top: f32, bottom: f32) -> bool {
     CANVAS.with(|c| {
@@ -136,7 +132,6 @@ impl ScrollPanel {
                 height,
                 offset: self.offset,
                 clip,
-                scrollable: maximum > 0.,
             }));
         });
         unsafe {
@@ -169,6 +164,41 @@ impl Drop for CanvasGuard {
             gl.quad_gl.scissor(None);
         }
         CANVAS.with(|c| c.set(None));
+    }
+}
+
+/// Clip a self-contained canvas using the active render target's real dimensions.
+pub struct Scissor;
+impl Scissor {
+    pub fn new(rect: Rect) -> Self {
+        unsafe {
+            let gl = get_internal_gl();
+            let physical = gl.quad_gl.get_active_render_pass().map_or_else(
+                miniquad::window::screen_size,
+                |pass| {
+                    let (w, h) = gl
+                        .quad_context
+                        .texture_size(gl.quad_context.render_pass_texture(pass));
+                    (w as f32, h as f32)
+                },
+            );
+            let sx = physical.0 / screen_width().max(1.);
+            let sy = physical.1 / screen_height().max(1.);
+            gl.quad_gl.scissor(Some((
+                (rect.x * sx).floor() as i32,
+                (rect.y * sy).floor() as i32,
+                (rect.w * sx).ceil() as i32,
+                (rect.h * sy).ceil() as i32,
+            )));
+        }
+        Self
+    }
+}
+impl Drop for Scissor {
+    fn drop(&mut self) {
+        unsafe {
+            get_internal_gl().quad_gl.scissor(None);
+        }
     }
 }
 

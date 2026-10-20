@@ -291,6 +291,75 @@ pub fn wall_geometry(
     }
 }
 
+/// Sparse original floor emblems. These are decoration, never invisible cover.
+pub fn landmark_geometry(
+    map: &str,
+    bounds: tankyard_core::Rect,
+    walls: &[tankyard_core::Rect],
+    dark: bool,
+    quality: u8,
+    emit: &mut impl FnMut(Primitive),
+) {
+    if quality == 0 || map == "open" {
+        return;
+    }
+    let radius = (bounds.w.min(bounds.h) * 0.018).clamp(14., 44.);
+    let shade = if dark {
+        Color::new(0.28, 0.35, 0.38, 0.42)
+    } else {
+        Color::new(0.39, 0.48, 0.48, 0.18)
+    };
+    for [nx, ny] in [
+        [0.22, 0.22],
+        [0.50, 0.22],
+        [0.78, 0.22],
+        [0.22, 0.50],
+        [0.78, 0.50],
+        [0.22, 0.78],
+        [0.50, 0.78],
+        [0.78, 0.78],
+    ] {
+        let point = tankyard_core::V2::new(bounds.x + nx * bounds.w, bounds.y + ny * bounds.h);
+        if !bounds.contains_circle(point, radius * 1.4)
+            || walls.iter().any(|&wall| {
+                tankyard_core::physics::circle_rect(point, radius * 1.4, wall).is_some()
+            })
+        {
+            continue;
+        }
+        let center = vec2(point.x, point.y);
+        let spokes = if map == "dense" { 4 } else { 6 };
+        for i in 0..spokes {
+            let angle = i as f32 * std::f32::consts::TAU / spokes as f32;
+            let d = vec2(angle.cos(), angle.sin());
+            let p = center + d * radius * 0.62;
+            if map == "dense" {
+                polygon(p, radius * 0.26, 4, angle, shade, emit);
+                polygon(p + d * radius * 0.23, radius * 0.12, 4, angle, shade, emit);
+            } else {
+                let tangent = vec2(-d.y, d.x) * radius * 0.07;
+                emit(Primitive::Quad {
+                    vertices: [
+                        center + d * radius * 0.32 - tangent,
+                        center + d * radius * 0.32 + tangent,
+                        center + d * radius + tangent,
+                        center + d * radius - tangent,
+                    ],
+                    color: shade,
+                });
+            }
+        }
+        polygon(
+            center,
+            radius * 0.14,
+            if map == "dense" { 4 } else { 6 },
+            0.,
+            shade,
+            emit,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

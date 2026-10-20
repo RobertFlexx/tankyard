@@ -15,6 +15,9 @@ adaptive_bots = true
 max_players = 64
 ban_file = "configs/official-bans.json"
 
+# Uptime-based map rotation; zero disables it.
+map_rotation_seconds = 7200
+
 [world]
 dynamic_arena = true
 width = 3600.0

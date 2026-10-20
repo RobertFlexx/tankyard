@@ -11,7 +11,7 @@ use crate::{
 };
 use macroquad::prelude::*;
 use tankyard_client::achievements::{ACHIEVEMENTS, AchievementMode};
-use tankyard_content::{Ability, ClassDef, Content};
+use tankyard_content::Content;
 use tankyard_core::{Mode, WorldConfig};
 
 // Baselines and button rows in the Display tab. Keep the damn labels out
@@ -41,6 +41,7 @@ pub enum Page {
     Credits,
     Practice,
     Controls,
+    Party,
 }
 pub enum Action {
     None,
@@ -49,6 +50,9 @@ pub enum Action {
     QuickPlay,
     Offline,
     Host,
+    CreateParty,
+    JoinParty,
+    CopyParty,
     Join,
     Quit,
     Save,
@@ -58,6 +62,12 @@ pub enum Action {
 }
 pub struct Menu {
     pub page: Page,
+    pub party_setup: bool,
+    pub party_invite: Option<tankyard_server::party::Invite>,
+    pub party_address: String,
+    pub party_input: String,
+    party_focus: bool,
+    pub party_roster: Vec<String>,
     pub mode: Mode,
     pub map: usize,
     pub bots: usize,
@@ -70,12 +80,13 @@ pub struct Menu {
     pub address_active: bool,
     pub password_active: bool,
     pub class_index: usize,
-    pub class_page: usize,
     pub tree: bool,
+    tree_view: crate::tank_tree::Tree,
     pub settings_tab: usize,
     pub binding: Option<usize>,
     pub error: String,
     motion_time: f32,
+    ambient: crate::ambient::Ambient,
     scroll_panel: crate::ui_layout::ScrollPanel,
     scroll_page: Option<(Page, usize)>,
     scale_edit: crate::ui_layout::ScaleEdit,
@@ -95,6 +106,12 @@ impl Menu {
     pub fn new() -> Self {
         Self {
             page: Page::Main,
+            party_setup: false,
+            party_invite: None,
+            party_address: String::new(),
+            party_input: String::new(),
+            party_focus: false,
+            party_roster: Vec::new(),
             mode: Mode::Ffa,
             map: 0,
             bots: 12,
@@ -107,12 +124,13 @@ impl Menu {
             address_active: false,
             password_active: false,
             class_index: 0,
-            class_page: 0,
-            tree: false,
+            tree: true,
+            tree_view: crate::tank_tree::Tree::default(),
             settings_tab: 0,
             binding: None,
             error: String::new(),
             motion_time: 0.0,
+            ambient: crate::ambient::Ambient::new(),
             scroll_panel: Default::default(),
             scroll_page: None,
             scale_edit: Default::default(),
@@ -137,6 +155,7 @@ impl Menu {
         self.address_active = false;
         self.password_active = false;
         self.binding = None;
+        self.party_focus = false;
     }
     pub fn go(&mut self, page: Page) {
         if self.page != page {
@@ -167,6 +186,18 @@ impl Menu {
         }
     }
     pub fn focus_next(&mut self, reverse: bool) {
+        if self.page == Page::Party {
+            let address = self.party_invite.is_some();
+            let was_address = self.address_active;
+            let was_invite = self.party_focus;
+            self.clear_focus();
+            if address && (was_invite || (!was_address && !reverse)) {
+                self.address_active = true;
+            } else {
+                self.party_focus = true;
+            }
+            return;
+        }
         let fields: &[usize] = match self.page {
             Page::Main => &[0],
             Page::Join => &[0, 1, 2],
@@ -194,6 +225,10 @@ impl Menu {
         ["Beginner", "Normal", "Advanced", "Expert"][self.difficulty.min(3)]
     }
     pub fn select_mode(&mut self, mode: Mode) {
+        if self.mode != mode && matches!(mode, Mode::CoopPve | Mode::BossRush) && !self.party_setup
+        {
+            self.bots = 3;
+        }
         self.mode = mode;
         let map = match mode {
             Mode::Maze => "maze",
@@ -248,7 +283,11 @@ impl Menu {
         } else {
             get_time() as f32
         };
-        render::menu_background(self.motion_time);
+        if self.page == Page::Main {
+            self.ambient.draw(settings);
+        } else {
+            render::menu_grid();
+        }
         let w = screen_width();
         let h = screen_height();
         let margin = 40.0 * s;
@@ -288,6 +327,9 @@ impl Menu {
         if self.page == Page::Settings {
             self.settings_tabs(s);
         }
+        if self.page == Page::Encyclopedia {
+            return self.encyclopedia(content, s);
+        }
         let key = (
             self.page,
             if self.page == Page::Settings {
@@ -323,6 +365,7 @@ impl Menu {
             Page::Credits => self.credits(s),
             Page::Practice => self.practice(settings, s),
             Page::Controls => self.controls(settings, s),
+            Page::Party => self.party(s),
         };
         drop(canvas);
         let footer = match self.page {
@@ -469,7 +512,7 @@ impl Menu {
             ("Offline modes", Page::Modes),
             ("Tank tree", Page::Encyclopedia),
             ("Settings", Page::Settings),
-            ("Mods", Page::Mods),
+            ("Parties", Page::Party),
         ]
         .into_iter()
         .enumerate()
@@ -719,12 +762,192 @@ impl Menu {
                 260.0 * s,
                 36.0 * s,
             ),
-            "Launch offline  →",
+            if self.party_setup {
+                "Create party  →"
+            } else {
+                "Launch offline  →"
+            },
             true,
             true,
             s * 0.85,
         ) {
-            return Action::Offline;
+            return if self.party_setup {
+                Action::CreateParty
+            } else {
+                Action::Offline
+            };
+        }
+        Action::None
+    }
+    fn party(&mut self, s: f32) -> Action {
+        let x = 40. * s;
+        let gap = 26. * s;
+        let width = (screen_width() - 80. * s - gap) * 0.5;
+        let right = x + width + gap;
+        label("Play together", x, 169. * s, 27. * s, text_color());
+        wrap(
+            "Private matches run on the leader's computer. Up to eight friends can join; friendly bots fill empty team slots.",
+            x,
+            200. * s,
+            screen_width() - 80. * s,
+            16. * s,
+            muted_color(),
+        );
+        panel(Rect::new(x, 245. * s, width, 360. * s));
+        panel(Rect::new(right, 245. * s, width, 360. * s));
+        let pad = 18. * s;
+        let inner = width - pad * 2.;
+        if self.party_invite.is_some() {
+            label("YOUR PARTY", x + pad, 276. * s, 17. * s, CYAN);
+            label(
+                "Reachable IP:PORT",
+                x + pad,
+                308. * s,
+                13. * s,
+                muted_color(),
+            );
+            text_field(
+                Rect::new(x + pad, 320. * s, inner, 36. * s),
+                &mut self.party_address,
+                &mut self.address_active,
+                64,
+                s * 0.8,
+                false,
+            );
+            if button(
+                Rect::new(x + pad, 368. * s, inner, 38. * s),
+                "Copy invite link",
+                true,
+                true,
+                s * 0.85,
+            ) {
+                return Action::CopyParty;
+            }
+            label(
+                &format!("PLAYERS · {} / 8", self.party_roster.len()),
+                x + pad,
+                433. * s,
+                11. * s,
+                muted_color(),
+            );
+            let columns = if self.party_roster.len() > 4 { 2 } else { 1 };
+            for (index, name) in self.party_roster.iter().take(8).enumerate() {
+                let cell = inner / columns as f32;
+                label(
+                    &fitted_label(name, 12. * s, cell - 8. * s),
+                    x + pad + (index % columns) as f32 * cell,
+                    (454. + (index / columns) as f32 * 18.) * s,
+                    12. * s,
+                    text_color(),
+                );
+            }
+            wrap(
+                "The leader can change mode, map and difficulty in Server tools. Changes keep your party connected.",
+                x + pad,
+                534. * s,
+                inner,
+                13. * s,
+                muted_color(),
+            );
+        } else {
+            label("HOST A PARTY", x + pad, 276. * s, 17. * s, CYAN);
+            label(
+                &fitted_label(self.mode.name(), 18. * s, inner),
+                x + pad,
+                313. * s,
+                18. * s,
+                text_color(),
+            );
+            label(
+                &fitted_label(
+                    self.maps.get(self.map).map_or("Arena", |m| &m.name),
+                    14. * s,
+                    inner,
+                ),
+                x + pad,
+                340. * s,
+                14. * s,
+                muted_color(),
+            );
+            label(
+                &format!(
+                    "{} team slots · {}",
+                    self.bots.clamp(2, 8),
+                    self.difficulty_name()
+                ),
+                x + pad,
+                368. * s,
+                14. * s,
+                muted_color(),
+            );
+            if button(
+                Rect::new(x + pad, 405. * s, inner, 38. * s),
+                "Configure match",
+                false,
+                true,
+                s * 0.85,
+            ) {
+                self.party_setup = true;
+                return Action::Page(Page::Modes);
+            }
+            if button(
+                Rect::new(x + pad, 455. * s, inner, 42. * s),
+                "Create party",
+                true,
+                true,
+                s * 0.9,
+            ) {
+                return Action::CreateParty;
+            }
+            wrap(
+                "Invite access lasts until the leader leaves. Invites grant entry only; the leader keeps moderation controls.",
+                x + pad,
+                531. * s,
+                inner,
+                13. * s,
+                muted_color(),
+            );
+        }
+        label("JOIN A PARTY", right + pad, 276. * s, 17. * s, text_color());
+        wrap(
+            "Paste the full invite link from your friend.",
+            right + pad,
+            313. * s,
+            inner,
+            15. * s,
+            muted_color(),
+        );
+        text_field(
+            Rect::new(right + pad, 360. * s, inner, 40. * s),
+            &mut self.party_input,
+            &mut self.party_focus,
+            256,
+            s * 0.8,
+            false,
+        );
+        if button(
+            Rect::new(right + pad, 415. * s, inner, 40. * s),
+            "Join party",
+            true,
+            !self.party_input.trim().is_empty(),
+            s * 0.9,
+        ) {
+            return Action::JoinParty;
+        }
+        wrap(
+            "LAN: share the detected local IP. Internet: replace it with your public IP and forward UDP port 5000 to the leader's computer. A random address cannot bypass your router.",
+            right + pad,
+            495. * s,
+            inner,
+            14. * s,
+            muted_color(),
+        );
+        if small_button(
+            Rect::new(x, 625. * s, 130. * s, 30. * s),
+            "Manage mods",
+            s * 0.75,
+        ) {
+            return Action::Page(Page::Mods);
         }
         Action::None
     }
@@ -1158,228 +1381,7 @@ impl Menu {
         Action::None
     }
     fn encyclopedia(&mut self, content: &Content, s: f32) -> Action {
-        let x = 40.0 * s;
-        let y = 159.0 * s;
-        let left = (screen_width() * 0.55 - 45.0 * s).max(430.0 * s);
-        label("Tank tree", x, y, 26.0 * s, text_color());
-        right_label(
-            &format!("{} tanks", content.classes.len()),
-            x + left,
-            y,
-            15.0 * s,
-            muted_color(),
-        );
-        if small_button(
-            Rect::new(x, y + 19.0 * s, 110.0 * s, 30.0 * s),
-            if self.tree { "Catalogue" } else { "Branches" },
-            s * 0.9,
-        ) {
-            self.tree = !self.tree;
-        }
-        let item_h = 100.0 * s;
-        let count = (((screen_height() - 290.0 * s) / item_h).floor() as usize).max(1) * 4;
-        let max_page = content.classes.len().saturating_sub(1) / count.max(1);
-        self.class_page = self.class_page.min(max_page);
-        let scroll = if crate::ui_layout::scrolling() {
-            0.
-        } else {
-            mouse_wheel().1
-        };
-        if scroll < 0.0 {
-            self.class_page = (self.class_page + 1).min(max_page);
-        } else if scroll > 0.0 {
-            self.class_page = self.class_page.saturating_sub(1);
-        }
-        if !self.tree {
-            for (row, (index, class)) in content
-                .classes
-                .iter()
-                .enumerate()
-                .skip(self.class_page * count)
-                .take(count)
-                .enumerate()
-            {
-                let r = Rect::new(
-                    x + (row % 4) as f32 * (left / 4.0),
-                    y + 64.0 * s + (row / 4) as f32 * item_h,
-                    left / 4.0 - 7.0 * s,
-                    item_h - 5.0 * s,
-                );
-                if class_card(class, r, self.class_index == index, index, s) {
-                    self.class_index = index;
-                }
-            }
-            if small_button(
-                Rect::new(
-                    x + left - 125.0 * s,
-                    screen_height() - 100.0 * s,
-                    52.0 * s,
-                    30.0 * s,
-                ),
-                "‹",
-                s,
-            ) {
-                self.class_page = self.class_page.saturating_sub(1);
-            }
-            if small_button(
-                Rect::new(
-                    x + left - 59.0 * s,
-                    screen_height() - 100.0 * s,
-                    52.0 * s,
-                    30.0 * s,
-                ),
-                "›",
-                s,
-            ) {
-                self.class_page = (self.class_page + 1).min(max_page);
-            }
-            label(
-                &format!("PAGE {} / {}", self.class_page + 1, max_page + 1),
-                x,
-                screen_height() - 79.0 * s,
-                13.0 * s,
-                muted_color(),
-            );
-        } else if let Some(class) = content.classes.get(self.class_index) {
-            let center = Rect::new(x + left * 0.28, y + 152.0 * s, left * 0.44, 88.0 * s);
-            let parent_indices: Vec<usize> = class
-                .parents
-                .iter()
-                .filter_map(|id| content.classes.iter().position(|c| &c.id == id))
-                .collect();
-            for (index, &ci) in parent_indices.iter().enumerate() {
-                let r = Rect::new(
-                    x + index as f32 * (left / parent_indices.len().max(1) as f32),
-                    y + 66.0 * s,
-                    left / parent_indices.len().max(1) as f32 - 8.0 * s,
-                    76.0 * s,
-                );
-                draw_line(
-                    r.x + r.w * 0.5,
-                    r.y + r.h,
-                    center.x + center.w * 0.5,
-                    center.y,
-                    1.0,
-                    alpha(CYAN, 0.4),
-                );
-                if class_card(&content.classes[ci], r, false, ci, s) {
-                    self.class_index = ci;
-                }
-            }
-            class_card(class, center, true, self.class_index, s);
-            let child_indices: Vec<usize> = class
-                .upgrades
-                .iter()
-                .filter_map(|id| content.classes.iter().position(|c| &c.id == id))
-                .collect();
-            if child_indices.is_empty() {
-                center_label(
-                    "Last upgrade",
-                    x + left * 0.5,
-                    y + 303.0 * s,
-                    16.0 * s,
-                    AMBER,
-                );
-            }
-            for (index, &ci) in child_indices.iter().enumerate() {
-                let col = index % 3;
-                let row = index / 3;
-                let r = Rect::new(
-                    x + col as f32 * left / 3.0,
-                    y + 274.0 * s + row as f32 * 94.0 * s,
-                    left / 3.0 - 8.0 * s,
-                    84.0 * s,
-                );
-                draw_line(
-                    center.x + center.w * 0.5,
-                    center.y + center.h,
-                    r.x + r.w * 0.5,
-                    r.y,
-                    1.0,
-                    alpha(CYAN, 0.4),
-                );
-                if class_card(&content.classes[ci], r, false, ci, s) {
-                    self.class_index = ci;
-                }
-            }
-        }
-        let rx = x + left + 30.0 * s;
-        let rw = screen_width() - rx - 40.0 * s;
-        if let Some(class) = content.classes.get(self.class_index) {
-            panel(Rect::new(
-                rx,
-                y - 15.0 * s,
-                rw,
-                screen_height() - y - 91.0 * s,
-            ));
-            label(
-                &class.name,
-                rx + 22.0 * s,
-                y + 22.0 * s,
-                30.0 * s,
-                text_color(),
-            );
-            label(
-                &format!("TIER {}  ·  LEVEL {}", class.tier + 1, class.min_level),
-                rx + 22.0 * s,
-                y + 48.0 * s,
-                13.0 * s,
-                AMBER,
-            );
-            render::class_preview(
-                class,
-                Rect::new(rx + 25.0 * s, y + 67.0 * s, rw - 50.0 * s, 139.0 * s),
-                42.0 * s,
-                -0.35,
-                CYAN,
-            );
-            let mut by = wrap(
-                &class.description,
-                rx + 22.0 * s,
-                y + 231.0 * s,
-                rw - 44.0 * s,
-                19.0 * s,
-                text_color(),
-            ) + 10.0 * s;
-            label("STRENGTHS", rx + 22.0 * s, by, 12.0 * s, CYAN);
-            by = wrap(
-                &class.strengths,
-                rx + 22.0 * s,
-                by + 23.0 * s,
-                rw - 44.0 * s,
-                17.0 * s,
-                muted_color(),
-            ) + 8.0 * s;
-            label("TRADEOFFS", rx + 22.0 * s, by, 12.0 * s, AMBER);
-            by = wrap(
-                &class.weaknesses,
-                rx + 22.0 * s,
-                by + 23.0 * s,
-                rw - 44.0 * s,
-                17.0 * s,
-                muted_color(),
-            ) + 8.0 * s;
-            if class.ability != Ability::None {
-                label(
-                    &format!(
-                        "ABILITY  {}  /  {:.0}s cooldown",
-                        class.ability.name(),
-                        class.ability_cooldown
-                    ),
-                    rx + 22.0 * s,
-                    by,
-                    14.0 * s,
-                    CYAN,
-                );
-            }
-            label(
-                &format!("Level {} upgrade", class.min_level),
-                rx + 22.0 * s,
-                screen_height() - 114.0 * s,
-                13.0 * s,
-                muted_color(),
-            );
-        }
+        self.tree_view.draw(content, &mut self.class_index, s);
         Action::None
     }
     fn accessibility_preview(&self, r: Rect, settings: &Settings, s: f32) {
@@ -2330,48 +2332,6 @@ impl Menu {
         );
         Action::None
     }
-}
-fn class_card(class: &ClassDef, r: Rect, selected: bool, index: usize, s: f32) -> bool {
-    let hovered = contains(r);
-    let color = card_color(index);
-    draw_rectangle(
-        r.x,
-        r.y,
-        r.w,
-        r.h,
-        mix(color, WHITE, if hovered { 0.38 } else { 0.2 }),
-    );
-    draw_rectangle(
-        r.x,
-        r.y + r.h * 0.60,
-        r.w,
-        r.h * 0.40,
-        mix(color, BLACK, 0.10),
-    );
-    draw_rectangle_lines(
-        r.x,
-        r.y,
-        r.w,
-        r.h,
-        if selected { 3.5 * s } else { 2.0 * s },
-        Color::new(0.333, 0.333, 0.333, 1.0),
-    );
-    render::class_preview(
-        class,
-        Rect::new(r.x + 7.0 * s, r.y + 5.0 * s, r.w - 14.0 * s, r.h - 38.0 * s),
-        19.0 * s,
-        -0.45,
-        player_color(),
-    );
-    let size = (14.0 * s).min((r.w - 10.0 * s) / (class.name.chars().count().max(1) as f32 * 0.65));
-    arcade_center(&class.name, r.x + r.w * 0.5, r.y + r.h - 19.0 * s, size);
-    arcade_center(
-        &format!("Level {}", class.min_level),
-        r.x + r.w * 0.5,
-        r.y + r.h - 5.0 * s,
-        10.0 * s,
-    );
-    hovered && is_mouse_button_pressed(MouseButton::Left)
 }
 pub fn mode_blurb(mode: Mode) -> &'static str {
     match mode {

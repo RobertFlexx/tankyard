@@ -442,7 +442,7 @@ impl Hud {
         if contains(Rect::new(m, m, 226.0 * s, 56.0 * s)) {
             return true;
         }
-        if tank.points > 0
+        if (tank.points > 0 || tank.creator_boss)
             && contains(Rect::new(
                 m,
                 screen_height() - m - 225.0 * s,
@@ -513,6 +513,7 @@ impl Hud {
         local: EntityId,
         settings: &Settings,
         diagnostics: Option<(f64, f64, f64, f64)>,
+        map_remaining: Option<u32>,
         s: f32,
         view: &render::View,
     ) -> Vec<HudAction> {
@@ -534,7 +535,7 @@ impl Hud {
             self.sandbox_level_pending = None;
         }
         let modal = self.sandbox || !tank.alive || snapshot.match_state.finished;
-        if !tank.alive {
+        if !tank.alive || tank.creator_boss {
             self.evolution = false;
             self.offered_class.clear();
         }
@@ -558,13 +559,14 @@ impl Hud {
                 },
             );
         }
-        let available = class.is_some_and(|class| {
-            class
-                .upgrades
-                .iter()
-                .filter_map(|id| content.class(id))
-                .any(|next| next.min_level <= tank.level)
-        });
+        let available = !tank.creator_boss
+            && class.is_some_and(|class| {
+                class
+                    .upgrades
+                    .iter()
+                    .filter_map(|id| content.class(id))
+                    .any(|next| next.min_level <= tank.level)
+            });
         if available && self.offered_class != tank.class && tank.alive {
             self.offered_class.clone_from(&tank.class);
             self.evolution = true;
@@ -577,6 +579,7 @@ impl Hud {
             "Tanks [Tab]",
             s * 0.76,
         ) && !modal
+            && !tank.creator_boss
         {
             self.evolution = !self.evolution;
         }
@@ -673,7 +676,7 @@ impl Hud {
             Color::new(0.42, 0.91, 0.89, 1.0),
         ];
         let mut tooltip = None;
-        if self.stat_visibility > 0.0 {
+        if self.stat_visibility > 0.0 && !tank.creator_boss {
             arcade_label(
                 &format!("Skill points: {}", tank.points),
                 stats_x + 6.0 * s,
@@ -826,11 +829,15 @@ impl Hud {
             arcade_track(Rect::new(xp_x, xp_y, xp_width, 24.0 * s), fraction, AMBER);
             arcade_center(
                 &fitted_label(
-                    &format!(
-                        "Lvl {} {}",
-                        tank.level,
-                        class.map(|c| c.name.as_str()).unwrap_or("Tank")
-                    ),
+                    &if tank.creator_boss {
+                        "Axiom · Event boss".to_owned()
+                    } else {
+                        format!(
+                            "Lvl {} {}",
+                            tank.level,
+                            class.map(|c| c.name.as_str()).unwrap_or("Tank")
+                        )
+                    },
                     16.0 * s,
                     xp_width - 16.0 * s,
                 ),
@@ -917,14 +924,24 @@ impl Hud {
                 );
             }
         }
+        if settings.show_fps || map_remaining.is_some() {
+            let footer = match map_remaining {
+                Some(seconds) => format!(
+                    "Map in {}:{:02}:{:02}{}",
+                    seconds / 3600,
+                    seconds / 60 % 60,
+                    seconds % 60,
+                    if settings.show_fps {
+                        format!("  ·  {} FPS", get_fps())
+                    } else {
+                        String::new()
+                    }
+                ),
+                None => format!("{} FPS  ·  tick {} / 60 Hz", get_fps(), snapshot.tick),
+            };
+            label(&footer, m, h - 5.0 * s, 11.0 * s, muted_color());
+        }
         if settings.show_fps {
-            label(
-                &format!("{} FPS  ·  tick {} / 60 Hz", get_fps(), snapshot.tick),
-                m,
-                h - 5.0 * s,
-                11.0 * s,
-                muted_color(),
-            );
             if let Some((ping, loss, sent, received)) = diagnostics {
                 label(
                     &format!(

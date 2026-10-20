@@ -40,6 +40,9 @@ pub struct ServerSettings {
     /// Shared relay addresses must never receive an address-wide player ban.
     pub shared_relay_ips: Vec<std::net::IpAddr>,
     pub round_restart_seconds: f32,
+    /// Uptime-based rotation; zero disables it for private matches.
+    pub map_rotation_seconds: u32,
+    pub party: Option<crate::party::PartySettings>,
     pub world: WorldConfig,
     pub mods: Vec<std::path::PathBuf>,
 }
@@ -73,6 +76,8 @@ impl Default for ServerSettings {
             ban_file: "bans.json".into(),
             shared_relay_ips: vec![],
             round_restart_seconds: 10.,
+            map_rotation_seconds: 7200,
+            party: None,
             world: WorldConfig::default(),
             mods: vec![],
         }
@@ -166,6 +171,20 @@ impl ServerSettings {
         Ok(())
     }
     pub fn validate(&self) -> Result<(), NetError> {
+        if (self.map_rotation_seconds != 0 && !(60..=604800).contains(&self.map_rotation_seconds))
+            || self.party.as_ref().is_some_and(|p| {
+                !(2..=8).contains(&p.ally_slots)
+                    || p.public_key == [0; 32]
+                    || self.max_players > 8
+                    || self.kind != tankyard_protocol::ServerKind::Community
+                    || self.creator_admin_enabled()
+                    || !self.password.is_empty()
+            })
+        {
+            return Err(NetError(
+                "Invalid party or map rotation configuration.".into(),
+            ));
+        }
         if self.central_owner_admin == Some(true) && !self.central_owner_enabled() {
             return Err(NetError("central owner administration requires the password-free official tankyard-central profile".into()));
         }

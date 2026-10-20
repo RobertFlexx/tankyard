@@ -10,6 +10,8 @@ use tankyard_server::creator::{Command, apply};
 
 pub struct CreatorUi {
     pub open: bool,
+    in_form: bool,
+    attack_group: usize,
     key: Option<Ed25519KeyPair>,
     tab: usize,
     page: usize,
@@ -39,6 +41,8 @@ impl CreatorUi {
         let key = crate::credentials::load("creator.key", &tankyard_protocol::CREATOR_PUBLIC_KEY);
         Self {
             open: false,
+            in_form: false,
+            attack_group: 0,
             key,
             tab: 0,
             page: 0,
@@ -68,6 +72,11 @@ impl CreatorUi {
         self.key.is_some()
     }
     pub fn authenticate(&mut self, session: &mut Session) {
+        self.in_form = session
+            .display
+            .as_ref()
+            .and_then(|s| s.tanks.iter().find(|t| t.id == session.player))
+            .is_some_and(|t| t.creator_boss && t.alive);
         if let Some(round) = session
             .display
             .as_ref()
@@ -127,11 +136,89 @@ impl CreatorUi {
             }
         }
     }
+    fn attack_rect(s: f32) -> Rect {
+        Rect::new(22. * s, screen_height() - 328. * s, 246. * s, 302. * s)
+    }
+    fn attack_panel(&mut self, session: &mut Session, s: f32) {
+        let Some(tank) = session.display.as_ref().and_then(|s| {
+            s.tanks
+                .iter()
+                .find(|t| t.id == session.player && t.alive && t.creator_boss)
+        }) else {
+            return;
+        };
+        let cooldowns = tank.creator_attacks;
+        let r = Self::attack_rect(s);
+        panel(r);
+        label(
+            "AXIOM · ATTACKS",
+            r.x + 12. * s,
+            r.y + 24. * s,
+            15. * s,
+            AMBER,
+        );
+        for (group, title) in ["Offense", "Control", "Fortress"].into_iter().enumerate() {
+            if button(
+                Rect::new(
+                    r.x + (10. + group as f32 * 77.) * s,
+                    r.y + 35. * s,
+                    72. * s,
+                    26. * s,
+                ),
+                title,
+                group == self.attack_group,
+                true,
+                s * 0.6,
+            ) {
+                self.attack_group = group;
+            }
+        }
+        let mut command = None;
+        let mut hint = "Hover over an attack for its effect.";
+        for (row, attack) in tankyard_core::creator_boss::Attack::GROUPS[self.attack_group]
+            .into_iter()
+            .enumerate()
+        {
+            let remaining = cooldowns[attack.index()];
+            let ready = remaining <= 0.;
+            let text = if ready {
+                attack.name().to_owned()
+            } else {
+                format!("{} · {:.1}s", attack.name(), remaining)
+            };
+            let button_rect = Rect::new(
+                r.x + 10. * s,
+                r.y + (75. + row as f32 * 43.) * s,
+                r.w - 20. * s,
+                34. * s,
+            );
+            if contains(button_rect) {
+                hint = attack.description();
+            }
+            if button(button_rect, &text, ready, ready, s * 0.8) {
+                command = Some(Command::Attack { kind: attack });
+            }
+        }
+        wrap(
+            hint,
+            r.x + 12. * s,
+            r.y + 260. * s,
+            r.w - 24. * s,
+            12. * s,
+            muted_color(),
+        );
+        if let Some(command) = command {
+            self.send(session, command);
+        }
+    }
     fn button_rect(s: f32) -> Rect {
         crate::ui_layout::staff_button(screen_width(), screen_height(), s)
     }
     pub fn captures_pointer(&self, s: f32) -> bool {
-        self.enabled() && (self.open || contains(Self::button_rect(s)))
+        self.enabled()
+            && (self.open
+                || contains(Self::button_rect(s))
+                || (self.in_form && contains(Self::attack_rect(s))))
     }
     fn send(&mut self, session: &mut Session, command: Command) {
         if !self.enabled() {
@@ -175,6 +262,7 @@ impl CreatorUi {
         self.reason_focus = false;
         self.announcement_focus = false;
         self.authorization = None;
+        self.in_form = false;
         self.open = false;
         self.pending.clear();
         self.god = false;
@@ -212,6 +300,7 @@ impl CreatorUi {
         }
         set_interactive(true);
         if !self.open {
+            self.attack_panel(session, s);
             if button(
                 Self::button_rect(s),
                 "Creator tools [F8]",
@@ -223,7 +312,7 @@ impl CreatorUi {
             }
             return;
         }
-        let s = s.min(screen_height() / 850.).min(screen_width() / 600.);
+        let s = s.min(screen_height() / 850.).min(screen_width() / 760.);
         draw_rectangle(
             0.,
             0.,
@@ -232,9 +321,9 @@ impl CreatorUi {
             alpha(bg_color(), 0.92),
         );
         let r = Rect::new(
-            screen_width() * 0.5 - 250. * s,
+            screen_width() * 0.5 - 320. * s,
             screen_height() * 0.5 - 363. * s,
-            500. * s,
+            640. * s,
             726. * s,
         );
         panel(r);
@@ -276,7 +365,7 @@ impl CreatorUi {
             12. * s,
             muted_color(),
         );
-        let tab_width = (r.w - 74. * s) / 6.;
+        let tab_width = (r.w - 80. * s) / 7.;
         for (index, title) in [
             "Player",
             "World",
@@ -284,6 +373,7 @@ impl CreatorUi {
             "Moderation",
             "Announce",
             "Maps",
+            "Showtime",
         ]
         .into_iter()
         .enumerate()
@@ -310,6 +400,65 @@ impl CreatorUi {
         let y = r.y + 136. * s;
         let width = r.w - 48. * s;
         match self.tab {
+            6 => {
+                center_label(
+                    "AXIOM, THE WORLDSHAPER",
+                    r.center().x,
+                    y + 18. * s,
+                    21. * s,
+                    AMBER,
+                );
+                tankyard_client::boss_model::axiom_geometry(
+                    vec2(r.center().x, y + 125. * s),
+                    67. * s,
+                    -0.45,
+                    crate::accessibility::motion_time(get_time() as f32),
+                    &mut crate::render::draw_model_primitive,
+                );
+                wrap(
+                    "A player-controlled celestial event boss. 120,000 health, twelve attacks, a colossal body, and a shared health bar. Players keep their spawn protection. This marks the round as modified.",
+                    x,
+                    y + 225. * s,
+                    width,
+                    16. * s,
+                    text_color(),
+                );
+                if button(
+                    Rect::new(x, y + 310. * s, width, 42. * s),
+                    if self.in_form {
+                        "Return to my tank"
+                    } else {
+                        "Become Axiom"
+                    },
+                    true,
+                    available,
+                    s,
+                ) {
+                    self.send(
+                        session,
+                        Command::Form {
+                            enabled: !self.in_form,
+                        },
+                    );
+                }
+                wrap(
+                    "Collapse the console to use the attack panel while moving. Each attack recharges on the server. Reset, death, a new round, or revoked authority restores your normal tank.",
+                    x,
+                    y + 389. * s,
+                    width,
+                    14. * s,
+                    muted_color(),
+                );
+                if button(
+                    Rect::new(x, y + 466. * s, width, 34. * s),
+                    "Announce a friendly boss event",
+                    false,
+                    available,
+                    s * 0.8,
+                ) {
+                    self.send(session, Command::Moderate { command: tankyard_protocol::ServerCommand::Announce { text: "The creator has become Axiom, the Worldshaper. Join the boss event!".into() } });
+                }
+            }
             5 => {
                 label("ARENA STYLE", x, y + 18. * s, 15. * s, muted_color());
                 let maps = &session.bundle.maps;

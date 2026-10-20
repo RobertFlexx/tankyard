@@ -247,6 +247,10 @@ pub struct Tank {
     #[serde(default)]
     pub game_creator: bool,
     #[serde(default)]
+    pub creator_boss: bool,
+    #[serde(default)]
+    pub creator_attacks: [f32; crate::creator_boss::ATTACK_COUNT],
+    #[serde(default)]
     pub server_badge: ServerBadge,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,6 +345,8 @@ impl Clone for Tank {
             damage_scale: self.damage_scale,
             stasis: self.stasis,
             game_creator: self.game_creator,
+            creator_boss: self.creator_boss,
+            creator_attacks: self.creator_attacks,
             server_badge: self.server_badge,
         }
     }
@@ -389,6 +395,8 @@ impl Clone for Tank {
         self.damage_scale = source.damage_scale;
         self.stasis = source.stasis;
         self.game_creator = source.game_creator;
+        self.creator_boss = source.creator_boss;
+        self.creator_attacks = source.creator_attacks;
         self.server_badge = source.server_badge;
     }
 }

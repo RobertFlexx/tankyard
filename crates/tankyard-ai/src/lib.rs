@@ -885,6 +885,29 @@ fn decide(
 
 fn objective_goal(world: &World, tank: &Tank) -> Option<(f32, V2, BotState)> {
     match world.config.mode {
+        Mode::BossRush => world
+            .bosses
+            .iter()
+            .filter(|boss| boss.health > 0. && hostile(tank.team, boss.team))
+            .min_by(|a, b| {
+                tank.pos
+                    .distance(a.pos)
+                    .total_cmp(&tank.pos.distance(b.pos))
+            })
+            .map(|boss| {
+                let direction = (tank.pos - boss.pos).normalized();
+                let angle = (noise(tank.id) - 0.5) * 0.65;
+                let offset = direction.rotate(angle) * (boss.radius + 220.);
+                (
+                    if tank.pos.distance(boss.pos) > 400. {
+                        1.6
+                    } else {
+                        0.15
+                    },
+                    boss.pos + offset,
+                    BotState::BossEngagement,
+                )
+            }),
         Mode::CoopPve => {
             let enemy = world
                 .tanks
@@ -900,23 +923,29 @@ fn objective_goal(world: &World, tank: &Tank) -> Option<(f32, V2, BotState)> {
                 )
                 .min_by(|a, b| tank.pos.distance(*a).total_cmp(&tank.pos.distance(*b)));
             if let Some(enemy) = enemy {
-                return (tank.pos.distance(enemy) > 650.0).then_some((
+                return (tank.pos.distance(enemy) > 350.0).then_some((
                     1.1,
                     enemy,
                     BotState::Attacking,
                 ));
             }
+            let humans = world
+                .tanks
+                .iter()
+                .filter(|other| other.alive && !other.bot && other.team == tank.team)
+                .count();
+            // Stable assignments split wingmates between friends rather than
+            // sending the whole squad after whichever human is nearest.
             world
                 .tanks
                 .iter()
                 .filter(|other| other.alive && !other.bot && other.team == tank.team)
-                .min_by(|a, b| {
-                    tank.pos
-                        .distance(a.pos)
-                        .total_cmp(&tank.pos.distance(b.pos))
+                .nth(tank.id as usize % humans.max(1))
+                .filter(|human| tank.pos.distance(human.pos) > 240.)
+                .map(|human| {
+                    let offset = V2::from_angle(noise(tank.id) * std::f32::consts::TAU) * 130.;
+                    (0.8, human.pos + offset, BotState::Escorting)
                 })
-                .filter(|human| tank.pos.distance(human.pos) > 260.0)
-                .map(|human| (0.7, human.pos, BotState::Escorting))
         }
         Mode::Domination => world
             .objectives

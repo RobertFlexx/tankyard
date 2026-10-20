@@ -5,6 +5,7 @@ mod arena_size;
 mod bosses;
 #[cfg(test)]
 mod combat_regressions;
+pub mod creator_boss;
 mod drones;
 mod homing;
 mod map_layout;

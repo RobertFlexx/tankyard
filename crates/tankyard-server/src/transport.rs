@@ -32,6 +32,7 @@ pub(crate) struct Peer {
     pub creator: bool,
     pub creator_session_nonce: Option<[u8; 32]>,
     pub last_owner_sequence: Option<u64>,
+    pub party_nonce: Option<[u8; 32]>,
 }
 #[derive(Default, Clone, Debug)]
 pub struct ServerMetrics {
@@ -121,6 +122,8 @@ pub struct UdpServer {
     global_authority: Option<std::sync::Arc<dyn crate::access::GlobalAuthority>>,
     pub(crate) chat: crate::chat::Chat,
     accounts_checked_at: u64,
+    pub(crate) rotation_checked_at: Option<u64>,
+    pub(crate) next_rotation: u64,
     owner_extension: Option<OwnerExtension>,
 }
 
@@ -193,6 +196,8 @@ impl UdpServer {
         Ok(Self {
             bastion: Default::default(),
             session,
+            next_rotation: u64::from(settings.map_rotation_seconds),
+            rotation_checked_at: None,
             settings,
             address,
             metrics: ServerMetrics {
@@ -251,6 +256,7 @@ impl UdpServer {
             self.receive_client(client);
         }
         self.expire_clients();
+        self.update_map_rotation();
         self.sync_bots();
         let occupied = self
             .peers
@@ -309,6 +315,10 @@ impl UdpServer {
             .values()
             .filter(|p| p.entity.is_some() && p.disconnect_at.is_none())
             .count();
+        if self.settings.party.is_some() {
+            self.sync_party_bots(humans);
+            return;
+        }
         let desired = self.settings.desired_bots(humans);
         let world = &mut self.session.world;
         // Wave enemies are managed by co-op, not the arena population policy.
@@ -438,6 +448,7 @@ impl UdpServer {
                             creator: false,
                             creator_session_nonce: None,
                             last_owner_sequence: None,
+                            party_nonce: None,
                         },
                     );
                     let blocked = self
@@ -676,6 +687,7 @@ impl UdpServer {
             password,
             account_token,
             admin_key,
+            party_proof,
         } = message
         {
             if entity.is_some() {
@@ -685,6 +697,45 @@ impl UdpServer {
             if protocol != PROTOCOL_VERSION {
                 self.reject(client, "Incompatible protocol version.");
                 return;
+            }
+            if let Some(party) = &self.settings.party {
+                if let Some(signature) = party_proof {
+                    let nonce = self
+                        .peers
+                        .get_mut(&client)
+                        .and_then(|p| p.party_nonce.take());
+                    let verified = nonce.is_some_and(|nonce| {
+                        verify_party(
+                            &party.public_key,
+                            client,
+                            &nonce,
+                            &self.settings.server_id,
+                            &admin_key,
+                            &signature,
+                        )
+                    });
+                    if !verified {
+                        self.reject(client, "Invalid or expired party invite proof.");
+                        return;
+                    }
+                } else {
+                    let nonce = renet_netcode::generate_random_bytes();
+                    if let Some(peer) = self.peers.get_mut(&client) {
+                        if peer.party_nonce.is_some() {
+                            self.reject(client, "Party proof required.");
+                            return;
+                        }
+                        peer.party_nonce = Some(nonce);
+                    }
+                    self.send_control(
+                        client,
+                        &ServerControl::PartyChallenge {
+                            nonce,
+                            server_id: self.settings.server_id.clone(),
+                        },
+                    );
+                    return;
+                }
             }
             if password != self.settings.password {
                 self.reject(client, "Incorrect server password.");
@@ -735,6 +786,10 @@ impl UdpServer {
             }
             let name = sanitize_name(&name);
             let player = self.session.world.add_player(&name, false);
+            if self.settings.party.is_some() && self.session.world.config.mode.teams() > 0 {
+                self.session.world.assign_team(player, 1);
+            }
+            self.sync_bots();
             if let Some(peer) = self.peers.get_mut(&client) {
                 peer.entity = Some(player);
                 if let Some(tank) = self.session.world.tanks.iter_mut().find(|t| t.id == player) {
@@ -938,6 +993,7 @@ impl UdpServer {
         );
         self.send_access(client);
         self.send_rooms(client);
+        self.send_rotation(client);
         self.send_control(
             client,
             &ServerControl::MatchSettings {
@@ -1231,6 +1287,7 @@ impl UdpServer {
             self.chat.refresh_role(client, ServerRole::Player);
             self.send_access(client);
             self.send_rooms(client);
+            self.send_rotation(client);
         }
         for index in 0..self.client_ids.len() {
             let client = self.client_ids[index];
@@ -1490,6 +1547,10 @@ impl UdpServer {
         self.pending_effects.clear();
         for (client, name) in players {
             let player = self.session.world.add_player(&name, false);
+            if self.settings.party.is_some() && self.session.world.config.mode.teams() > 0 {
+                self.session.world.assign_team(player, 1);
+            }
+            self.sync_bots();
             if let Some(peer) = self.peers.get_mut(&client) {
                 peer.entity = Some(player);
                 if let Some(tank) = self.session.world.tanks.iter_mut().find(|t| t.id == player) {

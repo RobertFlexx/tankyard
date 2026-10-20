@@ -9,6 +9,29 @@ pub struct Modifiers {
 }
 
 impl World {
+    /// Host-owned team assignment also finds a legal spawn and drops held objectives.
+    pub fn assign_team(&mut self, player: EntityId, team: u8) -> bool {
+        if team == 0 || team > self.config.mode.teams() {
+            return false;
+        }
+        let Some(index) = self.tanks.iter().position(|t| t.id == player) else {
+            return false;
+        };
+        let previous = self.tanks[index].pos;
+        let pos = self.spawn_position(team);
+        for objective in &mut self.objectives {
+            if objective.carrier == Some(player) {
+                objective.carrier = None;
+                objective.pos = previous;
+                objective.return_timer = 15.;
+            }
+        }
+        self.tanks[index].team = team;
+        self.tanks[index].pos = pos;
+        self.tanks[index].vel = crate::V2::ZERO;
+        self.tanks[index].carrying = false;
+        true
+    }
     pub fn admin_class(&mut self, player: EntityId, class: &str) -> bool {
         let Some(def) = self.content.class(class) else {
             return false;
@@ -38,6 +61,20 @@ impl World {
 
     /// Revocation removes active powers immediately; the round stays modified.
     pub fn reset_administration(&mut self) {
+        let forms: Vec<_> = self
+            .tanks
+            .iter()
+            .filter(|t| t.creator_boss)
+            .map(|t| t.id)
+            .collect();
+        self.projectiles.retain(|p| !forms.contains(&p.owner));
+        for id in forms {
+            if let Some(tank) = self.tanks.iter_mut().find(|t| t.id == id) {
+                tank.creator_boss = false;
+                tank.creator_attacks = [0.; crate::creator_boss::ATTACK_COUNT];
+            }
+            self.refresh_stats(id, true);
+        }
         self.admin_modifiers.clear();
         self.bots_frozen = false;
         for tank in &mut self.tanks {
@@ -52,6 +89,30 @@ impl World {
 mod tests {
     use super::*;
     use crate::*;
+
+    #[test]
+    fn reassignment_drops_a_held_core_before_moving_to_the_new_team() {
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::CaptureCore,
+                target_count: 0,
+                ..Default::default()
+            },
+            tankyard_content::Content::builtin(),
+        );
+        let id = world.add_player("Friend", false);
+        let before = world.tanks[0].pos;
+        world.objectives[0].carrier = Some(id);
+        world.tanks[0].carrying = true;
+        assert!(!world.assign_team(id, 3));
+        assert_eq!(world.objectives[0].carrier, Some(id));
+        assert!(world.assign_team(id, 2));
+        assert_eq!(world.objectives[0].carrier, None);
+        assert_eq!(world.objectives[0].pos, before);
+        assert!(!world.tanks[0].carrying);
+        assert_eq!(world.tanks[0].team, 2);
+        assert!(world.position_clear(world.tanks[0].pos, world.tanks[0].radius));
+    }
 
     #[test]
     fn host_modifiers_apply_authoritatively_and_revocation_removes_them() {

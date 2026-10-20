@@ -382,6 +382,45 @@ pub fn world(
     }
     let wall_scale = scale / snapshot.config.arena_scale.max(0.5);
     let arena_center = V2::new(snapshot.config.width * 0.5, snapshot.config.height * 0.5);
+    let emblem_screen =
+        |p: Vec2| view.screen(arena_center + (V2::new(p.x, p.y) - arena_center) * wall_scale);
+    tankyard_client::map_model::landmark_geometry(
+        &snapshot.config.map,
+        snapshot.config.bounds(),
+        &snapshot.walls,
+        dark,
+        settings.shape_quality,
+        &mut |primitive| {
+            use crate::tank_model::Primitive;
+            let transformed = match primitive {
+                Primitive::Polygon {
+                    center,
+                    sides,
+                    radius,
+                    angle,
+                    color,
+                } => {
+                    let point = emblem_screen(center);
+                    Primitive::Polygon {
+                        center: point,
+                        sides,
+                        radius: radius * z * wall_scale,
+                        angle,
+                        color,
+                    }
+                }
+                Primitive::Quad { vertices, color } => Primitive::Quad {
+                    vertices: vertices.map(&emblem_screen),
+                    color,
+                },
+                Primitive::Triangle { vertices, color } => Primitive::Triangle {
+                    vertices: vertices.map(&emblem_screen),
+                    color,
+                },
+            };
+            draw_model_primitive(transformed);
+        },
+    );
     for wall in &snapshot.walls {
         let wall = tankyard_core::Rect {
             x: arena_center.x + (wall.x - arena_center.x) * wall_scale,
@@ -745,37 +784,51 @@ pub fn world(
                 ),
             );
         }
-        class_model_animated(
-            class,
-            p,
-            r,
-            *effects.display_aim.get(&tank.id).unwrap_or(&tank.aim),
-            *effects.recoil.get(&tank.id).unwrap_or(&0.0),
-            if settings.reduced_motion {
-                spawn_flash
-            } else {
-                (effects.flashes.get(&tank.id).copied().unwrap_or(0.) * settings.effects)
-                    .max(spawn_flash)
-            },
-            color,
-            if tank.id == local {
-                local_animation_time
-            } else {
-                animation_time
-            },
-            effects
-                .barrels
-                .get(&tank.id)
-                .map(|visual| visual.recoil.as_slice()),
-            Some(
+        if tank.creator_boss {
+            tankyard_client::boss_model::axiom_geometry(
+                p,
+                r,
+                tank.aim,
+                if settings.reduced_motion {
+                    0.
+                } else {
+                    animation_time
+                },
+                &mut draw_model_primitive,
+            );
+        } else {
+            class_model_animated(
+                class,
+                p,
+                r,
+                *effects.display_aim.get(&tank.id).unwrap_or(&tank.aim),
+                *effects.recoil.get(&tank.id).unwrap_or(&0.0),
+                if settings.reduced_motion {
+                    spawn_flash
+                } else {
+                    (effects.flashes.get(&tank.id).copied().unwrap_or(0.) * settings.effects)
+                        .max(spawn_flash)
+                },
+                color,
+                if tank.id == local {
+                    local_animation_time
+                } else {
+                    animation_time
+                },
                 effects
                     .barrels
                     .get(&tank.id)
-                    .map_or(tank.barrel_aims.as_slice(), |visual| visual.aim.as_slice()),
-            ),
-            Some(z),
-        );
-        if tank.id != local {
+                    .map(|visual| visual.recoil.as_slice()),
+                Some(
+                    effects
+                        .barrels
+                        .get(&tank.id)
+                        .map_or(tank.barrel_aims.as_slice(), |visual| visual.aim.as_slice()),
+                ),
+                Some(z),
+            );
+        }
+        if local != 0 && tank.id != local {
             arcade_player_label(tank, "", vec2(p.x, p.y - r - 14. * z), 320. * z, 15. * z);
         }
         if settings.colorblind {
@@ -786,13 +839,15 @@ pub fn world(
                 r * 0.19,
             );
         }
-        health_bar(
-            p,
-            r,
-            visual.map_or(tank.health / tank.max_health, |hull| hull.health),
-            z,
-            Color::new(0.45, 0.86, 0.33, 1.0),
-        );
+        if local != 0 {
+            health_bar(
+                p,
+                r,
+                visual.map_or(tank.health / tank.max_health, |hull| hull.health),
+                z,
+                Color::new(0.45, 0.86, 0.33, 1.0),
+            );
+        }
     }
     for particle in &effects.particles {
         if settings.reduced_motion || settings.effects <= 0. {
@@ -863,8 +918,7 @@ fn health_bar(p: Vec2, r: f32, ratio: f32, z: f32, color: Color) {
     );
 }
 
-pub fn menu_background(time: f32) {
-    let time = crate::accessibility::motion_time(time);
+pub fn menu_grid() {
     clear_background(bg_color());
     let grid = if is_dark() {
         Color::new(0.17, 0.20, 0.23, 1.0)
@@ -892,6 +946,11 @@ pub fn menu_background(time: f32) {
             grid,
         );
     }
+}
+
+pub fn menu_background(time: f32) {
+    let time = crate::accessibility::motion_time(time);
+    menu_grid();
     // A few quiet geometric targets around the edge, not behind the controls.
     // Their movement is cosmetic and disabled by the reduced-motion setting.
     let w = screen_width();

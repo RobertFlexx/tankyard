@@ -18,6 +18,7 @@ pub enum Engine {
     },
 }
 pub struct Session {
+    pub party_invite: Option<tankyard_server::party::Invite>,
     pub practice: Option<tankyard_client::practice::Run>,
     pub engine: Engine,
     pub player: EntityId,
@@ -126,15 +127,74 @@ impl Session {
         ))
     }
     pub fn join(address: &str, name: &str, password: &str) -> Result<Self, String> {
+        let invite = address
+            .starts_with("tankyard://party/")
+            .then(|| tankyard_server::party::Invite::parse(address))
+            .transpose()
+            .map_err(|e| e.to_string())?;
         let client = NetworkClient::connect(address, name, password).map_err(|e| e.to_string())?;
-        Ok(Self::create(
+        let mut session = Self::create(
             Engine::Online {
                 client: Box::new(client),
                 host: None,
             },
             0,
             None,
-        ))
+        );
+        session.party_invite = invite;
+        Ok(session)
+    }
+    pub fn party(
+        config: WorldConfig,
+        slots: usize,
+        name: &str,
+        difficulty: &str,
+        mods: Vec<std::path::PathBuf>,
+    ) -> Result<Self, String> {
+        let invite = tankyard_server::party::Invite::create(std::net::SocketAddr::new(
+            tankyard_server::party::local_ip(),
+            5000,
+        ));
+        let settings = ServerSettings {
+            allow_sandbox: config.mode == Mode::Sandbox,
+            world: config,
+            name: format!("{}'s party", name.chars().take(21).collect::<String>()),
+            max_players: 8,
+            bot_count: 0,
+            adaptive_bots: false,
+            party: Some(invite.settings(slots)),
+            map_rotation_seconds: 0,
+            creator_admin: Some(false),
+            ban_file: String::new(),
+            difficulty: tankyard_server::difficulty_from_name(difficulty)?,
+            mods,
+            ..Default::default()
+        };
+        let host = HostedServer::start(settings).map_err(|e| e.to_string())?;
+        let mut local_invite = invite.clone();
+        local_invite
+            .address
+            .set_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let client =
+            NetworkClient::connect(&local_invite.link(), name, "").map_err(|e| e.to_string())?;
+        let mut session = Self::create(
+            Engine::Online {
+                client: Box::new(client),
+                host: Some(host),
+            },
+            0,
+            None,
+        );
+        session.party_invite = Some(invite);
+        Ok(session)
+    }
+    pub fn map_remaining(&self) -> Option<u32> {
+        match &self.engine {
+            Engine::Online { client, .. } => client.map_rotation.map(|(remaining, received)| {
+                remaining.saturating_sub(received.elapsed().as_secs() as u32)
+            }),
+            _ => None,
+        }
     }
     pub fn join_token(
         path: &std::path::Path,
@@ -198,6 +258,7 @@ impl Session {
         }
         Self {
             practice: None,
+            party_invite: None,
             engine,
             player,
             spectating: None,

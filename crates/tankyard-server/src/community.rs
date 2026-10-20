@@ -6,7 +6,11 @@ impl UdpServer {
             mode: self.session.world.config.mode,
             map: self.session.world.config.map.clone(),
             difficulty: self.settings.difficulty.name().into(),
-            bots: self.settings.bot_count,
+            bots: self
+                .settings
+                .party
+                .as_ref()
+                .map_or(self.settings.bot_count, |p| p.ally_slots),
         }
     }
     pub(crate) fn broadcast_match_settings(&mut self) {

@@ -1,3 +1,11 @@
+# v0.5.0 checks (2026-10-20)
+
+411 public Rust tests and ten installer fixtures pass, with formatting and strict Clippy. New tests exercise party proof binding, admission failure, allied replacement and refill, preserved party teams across round changes, independent wave enemies, empty-server rotation deadlines, complete tree connections and creator event authorization/cooldowns/revocation, wall-safe Axiom dashes, working sentries, limited healing and hostile-only gravity. Native GUI fixtures at 1280×800 and 800×600 with 140% UI cover the connected tree, party creation/host badge, creator Showtime, transformation/attacks/reset and the uptime countdown.
+
+Five additional private real-key integration tests pass against ordinary local servers, including Axiom signatures, player spawn protection, cooldown rejection and immediate revocation cleanup.
+
+Protocol is now 17. Upgrade regular clients, servers and relays together using the [Pi instructions](central-pi-upgrade.md); publishing does not deploy the central server. [Party setup](parties.md) explains leader-hosted IP connectivity. The [scoped review](security-review-v050.md) records authority and transport limits. Private credential editions and keys remain local.
+
 # v0.4.1 checks (2026-10-20)
 
 398 public Rust tests, ten installer fixtures, formatting, Clippy with warnings denied, all 103 tank profiles and both bundled mods pass on Linux. New regressions cover preference reset without profile loss, bounded custom-map validation work, procedural cover containment/nonoverlap, Maze connectivity at small and maximum dimensions, scaling without coordinate drift, safe map-switch rollback, quicker population growth and nearby collision recovery in large maps.

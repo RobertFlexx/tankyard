@@ -37,6 +37,7 @@ pub struct CommunityUi {
     text_lines: Vec<String>,
     scroll: usize,
     docked: bool,
+    compact_chat: bool,
 }
 impl Default for CommunityUi {
     fn default() -> Self {
@@ -71,6 +72,7 @@ impl Default for CommunityUi {
             text_lines: vec![],
             scroll: 0,
             docked: false,
+            compact_chat: false,
         }
     }
 }
@@ -144,11 +146,11 @@ impl CommunityUi {
         }
     }
     fn chat_rect(&self, s: f32) -> Rect {
+        let width = if self.compact_chat { 286. } else { 358. } * s;
         if self.docked {
-            // Keep chat readable beside upgrades and the Sandbox panel.
-            Rect::new(screen_width() - 380. * s, 270. * s, 358. * s, 224. * s)
+            Rect::new(screen_width() - width - 22. * s, 270. * s, width, 224. * s)
         } else {
-            Rect::new(22.0 * s, 87.0 * s, 358.0 * s, 224.0 * s)
+            Rect::new(22. * s, 87. * s, width, 224. * s)
         }
     }
     fn submit(&mut self, client: &mut NetworkClient, command: ServerCommand) {
@@ -169,6 +171,7 @@ impl CommunityUi {
         owner: bool,
     ) {
         self.docked = dock_chat;
+        self.compact_chat = snapshot.tanks.iter().any(|t| t.creator_boss && t.alive);
         if self.round != Some(snapshot.match_state.round) {
             self.round = Some(snapshot.match_state.round);
             self.selected = None;
@@ -275,7 +278,7 @@ impl CommunityUi {
             );
         }
         if self.chat_revision != client.chat_revision
-            || self.chat_scale != s.to_bits()
+            || self.chat_scale != (s.to_bits() ^ u32::from(self.compact_chat))
             || self.cached_room != self.room
         {
             let old_len = self.text_lines.len();
@@ -307,7 +310,7 @@ impl CommunityUi {
             };
             self.cached_room.clone_from(&self.room);
             self.chat_revision = client.chat_revision;
-            self.chat_scale = s.to_bits();
+            self.chat_scale = s.to_bits() ^ u32::from(self.compact_chat);
         }
         let count = if self.typing { 8 } else { 5 };
         let maximum = self.text_lines.len().saturating_sub(count);
