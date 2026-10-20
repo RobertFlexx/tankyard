@@ -20,6 +20,7 @@ pub struct World {
     pub targets: Vec<Target>,
     pub bosses: Vec<Boss>,
     pub walls: Vec<Rect>,
+    pub(crate) map_walls: Vec<Rect>,
     pub objectives: Vec<Objective>,
     pub match_state: MatchState,
     pub events: Vec<GameEvent>,
@@ -119,6 +120,7 @@ impl World {
             targets: Vec::with_capacity(config.target_count),
             bosses: vec![],
             walls: vec![],
+            map_walls: vec![],
             objectives: vec![],
             match_state: MatchState {
                 elapsed: 0.,

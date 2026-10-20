@@ -310,25 +310,36 @@ pub fn clear_circle_position(pos: V2, radius: f32, bounds: Rect, walls: &[Rect])
         return Some(pos);
     }
     let mut best: Option<V2> = None;
-    for wall in walls.iter().take(256) {
-        let left = wall.x - radius - 0.1;
-        let right = wall.x + wall.w + radius + 0.1;
-        let top = wall.y - radius - 0.1;
-        let bottom = wall.y + wall.h + radius + 0.1;
-        for p in [
-            V2::new(left, pos.y),
-            V2::new(right, pos.y),
-            V2::new(pos.x, top),
-            V2::new(pos.x, bottom),
-            V2::new(left, top),
-            V2::new(left, bottom),
-            V2::new(right, top),
-            V2::new(right, bottom),
-        ] {
-            let p = bounds.clamp_circle(p, radius);
-            if valid(p) && best.is_none_or(|b| p.distance(pos) < b.distance(pos)) {
-                best = Some(p);
+    // Resolve the actual contact first. A long maze may have thousands of
+    // earlier, distant walls; using only those can teleport a hull across it.
+    for contacts_only in [true, false] {
+        for wall in walls
+            .iter()
+            .filter(|&&wall| !contacts_only || circle_rect(pos, radius, wall).is_some())
+            .take(256)
+        {
+            let left = wall.x - radius - 0.1;
+            let right = wall.x + wall.w + radius + 0.1;
+            let top = wall.y - radius - 0.1;
+            let bottom = wall.y + wall.h + radius + 0.1;
+            for p in [
+                V2::new(left, pos.y),
+                V2::new(right, pos.y),
+                V2::new(pos.x, top),
+                V2::new(pos.x, bottom),
+                V2::new(left, top),
+                V2::new(left, bottom),
+                V2::new(right, top),
+                V2::new(right, bottom),
+            ] {
+                let p = bounds.clamp_circle(p, radius);
+                if valid(p) && best.is_none_or(|b| p.distance(pos) < b.distance(pos)) {
+                    best = Some(p);
+                }
             }
+        }
+        if best.is_some() {
+            break;
         }
     }
     best
@@ -591,6 +602,44 @@ impl<T: Copy> SpatialGrid<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolving_contact_uses_a_nearby_wall_even_after_hundreds_of_distant_walls() {
+        let mut walls = vec![
+            Rect {
+                x: 1500.,
+                y: 1500.,
+                w: 20.,
+                h: 20.
+            };
+            300
+        ];
+        walls.push(Rect {
+            x: 500.,
+            y: 500.,
+            w: 100.,
+            h: 100.,
+        });
+        let start = V2::new(550., 550.);
+        let clear = clear_circle_position(
+            start,
+            20.,
+            Rect {
+                x: 0.,
+                y: 0.,
+                w: 2000.,
+                h: 2000.,
+            },
+            &walls,
+        )
+        .unwrap();
+        assert!(clear.distance(start) < 71.);
+        assert!(
+            walls
+                .iter()
+                .all(|&wall| circle_rect(clear, 20., wall).is_none())
+        );
+    }
     #[test]
     fn aiming_auto_fire_and_abilities_cannot_spend_or_cancel_stationary_spawn_immunity() {
         let mut world = crate::World::new(

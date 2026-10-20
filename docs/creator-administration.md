@@ -2,6 +2,8 @@
 
 Any v0.4.0 game client can use creator or central-owner tools when it holds the corresponding private signing key. Menu and verification code are public and reviewable. Public binaries and GitHub contain no private signing credentials. The optional self-contained credential editions remain private.
 
+Version 0.4.1 adds a bottom-right owner toggle with authorization diagnostics and a Maps tab in the creator panel. Map changes are signed, audited and checked against the server's catalog. They retain identities, roles, upgrades and scores, refresh map-dependent objects and projectiles, and roll back if current entities cannot fit safely.
+
 ## Roles and scope
 
 | Identity | Authorization | Available tools |

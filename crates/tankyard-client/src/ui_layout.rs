@@ -37,6 +37,15 @@ pub fn scale(width: f32, height: f32, preference: f32) -> f32 {
     ((width / 1280.).min(height / 800.) * preference).clamp(0.1, 8.)
 }
 
+pub fn staff_button(width: f32, height: f32, s: f32) -> Rect {
+    Rect::new(
+        width - 176. * s,
+        (height - 306. * s).max(296. * s),
+        156. * s,
+        28. * s,
+    )
+}
+
 /// Keep the layout fixed while its own scale slider is being dragged.
 #[derive(Default)]
 pub struct ScaleEdit {
@@ -166,6 +175,18 @@ impl Drop for CanvasGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn staff_toggle_fits_between_a_full_leaderboard_and_the_minimap() {
+        for (w, h) in [(800., 600.), (1280., 800.), (1920., 1080.), (3840., 2160.)] {
+            for preference in [0.8, 1., 1.4] {
+                let s = scale(w, h, preference);
+                let r = staff_button(w, h, s);
+                assert!(r.y >= 295. * s);
+                assert!(r.bottom() <= h - 236. * s);
+                assert!(r.x > 0. && r.right() < w);
+            }
+        }
+    }
     #[test]
     fn scale_drag_commits_once_on_release_and_cancellation_keeps_the_applied_scale() {
         let mut edit = ScaleEdit::default();

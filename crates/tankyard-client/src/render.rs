@@ -257,6 +257,7 @@ fn cannon(p: Vec2, angle: f32, length: f32, width: f32, color: Color, recoil: f3
 pub fn world(
     snapshot: &Snapshot,
     content: &Content,
+    map: Option<&tankyard_content::MapDef>,
     local: EntityId,
     view: &View,
     effects: &Effects,
@@ -353,39 +354,51 @@ pub fn world(
                 3 => V2::new(snapshot.config.width - 220.0, 220.0),
                 _ => V2::new(220.0, snapshot.config.height - 220.0),
             };
-            let p = view.screen(snapshot.config.arena_point(position));
+            let position = map
+                .and_then(|map| map.team_bases.iter().find(|base| base.team == team))
+                .map_or(position, |base| {
+                    V2::new(
+                        base.position[0] * snapshot.config.width,
+                        base.position[1] * snapshot.config.height,
+                    )
+                });
+            let home = V2::new(
+                bounds.x + position.x / snapshot.config.width * bounds.w,
+                bounds.y + position.y / snapshot.config.height * bounds.h,
+            );
+            let clearance = (home.x - bounds.x)
+                .min(home.y - bounds.y)
+                .min(bounds.x + bounds.w - home.x)
+                .min(bounds.y + bounds.h - home.y);
+            let fit = (snapshot.config.width / 3600.)
+                .min(snapshot.config.height / 2600.)
+                .clamp(0.35, 1.);
+            let radius = (180. * fit * scale).min((clearance - 8. * scale).max(0.));
+            let p = view.screen(home);
             let c = team_color(team, false, settings.colorblind);
-            draw_circle(p.x, p.y, 180.0 * z, alpha(c, 0.055));
-            draw_circle_lines(p.x, p.y, 180.0 * z, 2.0, alpha(c, 0.24));
+            draw_circle(p.x, p.y, radius * z, alpha(c, 0.055));
+            draw_circle_lines(p.x, p.y, radius * z, 2.0, alpha(c, 0.24));
         }
     }
+    let wall_scale = scale / snapshot.config.arena_scale.max(0.5);
+    let arena_center = V2::new(snapshot.config.width * 0.5, snapshot.config.height * 0.5);
     for wall in &snapshot.walls {
+        let wall = tankyard_core::Rect {
+            x: arena_center.x + (wall.x - arena_center.x) * wall_scale,
+            y: arena_center.y + (wall.y - arena_center.y) * wall_scale,
+            w: wall.w * wall_scale,
+            h: wall.h * wall_scale,
+        };
         if !view.visible(wall.center(), wall.w.max(wall.h)) {
             continue;
         }
         let p = view.screen(V2::new(wall.x, wall.y));
-        draw_rectangle(
-            p.x,
-            p.y,
-            wall.w * z,
-            wall.h * z,
-            if dark {
-                Color::new(0.105, 0.15, 0.21, 1.0)
-            } else {
-                Color::new(0.75, 0.79, 0.82, 1.0)
-            },
-        );
-        draw_rectangle_lines(
-            p.x,
-            p.y,
-            wall.w * z,
-            wall.h * z,
-            2.0 * z,
-            if dark {
-                Color::new(0.2, 0.29, 0.37, 1.0)
-            } else {
-                Color::new(0.44, 0.49, 0.54, 1.0)
-            },
+        tankyard_client::map_model::wall_geometry(
+            Rect::new(p.x, p.y, wall.w * z, wall.h * z),
+            tankyard_client::map_model::WallStyle::for_map(&snapshot.config.map),
+            dark,
+            settings.shape_quality,
+            &mut draw_model_primitive,
         );
     }
     if snapshot.config.mode == Mode::Survival {

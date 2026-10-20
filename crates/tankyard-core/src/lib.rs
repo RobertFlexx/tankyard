@@ -7,6 +7,7 @@ mod bosses;
 mod combat_regressions;
 mod drones;
 mod homing;
+mod map_layout;
 pub mod math;
 mod minions;
 pub mod modding;

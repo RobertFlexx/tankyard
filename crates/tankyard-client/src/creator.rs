@@ -32,6 +32,7 @@ pub struct CreatorUi {
     announcement: String,
     announcement_focus: bool,
     minutes: f32,
+    map: String,
 }
 impl CreatorUi {
     pub fn new() -> Self {
@@ -60,6 +61,7 @@ impl CreatorUi {
             announcement: String::new(),
             announcement_focus: false,
             minutes: 10.,
+            map: "open".into(),
         }
     }
     pub fn enabled(&self) -> bool {
@@ -73,6 +75,9 @@ impl CreatorUi {
             && self.round != Some(round)
         {
             self.reset_controls();
+            if let Some(snapshot) = &session.display {
+                self.map.clone_from(&snapshot.config.map);
+            }
             self.round = Some(round);
         }
         let Some(key) = &self.key else {
@@ -123,12 +128,7 @@ impl CreatorUi {
         }
     }
     fn button_rect(s: f32) -> Rect {
-        Rect::new(
-            screen_width() - 176. * s,
-            screen_height() - 306. * s,
-            156. * s,
-            28. * s,
-        )
+        crate::ui_layout::staff_button(screen_width(), screen_height(), s)
     }
     pub fn captures_pointer(&self, s: f32) -> bool {
         self.enabled() && (self.open || contains(Self::button_rect(s)))
@@ -276,10 +276,17 @@ impl CreatorUi {
             12. * s,
             muted_color(),
         );
-        let tab_width = (r.w - 68. * s) / 5.;
-        for (index, title) in ["Player", "World", "Tank class", "Moderation", "Announce"]
-            .into_iter()
-            .enumerate()
+        let tab_width = (r.w - 74. * s) / 6.;
+        for (index, title) in [
+            "Player",
+            "World",
+            "Tank class",
+            "Moderation",
+            "Announce",
+            "Maps",
+        ]
+        .into_iter()
+        .enumerate()
         {
             if button(
                 Rect::new(
@@ -303,6 +310,88 @@ impl CreatorUi {
         let y = r.y + 136. * s;
         let width = r.w - 48. * s;
         match self.tab {
+            5 => {
+                label("ARENA STYLE", x, y + 18. * s, 15. * s, muted_color());
+                let maps = &session.bundle.maps;
+                let pages = maps.len().div_ceil(8);
+                self.page = self.page.min(pages.saturating_sub(1));
+                for (slot, map) in maps.iter().skip(self.page * 8).take(8).enumerate() {
+                    if button(
+                        Rect::new(
+                            x + (slot % 2) as f32 * (width + 10. * s) / 2.,
+                            y + (40. + (slot / 2) as f32 * 60.) * s,
+                            (width - 10. * s) / 2.,
+                            48. * s,
+                        ),
+                        &map.name,
+                        self.map == map.id,
+                        available,
+                        s * 0.8,
+                    ) {
+                        self.map.clone_from(&map.id);
+                    }
+                }
+                if pages > 1 {
+                    if small_button(
+                        Rect::new(x, y + 292. * s, 100. * s, 32. * s),
+                        "Previous",
+                        s * 0.75,
+                    ) {
+                        self.page = self.page.saturating_sub(1);
+                    }
+                    center_label(
+                        &format!("{} / {pages}", self.page + 1),
+                        r.center().x,
+                        y + 315. * s,
+                        14. * s,
+                        muted_color(),
+                    );
+                    if small_button(
+                        Rect::new(x + width - 100. * s, y + 292. * s, 100. * s, 32. * s),
+                        "Next",
+                        s * 0.75,
+                    ) {
+                        self.page = (self.page + 1).min(pages - 1);
+                    }
+                }
+                if let Some(map) = maps.iter().find(|map| map.id == self.map) {
+                    for (row, line) in wrapped_lines(&map.description, width, 17. * s)
+                        .iter()
+                        .take(2)
+                        .enumerate()
+                    {
+                        label(
+                            line,
+                            x,
+                            y + (355. + row as f32 * 22.) * s,
+                            17. * s,
+                            text_color(),
+                        );
+                    }
+                }
+                wrap(
+                    "Keeps tank upgrades and scores. Refreshes cover, shapes and shots for everyone on this server.",
+                    x,
+                    y + 416. * s,
+                    width,
+                    15. * s,
+                    muted_color(),
+                );
+                if button(
+                    Rect::new(x, y + 490. * s, width, 36. * s),
+                    "Apply map style",
+                    true,
+                    available,
+                    s * 0.85,
+                ) {
+                    self.send(
+                        session,
+                        Command::Map {
+                            id: self.map.clone(),
+                        },
+                    );
+                }
+            }
             0 => {
                 if slider_value(
                     Rect::new(x, y, width, 48. * s),

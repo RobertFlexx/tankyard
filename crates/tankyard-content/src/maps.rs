@@ -68,6 +68,27 @@ pub fn validate_maps(maps: &[MapDef]) -> Result<(), String> {
     if maps.is_empty() || maps.len() > 256 {
         return Err("a map catalog needs between 1 and 256 arenas".into());
     }
+    // Wire size alone does not bound geometric work: a compact catalog can
+    // request hundreds of large navigation grids against thousands of walls.
+    // Reject the whole catalog before starting any connectivity traversal.
+    let mut geometry_work = 0_u64;
+    for map in maps {
+        if !range(map.width, 900., 16000.)
+            || !range(map.height, 700., 16000.)
+            || map.walls.len() > 2048
+        {
+            return Err(format!(
+                "{}: invalid dimensions or excessive geometry",
+                map.id
+            ));
+        }
+        geometry_work += (map.width / 80.).ceil() as u64
+            * (map.height / 80.).ceil() as u64
+            * map.walls.len().max(1) as u64;
+        if geometry_work > 16_000_000 {
+            return Err("map catalog exceeds the geometry validation budget".into());
+        }
+    }
     let mut ids = HashSet::new();
     for map in maps {
         if map.id.is_empty()
@@ -336,6 +357,28 @@ fn validate_connectivity(map: &MapDef) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_catalogs_cannot_request_unbounded_geometry_validation_work() {
+        let mut map = builtin_maps().remove(0);
+        map.width = 16000.;
+        map.height = 16000.;
+        map.walls = vec![[0.45, 0.45, 0.001, 0.001]; 2048];
+        assert!(
+            validate_maps(&[map.clone()])
+                .unwrap_err()
+                .contains("budget")
+        );
+        map.walls.truncate(64);
+        let maps: Vec<_> = (0..8)
+            .map(|index| {
+                let mut copy = map.clone();
+                copy.id = format!("arena_{index}");
+                copy
+            })
+            .collect();
+        assert!(validate_maps(&maps).unwrap_err().contains("budget"));
+    }
 
     #[test]
     fn all_eight_arenas_have_valid_clear_connected_geometry() {

@@ -118,6 +118,23 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    pub fn reset_preferences(&mut self) {
+        *self = Self {
+            player_name: std::mem::take(&mut self.player_name),
+            server_address: std::mem::take(&mut self.server_address),
+            favorites: std::mem::take(&mut self.favorites),
+            recent_servers: std::mem::take(&mut self.recent_servers),
+            window_position: self.window_position,
+            theme_chosen: true,
+            games_played: self.games_played,
+            total_kills: self.total_kills,
+            highest_score: self.highest_score,
+            unlocked_achievements: std::mem::take(&mut self.unlocked_achievements),
+            practice_records: std::mem::take(&mut self.practice_records),
+            enabled_mods: std::mem::take(&mut self.enabled_mods),
+            ..Self::default()
+        };
+    }
     pub fn use_safe_graphics(&mut self) {
         self.native_resolution = false;
         self.fullscreen = false;
@@ -415,6 +432,57 @@ pub fn bindable_pressed() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restoring_preferences_keeps_identity_servers_mods_and_earned_progress() {
+        let mut settings: Settings = serde_json::from_str(r#"{
+            "player_name":"Mira","server_address":"arena.example:5000",
+            "favorites":["favorite.example:5000"],"recent_servers":["recent.example:5000"],
+            "window_position":[-1800,75],"enabled_mods":["mods/fast_arena"],
+            "games_played":12,"total_kills":55,"highest_score":9000,
+            "unlocked_achievements":["meet_central_owner"],
+            "practice_records":[{"id":"shape_sprint","attempts":3,"completed":1,"best_ticks":2400,"best_progress":500}],
+            "width":1920,"height":1080,"fullscreen":true,"native_resolution":true,
+            "ui_scale":1.4,"master_volume":0.0,"colorblind":true,"high_contrast":true,
+            "reduced_motion":true,"auto_fire":true,"dark_arena":true,
+            "bindings":["Up","Down","Left","Right","Q","R"]
+        }"#).unwrap();
+        let before = serde_json::to_value(&settings).unwrap();
+        settings.reset_preferences();
+        settings.validate();
+        let after = serde_json::to_value(&settings).unwrap();
+        let defaults = Settings::default();
+        assert_eq!(
+            (settings.width, settings.height),
+            (defaults.width, defaults.height)
+        );
+        assert_eq!(settings.bindings, defaults.bindings);
+        assert_eq!(settings.ui_scale, defaults.ui_scale);
+        assert_eq!(settings.master_volume, defaults.master_volume);
+        assert!(!settings.fullscreen && !settings.native_resolution && !settings.auto_fire);
+        assert!(
+            !settings.colorblind
+                && !settings.high_contrast
+                && !settings.reduced_motion
+                && !settings.dark_arena
+        );
+        assert!(settings.theme_chosen);
+        for field in [
+            "player_name",
+            "server_address",
+            "favorites",
+            "recent_servers",
+            "window_position",
+            "enabled_mods",
+            "games_played",
+            "total_kills",
+            "highest_score",
+            "unlocked_achievements",
+            "practice_records",
+        ] {
+            assert_eq!(before[field], after[field], "{field}");
+        }
+    }
 
     #[test]
     fn profile_records_only_observed_player_progress_even_without_a_final_snapshot() {

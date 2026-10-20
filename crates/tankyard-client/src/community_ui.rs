@@ -125,13 +125,23 @@ impl CommunityUi {
         }
         false
     }
-    pub fn captures_pointer(&self, client: &NetworkClient, s: f32) -> bool {
-        (!client.permissions.is_empty() && contains(Self::server_button(s)))
+    pub fn captures_pointer(
+        &self,
+        client: &NetworkClient,
+        s: f32,
+        creator: bool,
+        owner: bool,
+    ) -> bool {
+        ((!client.permissions.is_empty() || owner) && contains(Self::server_button(s, creator)))
             || (self.typing && contains(self.chat_rect(s)))
             || self.admin_open
     }
-    fn server_button(s: f32) -> Rect {
-        Rect::new(254.0 * s, 54.0 * s, 110.0 * s, 24.0 * s)
+    fn server_button(s: f32, creator: bool) -> Rect {
+        if creator {
+            Rect::new(254.0 * s, 54.0 * s, 110.0 * s, 24.0 * s)
+        } else {
+            crate::ui_layout::staff_button(screen_width(), screen_height(), s)
+        }
     }
     fn chat_rect(&self, s: f32) -> Rect {
         if self.docked {
@@ -155,6 +165,8 @@ impl CommunityUi {
         snapshot: &Snapshot,
         s: f32,
         dock_chat: bool,
+        creator: bool,
+        owner: bool,
     ) {
         self.docked = dock_chat;
         if self.round != Some(snapshot.match_state.round) {
@@ -177,11 +189,23 @@ impl CommunityUi {
             }
             self.configuration.clone_from(&client.match_settings);
         }
-        if !client.permissions.is_empty() && small_button(Self::server_button(s), "Server", s * 0.8)
+        let title = if creator {
+            "Server"
+        } else if owner {
+            "Owner tools [F8]"
+        } else {
+            "Server tools [F8]"
+        };
+        if (!client.permissions.is_empty() || owner)
+            && small_button(Self::server_button(s, creator), title, s * 0.72)
         {
-            self.admin_open = !self.admin_open;
-            self.typing = false;
-            self.notice.clear();
+            if client.permissions.is_empty() {
+                client.last_action = Some(crate::central_owner::CentralOwner::unavailable(client));
+            } else {
+                self.admin_open = !self.admin_open;
+                self.typing = false;
+                self.notice.clear();
+            }
         }
         if client.chat_enabled && !self.admin_open {
             self.chat(client, s);

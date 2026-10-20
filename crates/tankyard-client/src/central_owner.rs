@@ -16,6 +16,18 @@ impl CentralOwner {
             ),
         }
     }
+    pub fn enabled(&self) -> bool {
+        self.key.is_some()
+    }
+    pub fn unavailable(client: &tankyard_server::NetworkClient) -> String {
+        match client.admin_server_id.as_deref() {
+            Some(id) if id != "tankyard-central" => format!(
+                "Owner tools unavailable: server ID is \"{id}\"; the central profile requires \"tankyard-central\"."
+            ),
+            Some(_) => "Owner access is disabled or verification has not succeeded. Check the server response and audit log.".into(),
+            None => "Waiting for the server administration handshake.".into(),
+        }
+    }
     pub fn authenticate(&self, session: &mut Session) {
         let Some(key) = &self.key else {
             return;

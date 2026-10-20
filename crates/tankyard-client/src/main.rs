@@ -459,6 +459,12 @@ impl App {
                     Err(error) => self.menu.error = format!("Could not save: {error}"),
                 }
             }
+            Action::ResetSettings => {
+                self.settings.reset_preferences();
+                self.menu.clear_focus();
+                self.menu.difficulty = self.settings.bot_difficulty;
+                self.handle(Action::Save);
+            }
             Action::PreviewAlarm => {
                 match self
                     .voice
@@ -755,18 +761,22 @@ impl App {
             || self.session.as_ref().is_some_and(|session| {
                 let community = match &session.engine {
                     session::Engine::Online { client, .. } => {
-                        self.community.captures_pointer(client, s)
-                            || client.active_notice().is_some_and(|notice| {
-                                contains(notifications::server_notice_rect(
-                                    notice,
-                                    s,
-                                    if self.effects.boss_arrival.is_some() {
-                                        188.
-                                    } else {
-                                        110.
-                                    } * s,
-                                ))
-                            })
+                        self.community.captures_pointer(
+                            client,
+                            s,
+                            self.creator.enabled(),
+                            self.central_owner.enabled(),
+                        ) || client.active_notice().is_some_and(|notice| {
+                            contains(notifications::server_notice_rect(
+                                notice,
+                                s,
+                                if self.effects.boss_arrival.is_some() {
+                                    188.
+                                } else {
+                                    110.
+                                } * s,
+                            ))
+                        })
                     }
                     _ => false,
                 };
@@ -803,6 +813,9 @@ impl App {
                 self.community.admin_open = false;
             } else if self.session.as_ref().is_some_and(|session| matches!(&session.engine, session::Engine::Online { client, .. } if !client.permissions.is_empty())) {
                 self.community.admin_open = !self.community.admin_open;
+            } else if self.central_owner.enabled()
+                && let Some(Session { engine: session::Engine::Online { client, .. }, .. }) = &self.session {
+                self.effects.notice(&central_owner::CentralOwner::unavailable(client));
             }
             self.hud.sandbox = false;
             self.hud.evolution = false;
@@ -1289,6 +1302,11 @@ impl App {
                 render::world(
                     snapshot,
                     &self.content,
+                    session
+                        .bundle
+                        .maps
+                        .iter()
+                        .find(|map| map.id == snapshot.config.map),
                     session.player,
                     &self.view,
                     &self.effects,
@@ -1494,8 +1512,14 @@ impl App {
             && let session::Engine::Online { client, .. } = &mut session.engine
             && let Some(snapshot) = &session.display
         {
-            self.community
-                .draw(client, snapshot, s, self.hud.evolution || self.hud.sandbox);
+            self.community.draw(
+                client,
+                snapshot,
+                s,
+                self.hud.evolution || self.hud.sandbox,
+                self.creator.enabled(),
+                self.central_owner.enabled(),
+            );
         }
         if !self.paused
             && !self.menu_over_game

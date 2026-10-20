@@ -466,8 +466,8 @@ impl VoiceChat {
                 "Click or M to unmute. Use headphones for voice chat."
             });
             let help = Rect::new(
-                r.x - 124. * s,
-                screen_height() - 292. * s,
+                r.x - 326. * s,
+                screen_height() - 270. * s,
                 308. * s,
                 66. * s,
             );

@@ -1,3 +1,11 @@
+# v0.4.1 checks (2026-10-20)
+
+398 public Rust tests, ten installer fixtures, formatting, Clippy with warnings denied, all 103 tank profiles and both bundled mods pass on Linux. New regressions cover preference reset without profile loss, bounded custom-map validation work, procedural cover containment/nonoverlap, Maze connectivity at small and maximum dimensions, scaling without coordinate drift, safe map-switch rollback, quicker population growth and nearby collision recovery in large maps.
+
+Native clicks at 800×600 and 1280×800 with 140% UI scale verify all seven Settings tabs, applying/persisting defaults while retaining profile progress and saved servers, and the bottom-right owner menu with a full leaderboard. A public client with the creator key successfully submits an audited Maps-tab change to an ordinary central-profile server. Native screenshots and a map layout/artwork sheet are in `artifacts/v041-review`.
+
+Protocol remains 16. Update the regular server for the new layouts, dynamic cover and signed creator map command. The [scoped review](security-review-v041.md) records the validation-work limit and other fixes. The central Pi still requires its operator's deployment; `server_id = "tankyard-central"` is required for central-owner access.
+
 # v0.4.0 checks (2026-10-20)
 
 389 public Rust tests, ten installer tests, formatting and Clippy with warnings denied pass on Linux. Four private real-key network tests verify creator and central-owner identity, host policy, impostors, replay/tampering rejection, revocation/re-enable, signed creator powers and a central-server-only ban. The compatible Linux build and ABI checks cover all five public executables. No identity signing credential is included in public source or packages.

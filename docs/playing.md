@@ -6,6 +6,10 @@ Join server and Settings → Servers have separate Favorites and Recent tabs. Cl
 
 On your first launch, choose Dark or Light from two live arena previews. The choice is saved; F9 or Settings changes it later. A small bar below your tank fills as your next manual shot reloads. Auto-firing and drone-only tanks hide the reload bar. Custom mods may still add charge weapons.
 
+Reset to defaults appears beside Save settings on every Settings tab. It applies and saves the default preferences and controls, keeping your name, progress, achievements, practice records, saved servers, mods and signing keys. VSync changes still require restarting the game.
+
+Map cover has distinct artwork, including Garden planters and Circuit Maze walls. Cover follows the animated arena border. The adaptive arena reaches its configured full size at sixteen participants; arrivals get faster expansion while departures retain gradual shrinkage.
+
 ## Controls
 
 | Action | Default control |
@@ -117,3 +121,5 @@ The verified creator has a gold **Game Creator** badge. Sharing an arena with an
 [Bastion Anticheat](bastion-anticheat.md) validates player intentions while the server runs movement, weapons, damage, and upgrades. Delayed or reordered inputs do not trigger cheating accusations or automatic bans. Signed creator powers are authorized changes to those server rules.
 
 Server hosts can open moderation with the Server button or F8. Creator and central-owner menus require the matching private key; see [server administration](creator-administration.md). Warnings and announcements appear in a centered banner and can be dismissed.
+
+Owner tools also have a bottom-right toggle. If the server cannot authorize the central-owner identity, clicking it explains the missing setup. Creator tools → Maps applies a map from the server's catalog, preserving tank progress and clearing transient shots. A layout that cannot safely fit current tanks, bosses or objectives is rejected.

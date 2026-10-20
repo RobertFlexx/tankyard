@@ -18,6 +18,7 @@ pub enum Command {
     Reload { value: f32 },
     Level { value: u8 },
     Class { id: String },
+    Map { id: String },
     Heal,
     FullBuild,
     ClearProjectiles,
@@ -103,7 +104,16 @@ pub(crate) fn handle(
         server.session.world.config.modded = true;
         return Ok(format!("Bot population: {count}"));
     }
+    let map_changed = matches!(&command, Command::Map { .. });
     let message = apply(&mut server.session, player, command)?;
+    if map_changed {
+        server
+            .settings
+            .world
+            .map
+            .clone_from(&server.session.world.config.map);
+        server.broadcast_match_settings();
+    }
     server.replicate_events();
     Ok(message)
 }
@@ -124,6 +134,18 @@ pub fn apply(
     command: Command,
 ) -> Result<String, String> {
     let index = creator_index(session, player)?;
+    if let Command::Map { id } = &command {
+        let map = session
+            .bundle
+            .maps
+            .iter()
+            .find(|map| &map.id == id)
+            .ok_or("Map is not available on this server.")?
+            .clone();
+        session.world.change_map(map)?;
+        session.world.config.modded = true;
+        return Ok("Map changed. Player progress kept.".into());
+    }
     let world = &mut session.world;
     let valid = match &command {
         Command::Speed { value } | Command::Reload { value } => {
@@ -137,7 +159,7 @@ pub fn apply(
             x.is_finite() && y.is_finite() && world.config.bounds().contains(V2::new(*x, *y))
         }
         Command::Heal => world.tanks[index].alive,
-        Command::Moderate { .. } => false,
+        Command::Moderate { .. } | Command::Map { .. } => false,
         _ => true,
     };
     if !valid {
@@ -220,7 +242,7 @@ pub fn apply(
             world.tanks[index].damage_scale = 1.;
             world.tanks[index].reload_scale = 1.;
         }
-        Command::Moderate { .. } => unreachable!(),
+        Command::Moderate { .. } | Command::Map { .. } => unreachable!(),
     }
     world.config.modded = true;
     Ok("Creator command applied.".into())
@@ -251,6 +273,9 @@ mod tests {
             Command::Class {
                 id: "missing".into(),
             },
+            Command::Map {
+                id: "missing".into(),
+            },
             Command::Teleport {
                 x: f32::INFINITY,
                 y: 0.,
@@ -276,6 +301,16 @@ mod tests {
         assert_eq!(local.world.tanks[0].class, "chronarch");
         assert!(local.world.admin_modifiers[&player].god);
         assert_eq!(local.world.tanks.iter().filter(|t| t.bot).count(), 4);
+        let before = local.world.tanks[0].clone();
+        apply(&mut local, player, Command::Map { id: "maze".into() }).unwrap();
+        let after = &local.world.tanks[0];
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.class, before.class);
+        assert_eq!(after.stats, before.stats);
+        assert!(after.game_creator);
+        assert!(local.world.position_clear(after.pos, after.radius));
+        assert_eq!(local.world.config.map, "maze");
+        assert!(!local.world.walls.is_empty());
         apply(&mut local, player, Command::Reset).unwrap();
         assert_eq!(local.world.tanks[0].speed_scale, 1.);
         assert!(local.world.admin_modifiers.is_empty());

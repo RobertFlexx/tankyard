@@ -52,6 +52,7 @@ pub enum Action {
     Join,
     Quit,
     Save,
+    ResetSettings,
     PreviewAlarm,
     Practice(usize),
 }
@@ -170,7 +171,7 @@ impl Menu {
             Page::Main => &[0],
             Page::Join => &[0, 1, 2],
             Page::Host => &[0, 2],
-            Page::Settings if self.settings_tab == 4 => &[0, 1],
+            Page::Settings if matches!(self.settings_tab, 4 | 6) => &[0, 1],
             _ => return,
         };
         let active = [self.name_active, self.address_active, self.password_active];
@@ -328,6 +329,20 @@ impl Menu {
             Page::Modes => self.modes_footer(settings, s),
             Page::Controls => self.controls_footer(s),
             Page::Settings => {
+                if button(
+                    Rect::new(
+                        screen_width() - 472.0 * s,
+                        screen_height() - 62.0 * s,
+                        200.0 * s,
+                        35.0 * s,
+                    ),
+                    "Reset to defaults",
+                    false,
+                    true,
+                    s * 0.85,
+                ) {
+                    return Action::ResetSettings;
+                }
                 if button(
                     Rect::new(
                         screen_width() - 260.0 * s,
@@ -2403,15 +2418,9 @@ mod tests {
             (1600.0, 900.0),
             (1920.0, 1080.0),
         ] {
-            let fit = (width / 1280.0_f32).min(height / 800.0);
             for setting_scale in [0.8_f32, 1.0, 1.4] {
-                let s = (fit * setting_scale)
-                    .min(((width - 24.0) / 1280.0).max(0.35))
-                    .min(((height - 24.0) / 800.0).max(0.35))
-                    .clamp(0.35, 2.75)
-                    .min(height / 800.0)
-                    .min(width / 1180.0);
-                let footer_top = height - 62.0 * s;
+                let s = crate::ui_layout::scale(width, height, setting_scale);
+                let footer_top = height.max(800. * s) - 79. * s;
                 let last_button_bottom = (158.0 + 64.0 + groups.last().unwrap().1) * s;
                 assert!(
                     last_button_bottom + 16.0 * s < footer_top,
@@ -2420,6 +2429,9 @@ mod tests {
                 let col = (width - 110.0 * s) * 0.5;
                 let right = 40.0 * s + col + 30.0 * s;
                 assert!(right + col <= width - 24.0 * s);
+                let reset = Rect::new(width - 472. * s, height - 62. * s, 200. * s, 35. * s);
+                assert!(reset.x > 150. * s);
+                assert!(reset.right() < width - 260. * s);
             }
         }
     }
@@ -2469,5 +2481,11 @@ mod tests {
         menu.settings_tab = 4;
         menu.focus_next(true);
         assert!(menu.address_active && !menu.password_active);
+        menu.settings_tab = 6;
+        menu.clear_focus();
+        menu.focus_next(false);
+        assert!(menu.name_active);
+        menu.focus_next(false);
+        assert!(menu.address_active);
     }
 }

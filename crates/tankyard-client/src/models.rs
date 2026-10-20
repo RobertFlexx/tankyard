@@ -11,6 +11,9 @@ struct Args {
     /// Export all boss models at their actual relative sizes.
     #[arg(long)]
     bosses: bool,
+    /// Export arena layouts and a close-up of their native cover artwork.
+    #[arg(long, conflicts_with = "bosses")]
+    maps: bool,
     #[arg(long, default_value = "artifacts/models/tanks.svg")]
     output: PathBuf,
     #[arg(long)]
@@ -31,6 +34,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.bosses {
         return export_bosses(&args);
+    }
+    if args.maps {
+        return export_maps(&args);
     }
     let content = if let Some(path) = args.content {
         Content::from_json(&std::fs::read_to_string(path)?)?
@@ -170,6 +176,82 @@ fn export_bosses(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "Exported {} bosses to {}",
         BossKind::ALL.len(),
+        args.output.display()
+    );
+    Ok(())
+}
+fn export_maps(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    use tankyard_client::map_model::{WallStyle, wall_geometry};
+    use tankyard_core::{World, WorldConfig};
+    let maps = tankyard_content::builtin_maps();
+    let columns = args.columns.min(4);
+    let width = columns * 640;
+    let height = maps.len().div_ceil(columns) * 620;
+    let mut svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\"><rect width=\"100%\" height=\"100%\" fill=\"#cdcdcd\"/>"
+    );
+    for (index, map) in maps.iter().enumerate() {
+        let x = (index % columns) as f32 * 640.;
+        let y = (index / columns) as f32 * 620.;
+        writeln!(
+            svg,
+            "<text x=\"{}\" y=\"{}\" font-family=\"DejaVu Sans,sans-serif\" font-size=\"20\" font-weight=\"bold\" fill=\"#404040\">{}</text>",
+            x + 24.,
+            y + 34.,
+            escape(&map.name)
+        )?;
+        let world = World::new(
+            WorldConfig {
+                map: map.id.clone(),
+                width: map.width,
+                height: map.height,
+                target_count: 0,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        let scale = (590. / map.width).min(430. / map.height);
+        let left = x + (640. - map.width * scale) / 2.;
+        let top = y + 56. + (430. - map.height * scale) / 2.;
+        writeln!(
+            svg,
+            "<rect x=\"{left}\" y=\"{top}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"#555\" stroke-width=\"2\"/>",
+            map.width * scale,
+            map.height * scale
+        )?;
+        let style = WallStyle::for_map(&map.id);
+        for wall in world.walls {
+            wall_geometry(
+                macroquad::prelude::Rect::new(
+                    left + wall.x * scale,
+                    top + wall.y * scale,
+                    wall.w * scale,
+                    wall.h * scale,
+                ),
+                style,
+                false,
+                2,
+                &mut |p| write_primitive(&mut svg, p),
+            );
+        }
+        if !map.walls.is_empty() || map.procedural != tankyard_content::MapProcedure::None {
+            wall_geometry(
+                macroquad::prelude::Rect::new(x + 130., y + 522., 380., 66.),
+                style,
+                false,
+                2,
+                &mut |p| write_primitive(&mut svg, p),
+            );
+        }
+    }
+    svg.push_str("</svg>\n");
+    if let Some(parent) = args.output.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&args.output, svg)?;
+    println!(
+        "Exported {} arenas to {}",
+        maps.len(),
         args.output.display()
     );
     Ok(())

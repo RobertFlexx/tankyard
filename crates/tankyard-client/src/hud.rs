@@ -943,8 +943,8 @@ impl Hud {
             right_label(
                 &format!("{ping:.0} ms"),
                 w - m,
-                m + 224.0 * s,
-                12.0 * s,
+                h - 66.0 * s,
+                10.0 * s,
                 muted_color(),
             );
         }

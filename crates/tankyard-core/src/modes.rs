@@ -2,103 +2,6 @@
 use crate::physics::circle_rect;
 use crate::*;
 impl World {
-    pub(crate) fn initialize_map(&mut self) {
-        self.walls.extend(self.map.walls.iter().map(|wall| Rect {
-            x: wall[0] * self.config.width,
-            y: wall[1] * self.config.height,
-            w: wall[2] * self.config.width,
-            h: wall[3] * self.config.height,
-        }));
-        match self.map.procedural {
-            tankyard_content::MapProcedure::Maze => self.maze_map(),
-            tankyard_content::MapProcedure::Dense => {
-                self.config.target_count = self.config.target_count.clamp(350, 10000);
-                for _ in 0..12 {
-                    let x = 200. + self.random() * (self.config.width - 500.);
-                    let y = 200. + self.random() * (self.config.height - 450.);
-                    self.walls.push(Rect {
-                        x,
-                        y,
-                        w: 90.,
-                        h: 70.,
-                    });
-                }
-            }
-            tankyard_content::MapProcedure::None => {}
-        }
-    }
-    fn maze_map(&mut self) {
-        let cols = (self.config.width / 360.).floor().max(3.) as usize;
-        let rows = (self.config.height / 360.).floor().max(3.) as usize;
-        let cw = self.config.width / cols as f32;
-        let ch = self.config.height / rows as f32;
-        let mut visited = vec![false; cols * rows];
-        let mut passage = vec![[false; 4]; cols * rows];
-        let mut stack = vec![0usize];
-        visited[0] = true;
-        while let Some(&cell) = stack.last() {
-            let x = cell % cols;
-            let y = cell / cols;
-            let mut neighbors = Vec::with_capacity(4);
-            if x + 1 < cols && !visited[cell + 1] {
-                neighbors.push((cell + 1, 0, 2));
-            }
-            if y + 1 < rows && !visited[cell + cols] {
-                neighbors.push((cell + cols, 1, 3));
-            }
-            if x > 0 && !visited[cell - 1] {
-                neighbors.push((cell - 1, 2, 0));
-            }
-            if y > 0 && !visited[cell - cols] {
-                neighbors.push((cell - cols, 3, 1));
-            }
-            if neighbors.is_empty() {
-                stack.pop();
-                continue;
-            }
-            let n = (self.random() * neighbors.len() as f32) as usize;
-            let (next, dir, reverse) = neighbors[n.min(neighbors.len() - 1)];
-            passage[cell][dir] = true;
-            passage[next][reverse] = true;
-            visited[next] = true;
-            stack.push(next);
-        }
-        // A spanning tree guarantees connectivity; a few seeded loops reduce camping.
-        for y in 0..rows {
-            for x in 0..cols {
-                let cell = y * cols + x;
-                if x + 1 < cols && self.random() < 0.12 {
-                    passage[cell][0] = true;
-                    passage[cell + 1][2] = true;
-                }
-                if y + 1 < rows && self.random() < 0.12 {
-                    passage[cell][1] = true;
-                    passage[cell + cols][3] = true;
-                }
-            }
-        }
-        for y in 0..rows {
-            for x in 0..cols {
-                let cell = y * cols + x;
-                if x + 1 < cols && !passage[cell][0] {
-                    self.walls.push(Rect {
-                        x: (x + 1) as f32 * cw - 18.,
-                        y: y as f32 * ch,
-                        w: 36.,
-                        h: ch + 18.,
-                    });
-                }
-                if y + 1 < rows && !passage[cell][1] {
-                    self.walls.push(Rect {
-                        x: x as f32 * cw,
-                        y: (y + 1) as f32 * ch - 18.,
-                        w: cw + 18.,
-                        h: 36.,
-                    });
-                }
-            }
-        }
-    }
     pub(crate) fn initialize_mode(&mut self) {
         match self.config.mode {
             Mode::Domination => {
@@ -116,7 +19,7 @@ impl World {
                     self.objectives.push(Objective {
                         id,
                         pos,
-                        radius: 130.,
+                        radius: self.map_object_scale() * 130.,
                         team: 0,
                         progress: 0.,
                         contested: false,

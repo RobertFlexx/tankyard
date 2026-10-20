@@ -1,4 +1,4 @@
-//! Population changes move the border, never the coordinate system or map walls.
+//! Population changes ease the border and cover together in world coordinates.
 use crate::{ArenaEvent, DT, Mode, V2, World};
 
 impl World {
@@ -23,12 +23,18 @@ impl World {
             .max(900. / self.config.width)
             .max(700. / self.config.height)
             .min(1.);
-        let density = ((count.clamp(2, 24) - 2) as f32 / 22.).sqrt();
+        let density = ((count.clamp(2, 16) - 2) as f32 / 14.).sqrt();
         let target = minimum + (1. - minimum) * density;
         let old = self.config.arena_scale;
-        // Critically damped motion, limited to 24 world units/second per edge.
-        let acceleration = (target - old) * 0.36 - self.arena_velocity * 1.2;
-        let limit = 48. / self.config.width.max(self.config.height);
+        // Expand promptly for arrivals; keep shrinkage slow enough to react.
+        let growing = target > old;
+        let (spring, damping, speed) = if growing {
+            (0.9, 1.8, 192.)
+        } else {
+            (0.36, 1.2, 48.)
+        };
+        let acceleration = (target - old) * spring - self.arena_velocity * damping;
+        let limit = speed / self.config.width.max(self.config.height);
         self.arena_velocity = (self.arena_velocity + acceleration * DT).clamp(-limit, limit);
         let next = (old + self.arena_velocity * DT).clamp(minimum, 1.);
         self.config.arena_scale =
@@ -38,9 +44,7 @@ impl World {
             } else {
                 next
             };
-        let ratio = self.config.arena_scale / old;
         let center = V2::new(self.config.width * 0.5, self.config.height * 0.5);
-        let bounds = self.config.bounds();
         if self.tick.is_multiple_of(15) && self.match_state.arena.event != ArenaEvent::ShapeRush {
             let excess = self
                 .targets
@@ -59,7 +63,16 @@ impl World {
                 }
             }
         }
+        if self.config.arena_scale == old {
+            return;
+        }
+        self.scale_map_walls();
+        let ratio = self.config.arena_scale / old;
+        let bounds = self.config.bounds();
         for objective in &mut self.objectives {
+            if self.config.mode == Mode::Domination {
+                objective.radius *= ratio;
+            }
             let at_home =
                 objective.carrier.is_none() && objective.pos.distance(objective.home) < 1.;
             objective.home = center + (objective.home - center) * ratio;
@@ -111,6 +124,38 @@ impl World {
 mod tests {
     use crate::*;
     use tankyard_content::Content;
+
+    #[test]
+    fn sixteen_participants_get_the_full_arena_with_faster_growth_and_gentle_shrinkage() {
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        world.add_player("Pilot", false);
+        for _ in 0..3000 {
+            world.update_arena_size();
+        }
+        let small = world.config.arena_scale;
+        for _ in 0..15 {
+            world.add_player("Arrival", true);
+        }
+        for _ in 0..600 {
+            world.update_arena_size();
+        }
+        assert!(world.config.arena_scale > 0.99);
+        for _ in 0..300 {
+            world.update_arena_size();
+        }
+        assert!(world.config.arena_scale > 0.999);
+        let old = world.config.arena_scale;
+        world.tanks.truncate(1);
+        world.update_arena_size();
+        assert!(old - world.config.arena_scale <= 48. / world.config.width * DT + 0.000001);
+        assert!(small < 0.66);
+    }
 
     #[test]
     fn borders_ease_in_both_directions_without_respawn_pulsing() {
