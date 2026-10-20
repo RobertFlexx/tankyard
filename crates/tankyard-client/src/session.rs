@@ -328,7 +328,12 @@ impl Session {
                 && let Some(host) = host
             {
                 self.owner_registered = true;
-                match host.command_async(&format!("owner-client {}", client.client_id())) {
+                let public: String = client
+                    .admin_public_key()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                match host.command_async(&format!("owner-client {} {public}", client.client_id())) {
                     Ok(reply) => self.host_request = Some(reply),
                     Err(error) => self.notice = Some(error.to_string()),
                 }

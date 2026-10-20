@@ -16,12 +16,18 @@ pub(crate) struct Peer {
     pub last_input_at: Duration,
     pub last_sequence: Option<u32>,
     pub control_tokens: f32,
+    pub queued_control: Option<Bytes>,
     pub input_tokens: f32,
     pub voice_tokens: f32,
     pub last_voice_sequence: Option<u32>,
     pub voice_muted: bool,
     pub spectating: Option<EntityId>,
     pub disconnect_at: Option<Duration>,
+    pub admin_key: Option<[u8; 32]>,
+    pub admin_nonce: Option<[u8; 32]>,
+    pub last_admin_sequence: Option<u64>,
+    pub central_owner: bool,
+    pub central_proof_used: bool,
     pub creator_nonce: Option<[u8; 32]>,
     pub creator: bool,
     pub creator_session_nonce: Option<[u8; 32]>,
@@ -416,12 +422,18 @@ impl UdpServer {
                             last_input_at: self.elapsed,
                             last_sequence: None,
                             control_tokens: 24.,
+                            queued_control: None,
                             input_tokens: 256.,
                             voice_tokens: 8.,
                             last_voice_sequence: None,
                             voice_muted: false,
                             spectating: None,
                             disconnect_at: None,
+                            admin_key: None,
+                            admin_nonce: None,
+                            last_admin_sequence: None,
+                            central_owner: false,
+                            central_proof_used: false,
                             creator_nonce: None,
                             creator: false,
                             creator_session_nonce: None,
@@ -467,12 +479,22 @@ impl UdpServer {
             return;
         }
         for _ in 0..32 {
-            let Some(bytes) = self.server.receive_message(client, CONTROL_CHANNEL) else {
+            let Some(bytes) = self
+                .peers
+                .get_mut(&client)
+                .and_then(|peer| peer.queued_control.take())
+                .or_else(|| self.server.receive_message(client, CONTROL_CHANNEL))
+            else {
                 break;
             };
             if !self.take_token(client, true) {
-                self.reject(client, "Control request rate exceeded.");
-                return;
+                // A delayed reliable burst is backpressured, not discarded or
+                // treated as cheating. The reliable channel and this one-slot
+                // pending buffer have fixed memory and work limits.
+                if let Some(peer) = self.peers.get_mut(&client) {
+                    peer.queued_control = Some(bytes);
+                }
+                break;
             }
             match decode_control(&bytes) {
                 Ok(message) => self.handle_control(client, message),
@@ -653,6 +675,7 @@ impl UdpServer {
             name,
             password,
             account_token,
+            admin_key,
         } = message
         {
             if entity.is_some() {
@@ -718,7 +741,11 @@ impl UdpServer {
                     tank.game_creator = peer.creator;
                 }
             }
+            if let Some(peer) = self.peers.get_mut(&client) {
+                peer.admin_key = Some(admin_key);
+            }
             self.welcome(client, player);
+            self.admin_challenge(client);
             let nonce = renet_netcode::generate_random_bytes::<32>();
             if let Some(peer) = self.peers.get_mut(&client) {
                 peer.creator_nonce = Some(nonce);
@@ -820,12 +847,19 @@ impl UdpServer {
                 self.community_result(client, result);
                 return;
             }
-            ClientControl::Admin { round, command } => {
-                let result = if round == self.session.world.match_state.round {
-                    self.server_command(client, command)
-                } else {
-                    Err(NetError("Match changed. Select the player again.".into()))
-                };
+            ClientControl::CentralOwnerProof { signature } => {
+                let result = self.central_owner_proof(client, &signature);
+                self.community_result(client, result);
+                return;
+            }
+            ClientControl::Admin {
+                round,
+                sequence,
+                command,
+                signature,
+            } => {
+                let result =
+                    self.signed_server_command(client, round, sequence, command, &signature);
                 match result {
                     Ok(()) => self.send_control(
                         client,
@@ -912,6 +946,7 @@ impl UdpServer {
         );
     }
     pub(crate) fn send_access(&mut self, client: u64) {
+        self.sync_player_badge(client);
         let grant = self.access.grant(client, unix_time().as_secs());
         self.send_control(
             client,
@@ -1570,6 +1605,7 @@ mod tests {
             victim: 5000,
             name: "Same-tick rival".into(),
             game_creator: false,
+            server_badge: Default::default(),
         });
         let batches = encode_event_batches(7, &events).unwrap();
         assert!(batches.len() > 1);

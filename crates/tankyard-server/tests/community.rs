@@ -40,6 +40,107 @@ fn ready(server: &mut UdpServer, clients: &mut [&mut NetworkClient]) {
     }
     panic!("handshake did not finish");
 }
+
+#[test]
+fn host_badges_warnings_announcements_and_delegation_are_server_scoped() {
+    use tankyard_core::ServerBadge;
+    use tankyard_protocol::NoticeKind;
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let mut host = NetworkClient::connect(&server.address.to_string(), "Host", "").unwrap();
+    let mut player =
+        NetworkClient::connect(&server.address.to_string(), "Central Server Owner", "").unwrap();
+    ready(&mut server, &mut [&mut host, &mut player]);
+    let host_id = host.player_id.unwrap();
+    let player_id = player.player_id.unwrap();
+    assert!(
+        !server
+            .admin_command(&format!("role {host_id} owner"))
+            .message
+            .starts_with("Error:")
+    );
+    pump(&mut server, &mut [&mut host, &mut player], 8);
+    assert_eq!(
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|t| t.id == host_id)
+            .unwrap()
+            .server_badge,
+        ServerBadge::Host
+    );
+    assert_eq!(
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|t| t.id == player_id)
+            .unwrap()
+            .server_badge,
+        ServerBadge::Player
+    );
+    assert!(!player.admin(ServerCommand::Announce {
+        text: "Forged".into()
+    }));
+    assert!(host.admin(ServerCommand::Warn {
+        player: player_id,
+        reason: "Please keep play friendly.".into()
+    }));
+    pump(&mut server, &mut [&mut host, &mut player], 8);
+    assert_eq!(player.active_notice().unwrap().kind, NoticeKind::Warning);
+    assert!(host.active_notice().is_none());
+    assert!(host.admin(ServerCommand::Announce {
+        text: "Welcome to this server.".into()
+    }));
+    pump(&mut server, &mut [&mut host, &mut player], 8);
+    assert_eq!(host.active_notice().unwrap().kind, NoticeKind::Announcement);
+    assert_eq!(
+        player.active_notice().unwrap().kind,
+        NoticeKind::Warning,
+        "announcement cannot erase an unread warning"
+    );
+    assert!(host.admin(ServerCommand::Nominate {
+        player: player_id,
+        role: Role::Moderator,
+        permissions: tankyard_server::access::Grant::for_role(Role::Moderator).permissions
+    }));
+    pump(&mut server, &mut [&mut host, &mut player], 8);
+    assert!(player.permissions.contains(&Permission::Warn));
+    assert_eq!(
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|t| t.id == player_id)
+            .unwrap()
+            .server_badge,
+        ServerBadge::Moderator
+    );
+    assert!(player.admin(ServerCommand::Warn {
+        player: host_id,
+        reason: "Forged authority".into()
+    }));
+    pump(&mut server, &mut [&mut host, &mut player], 8);
+    assert_eq!(host.active_notice().unwrap().kind, NoticeKind::Announcement);
+    assert!(
+        player
+            .last_action
+            .as_ref()
+            .unwrap()
+            .contains("equal or higher")
+    );
+    assert!(
+        !server
+            .session
+            .world
+            .tanks
+            .iter()
+            .any(|tank| tank.game_creator)
+    );
+}
 #[test]
 fn names_roles_and_forged_proofs_cannot_enable_private_creator_tools() {
     let mut server = UdpServer::bind(settings()).unwrap();
@@ -167,7 +268,7 @@ fn community_delegation_chat_privacy_and_muting_are_authoritative() {
     );
     assert_eq!(owner.role, Role::Owner);
     assert!(owner.chat_enabled);
-    owner.snapshot.as_mut().unwrap().match_state.round = 0;
+    owner.snapshot.as_mut().unwrap().match_state.round = server.session.world.match_state.round + 1;
     assert!(owner.admin(ServerCommand::Kick {
         player: moderator_id,
         reason: String::new()

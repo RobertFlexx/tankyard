@@ -283,6 +283,7 @@ impl World {
             damage_scale: 1.,
             stasis: 0.,
             game_creator: false,
+            server_badge: Default::default(),
         });
         if matches!(self.config.mode, Mode::Deathmatch | Mode::Sandbox) {
             self.set_level_unchecked(id, 30);
@@ -1051,6 +1052,7 @@ impl World {
                 victim: id,
                 name: self.tanks[i].name.clone(),
                 game_creator: self.tanks[i].game_creator,
+                server_badge: self.tanks[i].server_badge,
             };
             self.event_detail(
                 EventKind::Kill,
@@ -1978,6 +1980,7 @@ mod important_event_regressions {
                 victim: 2,
                 name: "Target".into(),
                 game_creator: false,
+                server_badge: Default::default(),
             }),
         );
         assert_eq!(world.events.len(), 512);

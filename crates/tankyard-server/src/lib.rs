@@ -3,6 +3,7 @@
 pub mod access;
 pub mod accounts;
 mod admin;
+mod administration;
 mod chat;
 mod client;
 mod community;

@@ -246,15 +246,49 @@ pub struct Tank {
     /// Set only after the server verifies the creator's signing key.
     #[serde(default)]
     pub game_creator: bool,
+    #[serde(default)]
+    pub server_badge: ServerBadge,
 }
-impl Tank {
-    pub fn display_name(&self) -> String {
-        display_player_name(&self.name, self.game_creator)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ServerBadge {
+    #[default]
+    Player,
+    Moderator,
+    Admin,
+    Host,
+    CentralOwner,
+}
+impl ServerBadge {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Player => "",
+            Self::Moderator => "Moderator",
+            Self::Admin => "Admin",
+            Self::Host => "Server Host",
+            Self::CentralOwner => "Central Server Owner",
+        }
     }
 }
-pub fn display_player_name(name: &str, game_creator: bool) -> String {
-    if game_creator {
-        format!("{name} [Game Creator]")
+impl Tank {
+    pub fn badge(&self) -> &'static str {
+        if self.game_creator {
+            "Game Creator"
+        } else {
+            self.server_badge.label()
+        }
+    }
+    pub fn display_name(&self) -> String {
+        display_player_name(&self.name, self.game_creator, self.server_badge)
+    }
+}
+pub fn display_player_name(name: &str, game_creator: bool, server_badge: ServerBadge) -> String {
+    let badge = if game_creator {
+        "Game Creator"
+    } else {
+        server_badge.label()
+    };
+    if !badge.is_empty() {
+        format!("{name} [{badge}]")
     } else {
         name.to_owned()
     }
@@ -307,6 +341,7 @@ impl Clone for Tank {
             damage_scale: self.damage_scale,
             stasis: self.stasis,
             game_creator: self.game_creator,
+            server_badge: self.server_badge,
         }
     }
     fn clone_from(&mut self, source: &Self) {
@@ -354,6 +389,7 @@ impl Clone for Tank {
         self.damage_scale = source.damage_scale;
         self.stasis = source.stasis;
         self.game_creator = source.game_creator;
+        self.server_badge = source.server_badge;
     }
 }
 
@@ -661,6 +697,8 @@ pub struct Elimination {
     pub victim: EntityId,
     pub name: String,
     pub game_creator: bool,
+    #[serde(default)]
+    pub server_badge: ServerBadge,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GameEvent {

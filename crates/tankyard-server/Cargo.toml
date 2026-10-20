@@ -6,6 +6,7 @@ license.workspace = true
 default-run = "tankyard-server"
 
 [dependencies]
+ring = "0.17"
 bastion-anticheat.workspace = true
 serde.workspace = true
 toml.workspace = true

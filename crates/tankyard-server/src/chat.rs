@@ -169,6 +169,7 @@ mod tests {
             player: 1,
             name: "Pilot".into(),
             game_creator: false,
+            server_badge: Default::default(),
             text: "Hello".into(),
             time: 1,
         }

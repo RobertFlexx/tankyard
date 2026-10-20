@@ -227,6 +227,7 @@ impl Effects {
                         name: tankyard_core::display_player_name(
                             &sanitize_name(&elimination.name),
                             elimination.game_creator,
+                            elimination.server_badge,
                         ),
                         life: 3.5,
                     });
@@ -901,6 +902,7 @@ mod elimination_regressions {
                 victim,
                 name: format!("Rival {victim}"),
                 game_creator: false,
+                server_badge: Default::default(),
             }),
         };
         let batch = vec![make(8), make(9)];
@@ -927,6 +929,7 @@ mod elimination_regressions {
                     victim: 50,
                     name: "A".repeat(200) + "\nBAD",
                     game_creator: false,
+                    server_badge: Default::default(),
                 }),
             }],
             7,

@@ -44,6 +44,47 @@ fn ready(server: &mut UdpServer, clients: &mut [&mut NetworkClient]) {
 }
 
 #[test]
+fn delayed_reliable_controls_are_deferred_without_disconnects_or_lost_requests() {
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Burst", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    // More than the entire control burst allowance arrives before a server tick.
+    // Alternating levels makes the last request observably different.
+    for i in 0..48 {
+        assert!(client.sandbox_level(if i == 47 { 55 } else { 3 }));
+    }
+    pump(&mut server, &mut [&mut client], 240);
+    assert!(client.is_ready());
+    assert_eq!(
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|t| Some(t.id) == client.player_id)
+            .unwrap()
+            .level,
+        55
+    );
+}
+
+#[test]
+fn failed_ban_storage_leaves_the_target_connected_and_no_hidden_ban() {
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Player", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    let file = std::env::temp_dir().join(format!("tankyard-ban-parent-{}", client.client_id()));
+    std::fs::write(&file, b"not a directory").unwrap();
+    server.settings.ban_file = file.join("bans.json").to_string_lossy().into();
+    let result = server.admin_command(&format!("ban {} 5", client.player_id.unwrap()));
+    assert!(result.message.starts_with("Error:"));
+    assert!(server.admin_command("bans").message.is_empty());
+    pump(&mut server, &mut [&mut client], 12);
+    assert!(client.is_ready());
+    std::fs::remove_file(file).unwrap();
+}
+
+#[test]
 fn banning_one_loopback_relay_client_keeps_other_and_new_players_connected() {
     let mut server = UdpServer::bind(settings()).unwrap();
     let address = server.address.to_string();

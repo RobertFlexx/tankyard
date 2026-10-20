@@ -33,6 +33,8 @@ pub enum ServerRole {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ServerPermission {
+    Warn,
+    Announce,
     Kick,
     Ban,
     Mute,
@@ -43,7 +45,9 @@ pub enum ServerPermission {
     ViewAudit,
 }
 impl ServerPermission {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
+        Self::Warn,
+        Self::Announce,
         Self::Kick,
         Self::Ban,
         Self::Mute,
@@ -67,11 +71,20 @@ pub struct ChatMessage {
     pub name: String,
     #[serde(default)]
     pub game_creator: bool,
+    #[serde(default)]
+    pub server_badge: tankyard_core::ServerBadge,
     pub text: String,
     pub time: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerCommand {
+    Warn {
+        player: u64,
+        reason: String,
+    },
+    Announce {
+        text: String,
+    },
     Kick {
         player: u64,
         reason: String,
@@ -112,8 +125,17 @@ pub enum ServerCommand {
 }
 impl ServerCommand {
     pub fn valid(&self) -> bool {
-        let reason = |s: &str| s.len() <= 160 && !s.chars().any(char::is_control);
+        let reason = |s: &str| {
+            s.len() <= 640 && s.chars().count() <= 160 && !s.chars().any(char::is_control)
+        };
         match self {
+            Self::Warn { player, reason: r } => *player > 0 && reason(r) && !r.trim().is_empty(),
+            Self::Announce { text } => {
+                !text.trim().is_empty()
+                    && text.len() <= 640
+                    && text.chars().count() <= 160
+                    && !text.chars().any(char::is_control)
+            }
             Self::Kick { player, reason: r } => *player > 0 && reason(r),
             Self::Ban {
                 player,
@@ -154,6 +176,8 @@ impl ServerCommand {
     }
     pub fn permission(&self) -> ServerPermission {
         match self {
+            Self::Warn { .. } => ServerPermission::Warn,
+            Self::Announce { .. } => ServerPermission::Announce,
             Self::Kick { .. } => ServerPermission::Kick,
             Self::Ban { .. } => ServerPermission::Ban,
             Self::Mute { .. } => ServerPermission::Mute,
@@ -164,6 +188,33 @@ impl ServerCommand {
             }
             Self::ReloadMods => ServerPermission::ReloadMods,
             Self::ReadAudit => ServerPermission::ViewAudit,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoticeKind {
+    Warning,
+    Announcement,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServerNotice {
+    pub kind: NoticeKind,
+    pub text: String,
+}
+impl ServerNotice {
+    pub fn valid(&self) -> bool {
+        !self.text.trim().is_empty()
+            && self.text.len() <= 640
+            && self.text.chars().count() <= 160
+            && !self.text.chars().any(char::is_control)
+    }
+    pub fn seconds(&self) -> u64 {
+        if self.kind == NoticeKind::Warning {
+            12
+        } else {
+            5
         }
     }
 }

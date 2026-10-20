@@ -8,13 +8,15 @@ use tankyard_content::Content;
 use tankyard_core::{BossKind, EntityId, GameEvent, PlayerInput, Snapshot};
 mod creator;
 pub use creator::*;
+mod administration;
+pub use administration::*;
 mod community;
 pub use community::*;
 mod voice;
 pub use voice::*;
 
-pub const PROTOCOL_VERSION: u32 = 15;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_000f;
+pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0010;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -86,6 +88,7 @@ pub enum ClientControl {
         name: String,
         password: String,
         account_token: Option<String>,
+        admin_key: [u8; 32],
     },
     UpgradeStat {
         stat: u8,
@@ -116,7 +119,12 @@ pub enum ClientControl {
     },
     Admin {
         round: u32,
+        sequence: u64,
         command: ServerCommand,
+        signature: Vec<u8>,
+    },
+    CentralOwnerProof {
+        signature: Vec<u8>,
     },
     Spectate {
         round: u32,
@@ -127,7 +135,9 @@ pub enum ClientControl {
 impl ClientControl {
     pub fn valid(&self) -> bool {
         match self {
-            Self::CreatorProof { signature } => signature.len() == 64,
+            Self::CreatorProof { signature } | Self::CentralOwnerProof { signature } => {
+                signature.len() == 64
+            }
             Self::OwnerExtension {
                 round,
                 payload,
@@ -157,7 +167,12 @@ impl ClientControl {
                     && !text.chars().any(char::is_control)
             }
             Self::JoinRoom { room } => tankyard_mods::identifier(room),
-            Self::Admin { command, .. } => command.valid(),
+            Self::Admin {
+                round,
+                command,
+                signature,
+                ..
+            } => *round > 0 && command.valid() && signature.len() == 64,
             Self::Spectate { round, target } => *round > 0 && target.is_none_or(|id| id > 0),
         }
     }
@@ -165,6 +180,14 @@ impl ClientControl {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerControl {
+    AdminChallenge {
+        nonce: [u8; 32],
+        server_id: String,
+        central_owner: bool,
+    },
+    Notice {
+        notice: ServerNotice,
+    },
     CreatorChallenge {
         nonce: [u8; 32],
         owner_extension: bool,
@@ -713,6 +736,8 @@ mod tests {
     #[test]
     fn match_controls_and_current_settings_roundtrip_with_bounded_values() {
         let command = ClientControl::Admin {
+            sequence: 0,
+            signature: vec![0; 64],
             round: 3,
             command: ServerCommand::ConfigureMatch {
                 mode: tankyard_core::Mode::Domination,
@@ -725,6 +750,8 @@ mod tests {
             decoded,
             ClientControl::Admin {
                 round: 3,
+                sequence: _,
+                signature: _,
                 command: ServerCommand::ConfigureMatch {
                     mode: tankyard_core::Mode::Domination,
                     ..

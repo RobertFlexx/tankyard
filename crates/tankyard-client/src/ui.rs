@@ -598,7 +598,7 @@ pub fn text_field(
     s: f32,
     secret: bool,
 ) {
-    use tankyard_client::text_edit::{Edit, KeyRepeat, text_character};
+    use tankyard_client::text_edit::{Edit, KeyRepeat, shortcut_character, text_character};
     let interactive = INTERACTIVE.with(|state| state.get());
     let clicked = interactive && is_mouse_button_pressed(MouseButton::Left) && contains(rect);
     if is_mouse_button_pressed(MouseButton::Left) && interactive {
@@ -611,15 +611,17 @@ pub fn text_field(
     let padding = 12.0 * s;
     let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
     let alt = is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt);
+    let modifiers = [
+        KeyCode::LeftControl,
+        KeyCode::RightControl,
+        KeyCode::LeftSuper,
+        KeyCode::RightSuper,
+    ];
+    let command_held = !alt && modifiers.into_iter().any(is_key_down);
     let command = !alt
-        && [
-            KeyCode::LeftControl,
-            KeyCode::RightControl,
-            KeyCode::LeftSuper,
-            KeyCode::RightSuper,
-        ]
-        .into_iter()
-        .any(is_key_down);
+        && modifiers
+            .into_iter()
+            .any(|key| is_key_down(key) || is_key_pressed(key) || is_key_released(key));
     FIELDS.with(|fields| {
         let mut fields = fields.borrow_mut();
         if fields.len() > 64 {
@@ -718,8 +720,10 @@ pub fn text_field(
                 }
             }
             let mut typed = String::new();
+            let mut chord_chars = [KeyCode::A, KeyCode::C, KeyCode::X, KeyCode::V]
+                .map(|key| command && is_key_pressed(key));
             while let Some(c) = get_char_pressed() {
-                if !command {
+                if !command_held && !shortcut_character(c, &mut chord_chars) {
                     typed.push(c);
                 }
             }
@@ -865,15 +869,15 @@ pub fn progress(rect: Rect, ratio: f32, color: Color) {
 /// Reserve the badge and score before fitting a long player name. Creator
 /// identity must remain legible even on a narrow leaderboard row.
 pub fn fitted_player_name(tank: &tankyard_core::Tank, size: f32, width: f32) -> String {
-    let badge = if tank.game_creator {
-        " [Game Creator]"
+    let badge = if tank.badge().is_empty() {
+        String::new()
     } else {
-        ""
+        format!(" [{}]", tank.badge())
     };
     let name = fitted_label(
         &tank.name,
         size,
-        (width - label_width(badge, size)).max(size),
+        (width - label_width(&badge, size)).max(size),
     );
     format!("{name}{badge}")
 }
@@ -887,12 +891,16 @@ pub fn arcade_player_label(
 ) {
     let suffix_width = label_width(suffix, size);
     let badge_size = size * 0.66;
-    let badge_width = if tank.game_creator {
-        label_width("Game Creator", badge_size) + size * 0.6
+    let badge_width = if !tank.badge().is_empty() {
+        label_width(tank.badge(), badge_size) + size * 0.6
     } else {
         0.
     };
-    let gap = if tank.game_creator { size * 0.35 } else { 0. };
+    let gap = if !tank.badge().is_empty() {
+        size * 0.35
+    } else {
+        0.
+    };
     let name = fitted_label(
         &tank.name,
         size,
@@ -901,13 +909,13 @@ pub fn arcade_player_label(
     let name_width = label_width(&name, size);
     let left = at.x - (name_width + gap + badge_width + suffix_width) * 0.5;
     arcade_label(&name, left, at.y, size);
-    if tank.game_creator {
+    if !tank.badge().is_empty() {
         let x = left + name_width + gap;
         let rect = Rect::new(x, at.y - size * 0.78, badge_width, size * 0.94);
         draw_rectangle(rect.x, rect.y, rect.w, rect.h, AMBER);
         draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, (size * 0.05).max(0.5), TEXT);
         center_label(
-            "Game Creator",
+            tank.badge(),
             rect.center().x,
             at.y - size * 0.09,
             badge_size,

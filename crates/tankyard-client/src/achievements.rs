@@ -22,6 +22,7 @@ pub enum Goal {
     Points(u8),
     Survival(u64),
     MeetCreator,
+    MeetCentralOwner,
 }
 pub struct Achievement {
     pub id: &'static str,
@@ -121,6 +122,12 @@ pub static ACHIEVEMENTS: &[Achievement] = &[
         goal: Goal::Kills(100),
     },
     Achievement {
+        id: "meet_central_owner",
+        title: "Meet the central server owner",
+        description: "Share an arena with the verified Central Server Owner.",
+        goal: Goal::MeetCentralOwner,
+    },
+    Achievement {
         id: "meet_creator",
         title: "Meet the game's creator",
         description: "Share an arena with the verified Game Creator.",
@@ -137,6 +144,7 @@ pub struct Progress {
     pub points: u8,
     pub alive_ticks: u64,
     pub met_creator: bool,
+    pub met_central_owner: bool,
 }
 impl Achievement {
     pub fn available(&self, mode: AchievementMode) -> bool {
@@ -152,6 +160,7 @@ impl Achievement {
             Goal::Tier(n) => p.tier >= n,
             Goal::Points(n) => p.points >= n,
             Goal::Survival(n) => p.alive_ticks >= n,
+            Goal::MeetCentralOwner => p.met_central_owner,
             Goal::MeetCreator => p.met_creator,
         }
     }
@@ -171,6 +180,7 @@ pub struct Tracker {
     highest_score: u32,
     progress: Option<Progress>,
     met_creator: bool,
+    met_central_owner: bool,
 }
 impl Tracker {
     pub fn observe(
@@ -186,6 +196,14 @@ impl Tracker {
             .iter()
             .any(|t| t.id != player && t.game_creator && !t.bot)
             && snapshot.tanks.iter().any(|t| t.id == player && !t.bot);
+        self.met_central_owner |= snapshot.tanks.iter().any(|tank| {
+            tank.id != player
+                && !tank.bot
+                && tank.server_badge == tankyard_core::ServerBadge::CentralOwner
+        }) && snapshot
+            .tanks
+            .iter()
+            .any(|tank| tank.id == player && !tank.bot);
         self.track(
             snapshot.tanks.iter().find(|tank| tank.id == player),
             &snapshot.config,
@@ -259,6 +277,7 @@ impl Tracker {
             tier: content.class(&tank.class).map_or(0, |c| c.tier),
             points: tank.stats.iter().copied().fold(0, u8::saturating_add),
             met_creator: self.met_creator,
+            met_central_owner: self.met_central_owner,
             alive_ticks: if tank.alive {
                 tick.saturating_sub(self.born_at)
             } else {
@@ -321,6 +340,7 @@ impl Claims {
         }
         let meeting = Progress {
             met_creator: tracker.met_creator,
+            met_central_owner: tracker.met_central_owner,
             ..Default::default()
         };
         match mode {
@@ -390,6 +410,48 @@ pub fn unlock(progress: Progress, unlocked: &mut Vec<String>, feed: &mut Feed) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn central_owner_meeting_requires_another_verified_human_and_unlocks_once() {
+        let content = Content::builtin();
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                ..Default::default()
+            },
+            content.clone(),
+        );
+        let player = world.add_player("Pilot", false);
+        world.add_player("Central Server Owner", false);
+        let mut tracker = Tracker::default();
+        let mut claims = Claims::default();
+        let mut global = vec![];
+        let mut feed = Feed::default();
+        for (badge, bot, expected) in [
+            (tankyard_core::ServerBadge::Player, false, 0),
+            (tankyard_core::ServerBadge::Host, false, 0),
+            (tankyard_core::ServerBadge::CentralOwner, true, 0),
+            (tankyard_core::ServerBadge::CentralOwner, false, 1),
+            (tankyard_core::ServerBadge::CentralOwner, false, 1),
+        ] {
+            world.tanks[1].server_badge = badge;
+            world.tanks[1].bot = bot;
+            tracker.observe(&world.snapshot(), player, &content, 0, 0);
+            claims.update(
+                &tracker,
+                AchievementMode::Global,
+                (0, 0),
+                &mut global,
+                &mut feed,
+            );
+            assert_eq!(
+                global
+                    .iter()
+                    .filter(|id| *id == "meet_central_owner")
+                    .count(),
+                expected
+            );
+        }
+    }
     #[test]
     fn meeting_requires_another_verified_human_and_is_saved_only_once() {
         let content = Content::builtin();

@@ -70,6 +70,7 @@ impl UdpServer {
             player,
             name: tank.name.clone(),
             game_creator: tank.game_creator,
+            server_badge: tank.server_badge,
             text: text.trim().replace('\u{2014}', "-"),
             time: now,
         };
@@ -105,7 +106,7 @@ impl UdpServer {
         command: ServerCommand,
     ) -> Result<(), NetError> {
         let now = unix_time().as_secs();
-        if self.settings.kind != ServerKind::Community {
+        if self.settings.kind != ServerKind::Community && !self.settings.central_owner_enabled() {
             return Err(NetError(
                 "Server permissions apply only to community servers.".into(),
             ));
@@ -128,18 +129,20 @@ impl UdpServer {
             ServerCommand::Kick { player, .. }
             | ServerCommand::Ban { player, .. }
             | ServerCommand::Mute { player, .. }
+            | ServerCommand::Warn { player, .. }
             | ServerCommand::Nominate { player, .. } => Some(client_for(*player)?),
             _ => None,
         };
         if let Some(target) = target
-            && !self.access.can_affect(actor, target, now)
+            && (!self.access.can_affect(actor, target, now)
+                || self.peers.get(&target).is_some_and(|peer| peer.creator))
         {
             return Err(NetError(
                 "You cannot moderate a player with equal or higher server authority.".into(),
             ));
         }
         crate::access::audit(
-            &self.settings.audit_file,
+            self.settings.creator_audit_file(),
             &crate::access::AuditRecord {
                 time: now,
                 actor: &actor.to_string(),
@@ -150,6 +153,8 @@ impl UdpServer {
         )
         .map_err(NetError)?;
         match command {
+            ServerCommand::Warn { reason, .. } => self.warn_client(target.unwrap(), reason),
+            ServerCommand::Announce { text } => self.announce(text.trim().to_owned()),
             ServerCommand::Kick { reason, .. } => self.reject(
                 target.unwrap(),
                 if reason.is_empty() {
@@ -233,13 +238,13 @@ impl UdpServer {
         Ok(())
     }
     pub(crate) fn local_role(&mut self, client: u64, role: ServerRole) -> Result<(), NetError> {
-        if self.settings.kind != ServerKind::Community {
+        if self.settings.kind != ServerKind::Community && !self.settings.central_owner_enabled() {
             return Err(NetError(
                 "Server roles are limited to community servers.".into(),
             ));
         }
         crate::access::audit(
-            &self.settings.audit_file,
+            self.settings.creator_audit_file(),
             &crate::access::AuditRecord {
                 time: unix_time().as_secs(),
                 actor: "host",

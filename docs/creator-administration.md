@@ -1,16 +1,35 @@
-# Creator administration
+# Server administration
 
-The regular v0.3.3 `tankyard-server` supports the separate creator client. A creator-server executable is no longer necessary. The creator client, menu, signing implementation, and secret key are maintained privately and excluded from this repository and public release packages. Public server handlers and their authorization checks are deliberately reviewable.
+Any v0.4.0 game client can use creator or central-owner tools when it holds the corresponding private signing key. Menu and verification code are public and reviewable. Public binaries and GitHub contain no private signing credentials. The optional self-contained credential editions remain private.
 
-## Host policy
+## Roles and scope
 
-Official public arenas (`kind = "Official"`) enable key-verified creator administration by default in the **regular server**. Use `tankyard-server --central` for the included central profile, even in a container without a configs directory. No separate creator server or additional creator opt-in is required. A top-level `creator_admin = false` always overrides the official default and is preserved with custom configurations.
+| Identity | Authorization | Available tools |
+| --- | --- | --- |
+| Server Host | Local hosting channel or explicit process-console grant | Server-local moderation, roles, rooms, bots, match settings, restart and audit |
+| Moderator / Admin | A grant from this server's owner | Only the selected server permissions |
+| Central Server Owner | Separate pinned Ed25519 key, verified on the official central profile | Central-server moderation, announcements, roles, match settings, bots and audit; no creator gameplay modifiers |
+| Game Creator | Pinned creator Ed25519 key and consenting host policy | Creator gameplay controls plus server-local kick, ban, mute, warnings and announcements |
 
-Community servers, older community configurations, personal **Host server** games, and password-protected arenas have creator tools disabled by default. A password disables the automatic official policy too; explicitly enabling tools on a password-protected host is rejected. No client URL, claimed hostname, username, badge, ordinary Owner role, or remote packet can change this policy. Official status is chosen by the operator's local configuration, never inferred from where a client claims to connect.
+Badges are assigned by the server, carried through snapshots, respawns, chat and elimination records, and shown beside names. Names and client labels never confer authority. The central-owner meeting achievement requires another human with the verified badge; it is a local cosmetic achievement, like the creator meeting achievement.
 
-The official/central templates include a stable server ID and persistent audit location. Without an explicit audit path, official servers use `creator-audit.jsonl` in their working directory; tools fail closed if that file cannot be written. Mount this storage persistently in Docker.
+Bans affect only the current server and its local ban/account records. Neither client can ban someone from the whole game or from another dedicated server. A moderator cannot affect equal or higher server authority, or the verified creator. No game-wide moderation packet exists. An operator always controls their own process and configuration.
 
-An independently operated public community arena may opt in with these top-level fields:
+## Keys and portability
+
+Use a matching **raw 32-byte Ed25519 seed** named `creator.key` or `central-owner.key`. The keys are different; a generated replacement or a public verification key cannot authenticate as either identity.
+
+The public client checks beside its executable and then the `keys` directory beside its profile's `settings.json`. Settings → Profile shows that profile path. On Linux the default is `~/.config/tankyard/keys/`. Restart after installing a key. Lookup never depends on the working directory. A key in the profile works after moving or renaming the executable; an adjacent key travels with the executable. Optional private credential editions embed the matching key and work without sidecars.
+
+Keep key files readable only by their owner (`chmod 600` on Unix). Keep an embedded-credential executable private too: sharing it shares its authority. No software-only check can establish that a particular executable, rather than another client holding the same key, signed a request. Compromise requires revoking the affected policy and rotating that identity's public/private key pair. Public source changes alone cannot manufacture a matching signature.
+
+F8 opens or collapses creator tools when a creator key is loaded; otherwise it opens the server moderation menu when this connection has permissions. The Server button also opens moderation. Escape closes the panel. Warnings remain for twelve seconds or until dismissed; announcements last five seconds and leave an unread warning visible. Duration sliders control temporary mutes and bans. Creator gameplay powers are authorized under [Bastion Anticheat](bastion-anticheat.md).
+
+## Hosting policy
+
+Personal **Host server** games assign their local client the Owner role over a private process channel, binding the grant to its connection ID and public session key. There is no first-join or username-based owner claim. For dedicated community servers, use the process console's `players` and `owner-client <client-id> [public-key]`, or `role <entity-id> owner`, to explicitly designate a connected owner. Use secure connection tokens or WSS for remote staff access.
+
+Official password-free servers enable creator tools by default. `creator_admin = false` overrides that policy. Community servers require explicit opt-in:
 
 ```toml
 creator_admin = true
@@ -18,33 +37,18 @@ server_id = "my-public-arena"
 audit_file = "configs/creator-audit.jsonl"
 ```
 
-The ID must contain 1–64 ASCII letters, digits, underscores, or hyphens. A community opt-in requires no password and an explicit audit path. Password-protected matches cannot enable creator tools. Leave the flag disabled on personal/private hosts. Public reachability is not inferred from an IP address: the operator's explicit configuration is the consent boundary.
+Private/password-protected hosts cannot enable creator administration. Public reachability is not guessed from addresses. No client packet, ordinary Owner role, hostname or URL can enable host policy.
 
-The process console reports `creator-admin status`. `creator-admin off` immediately removes invulnerability, unlimited abilities, movement/damage/reload modifiers, and bot freezing. It invalidates command authorization and updates connected clients. It still revokes powers when the audit disk is unavailable. `creator-admin on` validates the host policy, writes an audit entry, and requires fresh authorization. Use `save <configuration-path>` to persist a console change, or edit the configuration before restarting. Gameplay edits already made, such as a spawned boss or granted level, remain until changed or the round restarts.
+The separate central-owner identity is accepted only with `kind = "Official"`, `server_id = "tankyard-central"`, and no password. That profile enables it by default; `central_owner_admin = false` explicitly revokes it. Other official and community servers do not grant central-owner jurisdiction.
 
-## Authorization and boundaries
+Console commands `creator-admin off` and `central-owner off` revoke their corresponding access. Re-enabling rotates challenges and requires new proof; old signatures cannot recover access. Revocation remains effective if auditing fails. `save <config-path>` persists policy changes. Creator revocation removes active god mode, ability and movement/weapon modifiers and bot freezing; already-created world changes last until reversed or the round restarts.
 
-Creator identity uses Ed25519 and the published verification key in `tankyard-protocol/src/creator.rs`. Each connection receives a fresh random 256-bit challenge. Proofs bind the server ID, connection ID, and nonce. A badge alone is cosmetic on a host whose policy disables tools.
+## Verification and limits
 
-Every administration request carries a separate signature over a distinct domain, server ID, session nonce, connection ID, round, monotonically increasing sequence, payload length, and exact payload. The server rechecks host policy on every action and rejects replayed, stale, forged, or modified commands. Revocation rotates the challenge; old authorization cannot become valid again when a host re-enables the policy. Commands are limited to 1024 bytes and share a budget of two per second with a burst of six. Ordinary packet limits also apply.
+Creator and central-owner proof domains are separate. Fresh random 256-bit nonces bind identity to the server and connection; central-owner proofs also bind the ephemeral administration public key. Every staff request is signed over its domain, server ID, nonce, connection, round, monotonic sequence, payload length and exact payload. The server rechecks signatures, policy, permissions, hierarchy, budgets and bounds. Ordinary Owner grants cannot invoke creator gameplay powers.
 
-Signed requests are recorded before execution, including actor, target, and command parameters. An unavailable request audit prevents execution. Results are recorded separately, including rejected signed command values. Logs rotate after 8 MiB and use private file permissions on Unix. Unauthenticated or invalid-signature traffic does not fill the audit file. The server contains the verification key only; it cannot sign as the creator. Hosts can revoke all creator powers with their own policy setting. The private creator executable is self-contained and carries its credential, so it can be moved or renamed without a separate key file. Treat the executable as a secret credential: sharing it also shares creator access. A leaked creator signing key or executable requires revoking access and rotating the public identity key in a new client/server build.
+Creator and central-owner access require writable request auditing before privileged execution. Official servers without an explicit audit path use `creator-audit.jsonl`; Docker should mount it persistently. Logs rotate after 8 MiB with private Unix permissions. Host moderation uses the configured audit path. Requests are rate-limited and contain bounded data, never executable code. See the [security review](security-review-v040.md) for remaining transport, dependency and anonymous-ban limits.
 
-Signed creator powers are authorized under [Bastion Anticheat](bastion-anticheat.md); using them does not produce cheat accusations or automatic bans. Key possession is the identity boundary. An executable hash or client claim cannot prove that a particular binary holds the key. Keep the private credential private.
+## Central Pi deployment
 
-Commands cover local moderation (kick, bounded ban, mute/unmute) and bounded arena tools: boss spawning, up to 128 bots within the configured population cap, invulnerability, unlimited abilities, speed/reload up to 6×, damage up to 8×, level/class/build changes, healing, projectile/boss cleanup, bot freezing, safe teleport, opponent elimination, and modifier reset. Moderation cannot grant roles, change host policy, access private files, or act on another server. The protocol accepts no scripts, executable modules, shell commands, arbitrary file paths, or outbound control requests.
-
-Gameplay tools mark the arena modified and notify players; regular arena achievements stop for that round. Pure moderation preserves ordinary achievement eligibility. The verified badge and cosmetic meeting achievement remain available on consenting and nonconsenting servers. Round restarts clear temporary gameplay modifiers. Disconnecting the last creator clears bot freezing.
-
-Command signatures protect request authenticity, not transport confidentiality or authentication of the host. Keep the existing TLS/WebSocket route and follow the [transport hosting guidance](hosting.md) for public deployment. A host controls its own process and may modify its own server build; this mechanism grants no authority over a third party's private server or machine.
-
-## Central server in Docker on a Raspberry Pi
-
-The live process must be upgraded; publishing a GitHub release does not deploy it. Check the Pi's architecture first: the Linux ARM64 release package is for an `aarch64` system. Keep the current Docker configuration, persistent volumes, ports, Cloudflare tunnel, and WebSocket relay route.
-
-1. Download the matching v0.3.3 package, verify it against the release's `SHA256SUMS`, and update the regular `tankyard-server` and `tankyard-relay` binaries in the container image or existing binary mount. Both must use protocol 15.
-2. Preserve the operator's world settings, bans, and other configuration. Use `kind = "Official"`, choose a stable `server_id`, and configure a writable persistent `audit_file` outside the disposable container layer. Omit `creator_admin` to use the official default; an existing explicit false remains a deliberate override. The included `configs/central.toml` is a starting template; its relative audit and ban paths must resolve into the existing persistent configuration mount.
-3. Start the ordinary server with `tankyard-server --central --config <mounted-config-path>`, or `tankyard-server --central` with the shipped profile. No creator-server binary is involved. Keep the existing relay and Cloudflare routing configuration. Restart or recreate through the deployment's normal Docker procedure.
-4. Join with a regular v0.3.3 client to check connectivity, then join with the private creator client. Verify the badge, one bounded command, and its request/result audit records. Test `creator-admin off` from the local process console when enabled. With `--no-console`, edit the flag in the persistent configuration and restart to revoke instead.
-
-The private client and key belong on the creator's computer. Neither is needed in the Pi's container. This repository contains no deployment connection to the live Pi.
+See [the Pi/Docker upgrade steps](central-pi-upgrade.md). Publishing a release does not replace the running server. Version 0.4.0 uses protocol **16**: clients, server and relay must update together. No creator-server binary or server-side private identity key is needed.

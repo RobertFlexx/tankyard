@@ -19,6 +19,9 @@ pub struct CommunityUi {
     reason_focus: bool,
     room_name: String,
     room_focus: bool,
+    announcement: String,
+    announcement_focus: bool,
+    minutes: f32,
     minimum_role: Role,
     nominated_role: Role,
     permissions: Vec<Permission>,
@@ -50,6 +53,9 @@ impl Default for CommunityUi {
             reason_focus: false,
             room_name: String::new(),
             room_focus: false,
+            announcement: String::new(),
+            announcement_focus: false,
+            minutes: 10.,
             minimum_role: Role::Player,
             nominated_role: Role::Moderator,
             permissions: tankyard_server::access::Grant::for_role(Role::Moderator).permissions,
@@ -79,11 +85,6 @@ impl CommunityUi {
     }
     /// Called before gameplay hotkeys, so Enter and Escape have a single owner.
     pub fn keys(&mut self, client: &mut NetworkClient, alive: bool) -> bool {
-        if client.kind != ServerKind::Community {
-            self.typing = false;
-            self.admin_open = false;
-            return false;
-        }
         if client.permissions.is_empty() {
             self.admin_open = false;
         }
@@ -95,6 +96,7 @@ impl CommunityUi {
             self.admin_open = false;
             self.reason_focus = false;
             self.room_focus = false;
+            self.announcement_focus = false;
             while get_char_pressed().is_some() {}
             return true;
         }
@@ -124,9 +126,7 @@ impl CommunityUi {
         false
     }
     pub fn captures_pointer(&self, client: &NetworkClient, s: f32) -> bool {
-        (client.kind == ServerKind::Community
-            && !client.permissions.is_empty()
-            && contains(Self::server_button(s)))
+        (!client.permissions.is_empty() && contains(Self::server_button(s)))
             || (self.typing && contains(self.chat_rect(s)))
             || self.admin_open
     }
@@ -156,9 +156,6 @@ impl CommunityUi {
         s: f32,
         dock_chat: bool,
     ) {
-        if client.kind != ServerKind::Community {
-            return;
-        }
         self.docked = dock_chat;
         if self.round != Some(snapshot.match_state.round) {
             self.round = Some(snapshot.match_state.round);
@@ -192,7 +189,7 @@ impl CommunityUi {
         if self.admin_open {
             self.admin(client, snapshot, s);
         }
-        if self.admin_open && !self.reason_focus && !self.room_focus {
+        if self.admin_open && !self.reason_focus && !self.room_focus && !self.announcement_focus {
             while get_char_pressed().is_some() {}
         }
     }
@@ -264,7 +261,11 @@ impl CommunityUi {
                 for line in chat_lines(
                     &format!(
                         "{}: {}",
-                        tankyard_core::display_player_name(&message.name, message.game_creator),
+                        tankyard_core::display_player_name(
+                            &message.name,
+                            message.game_creator,
+                            message.server_badge
+                        ),
                         message.text
                     ),
                     r.w - 16.0 * s,
@@ -347,15 +348,16 @@ impl CommunityUi {
             screen_height(),
             alpha(bg_color(), 0.72),
         );
-        let r = Rect::new(
-            (screen_width() - 710.0 * s) * 0.5,
-            ((screen_height() - 560.0 * s) * 0.5).max(190. * s),
-            710.0 * s,
-            560.0 * s,
-        );
+        let (r, s) = admin_layout(screen_width(), screen_height(), s);
         panel(r);
         label(
-            "Server",
+            if client.kind == ServerKind::Official {
+                "Central server"
+            } else if client.role == Role::Owner {
+                "Server host"
+            } else {
+                "Server moderation"
+            },
             r.x + 20.0 * s,
             r.y + 31.0 * s,
             24.0 * s,
@@ -368,7 +370,10 @@ impl CommunityUi {
         ) {
             self.admin_open = false;
         }
-        for (i, title) in ["Players", "Rooms", "Settings", "Audit"].iter().enumerate() {
+        for (i, title) in ["Players", "Rooms", "Settings", "Audit", "Announce"]
+            .iter()
+            .enumerate()
+        {
             if button(
                 Rect::new(
                     r.x + 20.0 * s + i as f32 * 128.0 * s,
@@ -390,9 +395,10 @@ impl CommunityUi {
             0 => self.players(client, snapshot, r, s),
             1 => self.rooms(client, r, s),
             2 => self.settings(client, r, s),
-            _ => self.audit(client, r, s),
+            3 => self.audit(client, r, s),
+            _ => self.announcements(client, r, s),
         }
-        let notice: String = self.notice.chars().take(82).collect();
+        let notice = fitted_label(&self.notice, 13. * s, r.w - 40. * s);
         label(
             &notice,
             r.x + 20.0 * s,
@@ -462,24 +468,25 @@ impl CommunityUi {
             Rect::new(x, r.y + 151.0 * s, 407.0 * s, 32.0 * s),
             &mut self.reason,
             &mut self.reason_focus,
-            80,
+            160,
             s * 0.8,
             false,
         );
         if let Some(player) = self.selected {
             for (i, (title, permission)) in [
+                ("Warn", Permission::Warn),
                 ("Kick", Permission::Kick),
-                ("Mute 10m", Permission::Mute),
-                ("Ban 1h", Permission::Ban),
+                ("Mute", Permission::Mute),
+                ("Ban", Permission::Ban),
             ]
             .into_iter()
             .enumerate()
             {
                 if button(
                     Rect::new(
-                        x + i as f32 * 137.0 * s,
+                        x + i as f32 * 104.0 * s,
                         r.y + 195.0 * s,
-                        129.0 * s,
+                        95.0 * s,
                         31.0 * s,
                     ),
                     title,
@@ -488,16 +495,21 @@ impl CommunityUi {
                     s * 0.75,
                 ) {
                     let reason = self.reason.trim().replace('\u{2014}', "-");
+                    if permission == Permission::Warn && reason.trim().is_empty() {
+                        self.notice = "Enter a reason for the warning.".into();
+                        continue;
+                    }
                     let command = match permission {
+                        Permission::Warn => ServerCommand::Warn { player, reason },
                         Permission::Kick => ServerCommand::Kick { player, reason },
                         Permission::Ban => ServerCommand::Ban {
                             player,
-                            minutes: 60,
+                            minutes: self.minutes as u32,
                             reason,
                         },
                         _ => ServerCommand::Mute {
                             player,
-                            minutes: 10,
+                            minutes: self.minutes as u32,
                         },
                     };
                     self.submit(client, command);
@@ -513,6 +525,15 @@ impl CommunityUi {
                 self.submit(client, ServerCommand::Mute { player, minutes: 0 });
             }
         }
+        slider_value(
+            Rect::new(x + 145. * s, r.y + 226. * s, 262. * s, 48. * s),
+            "Duration (minutes)",
+            &mut self.minutes,
+            [1., 1440.],
+            1.,
+            s * 0.8,
+            |value| format!("{value:.0}"),
+        );
         if !client.permissions.contains(&Permission::ManageRoles) {
             return;
         }
@@ -567,7 +588,7 @@ impl CommunityUi {
         }
         if let Some(player) = self.selected
             && button(
-                Rect::new(x, r.y + 472.0 * s, 407.0 * s, 32.0 * s),
+                Rect::new(x, r.y + 507.0 * s, 407.0 * s, 32.0 * s),
                 "Apply role",
                 true,
                 true,
@@ -580,6 +601,46 @@ impl CommunityUi {
                     player,
                     role: self.nominated_role,
                     permissions: self.permissions.clone(),
+                },
+            );
+        }
+    }
+    fn announcements(&mut self, client: &mut NetworkClient, r: Rect, s: f32) {
+        label(
+            "Announcement",
+            r.x + 20. * s,
+            r.y + 116. * s,
+            20. * s,
+            text_color(),
+        );
+        wrap(
+            "Shown to everyone on this server for five seconds. Moderation and bans apply only to this server.",
+            r.x + 20. * s,
+            r.y + 149. * s,
+            r.w - 40. * s,
+            15. * s,
+            muted_color(),
+        );
+        text_field(
+            Rect::new(r.x + 20. * s, r.y + 214. * s, r.w - 40. * s, 42. * s),
+            &mut self.announcement,
+            &mut self.announcement_focus,
+            160,
+            s,
+            false,
+        );
+        if button(
+            Rect::new(r.x + 20. * s, r.y + 274. * s, 240. * s, 36. * s),
+            "Send announcement",
+            true,
+            client.permissions.contains(&Permission::Announce)
+                && !self.announcement.trim().is_empty(),
+            s * 0.9,
+        ) {
+            self.submit(
+                client,
+                ServerCommand::Announce {
+                    text: self.announcement.trim().to_owned(),
                 },
             );
         }
@@ -864,6 +925,8 @@ fn setting_choice(r: Rect, text: &str, enabled: bool, s: f32) -> i32 {
 
 fn permission_name(permission: Permission) -> &'static str {
     match permission {
+        Permission::Warn => "Warn",
+        Permission::Announce => "Announce",
         Permission::Kick => "Kick",
         Permission::Ban => "Ban",
         Permission::Mute => "Mute",
@@ -897,4 +960,51 @@ fn chat_lines(text: &str, width: f32, size: f32) -> Vec<String> {
         lines.push(line);
     }
     lines
+}
+
+fn admin_layout(width: f32, height: f32, requested: f32) -> (Rect, f32) {
+    let s = requested
+        .min((width - 32.) / 710.)
+        .min((height - 32.) / 600.);
+    (
+        Rect::new(
+            (width - 710. * s) * 0.5,
+            (height - 600. * s) * 0.5,
+            710. * s,
+            600. * s,
+        ),
+        s,
+    )
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    #[test]
+    fn staff_panels_are_centered_and_fit_at_every_interface_scale() {
+        for (width, height) in [
+            (800., 600.),
+            (1280., 800.),
+            (1920., 1080.),
+            (3840., 2160.),
+            (800., 1200.),
+        ] {
+            for interface in [0.8, 1., 1.4] {
+                let (rect, scale) = admin_layout(
+                    width,
+                    height,
+                    crate::ui_layout::scale(width, height, interface),
+                );
+                assert!((rect.center().x - width * 0.5).abs() < 0.01);
+                assert!((rect.center().y - height * 0.5).abs() < 0.01);
+                assert!(
+                    rect.x >= 15.9
+                        && rect.y >= 15.9
+                        && rect.x + rect.w <= width - 15.9
+                        && rect.y + rect.h <= height - 15.9
+                );
+                assert!(scale > 0.);
+            }
+        }
+    }
 }

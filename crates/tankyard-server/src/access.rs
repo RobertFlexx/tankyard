@@ -118,8 +118,15 @@ impl Grant {
     pub fn for_role(role: Role) -> Self {
         let permissions = match role {
             Role::Player => vec![],
-            Role::Moderator => vec![Permission::Kick, Permission::Mute, Permission::ViewAudit],
+            Role::Moderator => vec![
+                Permission::Kick,
+                Permission::Mute,
+                Permission::Warn,
+                Permission::ViewAudit,
+            ],
             Role::Admin => vec![
+                Permission::Warn,
+                Permission::Announce,
                 Permission::Kick,
                 Permission::Ban,
                 Permission::Mute,
@@ -132,7 +139,7 @@ impl Grant {
         Self { role, permissions }
     }
     fn validate(&self) -> bool {
-        self.permissions.len() <= 8
+        self.permissions.len() <= Permission::ALL.len()
             && self.permissions.iter().collect::<BTreeSet<_>>().len() == self.permissions.len()
             && (self.role != Role::Player || self.permissions.is_empty())
     }
@@ -310,6 +317,16 @@ impl Access {
             && self.grant(actor, now).role > self.grant(target, now).role
     }
     /// This entry point is called by the process console or local host channel.
+    pub(crate) fn session_grant(&mut self, target: u64, grant: Grant) -> Result<(), String> {
+        if !grant.validate() {
+            return Err("invalid server permission profile".into());
+        }
+        self.members
+            .get_mut(&target)
+            .ok_or("player is not connected")?
+            .grant = grant;
+        Ok(())
+    }
     pub fn local_grant(&mut self, target: u64, grant: Grant) -> Result<(), String> {
         if !grant.validate() {
             return Err("invalid server permission profile".into());

@@ -14,3 +14,8 @@ __pycache__/
 
 # Local creator edition and signing credentials never enter public source.
 /private-creator/
+
+# Local identity credentials must never enter source or release assets.
+creator.key
+central-owner.key
+staff_credential.bin

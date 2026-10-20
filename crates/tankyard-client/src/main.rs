@@ -5,7 +5,10 @@ compile_error!(
 );
 
 mod accessibility;
+mod central_owner;
 mod community_ui;
+mod creator;
+mod credentials;
 mod effects;
 mod first_run;
 mod graphics;
@@ -128,6 +131,8 @@ struct PendingJoin {
     return_page: Page,
 }
 struct App {
+    creator: creator::CreatorUi,
+    central_owner: central_owner::CentralOwner,
     settings: Settings,
     display_revision: u64,
     content: Content,
@@ -216,6 +221,8 @@ impl App {
             content,
             menu,
             hud: Hud::new(),
+            creator: creator::CreatorUi::new(),
+            central_owner: central_owner::CentralOwner::new(),
             session: None,
             pending_join: None,
             connecting_address: CENTRAL_SERVER.into(),
@@ -297,7 +304,10 @@ impl App {
     fn scale(&self) -> f32 {
         ui_layout::scale(screen_width(), screen_height(), self.settings.ui_scale)
     }
-    fn launch(&mut self, session: Session) {
+    fn launch(&mut self, mut session: Session) {
+        self.creator.reset_controls();
+        self.creator.authenticate(&mut session);
+        self.central_owner.authenticate(&mut session);
         if self.session.is_some() {
             self.save_progress();
         }
@@ -597,6 +607,13 @@ impl App {
         }
     }
     fn shortcuts(&mut self) -> bool {
+        if self.creator.open {
+            if is_key_pressed(KeyCode::Escape) {
+                self.creator.open = false;
+                return true;
+            }
+            return false;
+        }
         if self.menu.binding.is_some() {
             if is_key_pressed(KeyCode::Escape) {
                 self.menu.binding = None;
@@ -640,8 +657,11 @@ impl App {
         false
     }
     fn input(&self, s: f32) -> PlayerInput {
-        let blocked =
-            self.paused || self.menu_over_game || self.hud.sandbox || self.community.focused();
+        let blocked = self.paused
+            || self.menu_over_game
+            || self.hud.sandbox
+            || self.creator.open
+            || self.community.focused();
         if blocked {
             return self.session.as_ref().map_or(
                 PlayerInput {
@@ -708,19 +728,27 @@ impl App {
             self.fire_queued,
             over_ui,
         );
-        let fire = self.settings.auto_fire || steer_return;
+        let fire = !self.creator.open && (self.settings.auto_fire || steer_return);
         PlayerInput {
             sequence: self.sequence,
-            movement: movement.normalized(),
+            movement: if self.creator.open {
+                V2::ZERO
+            } else {
+                movement.normalized()
+            },
             aim,
             aim_distance: cursor.length().min(5000.),
             fire,
             steer_return,
             alt_fire: is_mouse_button_down(MouseButton::Right),
-            ability: is_key_down(self.settings.key(4)) || self.ability_queued,
+            ability: !self.creator.open
+                && (is_key_down(self.settings.key(4)) || self.ability_queued),
         }
     }
     fn pointer_over_ui(&self, s: f32) -> bool {
+        if self.creator.captures_pointer(s) {
+            return true;
+        }
         self.voice.captures_pointer(s)
             || (self.effects.boss_arrival.is_some()
                 && contains(hud::boss_banner_layout(screen_width(), s)))
@@ -728,6 +756,17 @@ impl App {
                 let community = match &session.engine {
                     session::Engine::Online { client, .. } => {
                         self.community.captures_pointer(client, s)
+                            || client.active_notice().is_some_and(|notice| {
+                                contains(notifications::server_notice_rect(
+                                    notice,
+                                    s,
+                                    if self.effects.boss_arrival.is_some() {
+                                        188.
+                                    } else {
+                                        110.
+                                    } * s,
+                                ))
+                            })
                     }
                     _ => false,
                 };
@@ -739,6 +778,9 @@ impl App {
             })
     }
     fn show_achievement_toasts(&self) -> bool {
+        if self.creator.open {
+            return false;
+        }
         !self.paused
             && !self.menu_over_game
             && !self.hud.sandbox
@@ -751,6 +793,24 @@ impl App {
             })
     }
     fn update(&mut self, dt: f32, s: f32) {
+        if self.session.is_some()
+            && !self.paused
+            && !self.menu_over_game
+            && is_key_pressed(KeyCode::F8)
+        {
+            if self.creator.enabled() {
+                self.creator.open = !self.creator.open;
+                self.community.admin_open = false;
+            } else if self.session.as_ref().is_some_and(|session| matches!(&session.engine, session::Engine::Online { client, .. } if !client.permissions.is_empty())) {
+                self.community.admin_open = !self.community.admin_open;
+            }
+            self.hud.sandbox = false;
+            self.hud.evolution = false;
+        }
+        if let Some(session) = &mut self.session {
+            self.creator.authenticate(session);
+            self.central_owner.authenticate(session);
+        }
         if self.session.is_none() && self.catalog_paths != self.settings.enabled_mods {
             self.catalog_paths.clone_from(&self.settings.enabled_mods);
             let paths: Vec<_> = self
@@ -786,6 +846,7 @@ impl App {
                 self.hud = Hud::new();
             }
             if let Some(message) = session.notice.take() {
+                self.creator.notice = message.clone();
                 self.community.message(&message);
                 self.effects.notice(&message);
             }
@@ -854,12 +915,16 @@ impl App {
             community_key = self.community.keys(client, alive);
         }
         if !self.menu_over_game {
-            if !community_key && !self.community.focused() && is_key_pressed(KeyCode::Escape) {
+            if !community_key
+                && !self.creator.open
+                && !self.community.focused()
+                && is_key_pressed(KeyCode::Escape)
+            {
                 self.paused = !self.paused;
                 self.hud.evolution = false;
                 self.hud.sandbox = false;
             }
-            if !self.paused && !community_key && !self.community.focused() {
+            if !self.paused && !community_key && !self.creator.open && !self.community.focused() {
                 if is_key_pressed(KeyCode::M) {
                     self.voice.toggle();
                 }
@@ -929,6 +994,7 @@ impl App {
             self.handle(Action::Back);
         }
         if !community_key
+            && !self.creator.open
             && !self.community.focused()
             && !self.paused
             && !self.menu_over_game
@@ -954,6 +1020,7 @@ impl App {
         let can_attack = !self.paused
             && !self.menu_over_game
             && !self.hud.sandbox
+            && !self.creator.open
             && !self.community.focused()
             && self.session.as_ref().is_some_and(|session| {
                 session.display.as_ref().is_some_and(|snapshot| {
@@ -1073,6 +1140,7 @@ impl App {
                 && !self.paused
                 && !self.menu_over_game
                 && !self.hud.sandbox
+                && !self.creator.open
                 && !self.community.focused()
                 && self.smoke.is_none()
             {
@@ -1179,10 +1247,21 @@ impl App {
             .and_then(|session| session.practice.as_ref())
             .is_some_and(|run| !run.done());
         let unobscured = !self.hud.sandbox && !self.community.admin_open;
+        let server_notice = self
+            .session
+            .as_ref()
+            .and_then(|session| match &session.engine {
+                session::Engine::Online { client, .. } if unobscured => client.active_notice(),
+                _ => None,
+            });
+        let server_height = server_notice.map_or(0., |notice| {
+            notifications::server_notice_rect(notice, s, 0.).h + 8. * s
+        });
         let overlays = notifications::top_overlays(
             screen_height(),
             s,
             self.effects.boss_arrival.is_some(),
+            server_height,
             practice,
             if unobscured {
                 self.effects.kills.len()
@@ -1195,7 +1274,15 @@ impl App {
         if let Some(session) = &self.session {
             set_interactive(
                 !self.paused
+                    && !self.creator.open
                     && !self.community.focused()
+                    && !server_notice.is_some_and(|notice| {
+                        contains(notifications::server_notice_rect(
+                            notice,
+                            s,
+                            overlays.server_y,
+                        ))
+                    })
                     && !session.practice.as_ref().is_some_and(|run| run.done()),
             );
             if let Some(snapshot) = &session.display {
@@ -1401,6 +1488,7 @@ impl App {
         }
         set_interactive(true);
         if !self.paused
+            && !self.creator.open
             && let Some(session) = &mut self.session
             && session.failure.is_none()
             && let session::Engine::Online { client, .. } = &mut session.engine
@@ -1409,11 +1497,25 @@ impl App {
             self.community
                 .draw(client, snapshot, s, self.hud.evolution || self.hud.sandbox);
         }
+        if !self.paused
+            && !self.menu_over_game
+            && unobscured
+            && let Some(session) = &mut self.session
+            && let session::Engine::Online { client, .. } = &mut session.engine
+            && let Some(notice) = client.active_notice()
+        {
+            let rect = notifications::server_notice_rect(notice, s, overlays.server_y);
+            if notifications::server_notice(notice, rect, s) {
+                client.server_notice = None;
+            }
+        }
         for action in actions {
             self.hud_action(action);
         }
         if !self.paused
             && !self.menu_over_game
+            && !self.creator.open
+            && !self.community.admin_open
             && let Some(session) = &self.session
             && session.failure.is_none()
             && session.display.is_some()
@@ -1460,6 +1562,12 @@ impl App {
                 self.settings.reduced_motion,
                 overlays.achievement_y,
             );
+        }
+        if !self.paused
+            && !self.menu_over_game
+            && let Some(session) = &mut self.session
+        {
+            self.creator.draw(session, s);
         }
     }
     fn hud_action(&mut self, action: HudAction) {

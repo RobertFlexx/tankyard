@@ -680,9 +680,18 @@ impl Hud {
                 stats_y - 9.0 * s,
                 16.0 * s,
             );
+            let covered = self.evolution
+                && class.is_some_and(|class| {
+                    evolution_cards(class.upgrades.len(), w, h, s)
+                        .iter()
+                        .any(|card| contains(*card))
+                });
             for (row, &index) in stat_order.iter().enumerate() {
                 let r = Rect::new(stats_x, stats_y + row as f32 * 26.0 * s, stat_w, 22.0 * s);
-                let hovered = contains(r) && !modal && !self.evolution && tank.points > 0;
+                let hovered = contains(Rect::new(r.x, r.y, r.w, 25. * s))
+                    && !modal
+                    && !covered
+                    && tank.points > 0;
                 if hovered {
                     tooltip = Some(index);
                 }

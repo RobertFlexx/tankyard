@@ -115,3 +115,5 @@ Chronarch is a level-55 evolution from Counterguard or Relay. Its Stasis wave ab
 The verified creator has a gold **Game Creator** badge. Sharing an arena with another verified human creator unlocks **Meet the game's creator** according to your achievement preference, including modified arenas. A matching display name or server moderation role cannot grant the badge.
 
 [Bastion Anticheat](bastion-anticheat.md) validates player intentions while the server runs movement, weapons, damage, and upgrades. Delayed or reordered inputs do not trigger cheating accusations or automatic bans. Signed creator powers are authorized changes to those server rules.
+
+Server hosts can open moderation with the Server button or F8. Creator and central-owner menus require the matching private key; see [server administration](creator-administration.md). Warnings and announcements appear in a centered banner and can be dismissed.

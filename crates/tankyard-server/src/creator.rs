@@ -41,11 +41,16 @@ pub(crate) fn handle(
         if !command.valid() {
             return Err("Invalid moderation command.".into());
         }
+        if let ServerCommand::Announce { text } = command {
+            server.announce(text.trim().to_owned());
+            return Ok("Announcement sent to this server.".into());
+        }
         let target = match &command {
             ServerCommand::Kick { player, .. }
             | ServerCommand::Ban { player, .. }
-            | ServerCommand::Mute { player, .. } => *player,
-            _ => return Err("Creator moderation supports kick, ban, and mute only.".into()),
+            | ServerCommand::Mute { player, .. }
+            | ServerCommand::Warn { player, .. } => *player,
+            _ => return Err("Creator moderation supports server-local kick, ban, mute, warning, and announcement only.".into()),
         };
         if target == player {
             return Err("Select another player.".into());
@@ -58,6 +63,7 @@ pub(crate) fn handle(
             })
             .ok_or("Player is no longer connected.")?;
         match command {
+            ServerCommand::Warn { reason, .. } => server.warn_client(client, reason),
             ServerCommand::Kick { reason, .. } => server.reject(
                 client,
                 if reason.is_empty() {

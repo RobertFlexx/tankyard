@@ -15,6 +15,9 @@ pub struct ServerSettings {
     /// hosts must explicitly opt in; false always overrides the official default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub creator_admin: Option<bool>,
+    /// Separate, signed owner identity for the central arena only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub central_owner_admin: Option<bool>,
     pub access_file: String,
     pub audit_file: String,
     pub global_audit_file: String,
@@ -48,6 +51,7 @@ impl Default for ServerSettings {
             chat_enabled: true,
             voice_enabled: true,
             creator_admin: None,
+            central_owner_admin: None,
             access_file: String::new(),
             audit_file: String::new(),
             global_audit_file: String::new(),
@@ -79,6 +83,14 @@ impl ServerSettings {
         // Shipped defaults also work in minimal Docker images without configs/.
         toml::from_str(include_str!("../../../configs/central.toml"))
             .expect("built-in central server configuration")
+    }
+    pub fn central_owner_enabled(&self) -> bool {
+        self.central_owner_admin.unwrap_or(
+            self.server_id == "tankyard-central"
+                && self.kind == tankyard_protocol::ServerKind::Official,
+        ) && self.kind == tankyard_protocol::ServerKind::Official
+            && self.server_id == "tankyard-central"
+            && self.password.is_empty()
     }
     pub fn creator_admin_enabled(&self) -> bool {
         self.password.is_empty()
@@ -154,6 +166,9 @@ impl ServerSettings {
         Ok(())
     }
     pub fn validate(&self) -> Result<(), NetError> {
+        if self.central_owner_admin == Some(true) && !self.central_owner_enabled() {
+            return Err(NetError("central owner administration requires the password-free official tankyard-central profile".into()));
+        }
         if self.creator_admin == Some(true)
             && (!self.password.is_empty()
                 || (self.kind != tankyard_protocol::ServerKind::Official

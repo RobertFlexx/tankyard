@@ -1,3 +1,13 @@
+# v0.4.0 checks (2026-10-20)
+
+389 public Rust tests, ten installer tests, formatting and Clippy with warnings denied pass on Linux. Four private real-key network tests verify creator and central-owner identity, host policy, impostors, replay/tampering rejection, revocation/re-enable, signed creator powers and a central-server-only ban. The compatible Linux build and ABI checks cover all five public executables. No identity signing credential is included in public source or packages.
+
+Native checks at 1280×800 and 800×600 with 140% interface scale and 100%/200% desktop DPI verify mouse skill upgrades while evolution choices remain open, automatic local Host assignment/badges, all five staff tabs, responsive centered panels, warning/announcement delivery and the central-owner meeting achievement. Ordinary public clients work with adjacent and profile key files; both self-contained credential editions work after relocation/renaming with no key sidecars and an unrelated working directory. Screenshots and logs are in `artifacts/v040-review`.
+
+Eight release UDP clients under 200 ms simulated latency, 75 ms jitter and 10% packet loss finish ready with zero stale clients, skipped snapshots or dropped catch-up ticks. Reliable bursts complete without disconnecting players, and failed ban storage leaves no hidden sanction. RustSec reports zero vulnerability entries, with outstanding Macroquad soundness and fxhash/ttf-parser maintenance advisories documented in the [security review](security-review-v040.md). These graphics dependencies are absent from the dedicated server's tree.
+
+The tagged workflow builds all public desktop packages and checks downloaded installers on Linux, macOS and Windows. Protocol 16 requires updating the central Pi's server and relay; [operator steps](central-pi-upgrade.md) are provided. No live deployment was performed.
+
 # v0.3.3 checks (2026-10-19)
 
 378 public Rust tests, ten installer tests, formatting, and Clippy with warnings denied pass on Linux. The compatible release build passes ABI checks for all five public executables, with no glibc imports newer than 2.30. Three private real-key integration tests pass against the regular server, including host consent, impersonation/replay rejection, revocation, and Bastion's treatment of signed creator powers.

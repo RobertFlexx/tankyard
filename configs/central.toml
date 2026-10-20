@@ -3,6 +3,7 @@
 # creator_admin = false overrides that policy. Private hosts use server.toml.
 kind = "Official"
 server_id = "tankyard-central"
+central_owner_admin = true
 name = "Tank Yard Central Arena"
 bind = "0.0.0.0:5000"
 chat_enabled = false

@@ -1,6 +1,7 @@
 use crate::{NetError, unix_time};
 use renet::RenetClient;
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport, generate_random_bytes};
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use std::{
     net::{SocketAddr, ToSocketAddrs, UdpSocket},
     time::Duration,
@@ -47,6 +48,12 @@ pub struct NetworkClient {
     pub owner_extension_available: bool,
     owner_nonce: Option<[u8; 32]>,
     owner_sequence: u64,
+    admin_key: Ed25519KeyPair,
+    admin_nonce: Option<[u8; 32]>,
+    pub admin_server_id: Option<String>,
+    pub central_owner_challenge: Option<[u8; 32]>,
+    admin_sequence: u64,
+    pub server_notice: Option<(ServerNotice, std::time::Instant)>,
     client: RenetClient,
     transport: NetcodeClientTransport,
     hello: ClientControl,
@@ -147,6 +154,10 @@ impl NetworkClient {
             .map_err(|e| NetError(e.to_string()))?;
         let bundle = tankyard_mods::GameBundle::builtin();
         let bundle_revision = bundle.fingerprint();
+        let admin_key = Ed25519KeyPair::from_seed_unchecked(&generate_random_bytes::<32>())
+            .map_err(|_| NetError("Could not create a secure administration session.".into()))?;
+        let mut admin_public_key = [0; 32];
+        admin_public_key.copy_from_slice(admin_key.public_key().as_ref());
         Ok(Self {
             player_id: None,
             player_round: None,
@@ -167,6 +178,7 @@ impl NetworkClient {
                 name: sanitize_name(name),
                 password: password.into(),
                 account_token,
+                admin_key: admin_public_key,
             },
             hello_sent: false,
             tick_rate: 60,
@@ -192,6 +204,12 @@ impl NetworkClient {
             owner_extension_available: false,
             owner_nonce: None,
             owner_sequence: 0,
+            admin_key,
+            admin_nonce: None,
+            admin_server_id: None,
+            central_owner_challenge: None,
+            admin_sequence: 0,
+            server_notice: None,
         })
     }
     pub fn update(&mut self, elapsed: Duration) -> Result<(), NetError> {
@@ -248,7 +266,7 @@ impl NetworkClient {
                     role,
                     permissions,
                 } => {
-                    if permissions.len() > 8
+                    if permissions.len() > ServerPermission::ALL.len()
                         || permissions
                             .iter()
                             .collect::<std::collections::BTreeSet<_>>()
@@ -364,12 +382,38 @@ impl NetworkClient {
                     }
                     self.match_settings = Some(settings);
                 }
+                ServerControl::AdminChallenge {
+                    nonce,
+                    server_id,
+                    central_owner,
+                } => {
+                    if (!server_id.is_empty() && !crate::access::account_id(&server_id))
+                        || (central_owner && server_id != "tankyard-central")
+                    {
+                        return self.fail("Invalid administration challenge.".into());
+                    }
+                    self.admin_server_id = Some(server_id);
+                    self.admin_nonce = Some(nonce);
+                    self.admin_sequence = 0;
+                    self.central_owner_challenge = central_owner.then_some(nonce);
+                }
+                ServerControl::Notice { notice } => {
+                    if !notice.valid() {
+                        return self.fail("Invalid server notice.".into());
+                    }
+                    // Warnings remain readable if a subsequent announcement arrives.
+                    if self.active_notice().is_none_or(|current| {
+                        current.kind != NoticeKind::Warning || notice.kind == NoticeKind::Warning
+                    }) {
+                        self.server_notice = Some((notice, std::time::Instant::now()));
+                    }
+                }
                 ServerControl::CreatorChallenge {
                     nonce,
                     owner_extension,
                     server_id,
                 } => {
-                    if !crate::access::account_id(&server_id) {
+                    if !server_id.is_empty() && !crate::access::account_id(&server_id) {
                         return self.fail("Invalid creator challenge server ID.".into());
                     }
                     self.creator_server_id = Some(server_id);
@@ -529,8 +573,56 @@ impl NetworkClient {
         let Some(round) = self.snapshot.as_ref().map(|s| s.match_state.round) else {
             return false;
         };
-        self.permissions.contains(&command.permission())
-            && self.queue_control(ClientControl::Admin { round, command })
+        let Some(nonce) = self.admin_nonce else {
+            return false;
+        };
+        let Some(server) = &self.admin_server_id else {
+            return false;
+        };
+        let Some(next) = self.admin_sequence.checked_add(1) else {
+            return false;
+        };
+        let Ok(payload) = serde_json::to_vec(&command) else {
+            return false;
+        };
+        let message = admin_command(
+            self.client_id(),
+            &nonce,
+            server,
+            round,
+            self.admin_sequence,
+            &payload,
+        );
+        let signature = self.admin_key.sign(&message).as_ref().to_vec();
+        if self.permissions.contains(&command.permission())
+            && self.queue_control(ClientControl::Admin {
+                round,
+                sequence: self.admin_sequence,
+                command,
+                signature,
+            })
+        {
+            self.admin_sequence = next;
+            true
+        } else {
+            false
+        }
+    }
+    pub fn admin_public_key(&self) -> [u8; 32] {
+        self.admin_key
+            .public_key()
+            .as_ref()
+            .try_into()
+            .expect("Ed25519 public key")
+    }
+    pub fn submit_central_owner_proof(&mut self, signature: Vec<u8>) -> bool {
+        self.queue_control(ClientControl::CentralOwnerProof { signature })
+    }
+    pub fn active_notice(&self) -> Option<&ServerNotice> {
+        self.server_notice
+            .as_ref()
+            .filter(|(notice, received)| received.elapsed().as_secs() < notice.seconds())
+            .map(|(notice, _)| notice)
     }
     pub fn sandbox_level(&mut self, level: u8) -> bool {
         self.sandbox_allowed && self.queue_control(ClientControl::SandboxLevel { level })
