@@ -76,6 +76,49 @@ pub fn local_ip() -> IpAddr {
         .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
 }
 
+impl crate::UdpServer {
+    pub(crate) fn update_party_roster(&mut self) {
+        if self.settings.party.is_none()
+            || self.party_roster_checked_at == Some(self.elapsed.as_secs())
+        {
+            return;
+        }
+        self.party_roster_checked_at = Some(self.elapsed.as_secs());
+        let now = crate::unix_time().as_secs();
+        let mut members: Vec<_> = self
+            .peers
+            .iter()
+            .filter_map(|(&client, peer)| {
+                if peer.disconnect_at.is_some() {
+                    return None;
+                }
+                let tank = self
+                    .session
+                    .world
+                    .tanks
+                    .iter()
+                    .find(|tank| Some(tank.id) == peer.entity)?;
+                Some(tankyard_protocol::PartyMember {
+                    client,
+                    player: tank.id,
+                    name: tank.name.clone(),
+                    class: tank.class.clone(),
+                    leader: self.access.grant(client, now).role
+                        == tankyard_protocol::ServerRole::Owner,
+                    in_menu: peer.party_in_menu,
+                })
+            })
+            .collect();
+        members.sort_by_key(|member| (!member.leader, member.client));
+        if members != self.party_roster {
+            self.party_roster.clone_from(&members);
+            if !members.is_empty() {
+                self.broadcast_control(&tankyard_protocol::ServerControl::PartyRoster { members });
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

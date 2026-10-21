@@ -120,7 +120,13 @@ impl VoiceChat {
         }
     }
 
-    pub fn update(&mut self, client: &mut NetworkClient, playing: bool, volume: f32) {
+    pub fn update(
+        &mut self,
+        client: &mut NetworkClient,
+        playing: bool,
+        volume: f32,
+        muted_players: &std::collections::HashSet<u64>,
+    ) {
         let session = client.player_round.map(|round| (client.client_id(), round));
         if session != self.session {
             self.reset();
@@ -194,10 +200,14 @@ impl VoiceChat {
             self.error = Some(format!("Voice playback unavailable: {error}"));
             self.output_failed = true;
         }
-        self.decoders
-            .retain(|_, voice| voice.received.elapsed() < Duration::from_secs(1));
+        self.decoders.retain(|player, voice| {
+            !muted_players.contains(player) && voice.received.elapsed() < Duration::from_secs(1)
+        });
         let mut decoded = Vec::with_capacity(client.voice_packets.len());
         while let Some(packet) = client.voice_packets.pop_front() {
+            if muted_players.contains(&packet.player) {
+                continue;
+            }
             if self.decoders.len() >= MAX_SPEAKERS && !self.decoders.contains_key(&packet.player) {
                 continue;
             }
@@ -220,9 +230,9 @@ impl VoiceChat {
         // Codec work runs on the game thread, outside the audio callback lock.
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.volume = volume.clamp(0., 1.);
-            mixer
-                .voices
-                .retain(|_, voice| voice.received.elapsed() < Duration::from_secs(1));
+            mixer.voices.retain(|player, voice| {
+                !muted_players.contains(player) && voice.received.elapsed() < Duration::from_secs(1)
+            });
             for (player, samples) in decoded {
                 mixer.voices.entry(player).or_default().push(samples);
             }

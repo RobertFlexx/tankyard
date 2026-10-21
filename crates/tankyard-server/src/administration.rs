@@ -258,6 +258,7 @@ mod tests {
                     creator_session_nonce: None,
                     last_owner_sequence: None,
                     party_nonce: None,
+                    party_in_menu: false,
                     admin_key: Some(key.public_key().as_ref().try_into().unwrap()),
                     admin_nonce: Some([3; 32]),
                     last_admin_sequence: None,

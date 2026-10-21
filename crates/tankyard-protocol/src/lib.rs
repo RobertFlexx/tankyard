@@ -14,9 +14,11 @@ mod community;
 pub use community::*;
 mod voice;
 pub use voice::*;
+mod party;
+pub use party::*;
 
-pub const PROTOCOL_VERSION: u32 = 18;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0012;
+pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0013;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -71,6 +73,9 @@ pub fn connection_config() -> ConnectionConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ClientControl {
+    PartyPresence {
+        in_menu: bool,
+    },
     CreatorProof {
         signature: Vec<u8>,
     },
@@ -136,6 +141,7 @@ pub enum ClientControl {
 impl ClientControl {
     pub fn valid(&self) -> bool {
         match self {
+            Self::PartyPresence { .. } => true,
             Self::CreatorProof { signature } | Self::CentralOwnerProof { signature } => {
                 signature.len() == 64
             }
@@ -183,6 +189,9 @@ impl ClientControl {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerControl {
+    PartyRoster {
+        members: Vec<PartyMember>,
+    },
     PartyChallenge {
         nonce: [u8; 32],
         server_id: String,

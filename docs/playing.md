@@ -2,6 +2,8 @@
 
 Play or Enter joins the main server at tankyard.kokonico.me. Play offline is beside it; Practice is just below. F6 opens Practice from the menu or during a game. Open Offline modes to choose the local arena, bot count, and difficulty. Beginner gives you more time to react; Expert has faster decisions and more accurate aim. Every difficulty uses the same combat stats and upgrade rules as a player.
 
+**Parties** hosts an invite-only match on the leader's computer. Internet invites detect a public IP and try temporary router forwarding; the setup screen explains any manual step still needed. Click the tank icons at the side for members, local voice mutes and party chat. Returning to the main menu keeps the party connected; Resume party returns to play. Leave party explicitly to disconnect. See [party setup](parties.md).
+
 Join server and Settings → Servers have separate Favorites and Recent tabs. Click Sort to cycle through saved/recency order, A–Z, and Z–A. Use × to remove an entry, the arrows to reorder favorites in saved order, or the star beside a recent entry to save it. Page controls reach every saved server. Each list can be cleared independently; changing its display order preserves connection history. Changes and sort preferences save immediately.
 
 On your first launch, choose Dark or Light from two live arena previews. The choice is saved; F9 or Settings changes it later. A small bar below your tank fills as your next manual shot reloads. Auto-firing and drone-only tanks hide the reload bar. Custom mods may still add charge weapons.

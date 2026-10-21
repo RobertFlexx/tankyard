@@ -19,6 +19,9 @@ pub enum Engine {
 }
 pub struct Session {
     pub party_invite: Option<tankyard_server::party::Invite>,
+    pub party_network: String,
+    party_discovery: Option<tankyard_client::party_network::Discovery>,
+    party_manual_address: bool,
     pub practice: Option<tankyard_client::practice::Run>,
     pub engine: Engine,
     pub player: EntityId,
@@ -45,6 +48,12 @@ pub struct Session {
     host_request: Option<std::sync::mpsc::Receiver<String>>,
 }
 impl Session {
+    pub fn set_party_address(&mut self, address: std::net::SocketAddr) {
+        if let Some(invite) = &mut self.party_invite {
+            self.party_manual_address |= invite.address != address;
+            invite.address = address;
+        }
+    }
     pub fn practice(index: usize, name: &str, seed: u64) -> Result<Self, String> {
         let challenge = *tankyard_client::practice::CHALLENGES
             .get(index)
@@ -150,12 +159,13 @@ impl Session {
         name: &str,
         difficulty: &str,
         mods: Vec<std::path::PathBuf>,
+        automatic_network: bool,
     ) -> Result<Self, String> {
         let invite = tankyard_server::party::Invite::create(std::net::SocketAddr::new(
             tankyard_server::party::local_ip(),
             5000,
         ));
-        let settings = ServerSettings {
+        let mut settings = ServerSettings {
             allow_sandbox: config.mode == Mode::Sandbox,
             world: config,
             name: format!("{}'s party", name.chars().take(21).collect::<String>()),
@@ -170,7 +180,18 @@ impl Session {
             mods,
             ..Default::default()
         };
-        let host = HostedServer::start(settings).map_err(|e| e.to_string())?;
+        let host = HostedServer::start(settings.clone())
+            .or_else(|original| {
+                // Retry on an OS-assigned port if the preferred port is occupied.
+                // Preserve the original error when the failure wasn't the port.
+                settings.bind = "0.0.0.0:0".into();
+                HostedServer::start(settings).map_err(|_| original)
+            })
+            .map_err(|error| error.to_string())?;
+        let mut invite = invite;
+        invite.address.set_port(host.address.port());
+        let discovery = automatic_network
+            .then(|| tankyard_client::party_network::Discovery::start(invite.address));
         let mut local_invite = invite.clone();
         local_invite
             .address
@@ -186,6 +207,16 @@ impl Session {
             None,
         );
         session.party_invite = Some(invite);
+        session.party_discovery = discovery;
+        session.party_network = if automatic_network {
+            "Finding your public IP and checking automatic UDP forwarding…".into()
+        } else {
+            let address = session.party_invite.as_ref().expect("party invite").address;
+            format!(
+                "Manual internet setup. Enter your public IP:PORT and forward UDP {} to {address}. For LAN play, use {address}.",
+                address.port()
+            )
+        };
         Ok(session)
     }
     pub fn map_remaining(&self) -> Option<u32> {
@@ -259,6 +290,9 @@ impl Session {
         Self {
             practice: None,
             party_invite: None,
+            party_network: String::new(),
+            party_discovery: None,
+            party_manual_address: false,
             engine,
             player,
             spectating: None,
@@ -353,6 +387,19 @@ impl Session {
         }
     }
     pub fn update_network(&mut self, dt: f32, now: f64, _content: &Content) {
+        if let Some(status) = self
+            .party_discovery
+            .as_ref()
+            .and_then(|discovery| discovery.poll())
+        {
+            self.party_network = status.message;
+            if !self.party_manual_address
+                && let Some(address) = status.address
+                && let Some(invite) = &mut self.party_invite
+            {
+                invite.address = address;
+            }
+        }
         let Engine::Online { client, host } = &mut self.engine else {
             return;
         };

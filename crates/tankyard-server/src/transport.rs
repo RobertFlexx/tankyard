@@ -33,6 +33,7 @@ pub(crate) struct Peer {
     pub creator_session_nonce: Option<[u8; 32]>,
     pub last_owner_sequence: Option<u64>,
     pub party_nonce: Option<[u8; 32]>,
+    pub party_in_menu: bool,
 }
 #[derive(Default, Clone, Debug)]
 pub struct ServerMetrics {
@@ -124,6 +125,8 @@ pub struct UdpServer {
     accounts_checked_at: u64,
     pub(crate) rotation_checked_at: Option<u64>,
     pub(crate) next_rotation: u64,
+    pub(crate) party_roster_checked_at: Option<u64>,
+    pub(crate) party_roster: Vec<PartyMember>,
     owner_extension: Option<OwnerExtension>,
 }
 
@@ -198,6 +201,8 @@ impl UdpServer {
             session,
             next_rotation: u64::from(settings.map_rotation_seconds),
             rotation_checked_at: None,
+            party_roster_checked_at: None,
+            party_roster: Vec::new(),
             settings,
             address,
             metrics: ServerMetrics {
@@ -257,6 +262,7 @@ impl UdpServer {
         }
         self.expire_clients();
         self.update_map_rotation();
+        self.update_party_roster();
         self.sync_bots();
         let occupied = self
             .peers
@@ -449,6 +455,7 @@ impl UdpServer {
                             creator_session_nonce: None,
                             last_owner_sequence: None,
                             party_nonce: None,
+                            party_in_menu: false,
                         },
                     );
                     let blocked = self
@@ -469,6 +476,7 @@ impl UdpServer {
                     }
                 }
                 ServerEvent::ClientDisconnected { client_id, reason } => {
+                    self.party_roster_checked_at = None;
                     self.access.remove(client_id);
                     self.chat.remove(client_id);
                     if let Some(entity) = self.peers.remove(&client_id).and_then(|p| p.entity) {
@@ -824,6 +832,7 @@ impl UdpServer {
                 player,
                 name: name.clone(),
             });
+            self.party_roster_checked_at = None;
             log::info!("{name} joined as entity {player} (client {client})");
             return;
         }
@@ -837,6 +846,17 @@ impl UdpServer {
         let permitted =
             self.settings.allow_sandbox && self.session.world.config.mode == Mode::Sandbox;
         let accepted = match message {
+            ClientControl::PartyPresence { in_menu } => {
+                if self.settings.party.is_some() {
+                    if let Some(peer) = self.peers.get_mut(&client) {
+                        peer.party_in_menu = in_menu;
+                    }
+                    self.party_roster_checked_at = None;
+                    true
+                } else {
+                    false
+                }
+            }
             ClientControl::CreatorProof { signature } => {
                 let proof = self
                     .peers
@@ -1503,6 +1523,7 @@ impl UdpServer {
     }
 
     pub(crate) fn restart_round(&mut self) {
+        self.party_roster_checked_at = None;
         let players: Vec<_> = self
             .peers
             .iter()

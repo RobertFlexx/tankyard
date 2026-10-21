@@ -210,7 +210,7 @@ impl CommunityUi {
                 self.notice.clear();
             }
         }
-        if client.chat_enabled && !self.admin_open {
+        if client.chat_enabled && client.party_members.is_empty() && !self.admin_open {
             self.chat(client, s);
         }
         if self.admin_open {

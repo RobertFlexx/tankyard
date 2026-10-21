@@ -28,6 +28,7 @@ pub struct NetworkClient {
     pub last_action: Option<String>,
     pub match_settings: Option<MatchSettings>,
     party_key: Option<Ed25519KeyPair>,
+    pub party_members: Vec<PartyMember>,
     pub map_rotation: Option<(u32, std::time::Instant)>,
     pub server_name: String,
     pub sandbox_allowed: bool,
@@ -176,6 +177,7 @@ impl NetworkClient {
             last_action: None,
             match_settings: None,
             party_key: None,
+            party_members: Vec::new(),
             map_rotation: None,
             server_name: String::new(),
             sandbox_allowed: false,
@@ -257,6 +259,20 @@ impl NetworkClient {
                 Err(e) => return self.fail(e.to_string()),
             };
             match control {
+                ServerControl::PartyRoster { members } => {
+                    if self.party_key.is_none()
+                        || !valid_party_roster(&members)
+                        || members
+                            .iter()
+                            .any(|member| self.bundle.content.class(&member.class).is_none())
+                        || !members
+                            .iter()
+                            .any(|member| member.client == self.client_id())
+                    {
+                        return self.fail("Invalid party membership data.".into());
+                    }
+                    self.party_members = members;
+                }
                 ServerControl::MapRotation { remaining } => {
                     if remaining > 604800 {
                         return self.fail("Invalid map rotation timer.".into());
@@ -604,6 +620,9 @@ impl NetworkClient {
                 room: room.into(),
                 text: text.into(),
             })
+    }
+    pub fn party_presence(&mut self, in_menu: bool) -> bool {
+        self.party_key.is_some() && self.queue_control(ClientControl::PartyPresence { in_menu })
     }
     pub fn join_room(&mut self, room: &str) -> bool {
         self.chat_enabled && self.queue_control(ClientControl::JoinRoom { room: room.into() })

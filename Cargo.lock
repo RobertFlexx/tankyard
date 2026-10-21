@@ -130,8 +130,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "bastion-anticheat"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ring",
  "tankyard-core",
@@ -1983,7 +1989,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-ai"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde",
  "tankyard-content",
@@ -1992,7 +1998,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-client"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arboard",
  "clap",
@@ -2016,14 +2022,17 @@ dependencies = [
  "tankyard-mods",
  "tankyard-protocol",
  "tankyard-server",
+ "ureq",
  "windows-sys 0.61.2",
  "xcb",
+ "xml-rs",
+ "xmltree",
  "zeroize",
 ]
 
 [[package]]
 name = "tankyard-content"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2031,7 +2040,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde",
  "tankyard-content",
@@ -2040,7 +2049,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-mods"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "image",
  "serde",
@@ -2050,7 +2059,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-protocol"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "lz4_flex",
  "postcard",
@@ -2064,7 +2073,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-server"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bastion-anticheat",
  "clap",
@@ -2090,7 +2099,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-tools"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "postcard",
@@ -2282,6 +2291,40 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "ureq"
+version = "3.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a7ac20be9b7726e0bbdbf974c059676d9acb1cd414961f570a4e8231cacd7fc"
+dependencies = [
+ "base64",
+ "log",
+ "percent-encoding",
+ "rustls",
+ "rustls-pki-types",
+ "ureq-proto",
+ "utf8-zero",
+ "webpki-roots",
+]
+
+[[package]]
+name = "ureq-proto"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "841583fc36089d7d59419568ae157f43a5a03a2e5a81ba87c77d1596ef46e922"
+dependencies = [
+ "base64",
+ "http",
+ "httparse",
+ "log",
+]
+
+[[package]]
+name = "utf8-zero"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8c0a043c9540bae7c578c88f91dda8bd82e59ae27c21baca69c8b191aaf5a6e"
 
 [[package]]
 name = "utf8parse"
@@ -2901,6 +2944,21 @@ name = "xkeysym"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
+
+[[package]]
+name = "xml-rs"
+version = "0.8.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
+
+[[package]]
+name = "xmltree"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7d8a75eaf6557bb84a65ace8609883db44a29951042ada9b393151532e41fcb"
+dependencies = [
+ "xml-rs",
+]
 
 [[package]]
 name = "zeroize"

@@ -31,3 +31,6 @@ from the desktop to use its cursor theme and native monitor geometry.
 
 Desktop clipboard integration uses Arboard, with X11/Wayland and Windows helpers.
 Their notices are included in [licenses/clipboard-dependencies.txt](licenses/clipboard-dependencies.txt).
+
+Party networking uses Ureq and XML parsers under the MIT license option.
+Their notices are included in [licenses/party-networking.txt](licenses/party-networking.txt).

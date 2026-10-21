@@ -53,6 +53,9 @@ pub enum Action {
     CreateParty,
     JoinParty,
     CopyParty,
+    ResumeParty,
+    LeaveParty,
+    OpenParty,
     Join,
     Quit,
     Save,
@@ -68,6 +71,8 @@ pub struct Menu {
     pub party_input: String,
     party_focus: bool,
     pub party_roster: Vec<String>,
+    pub party_active: bool,
+    pub party_network: String,
     pub mode: Mode,
     pub map: usize,
     pub bots: usize,
@@ -113,6 +118,8 @@ impl Menu {
             party_input: String::new(),
             party_focus: false,
             party_roster: Vec::new(),
+            party_active: false,
+            party_network: String::new(),
             mode: Mode::Ffa,
             map: 0,
             bots: 12,
@@ -358,7 +365,14 @@ impl Menu {
             144.
         } * s;
         let footer = if self.page == Page::Main { 12. } else { 78. };
-        let bottom = h - (footer + if self.error.is_empty() { 0. } else { 38. }) * s;
+        let bottom = h
+            - (footer
+                + if self.error.is_empty() && self.info.is_empty() {
+                    0.
+                } else {
+                    38.
+                })
+                * s;
         let anchor = self.scale_anchor.take();
         let canvas = self.scroll_panel.begin(s, top, bottom, anchor);
         let mut action = match self.page {
@@ -373,7 +387,7 @@ impl Menu {
             Page::Credits => self.credits(s),
             Page::Practice => self.practice(settings, s),
             Page::Controls => self.controls(settings, s),
-            Page::Party => self.party(s),
+            Page::Party => self.party(settings, s),
         };
         drop(canvas);
         let footer = match self.page {
@@ -477,23 +491,39 @@ impl Menu {
         let play_y = y + 190.0 * s;
         if button(
             Rect::new(x, play_y, pane_w - 162.0 * s, 55.0 * s),
-            "Play [Enter]",
+            if self.party_active {
+                "Resume party [Enter]"
+            } else {
+                "Play [Enter]"
+            },
             true,
             true,
             s * 1.08,
         ) || is_key_pressed(KeyCode::Enter)
         {
             let _ = settings.save();
-            return Action::QuickPlay;
+            return if self.party_active {
+                Action::ResumeParty
+            } else {
+                Action::QuickPlay
+            };
         }
         if button(
             Rect::new(x + pane_w - 152.0 * s, play_y, 152.0 * s, 55.0 * s),
-            "Play offline",
+            if self.party_active {
+                "Party roster"
+            } else {
+                "Play offline"
+            },
             false,
             true,
             s * 0.9,
         ) {
-            return Action::Offline;
+            return if self.party_active {
+                Action::OpenParty
+            } else {
+                Action::Offline
+            };
         }
         let third = (pane_w - 18.0 * s) / 3.0;
         for (index, (title, page)) in [
@@ -792,7 +822,7 @@ impl Menu {
         }
         Action::None
     }
-    fn party(&mut self, s: f32) -> Action {
+    fn party(&mut self, settings: &mut Settings, s: f32) -> Action {
         let x = 40. * s;
         let gap = 26. * s;
         let width = (screen_width() - 80. * s - gap) * 0.5;
@@ -813,7 +843,7 @@ impl Menu {
         if self.party_invite.is_some() {
             label("YOUR PARTY", x + pad, 276. * s, 17. * s, CYAN);
             label(
-                "Reachable IP:PORT",
+                "Public IP:PORT · editable for manual forwarding",
                 x + pad,
                 308. * s,
                 13. * s,
@@ -831,7 +861,7 @@ impl Menu {
                 Rect::new(x + pad, 368. * s, inner, 38. * s),
                 "Copy invite link",
                 true,
-                true,
+                !self.party_address.is_empty(),
                 s * 0.85,
             ) {
                 return Action::CopyParty;
@@ -855,7 +885,11 @@ impl Menu {
                 );
             }
             wrap(
-                "The leader can change mode, map and difficulty in Server tools. Changes keep your party connected.",
+                if self.party_network.is_empty() {
+                    "The leader can change mode and map in Server tools. Changes keep everyone connected."
+                } else {
+                    &self.party_network
+                },
                 x + pad,
                 534. * s,
                 inner,
@@ -921,6 +955,44 @@ impl Menu {
                 muted_color(),
             );
         }
+        if self.party_active {
+            label("STAY CONNECTED", right + pad, 276. * s, 17. * s, CYAN);
+            wrap(
+                "Your party stays connected when you return to the main menu. Use the tank icons at the side to open members, local voice mutes and party text chat.",
+                right + pad,
+                313. * s,
+                inner,
+                15. * s,
+                muted_color(),
+            );
+            if button(
+                Rect::new(right + pad, 415. * s, inner, 40. * s),
+                "Enter match",
+                true,
+                true,
+                s * 0.9,
+            ) {
+                return Action::ResumeParty;
+            }
+            if button(
+                Rect::new(right + pad, 467. * s, inner, 36. * s),
+                "Members and party chat",
+                false,
+                true,
+                s * 0.85,
+            ) {
+                return Action::OpenParty;
+            }
+            wrap(
+                "The online match keeps running while you browse menus. Leaving the leader's party closes it for everyone.",
+                right + pad,
+                540. * s,
+                inner,
+                13. * s,
+                muted_color(),
+            );
+            return Action::None;
+        }
         label("JOIN A PARTY", right + pad, 276. * s, 17. * s, text_color());
         wrap(
             "Paste the full invite link from your friend.",
@@ -948,7 +1020,7 @@ impl Menu {
             return Action::JoinParty;
         }
         wrap(
-            "LAN: share the detected local IP. Internet: replace it with your public IP and forward UDP port 5000 to the leader's computer. A random address cannot bypass your router.",
+            "The leader detects their public IP and requests a temporary UDP router forward. If the router or ISP blocks it, the invite screen shows the port to forward manually. You can also enter a LAN address for local play.",
             right + pad,
             495. * s,
             inner,
@@ -961,6 +1033,20 @@ impl Menu {
             s * 0.75,
         ) {
             return Action::Page(Page::Mods);
+        }
+        if small_button(
+            Rect::new(x + 150. * s, 625. * s, 280. * s, 30. * s),
+            if settings.auto_party_network {
+                "Internet setup: Automatic"
+            } else {
+                "Internet setup: Manual / LAN"
+            },
+            s * 0.75,
+        ) {
+            settings.auto_party_network = !settings.auto_party_network;
+            if let Err(error) = settings.save() {
+                self.error = format!("Could not save party preference: {error}");
+            }
         }
         Action::None
     }

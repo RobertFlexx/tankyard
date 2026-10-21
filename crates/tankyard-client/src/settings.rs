@@ -33,6 +33,7 @@ pub enum ServerList {
 #[serde(default)]
 pub struct Settings {
     pub player_name: String,
+    pub auto_party_network: bool,
     pub server_address: String,
     pub favorites: Vec<String>,
     pub recent_servers: Vec<String>,
@@ -76,6 +77,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             player_name: "Pilot".into(),
+            auto_party_network: true,
             server_address: CENTRAL_SERVER.into(),
             favorites: vec![],
             recent_servers: vec![],

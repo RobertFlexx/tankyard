@@ -17,6 +17,7 @@ mod hud;
 mod menu;
 mod native_resolution;
 mod notifications;
+mod party_ui;
 mod practice_ui;
 mod presentation;
 mod render;
@@ -145,6 +146,7 @@ struct PendingJoin {
 }
 struct App {
     party_copy: Option<clipboard::Request<()>>,
+    party_ui: party_ui::PartyUi,
     creator: creator::CreatorUi,
     central_owner: central_owner::CentralOwner,
     settings: Settings,
@@ -261,6 +263,7 @@ impl App {
             bundle_revision: 0,
             community: community_ui::CommunityUi::default(),
             voice: voice::VoiceChat::new(cli.no_audio),
+            party_ui: party_ui::PartyUi::default(),
             catalog_paths,
         };
         if let Some(id) = cli.practice {
@@ -320,11 +323,22 @@ impl App {
         ui_layout::scale(screen_width(), screen_height(), self.settings.ui_scale)
     }
     fn launch(&mut self, mut session: Session) {
+        self.party_ui = party_ui::PartyUi::default();
+        if let Some(invite) = &session.party_invite {
+            self.connecting_address = format!("Party at {}", invite.address);
+        }
         self.menu.party_invite = session.party_invite.clone();
         self.menu.party_address = session
             .party_invite
             .as_ref()
             .map_or_else(String::new, |invite| invite.address.to_string());
+        if matches!(
+            &session.engine,
+            session::Engine::Online { host: Some(_), .. }
+        ) && session.party_invite.is_some()
+        {
+            self.menu.party_address.clear();
+        }
         self.creator.reset_controls();
         self.creator.authenticate(&mut session);
         self.central_owner.authenticate(&mut session);
@@ -370,11 +384,32 @@ impl App {
         }
     }
     fn handle(&mut self, action: Action) {
+        if self.active_party()
+            && matches!(
+                action,
+                Action::QuickPlay
+                    | Action::Offline
+                    | Action::Host
+                    | Action::CreateParty
+                    | Action::JoinParty
+                    | Action::Join
+                    | Action::Practice(_)
+            )
+        {
+            self.menu.error = "Your party is still connected. Resume the match or leave the party before starting another session.".into();
+            return;
+        }
         if !matches!(action, Action::None) {
             self.menu.info.clear();
         }
         match action {
             Action::None => {}
+            Action::OpenParty => {
+                self.party_ui.open = self.active_party();
+                self.menu.clear_focus();
+            }
+            Action::ResumeParty => self.resume_party(),
+            Action::LeaveParty => self.finish_session(),
             Action::Page(page) => {
                 if page == Page::Modes && self.menu.page != Page::Party {
                     self.menu.party_setup = false;
@@ -389,13 +424,21 @@ impl App {
                     self.menu.bots = 4;
                 }
                 self.save_menu_settings();
-                self.menu.go(page);
+                if self.active_party() && !self.menu_over_game {
+                    self.open_menu(page);
+                } else {
+                    self.menu.go(page);
+                }
             }
             Action::Back => {
                 self.save_menu_settings();
                 if self.menu.back() && self.menu_over_game {
-                    self.menu_over_game = false;
-                    self.paused = self.menu_return_paused;
+                    if self.active_party() {
+                        self.resume_party();
+                    } else {
+                        self.menu_over_game = false;
+                        self.paused = self.menu_return_paused;
+                    }
                 }
             }
             Action::QuickPlay => {
@@ -454,10 +497,10 @@ impl App {
                         .iter()
                         .map(std::path::PathBuf::from)
                         .collect(),
+                    self.settings.auto_party_network,
                 ) {
                     Ok(session) => {
                         self.launch(session);
-                        self.open_menu(Page::Party);
                     }
                     Err(error) => self.menu.error = error,
                 }
@@ -478,13 +521,16 @@ impl App {
                                 && !address.ip().is_multicast() =>
                         {
                             invite.address = address;
+                            if let Some(session) = &mut self.session {
+                                session.set_party_address(address);
+                            }
                             self.party_copy = Some(clipboard::copy(&invite.link()));
                             self.menu.error.clear();
                             self.menu.info = "Copying invite…".into();
                         }
                         _ => {
                             self.menu.error =
-                                "Enter a reachable IP:PORT, for example 192.168.1.8:5000.".into()
+                                "Wait for public-IP discovery, or enter your public IP:PORT.".into()
                         }
                     }
                 }
@@ -615,6 +661,8 @@ impl App {
         }
     }
     fn finish_session(&mut self) {
+        self.party_ui = party_ui::PartyUi::default();
+        self.party_copy = None;
         self.menu.party_invite = None;
         self.menu.party_roster.clear();
         self.voice.reset();
@@ -672,6 +720,61 @@ impl App {
         self.hud.sandbox = false;
         self.menu_over_game = true;
         self.paused = true;
+        if let Some(Session {
+            engine: session::Engine::Online { client, .. },
+            ..
+        }) = &mut self.session
+        {
+            client.party_presence(true);
+        }
+    }
+    fn active_party(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|session| session.party_invite.is_some() && session.failure.is_none())
+    }
+    fn resume_party(&mut self) {
+        if !self.active_party() {
+            return;
+        }
+        self.party_ui.close();
+        self.menu.clear_focus();
+        self.menu_over_game = false;
+        self.menu_return_paused = false;
+        self.paused = false;
+        if let Some(Session {
+            engine: session::Engine::Online { client, .. },
+            ..
+        }) = &mut self.session
+        {
+            client.party_presence(false);
+        }
+    }
+    fn return_to_menu(&mut self) {
+        if self.active_party() {
+            self.party_ui.close();
+            self.open_menu(Page::Main);
+            self.menu.reset(Page::Main);
+        } else {
+            self.finish_session();
+        }
+    }
+    fn draw_party(&mut self, s: f32) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let session::Engine::Online { client, .. } = &mut session.engine else {
+            return;
+        };
+        let action = self.party_ui.panel(
+            client,
+            &self.content,
+            &session.party_network,
+            !self.menu.party_address.is_empty(),
+            self.menu_over_game,
+            s,
+        );
+        self.handle(action);
     }
     fn save_menu_settings(&mut self) {
         if matches!(self.menu.page, Page::Settings | Page::Mods)
@@ -701,6 +804,9 @@ impl App {
         }
     }
     fn shortcuts(&mut self) -> bool {
+        if self.party_ui.open {
+            return false;
+        }
         if self.creator.open {
             if is_key_pressed(KeyCode::Escape) {
                 self.creator.open = false;
@@ -752,6 +858,7 @@ impl App {
     }
     fn input(&self, s: f32) -> PlayerInput {
         let blocked = self.paused
+            || self.party_ui.open
             || self.menu_over_game
             || self.hud.sandbox
             || self.creator.open
@@ -840,6 +947,20 @@ impl App {
         }
     }
     fn pointer_over_ui(&self, s: f32) -> bool {
+        if self.active_party()
+            && let Some(Session {
+                engine: session::Engine::Online { client, .. },
+                ..
+            }) = &self.session
+            && self.party_ui.captures_pointer(
+                client.party_members.len(),
+                s,
+                self.menu_over_game,
+                self.hud.evolution,
+            )
+        {
+            return true;
+        }
         if self.creator.captures_pointer(s) {
             return true;
         }
@@ -891,8 +1012,13 @@ impl App {
             })
     }
     fn update(&mut self, dt: f32, s: f32) {
+        let party_key = self.party_ui.keys();
         if let Some(result) = self.party_copy.as_ref().and_then(|request| request.poll()) {
             self.party_copy = None;
+            self.party_ui.notice = match &result {
+                Ok(()) => "Invite copied. Share it privately with your friends.".into(),
+                Err(error) => error.clone(),
+            };
             if self.menu.page == Page::Party {
                 self.menu.info.clear();
                 match result {
@@ -905,6 +1031,8 @@ impl App {
             }
         }
         if self.session.is_some()
+            && !self.party_ui.open
+            && !party_key
             && !self.paused
             && !self.menu_over_game
             && is_key_pressed(KeyCode::F8)
@@ -960,6 +1088,9 @@ impl App {
                 self.hud = Hud::new();
             }
             if let Some(message) = session.notice.take() {
+                if self.party_ui.open {
+                    self.party_ui.notice.clone_from(&message);
+                }
                 self.creator.notice = message.clone();
                 self.community.message(&message);
                 self.effects.notice(&message);
@@ -975,11 +1106,26 @@ impl App {
                             .any(|t| t.id == session.player && t.alive)
                 });
             if let session::Engine::Online { client, .. } = &mut session.engine {
+                self.party_ui.sync(client);
+                let muted = self.party_ui.muted_players(client);
                 self.voice.update(
                     client,
                     playing,
                     self.settings.master_volume * self.settings.voice_volume,
+                    &muted,
                 );
+            }
+            if session.party_invite.is_some() {
+                self.menu.party_network.clone_from(&session.party_network);
+                if let Some(invite) = &session.party_invite {
+                    let previous = self.menu.party_invite.as_ref().map(|invite| invite.address);
+                    if previous != Some(invite.address) {
+                        if !self.menu.address_active || self.menu.party_address.trim().is_empty() {
+                            self.menu.party_address = invite.address.to_string();
+                        }
+                        self.menu.party_invite = Some(invite.clone());
+                    }
+                }
             }
         }
         if self.pending_join.is_some() {
@@ -1016,6 +1162,8 @@ impl App {
         }
         let mut community_key = false;
         if !self.menu_over_game
+            && !self.party_ui.open
+            && !party_key
             && !self.paused
             && let Some(session) = &mut self.session
             && let session::Engine::Online { client, .. } = &mut session.engine
@@ -1026,9 +1174,16 @@ impl App {
                     .iter()
                     .any(|t| t.id == session.player && t.alive)
             });
-            community_key = self.community.keys(client, alive);
+            if session.party_invite.is_some() {
+                if (alive && is_key_pressed(KeyCode::Enter)) || is_key_pressed(KeyCode::Slash) {
+                    self.party_ui.focus_chat();
+                    community_key = true;
+                }
+            } else {
+                community_key = self.community.keys(client, alive);
+            }
         }
-        if !self.menu_over_game {
+        if !self.menu_over_game && !self.party_ui.open && !party_key {
             if !community_key
                 && !self.creator.open
                 && !self.community.focused()
@@ -1104,7 +1259,11 @@ impl App {
                     }
                 }
             }
-        } else if is_key_pressed(KeyCode::Escape) {
+        } else if self.menu_over_game
+            && !self.party_ui.open
+            && !party_key
+            && is_key_pressed(KeyCode::Escape)
+        {
             self.handle(Action::Back);
         }
         if !community_key
@@ -1132,6 +1291,7 @@ impl App {
         // Keep short taps until a simulation tick consumes them, including at
         // render rates above 60 Hz and down/up events within one frame.
         let can_attack = !self.paused
+            && !self.party_ui.open
             && !self.menu_over_game
             && !self.hud.sandbox
             && !self.creator.open
@@ -1312,6 +1472,11 @@ impl App {
         }
     }
     fn draw(&mut self, s: f32) {
+        if self.party_ui.open && self.active_party() {
+            render::menu_grid();
+            self.draw_party(s);
+            return;
+        }
         if let Some(pending) = &self.pending_join {
             render::menu_background(accessibility::motion_time(get_time() as f32));
             center_label(
@@ -1349,19 +1514,19 @@ impl App {
             return;
         }
         if self.session.is_none() || self.menu_over_game {
+            self.menu.party_active = self.active_party();
             let menu_scale = s;
-            self.menu.party_roster = self
-                .session
-                .as_ref()
-                .and_then(|session| session.display.as_ref())
-                .map_or_else(Vec::new, |snapshot| {
-                    snapshot
-                        .tanks
-                        .iter()
-                        .filter(|tank| !tank.bot)
-                        .map(|tank| tank.display_name())
-                        .collect()
-                });
+            self.menu.party_roster =
+                self.session
+                    .as_ref()
+                    .map_or_else(Vec::new, |session| match &session.engine {
+                        session::Engine::Online { client, .. } => client
+                            .party_members
+                            .iter()
+                            .map(|member| member.name.clone())
+                            .collect(),
+                        _ => Vec::new(),
+                    });
             let action = self.menu.draw(
                 &self.content,
                 &mut self.settings,
@@ -1369,6 +1534,15 @@ impl App {
                 menu_scale,
             );
             self.handle(action);
+            if self.menu.page == Page::Main
+                && self.active_party()
+                && let Some(Session {
+                    engine: session::Engine::Online { client, .. },
+                    ..
+                }) = &self.session
+            {
+                self.party_ui.rail(client, &self.content, s, true, false);
+            }
             return;
         }
         let practice = self
@@ -1680,6 +1854,19 @@ impl App {
             );
         }
         if !self.paused
+            && !self.hud.sandbox
+            && !self.creator.open
+            && !self.community.admin_open
+            && self.active_party()
+            && let Some(Session {
+                engine: session::Engine::Online { client, .. },
+                ..
+            }) = &self.session
+        {
+            self.party_ui
+                .rail(client, &self.content, s, false, self.hud.evolution);
+        }
+        if !self.paused
             && !self.menu_over_game
             && unobscured
             && let Some(session) = &mut self.session
@@ -1798,7 +1985,7 @@ impl App {
             }
             HudAction::Pause => self.paused = true,
             HudAction::Controls => self.open_menu(Page::Controls),
-            HudAction::Menu => self.finish_session(),
+            HudAction::Menu => self.return_to_menu(),
             HudAction::Reconnect => {
                 if let Some((address, password)) = self.last_join.clone() {
                     self.finish_session();
@@ -1901,7 +2088,7 @@ impl App {
                     "Tank tree" => self.open_menu(Page::Encyclopedia),
                     "Party invites" => self.open_menu(Page::Party),
                     "Restart [F5]" => self.restart_offline(),
-                    "Return to menu" => self.finish_session(),
+                    "Return to menu" => self.return_to_menu(),
                     _ => self.quit = true,
                 }
             }

@@ -1,3 +1,11 @@
+# v0.7.0 checks (2026-10-21)
+
+430 public Rust tests, five real-key private authorization tests and ten installer fixtures pass. Formatting, strict Clippy, all 103 tank profiles, eight maps and both bundled mods pass. Added coverage includes server-issued party rosters, menu presence and chat across rounds, distant members, local-router SOAP requests, finite leases, ownership checks before deletion, permanent-lease rejection, response limits, URL confinement, XML depth/entities and party geometry at every supported interface scale.
+
+Native host/guest checks at 1280×800 and 800×600 with 140% UI verify immediate match entry, invite copy, membership, mute/unmute, party chat, retained connections at the main menu, resume, explicit leave confirmation and the remote disconnect when a leader leaves. The roster moves around upgrade controls; captures are in `artifacts/v070-review`. Native automatic setup also produced a global public IPv4 endpoint without putting the address in test logs. Router mapping is tested against a local simulated gateway; incoming reachability through an arbitrary home router/ISP is not guaranteed by these checks. Both relocated private editions unlock without sidecars, reject bad passwords and keep networking blocked until the correct password is entered.
+
+Protocol **19** requires updating clients, regular servers and relays together. Private password-protected editions are rebuilt locally; no plaintext signing seed or password enters public source or packages. Publishing does not deploy the central Pi. See [party setup](parties.md), the [scoped review](security-review-v070.md) and [Pi operator steps](central-pi-upgrade.md).
+
 # v0.6.0 checks (2026-10-20)
 
 421 public Rust tests, five real-key private authorization tests and ten installer fixtures pass. Strict Clippy, formatting, all 103 tank profiles, both bundled mods and eight maps pass validation. New coverage includes authenticated credential envelopes, wrong passwords and identities, tampering/randomness, Infection timing/conversion/late joins/disconnects, party survivor preservation, occupied/contested moving-hill scoring, all-map hill clearance, mode-aware bot goals, longer protocol timer limits and lethal host changes.

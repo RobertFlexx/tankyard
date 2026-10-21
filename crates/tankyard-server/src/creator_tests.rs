@@ -77,6 +77,7 @@ impl Arena {
                 creator_session_nonce: None,
                 last_owner_sequence: None,
                 party_nonce: None,
+                party_in_menu: false,
             },
         );
         Self {
@@ -363,6 +364,7 @@ fn creator_moderation_is_host_local_and_preserves_regular_achievement_eligibilit
         creator_session_nonce: None,
         last_owner_sequence: None,
         party_nonce: None,
+        party_in_menu: false,
     };
     arena.server.peers.insert(42, peer);
     arena.command("mute").unwrap();
