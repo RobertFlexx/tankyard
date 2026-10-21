@@ -787,7 +787,14 @@ impl UdpServer {
             let name = sanitize_name(&name);
             let player = self.session.world.add_player(&name, false);
             if self.settings.party.is_some() && self.session.world.config.mode.teams() > 0 {
-                self.session.world.assign_team(player, 1);
+                let team = if self.session.world.config.mode == Mode::Infection
+                    && self.session.world.match_state.arena.wave > 0
+                {
+                    2
+                } else {
+                    1
+                };
+                self.session.world.assign_team(player, team);
             }
             self.sync_bots();
             if let Some(peer) = self.peers.get_mut(&client) {
@@ -1548,7 +1555,14 @@ impl UdpServer {
         for (client, name) in players {
             let player = self.session.world.add_player(&name, false);
             if self.settings.party.is_some() && self.session.world.config.mode.teams() > 0 {
-                self.session.world.assign_team(player, 1);
+                let team = if self.session.world.config.mode == Mode::Infection
+                    && self.session.world.match_state.arena.wave > 0
+                {
+                    2
+                } else {
+                    1
+                };
+                self.session.world.assign_team(player, team);
             }
             self.sync_bots();
             if let Some(peer) = self.peers.get_mut(&client) {

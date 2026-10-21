@@ -28,3 +28,6 @@ in [bosses and learning](docs/bosses-and-learning.md).
 Linux window controls use `libloading` under the ISC license; its notice is in
 [licenses/libloading.txt](licenses/libloading.txt). X11 and Xcursor are loaded
 from the desktop to use its cursor theme and native monitor geometry.
+
+Desktop clipboard integration uses Arboard, with X11/Wayland and Windows helpers.
+Their notices are included in [licenses/clipboard-dependencies.txt](licenses/clipboard-dependencies.txt).

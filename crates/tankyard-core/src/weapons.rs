@@ -164,7 +164,7 @@ impl World {
         let mut events = Vec::new();
         for index in 0..self.tanks.len() {
             let tank = &self.tanks[index];
-            if !tank.alive {
+            if !tank.alive || tank.health <= 0. {
                 continue;
             }
             let Some(class) = self.content.class(&tank.class) else {

@@ -131,3 +131,11 @@ Owner tools also have a bottom-right toggle. If the server cannot authorize the 
 Dedicated servers rotate to an appropriate map every two hours of process uptime, even while empty. The bottom-left timer continues through round changes. Hosts can set `map_rotation_seconds = 0` to disable rotation; private parties disable it by default.
 
 The Tank tree shows every upgrade connection. Scroll over the tree to zoom around the pointer. Drag empty space, or use the middle/right mouse button, to pan. Click a tank for its model, strengths and tradeoffs. Fit all restores the overview; Focus centers and enlarges the selected tank. Background gameplay on the main menu pauses with Reduced motion.
+
+## Infection and King of the Hill
+
+Infection starts with an eight-second preparation period once at least two tanks are present. One random Patient Zero becomes infected. Survivors win by lasting up to three minutes; infected win by converting everyone. Death after the outbreak converts survivors and automatically respawns them, preserving their build. Late arrivals join the infected. Your role and the remaining time appear at the top. Parties keep a fixed total population instead of recreating converted survivors.
+
+King of the Hill has one capture point that relocates every 45 seconds. Capture it, stay inside to score, and contest it to stop the other team. The first team to the score target wins. Bots defend and retarget the hill. Both modes work offline, in parties and on dedicated servers (`--mode infection` or `--mode king-of-the-hill`).
+
+All text boxes support Ctrl/Cmd+A/C/X/V and Shift+Insert for paste. Clipboard work runs separately from rendering. Cutting only removes a selection after copying succeeds; a pending paste is discarded if focus or editing changes. Party copy confirmation appears only after a successful native clipboard write.

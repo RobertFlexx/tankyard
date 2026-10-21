@@ -13,7 +13,9 @@
         "four_teams",
         "tag",
         "sandbox",
-        "random_events"
+        "random_events",
+        "infection",
+        "king_of_the_hill"
       ],
       "walls": [],
       "procedural": "None",
@@ -302,7 +304,9 @@
         "four_teams",
         "mothership",
         "capture_core",
-        "deathmatch"
+        "deathmatch",
+        "infection",
+        "king_of_the_hill"
       ],
       "walls": [
         [

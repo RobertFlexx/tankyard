@@ -360,6 +360,8 @@ pub fn mode_from_name(name: &str) -> Result<Mode, String> {
         "domination" => Ok(Mode::Domination),
         "survival" => Ok(Mode::Survival),
         "tag" => Ok(Mode::Tag),
+        "infection" => Ok(Mode::Infection),
+        "king-of-the-hill" | "king_of_the_hill" | "koth" | "hill" => Ok(Mode::KingOfTheHill),
         "mothership" => Ok(Mode::Mothership),
         "capture-core" => Ok(Mode::CaptureCore),
         "boss-rush" => Ok(Mode::BossRush),

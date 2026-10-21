@@ -20,9 +20,11 @@ pub enum Mode {
     Sandbox,
     RandomEvents,
     CoopPve,
+    Infection,
+    KingOfTheHill,
 }
 impl Mode {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 16] = [
         Self::Ffa,
         Self::TwoTeams,
         Self::FourTeams,
@@ -37,6 +39,8 @@ impl Mode {
         Self::Sandbox,
         Self::RandomEvents,
         Self::CoopPve,
+        Self::Infection,
+        Self::KingOfTheHill,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -54,6 +58,8 @@ impl Mode {
             Self::Sandbox => "Sandbox",
             Self::RandomEvents => "Random Events",
             Self::CoopPve => "Co-op PvE",
+            Self::Infection => "Infection",
+            Self::KingOfTheHill => "King of the Hill",
         }
     }
     pub fn teams(self) -> u8 {
@@ -64,7 +70,9 @@ impl Mode {
             | Self::Tag
             | Self::Mothership
             | Self::CaptureCore
-            | Self::Deathmatch => 2,
+            | Self::Deathmatch
+            | Self::Infection
+            | Self::KingOfTheHill => 2,
             Self::BossRush | Self::CoopPve => 1,
             _ => 0,
         }

@@ -32,6 +32,8 @@ env_logger.workspace = true
 cpal = "0.16"
 opus = "0.4"
 display-info = "0.5.9"
+arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
+zeroize = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Load the desktop's XCB ABI at runtime, matching Miniquad's display handling.

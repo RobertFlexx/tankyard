@@ -620,17 +620,56 @@ impl Hud {
                 actions.push(HudAction::Controls);
             }
         }
+        let header_width = (w - 548. * s).max(120. * s);
+        let mode_name = snapshot
+            .config
+            .mode_name
+            .as_deref()
+            .unwrap_or(snapshot.config.mode.name());
+        let title = if snapshot.config.mode == Mode::Infection {
+            format!(
+                "{mode_name} · {}",
+                if tank.team == 2 {
+                    "Infected"
+                } else {
+                    "Survivor"
+                }
+            )
+        } else {
+            mode_name.to_owned()
+        };
         arcade_center(
-            snapshot
-                .config
-                .mode_name
-                .as_deref()
-                .unwrap_or(snapshot.config.mode.name()),
+            &fitted_label(&title, 19. * s, header_width),
             w * 0.5,
-            m + 16.0 * s,
-            19.0 * s,
+            m + 16. * s,
+            19. * s,
         );
-        if snapshot.config.mode.teams() > 1 {
+        if matches!(snapshot.config.mode, Mode::Infection | Mode::KingOfTheHill) {
+            let remaining = snapshot.match_state.arena.remaining.ceil().max(0.) as u32;
+            let text = if snapshot.config.mode == Mode::Infection {
+                format!(
+                    "Survivors {} · Infected {} · {}:{:02}",
+                    snapshot.match_state.scores[0],
+                    snapshot.match_state.scores[1],
+                    remaining / 60,
+                    remaining % 60
+                )
+            } else {
+                format!(
+                    "{} : {} · Hill moves in {}:{:02}",
+                    snapshot.match_state.scores[0],
+                    snapshot.match_state.scores[1],
+                    remaining / 60,
+                    remaining % 60
+                )
+            };
+            arcade_center(
+                &fitted_label(&text, 15. * s, header_width),
+                w * 0.5,
+                m + 44. * s,
+                15. * s,
+            );
+        } else if snapshot.config.mode.teams() > 1 {
             for i in 0..snapshot.config.mode.teams() {
                 label(
                     &format!("{}", snapshot.match_state.scores[i as usize]),
@@ -646,7 +685,7 @@ impl Hud {
             && snapshot.match_state.announcement != snapshot.config.mode.name()
         {
             arcade_center(
-                &snapshot.match_state.announcement,
+                &fitted_label(&snapshot.match_state.announcement, 17. * s, header_width),
                 w * 0.5,
                 m + 72.0 * s,
                 17.0 * s,
@@ -988,6 +1027,8 @@ impl Hud {
             let result = match (snapshot.config.mode, snapshot.match_state.winner) {
                 (Mode::CoopPve, Some(1)) => "All ten waves cleared".into(),
                 (Mode::CoopPve, _) => "Squad eliminated".into(),
+                (Mode::Infection, Some(1)) => "The survivors contained the outbreak".into(),
+                (Mode::Infection, Some(2)) => "The infected took the arena".into(),
                 (_, Some(0)) => "The arena has a champion".into(),
                 (_, Some(team)) => format!("Team {team} wins"),
                 (_, None) => "Match finished".into(),
@@ -1473,6 +1514,8 @@ impl Hud {
         let eliminated = tank.lives == 0 && mode == Mode::Survival;
         let status = if waiting_wave {
             "Reviving after this wave".to_owned()
+        } else if mode == Mode::Infection {
+            format!("Rejoining the outbreak in {:.1}s", tank.respawn_timer)
         } else if eliminated {
             "Out of lives".to_owned()
         } else if tank.respawn_timer > 0.0 {

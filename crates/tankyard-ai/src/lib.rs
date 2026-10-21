@@ -815,8 +815,9 @@ fn decide(
         // farming target while enemies are in contact range.
         target = nearest_enemy.map(|(_, enemy)| enemy);
     }
-    if let Some((_, objective_goal, action)) = objective_goal(world, tank)
-        .filter(|(objective_priority, _, _)| priority < 5. && *objective_priority > priority)
+    if let Some((_, objective_goal, action)) =
+        objective_goal(world, tank, nearest_enemy.map(|(_, enemy)| enemy))
+            .filter(|(objective_priority, _, _)| priority < 5. && *objective_priority > priority)
     {
         state = action;
         goal = objective_goal;
@@ -883,8 +884,55 @@ fn decide(
     brain.target = target;
 }
 
-fn objective_goal(world: &World, tank: &Tank) -> Option<(f32, V2, BotState)> {
+fn objective_goal(
+    world: &World,
+    tank: &Tank,
+    observed: Option<TargetSample>,
+) -> Option<(f32, V2, BotState)> {
     match world.config.mode {
+        Mode::Infection if world.match_state.arena.intermission => None,
+        Mode::Infection if tank.team == 1 => {
+            if let Some(enemy) = observed {
+                return Some((
+                    3.5,
+                    tank.pos + (tank.pos - enemy.pos).normalized() * 600.,
+                    BotState::Repositioning,
+                ));
+            }
+            world
+                .tanks
+                .iter()
+                .filter(|ally| ally.id != tank.id && ally.alive && ally.team == 1)
+                .min_by(|a, b| {
+                    tank.pos
+                        .distance(a.pos)
+                        .total_cmp(&tank.pos.distance(b.pos))
+                })
+                .filter(|ally| tank.pos.distance(ally.pos) > 260.)
+                .map(|ally| {
+                    (
+                        0.85,
+                        ally.pos + V2::from_angle(noise(tank.id) * std::f32::consts::TAU) * 130.,
+                        BotState::Escorting,
+                    )
+                })
+        }
+        Mode::Infection => {
+            if observed.is_some() {
+                return None;
+            }
+            // Patrol known terrain instead of reading hidden survivors' locations.
+            let patrol = [[0.23, 0.26], [0.75, 0.72], [0.25, 0.74], [0.74, 0.25]];
+            let point = patrol[((world.tick / 720 + tank.id) % 4) as usize];
+            Some((
+                0.9,
+                world.config.arena_point(V2::new(
+                    world.config.width * point[0],
+                    world.config.height * point[1],
+                )),
+                BotState::Exploring,
+            ))
+        }
         Mode::BossRush => world
             .bosses
             .iter()
@@ -947,12 +995,18 @@ fn objective_goal(world: &World, tank: &Tank) -> Option<(f32, V2, BotState)> {
                     (0.8, human.pos + offset, BotState::Escorting)
                 })
         }
-        Mode::Domination => world
+        Mode::Domination | Mode::KingOfTheHill => world
             .objectives
             .iter()
             .map(|objective| {
                 let desired = objective.team != tank.team || objective.contested;
-                let priority = if desired { 1.5 } else { 0.12 };
+                let priority = if desired {
+                    1.5
+                } else if world.config.mode == Mode::KingOfTheHill {
+                    1.1
+                } else {
+                    0.12
+                };
                 let coverage = world
                     .tanks
                     .iter()
@@ -1394,6 +1448,58 @@ fn intercept(origin: V2, position: V2, velocity: V2, speed: f32) -> V2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn outbreak_bots_evade_observed_threats_and_patrol_without_hidden_positions() {
+        let mut world = World::new(
+            tankyard_core::WorldConfig {
+                mode: Mode::Infection,
+                target_count: 0,
+                ..Default::default()
+            },
+            tankyard_content::Content::builtin(),
+        );
+        world.add_player("Survivor", true);
+        world.add_player("Infected", true);
+        world.match_state.arena.intermission = false;
+        world.match_state.arena.wave = 1;
+        world.tanks[0].pos = V2::new(1500., 1200.);
+        world.tanks[1].pos = V2::new(1600., 1200.);
+        world.tanks[1].team = 2;
+        let threat = TargetSample {
+            id: world.tanks[1].id,
+            pos: world.tanks[1].pos,
+            velocity: V2::ZERO,
+            radius: world.tanks[1].radius,
+        };
+        let (_, goal, state) = objective_goal(&world, &world.tanks[0], Some(threat)).unwrap();
+        assert_eq!(state, BotState::Repositioning);
+        assert!(goal.distance(threat.pos) > world.tanks[0].pos.distance(threat.pos));
+        let (_, patrol, state) = objective_goal(&world, &world.tanks[1], None).unwrap();
+        assert_eq!(state, BotState::Exploring);
+        world.tanks[0].pos = V2::new(3000., 2200.);
+        assert_eq!(
+            patrol,
+            objective_goal(&world, &world.tanks[1], None).unwrap().1
+        );
+        assert!(objective_goal(&world, &world.tanks[1], Some(threat)).is_none());
+    }
+    #[test]
+    fn hill_bots_retarget_the_objective_after_it_moves() {
+        let mut world = World::new(
+            tankyard_core::WorldConfig {
+                mode: Mode::KingOfTheHill,
+                target_count: 0,
+                ..Default::default()
+            },
+            tankyard_content::Content::builtin(),
+        );
+        world.add_player("Defender", true);
+        let (_, first, state) = objective_goal(&world, &world.tanks[0], None).unwrap();
+        assert_eq!(state, BotState::Capturing);
+        world.objectives[0].pos += V2::new(500., 300.);
+        let (_, second, _) = objective_goal(&world, &world.tanks[0], None).unwrap();
+        assert!(first.distance(second) > 500.);
+    }
     use tankyard_content::{Content, ProjectileKind};
     use tankyard_core::{BossKind, WorldConfig};
 
@@ -1618,7 +1724,7 @@ mod tests {
         }
         // Keep the other point outside the coverage radius of the first.
         world.objectives[1].pos = V2::new(1700., 1000.);
-        let (_, goal, state) = objective_goal(&world, &world.tanks[0]).unwrap();
+        let (_, goal, state) = objective_goal(&world, &world.tanks[0], None).unwrap();
         assert_eq!(state, BotState::Capturing);
         assert_eq!(goal, world.objectives[1].pos);
     }
@@ -2423,7 +2529,7 @@ mod tests {
         let roles = world
             .tanks
             .iter()
-            .filter_map(|tank| objective_goal(&world, tank))
+            .filter_map(|tank| objective_goal(&world, tank, None))
             .map(|(_, _, state)| state)
             .collect::<Vec<_>>();
         assert!(roles.contains(&BotState::BossEngagement));
@@ -2432,7 +2538,8 @@ mod tests {
             boss.health = boss.max_health * 0.5;
         }
         assert!(world.tanks.iter().all(|tank| {
-            objective_goal(&world, tank).is_some_and(|(_, _, state)| state == BotState::Defending)
+            objective_goal(&world, tank, None)
+                .is_some_and(|(_, _, state)| state == BotState::Defending)
         }));
     }
 

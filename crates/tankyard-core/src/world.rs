@@ -228,7 +228,13 @@ impl World {
     }
     pub fn add_player(&mut self, name: &str, bot: bool) -> EntityId {
         let teams = self.config.mode.teams();
-        let team = if teams == 0 {
+        let team = if self.config.mode == Mode::Infection {
+            if self.match_state.arena.wave > 0 {
+                2
+            } else {
+                1
+            }
+        } else if teams == 0 {
             0
         } else {
             (1..=teams)
@@ -289,7 +295,10 @@ impl World {
             creator_attacks: [0.; crate::creator_boss::ATTACK_COUNT],
             server_badge: Default::default(),
         });
-        if matches!(self.config.mode, Mode::Deathmatch | Mode::Sandbox) {
+        if matches!(
+            self.config.mode,
+            Mode::Deathmatch | Mode::Sandbox | Mode::Infection | Mode::KingOfTheHill
+        ) {
             self.set_level_unchecked(id, 30);
         } else if self.config.mode == Mode::CoopPve {
             self.set_level_unchecked(
@@ -615,12 +624,17 @@ impl World {
             if !tank.alive {
                 tank.respawn_timer = (tank.respawn_timer - DT).max(0.);
                 if tank.respawn_timer <= 0.
-                    && (tank.bot || tank.input.ability)
+                    && (tank.bot || tank.input.ability || self.config.mode == Mode::Infection)
                     && !(self.config.mode == Mode::Survival && tank.lives == 0)
                     && self.config.mode != Mode::CoopPve
                 {
                     respawns.push(tank.id);
                 }
+                continue;
+            }
+            // Lethal changes made by a host hook must reach death resolution;
+            // passive regeneration cannot revive a tank before that phase.
+            if tank.health <= 0. {
                 continue;
             }
             for cooldown in &mut tank.creator_attacks {
@@ -1026,6 +1040,10 @@ impl World {
             {
                 self.tanks[i].team = kteam;
             }
+            if self.config.mode == Mode::Infection && self.match_state.arena.wave > 0 {
+                self.tanks[i].team = 2;
+                self.projectiles.retain(|shot| shot.owner != id);
+            }
             if let Some(k) = self.tanks.iter_mut().find(|t| t.id == killer) {
                 k.kills += 1;
             }
@@ -1043,7 +1061,10 @@ impl World {
             // percentage of XP (which barely changes level on a curved scale).
             // Re-enter at the beginning of the recovered level, with its normal
             // stat budget, and pick a new class path as you level again.
-            if self.config.mode != Mode::CoopPve {
+            if !matches!(
+                self.config.mode,
+                Mode::CoopPve | Mode::Infection | Mode::KingOfTheHill
+            ) {
                 let recovered_level = respawn_level(self.tanks[i].level);
                 let recovered_score = xp_for_level(recovered_level);
                 self.tanks[i].xp = recovered_score;

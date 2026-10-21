@@ -40,6 +40,8 @@ impl UdpServer {
                     Mode::Survival => "survival",
                     Mode::Maze => "maze",
                     Mode::Tag => "tag",
+                    Mode::Infection => "infection",
+                    Mode::KingOfTheHill => "king_of_the_hill",
                     Mode::Sandbox => "sandbox",
                 };
                 let next = (1..=maps.len())
@@ -68,6 +70,38 @@ impl UdpServer {
         let party = self.settings.party.as_ref().expect("party settings");
         let teams = self.session.world.config.mode.teams();
         let slots = party.ally_slots.max(humans.min(8));
+        if self.session.world.config.mode == tankyard_core::Mode::Infection {
+            // Conversion must not replenish the survivor team indefinitely.
+            let desired = (slots * 2).saturating_sub(humans);
+            let current = self
+                .session
+                .world
+                .tanks
+                .iter()
+                .filter(|tank| tank.bot)
+                .count();
+            if current == desired {
+                return;
+            }
+            let mut bots: Vec<_> = self
+                .session
+                .world
+                .tanks
+                .iter()
+                .filter(|tank| tank.bot)
+                .map(|tank| (tank.alive, tank.score, tank.id))
+                .collect();
+            bots.sort_unstable();
+            for (_, _, id) in bots.into_iter().take(current.saturating_sub(desired)) {
+                self.session.world.remove_player(id);
+            }
+            for i in current..desired {
+                self.session
+                    .world
+                    .add_player(&format!("Outbreak {:02}", i + 1), true);
+            }
+            return;
+        }
         // Co-op wave enemies (team 2) remain entirely mode-owned. Stable
         // populations allocate nothing; only an actual replacement builds IDs.
         let first = if teams == 0 { 0 } else { 1 };

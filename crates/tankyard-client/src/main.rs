@@ -27,7 +27,9 @@ mod startup;
 mod tank_tree;
 mod ui_layout;
 mod ui_text;
+mod unlock;
 use tankyard_client::achievements;
+use tankyard_client::clipboard;
 use tankyard_client::tank_model;
 mod ui;
 mod voice;
@@ -142,6 +144,7 @@ struct PendingJoin {
     return_page: Page,
 }
 struct App {
+    party_copy: Option<clipboard::Request<()>>,
     creator: creator::CreatorUi,
     central_owner: central_owner::CentralOwner,
     settings: Settings,
@@ -227,6 +230,7 @@ impl App {
         }
         let catalog_paths = settings.enabled_mods.clone();
         let mut app = Self {
+            party_copy: None,
             settings,
             display_revision: 0,
             content,
@@ -366,6 +370,9 @@ impl App {
         }
     }
     fn handle(&mut self, action: Action) {
+        if !matches!(action, Action::None) {
+            self.menu.info.clear();
+        }
         match action {
             Action::None => {}
             Action::Page(page) => {
@@ -471,9 +478,9 @@ impl App {
                                 && !address.ip().is_multicast() =>
                         {
                             invite.address = address;
-                            miniquad::window::clipboard_set(&invite.link());
-                            self.menu.error =
-                                "Invite copied. Share it privately with your friends.".into();
+                            self.party_copy = Some(clipboard::copy(&invite.link()));
+                            self.menu.error.clear();
+                            self.menu.info = "Copying invite…".into();
                         }
                         _ => {
                             self.menu.error =
@@ -884,6 +891,19 @@ impl App {
             })
     }
     fn update(&mut self, dt: f32, s: f32) {
+        if let Some(result) = self.party_copy.as_ref().and_then(|request| request.poll()) {
+            self.party_copy = None;
+            if self.menu.page == Page::Party {
+                self.menu.info.clear();
+                match result {
+                    Ok(()) => {
+                        self.menu.info =
+                            "Invite copied. Share it privately with your friends.".into()
+                    }
+                    Err(error) => self.menu.error = error,
+                }
+            }
+        }
         if self.session.is_some()
             && !self.paused
             && !self.menu_over_game
@@ -1906,6 +1926,11 @@ async fn run(cli: Cli) {
     }
     let mut native_resolution = native_resolution::NativeResolution::new(&initial_settings);
     ui::init_font();
+    if !unlock::require_password().await {
+        clipboard::shutdown();
+        ui::unload_font();
+        return;
+    }
     let Some(dark_theme) = first_run::choose_theme(cli.smoke_frames.is_some()).await else {
         ui::unload_font();
         return;
@@ -2002,6 +2027,7 @@ async fn run(cli: Cli) {
     }
     native_resolution.remember(&mut app.settings);
     app.save_progress();
+    clipboard::shutdown();
 }
 fn parse_mode(value: &str) -> Mode {
     match value
@@ -2015,6 +2041,8 @@ fn parse_mode(value: &str) -> Mode {
         "domination" => Mode::Domination,
         "survival" => Mode::Survival,
         "tag" => Mode::Tag,
+        "infection" => Mode::Infection,
+        "kingofthehill" | "koth" | "hill" => Mode::KingOfTheHill,
         "mothership" => Mode::Mothership,
         "capturecore" | "capturethecore" | "ctf" => Mode::CaptureCore,
         "bossrush" | "boss" => Mode::BossRush,

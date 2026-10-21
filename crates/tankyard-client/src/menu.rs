@@ -85,6 +85,7 @@ pub struct Menu {
     pub settings_tab: usize,
     pub binding: Option<usize>,
     pub error: String,
+    pub info: String,
     motion_time: f32,
     ambient: crate::ambient::Ambient,
     scroll_panel: crate::ui_layout::ScrollPanel,
@@ -129,6 +130,7 @@ impl Menu {
             settings_tab: 0,
             binding: None,
             error: String::new(),
+            info: String::new(),
             motion_time: 0.0,
             ambient: crate::ambient::Ambient::new(),
             scroll_panel: Default::default(),
@@ -158,6 +160,7 @@ impl Menu {
         self.party_focus = false;
     }
     pub fn go(&mut self, page: Page) {
+        self.info.clear();
         if self.page != page {
             if self.history.len() == 16 {
                 self.history.remove(0);
@@ -175,6 +178,7 @@ impl Menu {
         self.error.clear();
     }
     pub fn back(&mut self) -> bool {
+        self.info.clear();
         self.clear_focus();
         self.error.clear();
         if let Some(page) = self.history.pop() {
@@ -235,9 +239,13 @@ impl Menu {
             Mode::Domination => "domination",
             Mode::Survival => "survival",
             Mode::BossRush | Mode::CoopPve => "boss",
-            Mode::TwoTeams | Mode::FourTeams | Mode::Mothership | Mode::CaptureCore | Mode::Tag => {
-                "fortress"
-            }
+            Mode::TwoTeams
+            | Mode::FourTeams
+            | Mode::Mothership
+            | Mode::CaptureCore
+            | Mode::Tag
+            | Mode::Infection
+            | Mode::KingOfTheHill => "fortress",
             _ => "open",
         };
         self.map = self
@@ -407,15 +415,20 @@ impl Menu {
         if !matches!(footer, Action::None) {
             action = footer;
         }
-        if !self.error.is_empty() {
+        if !self.error.is_empty() || !self.info.is_empty() {
+            let (message, color) = if self.error.is_empty() {
+                (&self.info, CYAN)
+            } else {
+                (&self.error, RED)
+            };
             let y = h - if self.page == Page::Main { 46. } else { 112. } * s;
             panel(Rect::new(margin, y, w - margin * 2., 32. * s));
             label(
-                &fitted_label(&self.error, 14. * s, (w - margin * 2. - 24. * s).max(1.)),
+                &fitted_label(message, 14. * s, (w - margin * 2. - 24. * s).max(1.)),
                 margin + 12. * s,
                 y + 22. * s,
                 14. * s,
-                RED,
+                color,
             );
         }
         action
@@ -588,25 +601,25 @@ impl Menu {
         let y = 152.0 * s;
         label("Game modes", x, y + 12.0 * s, 25.0 * s, text_color());
         let gap = 6.0 * s;
-        let width = (screen_width() - 80.0 * s - gap * 2.0) / 3.0;
+        let width = (screen_width() - 80.0 * s - gap * 3.0) / 4.0;
         let height = 64.0 * s;
         for (index, mode) in Mode::ALL.into_iter().enumerate() {
-            let bx = x + (index % 3) as f32 * (width + gap);
-            let by = y + 35.0 * s + (index / 3) as f32 * (height + gap);
+            let bx = x + (index % 4) as f32 * (width + gap);
+            let by = y + 35.0 * s + (index / 4) as f32 * (height + gap);
             let r = Rect::new(bx, by, width, height);
             let selected = self.mode == mode;
-            if button(r, mode.name(), selected, true, s) {
+            if button(r, mode.name(), selected, true, s * 0.85) {
                 self.select_mode(mode);
             }
             label(
-                mode_blurb(mode),
+                &fitted_label(mode_blurb(mode), 12. * s, width - 24. * s),
                 bx + 16.0 * s,
                 by + 56.0 * s,
-                13.0 * s,
+                12.0 * s,
                 muted_color(),
             );
         }
-        let by = y + 35.0 * s + Mode::ALL.len().div_ceil(3) as f32 * (height + gap) + 6.0 * s;
+        let by = y + 35.0 * s + Mode::ALL.len().div_ceil(4) as f32 * (height + gap) + 6.0 * s;
         label("ARENA", x, by + 18.0 * s, 13.0 * s, muted_color());
         self.map_page = self.map_page.min(self.maps.len().saturating_sub(1) / 8);
         if self.maps.len() > 8 {
@@ -2342,6 +2355,8 @@ pub fn mode_blurb(mode: Mode) -> &'static str {
         Mode::Domination => "Capture control points to score.",
         Mode::Survival => "Survive as the arena shrinks.",
         Mode::Tag => "Eliminations convert enemy tanks.",
+        Mode::Infection => "Survive the infected or spread the outbreak.",
+        Mode::KingOfTheHill => "Capture and defend the moving hill.",
         Mode::Mothership => "Protect your armed command ship.",
         Mode::CaptureCore => "Steal, carry, and return the core.",
         Mode::BossRush => "Cooperate through six boss waves.",

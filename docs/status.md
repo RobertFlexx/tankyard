@@ -1,3 +1,11 @@
+# v0.6.0 checks (2026-10-20)
+
+421 public Rust tests, five real-key private authorization tests and ten installer fixtures pass. Strict Clippy, formatting, all 103 tank profiles, both bundled mods and eight maps pass validation. New coverage includes authenticated credential envelopes, wrong passwords and identities, tampering/randomness, Infection timing/conversion/late joins/disconnects, party survivor preservation, occupied/contested moving-hill scoring, all-map hill clearance, mode-aware bot goals, longer protocol timer limits and lethal host changes.
+
+Native tests cover clipboard TARGETS discovery and cross-process Unicode exchange, party invite copying and text-box paste/copy at 1280×800 and 800×600 with 140% UI, the sixteen-mode grid, and both new modes in actual gameplay. Both relocated/renamed private editions remain locked even with a matching profile key and direct-join/smoke options: a bad password starts no connection; pasting the correct password permits it. Captures and logs are in `artifacts/v060-review`. Generated passwords remain separate from the private archives; no password or plaintext signing seed is embedded in those binaries.
+
+The tagged workflow builds all public platforms, checks native clipboard interoperability and validates downloaded installers. Protocol 18 requires upgrading clients, the central Pi's regular server and its relay together. Publishing does not deploy that process. [Security review](security-review-v060.md) and [operator steps](central-pi-upgrade.md) describe the scope and remaining limits.
+
 # v0.5.0 checks (2026-10-20)
 
 411 public Rust tests and ten installer fixtures pass, with formatting and strict Clippy. New tests exercise party proof binding, admission failure, allied replacement and refill, preserved party teams across round changes, independent wave enemies, empty-server rotation deadlines, complete tree connections and creator event authorization/cooldowns/revocation, wall-safe Axiom dashes, working sentries, limited healing and hostile-only gravity. Native GUI fixtures at 1280×800 and 800×600 with 140% UI cover the connected tree, party creation/host badge, creator Showtime, transformation/attacks/reset and the uptime countdown.

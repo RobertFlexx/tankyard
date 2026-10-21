@@ -4,6 +4,8 @@ use crate::*;
 impl World {
     pub(crate) fn initialize_mode(&mut self) {
         match self.config.mode {
+            Mode::Infection => self.initialize_infection(),
+            Mode::KingOfTheHill => self.initialize_hill(),
             Mode::Domination => {
                 let positions = if self.map.objective_positions.is_empty() {
                     vec![[0.25, 0.5], [0.5, 0.5], [0.75, 0.5]]
@@ -108,6 +110,11 @@ impl World {
     }
     pub(crate) fn update_mode(&mut self) {
         match self.config.mode {
+            Mode::Infection => self.update_infection(),
+            Mode::KingOfTheHill => {
+                self.update_hill();
+                self.domination();
+            }
             Mode::Domination => self.domination(),
             Mode::CaptureCore => self.capture_core(),
             Mode::RandomEvents => self.update_arena_events(),
@@ -179,6 +186,7 @@ impl World {
                 | Mode::Domination
                 | Mode::Deathmatch
                 | Mode::CaptureCore
+                | Mode::KingOfTheHill
         ) {
             if let Some(i) = self
                 .match_state
@@ -240,7 +248,10 @@ impl World {
                     }
                 }
             }
-            if o.team > 0 && !o.contested {
+            if o.team > 0
+                && !o.contested
+                && (self.config.mode != Mode::KingOfTheHill || counts[o.team as usize - 1] > 0)
+            {
                 self.score_fraction[o.team as usize - 1] += DT;
             }
         }

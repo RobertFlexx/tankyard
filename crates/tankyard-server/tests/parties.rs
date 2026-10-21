@@ -43,7 +43,12 @@ fn arena(mode: Mode) -> (UdpServer, Invite) {
 }
 #[test]
 fn friends_replace_only_allied_bots_stay_together_after_changes_and_never_claim_host() {
-    for mode in [Mode::TwoTeams, Mode::CoopPve, Mode::BossRush] {
+    for mode in [
+        Mode::TwoTeams,
+        Mode::CoopPve,
+        Mode::BossRush,
+        Mode::KingOfTheHill,
+    ] {
         let (mut server, invite) = arena(mode);
         let mut first = NetworkClient::connect(&invite.link(), "Friend", "").unwrap();
         ready(&mut server, &mut [&mut first]);
@@ -127,6 +132,62 @@ fn friends_replace_only_allied_bots_stay_together_after_changes_and_never_claim_
             3
         );
     }
+}
+#[test]
+fn infection_party_preserves_conversion_and_late_joiners_do_not_replenish_survivors() {
+    let (mut server, invite) = arena(Mode::Infection);
+    let mut first = NetworkClient::connect(&invite.link(), "Leader", "").unwrap();
+    ready(&mut server, &mut [&mut first]);
+    pump(&mut server, &mut [&mut first], 510);
+    assert_eq!(server.session.world.tanks.len(), 8);
+    assert!(!server.session.world.match_state.arena.intermission);
+    let survivors = server
+        .session
+        .world
+        .tanks
+        .iter()
+        .filter(|tank| tank.team == 1)
+        .count();
+    let mut second = NetworkClient::connect(&invite.link(), "Late friend", "").unwrap();
+    ready(&mut server, &mut [&mut first, &mut second]);
+    let id = second.player_id.unwrap();
+    assert_eq!(
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|tank| tank.id == id)
+            .unwrap()
+            .team,
+        2
+    );
+    assert!(
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .filter(|tank| tank.team == 1)
+            .count()
+            <= survivors
+    );
+    assert_eq!(server.session.world.tanks.len(), 8);
+    for tank in &mut server.session.world.tanks {
+        if tank.bot {
+            tank.team = 2;
+        }
+    }
+    pump(&mut server, &mut [&mut first, &mut second], 5);
+    assert!(
+        server
+            .session
+            .world
+            .tanks
+            .iter()
+            .filter(|tank| tank.bot)
+            .all(|tank| tank.team == 2)
+    );
 }
 #[test]
 fn wrong_invite_and_plain_ip_do_not_admit_players() {

@@ -15,8 +15,8 @@ pub use community::*;
 mod voice;
 pub use voice::*;
 
-pub const PROTOCOL_VERSION: u32 = 17;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0011;
+pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0012;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -604,7 +604,12 @@ fn snapshot_valid(s: &Snapshot) -> bool {
         && s.match_state.boss_wave <= 6
         && s.match_state.announcement.len() <= 256
         && scalar(s.match_state.arena.remaining)
-        && (0.0..=60.0).contains(&s.match_state.arena.remaining)
+        && (0.0..=if s.config.mode == tankyard_core::Mode::Infection {
+            tankyard_core::INFECTION_SECONDS
+        } else {
+            60.
+        })
+            .contains(&s.match_state.arena.remaining)
         && s.match_state.arena.wave <= tankyard_core::PVE_WAVES
         && s.match_state.arena.enemies <= 512
         && s.events.iter().all(|e| vector(e.pos) && e.team <= 4)
@@ -717,6 +722,35 @@ mod tests {
         assert_eq!(decoded.projectiles[0].homing_target, 123);
         assert_eq!(decoded.projectiles[0].owner, id);
         assert!(!decoded.tanks[0].spawn_immunity);
+    }
+    #[test]
+    fn outbreak_and_hill_timers_round_trip_with_mode_specific_limits() {
+        for (mode, limit) in [
+            (
+                tankyard_core::Mode::Infection,
+                tankyard_core::INFECTION_SECONDS,
+            ),
+            (
+                tankyard_core::Mode::KingOfTheHill,
+                tankyard_core::HILL_SECONDS,
+            ),
+        ] {
+            let world = tankyard_core::World::new(
+                tankyard_core::WorldConfig {
+                    mode,
+                    target_count: 0,
+                    ..Default::default()
+                },
+                Content::builtin(),
+            );
+            let mut snapshot = world.snapshot();
+            snapshot.match_state.arena.remaining = limit;
+            let result = decode_snapshot(&encode_snapshot(&snapshot).unwrap()).unwrap();
+            assert_eq!(result.config.mode, mode);
+            assert_eq!(result.match_state.arena.remaining, limit);
+            snapshot.match_state.arena.remaining = 181.;
+            assert!(decode_snapshot(&encode_snapshot(&snapshot).unwrap()).is_err());
+        }
     }
 
     #[test]

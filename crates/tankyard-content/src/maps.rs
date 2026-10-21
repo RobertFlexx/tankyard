@@ -134,6 +134,8 @@ pub fn validate_maps(maps: &[MapDef]) -> Result<(), String> {
                     | "domination"
                     | "survival"
                     | "tag"
+                    | "infection"
+                    | "king_of_the_hill"
                     | "mothership"
                     | "capture_core"
                     | "boss_rush"

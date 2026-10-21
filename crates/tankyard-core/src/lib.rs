@@ -19,6 +19,7 @@ pub mod physics;
 pub mod progression;
 #[cfg(test)]
 mod scenarios;
+mod special_modes;
 mod spectating;
 mod stasis;
 pub use stasis::{STASIS_RADIUS, STASIS_SECONDS};
@@ -28,6 +29,7 @@ pub use arena::PVE_WAVES;
 pub use math::*;
 pub use model::*;
 pub use progression::*;
+pub use special_modes::{HILL_SECONDS, INFECTION_SECONDS, INFECTION_WARMUP};
 pub use spectating::*;
 pub use tankyard_content::{MAX_LEVEL, UPGRADE_LEVELS};
 pub use weapons::reload_progress;

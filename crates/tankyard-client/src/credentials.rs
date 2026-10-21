@@ -1,6 +1,27 @@
 //! Local credentials enable UI; the server independently verifies every privilege.
 use ring::signature::{Ed25519KeyPair, KeyPair};
+use std::sync::OnceLock;
 use std::{io::Read, path::Path};
+use zeroize::Zeroizing;
+
+pub struct Vault {
+    pub identity: &'static str,
+    pub expected: [u8; 32],
+    pub envelope: &'static [u8],
+}
+static UNLOCKED: OnceLock<Zeroizing<[u8; 32]>> = OnceLock::new();
+pub fn bundled_vault() -> Option<Vault> {
+    None
+}
+pub fn unlock(seed: Zeroizing<[u8; 32]>) -> bool {
+    let Some(vault) = bundled_vault() else {
+        return false;
+    };
+    if parse(seed.as_ref(), &vault.expected).is_none() {
+        return false;
+    }
+    UNLOCKED.set(seed).is_ok()
+}
 
 fn read_key(path: &Path, expected: &[u8; 32]) -> Option<Ed25519KeyPair> {
     if !std::fs::metadata(path).ok()?.is_file() {
@@ -26,6 +47,12 @@ pub fn parse(seed: &[u8], expected: &[u8; 32]) -> Option<Ed25519KeyPair> {
         .filter(|key| key.public_key().as_ref() == expected)
 }
 pub fn load(name: &str, expected: &[u8; 32]) -> Option<Ed25519KeyPair> {
+    if let Some(vault) = bundled_vault() {
+        let seed = UNLOCKED.get()?;
+        if expected == &vault.expected && name == format!("{}.key", vault.identity) {
+            return parse(seed.as_ref(), expected);
+        }
+    }
     let executable = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.join(name)));
@@ -36,12 +63,6 @@ pub fn load(name: &str, expected: &[u8; 32]) -> Option<Ed25519KeyPair> {
         .into_iter()
         .chain(profile)
         .find_map(|path| read_key(&path, expected))
-        .or_else(|| embedded(name, expected))
-}
-// Private local packaging may supply an embedded credential here. Public builds
-// have none; merely enabling a UI or editing a role cannot authorize a request.
-fn embedded(_name: &str, _expected: &[u8; 32]) -> Option<Ed25519KeyPair> {
-    None
 }
 
 #[cfg(test)]

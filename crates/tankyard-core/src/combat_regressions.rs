@@ -1,6 +1,18 @@
 use crate::*;
 use tankyard_content::{Content, ProjectileKind};
 
+#[test]
+fn lethal_host_changes_cannot_regenerate_or_fire_before_death_resolution() {
+    let (mut world, id) = arena("vector");
+    world.tick = 600;
+    world.tanks[0].damaged_at = 0;
+    world.tanks[0].health = 0.;
+    world.tanks[0].input.fire = true;
+    world.step();
+    assert!(!world.tanks[0].alive);
+    assert!(world.projectiles.iter().all(|shot| shot.owner != id));
+}
+
 fn arena(class: &str) -> (World, EntityId) {
     let mut world = World::new(
         WorldConfig {

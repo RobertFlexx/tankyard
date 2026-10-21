@@ -62,6 +62,8 @@ jobs:
           cargo run --locked -p tankyard-tools -- validate
           cargo run --locked -p tankyard-tools -- validate-mods --mod mods/fast_arena --mod mods/vampire
           cargo build --locked -p tankyard-client --bin tankyard
+          cargo build --locked -p tankyard-client --example clipboard_probe
+          xvfb-run -a python3 scripts/check_clipboard.py target/debug/examples/clipboard_probe
           mkdir -p artifacts
           export XDG_CONFIG_HOME="$RUNNER_TEMP/tankyard-smoke"
           LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a target/debug/tankyard --offline --bots 4 --smoke-frames 120 --screenshot artifacts/release-smoke.png

@@ -516,6 +516,8 @@ pub fn slider_value(
 
 #[derive(Default)]
 struct FieldState {
+    cut: Option<(crate::clipboard::Request<()>, f64)>,
+    paste: Option<(crate::clipboard::Request<String>, f64)>,
     editor: tankyard_client::text_edit::Editor,
     repeat: tankyard_client::text_edit::KeyRepeat,
     active: bool,
@@ -638,6 +640,8 @@ pub fn text_field(
         if !editing {
             field.scroll = 0;
             field.dragging = false;
+            field.paste = None;
+            field.cut = None;
         }
         if editing && (clicked || (field.dragging && is_mouse_button_down(MouseButton::Left))) {
             let shown = field_text(value, secret);
@@ -673,6 +677,28 @@ pub fn text_field(
             field.dragging = false;
         }
         if editing {
+            if let Some((request, submitted)) = &field.cut
+                && let Some(result) = request.poll()
+            {
+                if result.is_ok() && field.edited <= *submitted {
+                    field.editor.edit(value, Edit::Backspace, false, false);
+                    field.edited = now;
+                }
+                field.cut = None;
+            }
+            if let Some((request, submitted)) = &field.paste
+                && let Some(result) = request.poll()
+            {
+                if let Ok(mut text) = result {
+                    if field.edited <= *submitted {
+                        field.editor.replace(value, &text, max);
+                        field.edited = now;
+                    }
+                    use zeroize::Zeroize;
+                    text.zeroize();
+                }
+                field.paste = None;
+            }
             if command && is_key_pressed(KeyCode::A) {
                 field.editor.edit(value, Edit::SelectAll, false, false);
                 field.edited = now;
@@ -682,15 +708,17 @@ pub fn text_field(
                 && (is_key_pressed(KeyCode::C) || is_key_pressed(KeyCode::X))
                 && !field.editor.selection().is_empty()
             {
-                miniquad::window::clipboard_set(field.editor.selected(value));
+                let request = crate::clipboard::copy(field.editor.selected(value));
                 if is_key_pressed(KeyCode::X) {
-                    field.editor.edit(value, Edit::Backspace, false, false);
+                    field.cut = Some((request, now));
+                    field.edited = now;
                 }
             }
-            if command && is_key_pressed(KeyCode::V) {
-                if let Some(clipboard) = miniquad::window::clipboard_get() {
-                    field.editor.replace(value, &clipboard, max);
-                }
+            if ((command && is_key_pressed(KeyCode::V))
+                || (shift && is_key_pressed(KeyCode::Insert)))
+                && field.paste.is_none()
+            {
+                field.paste = Some((crate::clipboard::paste(), now));
                 field.edited = now;
             }
             for (index, (key, edit)) in [
@@ -729,6 +757,10 @@ pub fn text_field(
             }
             if field.editor.replace(value, &typed, max) {
                 field.edited = now;
+            }
+            if secret {
+                use zeroize::Zeroize;
+                typed.zeroize();
             }
         }
         field.active = editing;
