@@ -950,7 +950,12 @@ impl Hud {
                 );
                 status_y -= 21.0 * s;
             }
-            if tank.spawn_immunity && tank.protection > 0.0 {
+            if snapshot
+                .config
+                .base_protected(tank.team, tank.pos, tank.radius)
+            {
+                center_label("Home base protection", w * 0.5, status_y, 12.0 * s, CYAN);
+            } else if tank.spawn_immunity && tank.protection > 0.0 {
                 center_label(
                     &format!(
                         "Spawn protection · {}s · move to engage",
@@ -1147,6 +1152,18 @@ impl Hud {
             1.5 * s,
             alpha(CYAN, 0.8),
         );
+        for team in 1..=snapshot.config.mode.teams() {
+            if let Some(base) = snapshot.config.team_base(team) {
+                let p = point(tankyard_core::V2::new(base.x, base.y));
+                draw_rectangle(
+                    p.x,
+                    p.y,
+                    base.w * sx,
+                    base.h * sy,
+                    alpha(render::team_color(team, false, settings.colorblind), 0.25),
+                );
+            }
+        }
         let top = view.world(vec2(0.0, 0.0));
         let bottom = view.world(vec2(screen_width(), screen_height()));
         let a = point(tankyard_core::V2::new(

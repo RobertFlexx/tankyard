@@ -536,7 +536,13 @@ fn decide(
         let (sample, utility, state) = match item {
             Seen::Tank(index) => {
                 let other = &world.tanks[index];
-                if other.id == tank.id || !other.alive || other.protection > 0. {
+                if other.id == tank.id
+                    || !other.alive
+                    || other.protection > 0.
+                    || world
+                        .config
+                        .base_protected(other.team, other.pos, other.radius)
+                {
                     continue;
                 }
                 let distance = tank.pos.distance(other.pos);
@@ -1328,6 +1334,9 @@ fn parry_threat(world: &World, tank: &Tank, seen: &[Seen]) -> Option<(EntityId, 
                         || !attacker.alive
                         || attacker.health <= 0.
                         || attacker.protection > 0.
+                        || world
+                            .config
+                            .base_protected(attacker.team, attacker.pos, attacker.radius)
                         || attacker.knockback > 0.
                         || !hostile(tank.team, attacker.team)
                         || !world

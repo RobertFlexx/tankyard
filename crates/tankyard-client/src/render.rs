@@ -257,7 +257,7 @@ fn cannon(p: Vec2, angle: f32, length: f32, width: f32, color: Color, recoil: f3
 pub fn world(
     snapshot: &Snapshot,
     content: &Content,
-    map: Option<&tankyard_content::MapDef>,
+    _map: Option<&tankyard_content::MapDef>,
     local: EntityId,
     view: &View,
     effects: &Effects,
@@ -343,41 +343,12 @@ pub fn world(
         4.0,
         if dark { line_color() } else { OUTLINE },
     );
-    if snapshot.config.mode.teams() > 0 {
-        for team in 1..=snapshot.config.mode.teams() {
-            let position = match team {
-                1 => V2::new(220.0, 220.0),
-                2 => V2::new(
-                    snapshot.config.width - 220.0,
-                    snapshot.config.height - 220.0,
-                ),
-                3 => V2::new(snapshot.config.width - 220.0, 220.0),
-                _ => V2::new(220.0, snapshot.config.height - 220.0),
-            };
-            let position = map
-                .and_then(|map| map.team_bases.iter().find(|base| base.team == team))
-                .map_or(position, |base| {
-                    V2::new(
-                        base.position[0] * snapshot.config.width,
-                        base.position[1] * snapshot.config.height,
-                    )
-                });
-            let home = V2::new(
-                bounds.x + position.x / snapshot.config.width * bounds.w,
-                bounds.y + position.y / snapshot.config.height * bounds.h,
-            );
-            let clearance = (home.x - bounds.x)
-                .min(home.y - bounds.y)
-                .min(bounds.x + bounds.w - home.x)
-                .min(bounds.y + bounds.h - home.y);
-            let fit = (snapshot.config.width / 3600.)
-                .min(snapshot.config.height / 2600.)
-                .clamp(0.35, 1.);
-            let radius = (180. * fit * scale).min((clearance - 8. * scale).max(0.));
-            let p = view.screen(home);
-            let c = team_color(team, false, settings.colorblind);
-            draw_circle(p.x, p.y, radius * z, alpha(c, 0.055));
-            draw_circle_lines(p.x, p.y, radius * z, 2.0, alpha(c, 0.24));
+    for team in 1..=snapshot.config.mode.teams() {
+        if let Some(base) = snapshot.config.team_base(team) {
+            let p = view.screen(V2::new(base.x, base.y));
+            let color = team_color(team, false, settings.colorblind);
+            draw_rectangle(p.x, p.y, base.w * z, base.h * z, alpha(color, 0.14));
+            draw_rectangle_lines(p.x, p.y, base.w * z, base.h * z, 1.5, alpha(color, 0.36));
         }
     }
     let wall_scale = scale / snapshot.config.arena_scale.max(0.5);
@@ -720,7 +691,11 @@ pub fn world(
         let visual = effects.hulls.get(&tank.id);
         let r = visual.map_or(tank.radius, |hull| hull.radius) * z;
         let color = team_color(tank.team, tank.id == local, settings.colorblind);
-        let spawn_flash = if tank.spawn_immunity && tank.protection > 0.0 {
+        let spawn_flash = if (tank.spawn_immunity && tank.protection > 0.0)
+            || snapshot
+                .config
+                .base_protected(tank.team, tank.pos, tank.radius)
+        {
             if settings.reduced_motion {
                 0.03
             } else {

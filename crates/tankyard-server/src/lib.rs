@@ -12,6 +12,7 @@ pub mod creator;
 mod host;
 pub mod netem;
 pub mod party;
+pub mod party_relay;
 mod rotation;
 mod session;
 mod sockets;

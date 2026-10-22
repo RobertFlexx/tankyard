@@ -146,6 +146,7 @@ struct PendingJoin {
 }
 struct App {
     party_copy: Option<clipboard::Request<()>>,
+    party_restart: Option<(u32, std::time::Instant)>,
     party_ui: party_ui::PartyUi,
     creator: creator::CreatorUi,
     central_owner: central_owner::CentralOwner,
@@ -233,6 +234,7 @@ impl App {
         let catalog_paths = settings.enabled_mods.clone();
         let mut app = Self {
             party_copy: None,
+            party_restart: None,
             settings,
             display_revision: 0,
             content,
@@ -336,6 +338,7 @@ impl App {
             &session.engine,
             session::Engine::Online { host: Some(_), .. }
         ) && session.party_invite.is_some()
+            && self.settings.auto_party_network
         {
             self.menu.party_address.clear();
         }
@@ -410,7 +413,19 @@ impl App {
             }
             Action::ResumeParty => self.resume_party(),
             Action::LeaveParty => self.finish_session(),
+            Action::ApplyParty => self.apply_party_settings(),
             Action::Page(page) => {
+                if page == Page::Modes
+                    && self.active_party()
+                    && let Some(Session {
+                        engine: session::Engine::Online { client, .. },
+                        ..
+                    }) = &self.session
+                    && let Some(settings) = &client.match_settings
+                {
+                    self.menu.load_party_settings(settings);
+                }
+
                 if page == Page::Modes && self.menu.page != Page::Party {
                     self.menu.party_setup = false;
                 }
@@ -490,6 +505,7 @@ impl App {
                 match Session::party(
                     self.menu.config(),
                     self.menu.bots.clamp(2, 8),
+                    self.menu.offline_level,
                     &self.settings.player_name,
                     self.menu.difficulty_name(),
                     self.settings
@@ -520,6 +536,9 @@ impl App {
                                 && !address.ip().is_unspecified()
                                 && !address.ip().is_multicast() =>
                         {
+                            if invite.address != address {
+                                invite.relay = None;
+                            }
                             invite.address = address;
                             if let Some(session) = &mut self.session {
                                 session.set_party_address(address);
@@ -663,6 +682,8 @@ impl App {
     fn finish_session(&mut self) {
         self.party_ui = party_ui::PartyUi::default();
         self.party_copy = None;
+        self.party_restart = None;
+        self.menu.party_configuring = false;
         self.menu.party_invite = None;
         self.menu.party_roster.clear();
         self.voice.reset();
@@ -733,6 +754,43 @@ impl App {
             .as_ref()
             .is_some_and(|session| session.party_invite.is_some() && session.failure.is_none())
     }
+    fn apply_party_settings(&mut self) {
+        let settings = self.menu.party_match_settings();
+        let Some(Session {
+            engine: session::Engine::Online { client, .. },
+            action_result,
+            ..
+        }) = &mut self.session
+        else {
+            return;
+        };
+        if !self.menu.party_active || self.party_restart.is_some() {
+            return;
+        }
+        if !self.menu.party_leader {
+            self.menu.error = "Only the party leader can start a new round.".into();
+            return;
+        }
+        let Some(round) = client
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.match_state.round)
+        else {
+            return;
+        };
+        client.last_action = None;
+        client.last_action_accepted = None;
+        *action_result = None;
+        if client.admin(tankyard_protocol::ServerCommand::ConfigureParty { settings }) {
+            self.party_restart = Some((round, std::time::Instant::now()));
+            self.menu.party_configuring = true;
+            self.menu.error.clear();
+            self.menu.info = "Starting a new round with your party…".into();
+        } else {
+            self.menu.error =
+                "Party controls are not ready. Wait for the leader badge, then try again.".into();
+        }
+    }
     fn resume_party(&mut self) {
         if !self.active_party() {
             return;
@@ -763,13 +821,14 @@ impl App {
         let Some(session) = &mut self.session else {
             return;
         };
+        let network = session.party_network_status();
         let session::Engine::Online { client, .. } = &mut session.engine else {
             return;
         };
         let action = self.party_ui.panel(
             client,
             &self.content,
-            &session.party_network,
+            &network,
             !self.menu.party_address.is_empty(),
             self.menu_over_game,
             s,
@@ -1078,6 +1137,14 @@ impl App {
         let now = get_time();
         if let Some(session) = &mut self.session {
             session.update_network(dt, now, &self.content);
+            if self.party_restart.is_some()
+                && let Some((false, message)) = session.action_result.take()
+            {
+                self.party_restart = None;
+                self.menu.party_configuring = false;
+                self.menu.info.clear();
+                self.menu.error = message;
+            }
             if self.bundle_revision != session.bundle_revision {
                 self.content.clone_from(&session.bundle.content);
                 self.bundle_revision = session.bundle_revision;
@@ -1116,15 +1183,45 @@ impl App {
                 );
             }
             if session.party_invite.is_some() {
-                self.menu.party_network.clone_from(&session.party_network);
+                self.menu.party_network = session.party_network_status();
                 if let Some(invite) = &session.party_invite {
-                    let previous = self.menu.party_invite.as_ref().map(|invite| invite.address);
-                    if previous != Some(invite.address) {
+                    let previous = self
+                        .menu
+                        .party_invite
+                        .as_ref()
+                        .map(|invite| (invite.address, invite.relay));
+                    if previous != Some((invite.address, invite.relay)) {
                         if !self.menu.address_active || self.menu.party_address.trim().is_empty() {
                             self.menu.party_address = invite.address.to_string();
                         }
                         self.menu.party_invite = Some(invite.clone());
                     }
+                }
+            }
+        }
+        if let Some((round, started)) = self.party_restart {
+            let client = self
+                .session
+                .as_ref()
+                .and_then(|session| match &session.engine {
+                    session::Engine::Online { client, .. } => Some(client),
+                    _ => None,
+                });
+            let ready = client.is_some_and(|client| {
+                client
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.match_state.round > round)
+            });
+            let error = client.and_then(|client| client.last_action.clone());
+            if ready || error.is_some() || started.elapsed().as_secs() >= 15 || !self.active_party()
+            {
+                self.party_restart = None;
+                self.menu.party_configuring = false;
+                if ready {
+                    self.resume_party();
+                } else {
+                    self.menu.error = error.unwrap_or_else(|| "The new round was not confirmed. Check the party connection and try again.".into());
                 }
             }
         }
@@ -1515,6 +1612,21 @@ impl App {
         }
         if self.session.is_none() || self.menu_over_game {
             self.menu.party_active = self.active_party();
+            self.menu.party_leader =
+                self.session
+                    .as_ref()
+                    .is_some_and(|session| match &session.engine {
+                        session::Engine::Online { client, .. } => {
+                            client
+                                .party_members
+                                .iter()
+                                .any(|member| member.client == client.client_id() && member.leader)
+                                && client
+                                    .permissions
+                                    .contains(&tankyard_protocol::ServerPermission::Configure)
+                        }
+                        _ => false,
+                    });
             let menu_scale = s;
             self.menu.party_roster =
                 self.session

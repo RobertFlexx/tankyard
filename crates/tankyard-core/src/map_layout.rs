@@ -24,6 +24,21 @@ impl World {
             }
             MapProcedure::None => {}
         }
+        // Carve reserved team territory out of cover before retaining the
+        // unscaled geometry. The same bases remain clear as borders animate.
+        for team in 1..=self.config.mode.teams() {
+            let original_scale = self.config.arena_scale;
+            self.config.arena_scale = 1.;
+            let base = self.config.team_base(team);
+            self.config.arena_scale = original_scale;
+            if let Some(base) = base {
+                self.walls = self
+                    .walls
+                    .drain(..)
+                    .flat_map(|wall| outside_base(wall, base))
+                    .collect();
+            }
+        }
         self.map_walls.clone_from(&self.walls);
         self.scale_map_walls();
     }
@@ -267,6 +282,46 @@ impl World {
             }
         }
     }
+}
+
+/// Split intersecting cover along base edges; preserve the remaining map.
+fn outside_base(wall: Rect, base: Rect) -> Vec<Rect> {
+    let left = wall.x.max(base.x);
+    let top = wall.y.max(base.y);
+    let right = (wall.x + wall.w).min(base.x + base.w);
+    let bottom = (wall.y + wall.h).min(base.y + base.h);
+    if left >= right || top >= bottom {
+        return vec![wall];
+    }
+    [
+        Rect {
+            x: wall.x,
+            y: wall.y,
+            w: left - wall.x,
+            h: wall.h,
+        },
+        Rect {
+            x: right,
+            y: wall.y,
+            w: wall.x + wall.w - right,
+            h: wall.h,
+        },
+        Rect {
+            x: left,
+            y: wall.y,
+            w: right - left,
+            h: top - wall.y,
+        },
+        Rect {
+            x: left,
+            y: bottom,
+            w: right - left,
+            h: wall.y + wall.h - bottom,
+        },
+    ]
+    .into_iter()
+    .filter(|rect| rect.w > 0.1 && rect.h > 0.1)
+    .collect()
 }
 
 #[cfg(test)]

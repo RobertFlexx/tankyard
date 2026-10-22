@@ -21,6 +21,8 @@ pub struct Session {
     pub party_invite: Option<tankyard_server::party::Invite>,
     pub party_network: String,
     party_discovery: Option<tankyard_client::party_network::Discovery>,
+    party_relay: Option<tankyard_server::party_relay::HostedRelay>,
+    party_relay_ready: Option<bool>,
     party_manual_address: bool,
     pub practice: Option<tankyard_client::practice::Run>,
     pub engine: Engine,
@@ -30,6 +32,7 @@ pub struct Session {
     pub display: Option<Snapshot>,
     pub failure: Option<String>,
     pub notice: Option<String>,
+    pub action_result: Option<(bool, String)>,
     pub events: Vec<GameEvent>,
     predicted: Option<Tank>,
     predicted_tick: u64,
@@ -50,8 +53,31 @@ pub struct Session {
 impl Session {
     pub fn set_party_address(&mut self, address: std::net::SocketAddr) {
         if let Some(invite) = &mut self.party_invite {
-            self.party_manual_address |= invite.address != address;
+            if invite.address != address {
+                self.party_manual_address = true;
+                invite.relay = None;
+                // Keep the existing tunnel alive for members who already use
+                // it. Editing the invite only changes how future guests join.
+            }
             invite.address = address;
+        }
+    }
+    pub fn party_network_status(&self) -> String {
+        if self.party_manual_address
+            && let Some(invite) = &self.party_invite
+        {
+            return format!(
+                "Direct invite: {}. Allow incoming UDP and forward this port for internet guests. Existing members stay connected.",
+                invite.address
+            );
+        }
+        match self.party_relay_ready {
+            Some(true) => {
+                "Internet relay ready · no port forwarding needed. The match runs on your computer."
+                    .into()
+            }
+            Some(false) => format!("Internet relay unavailable. {}", self.party_network),
+            None => self.party_network.clone(),
         }
     }
     pub fn practice(index: usize, name: &str, seed: u64) -> Result<Self, String> {
@@ -156,6 +182,7 @@ impl Session {
     pub fn party(
         config: WorldConfig,
         slots: usize,
+        starting_level: u8,
         name: &str,
         difficulty: &str,
         mods: Vec<std::path::PathBuf>,
@@ -166,7 +193,7 @@ impl Session {
             5000,
         ));
         let mut settings = ServerSettings {
-            allow_sandbox: config.mode == Mode::Sandbox,
+            allow_sandbox: true,
             world: config,
             name: format!("{}'s party", name.chars().take(21).collect::<String>()),
             max_players: 8,
@@ -180,6 +207,12 @@ impl Session {
             mods,
             ..Default::default()
         };
+        settings
+            .party
+            .as_mut()
+            .expect("party settings")
+            .starting_level = starting_level;
+        settings.world.modded |= starting_level > 1;
         let host = HostedServer::start(settings.clone())
             .or_else(|original| {
                 // Retry on an OS-assigned port if the preferred port is occupied.
@@ -198,6 +231,14 @@ impl Session {
             .set_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
         let client =
             NetworkClient::connect(&local_invite.link(), name, "").map_err(|e| e.to_string())?;
+        let relay = automatic_network
+            .then(|| {
+                tankyard_server::party_relay::HostedRelay::start(
+                    local_invite.address,
+                    invite.settings(slots).public_key,
+                )
+            })
+            .and_then(Result::ok);
         let mut session = Self::create(
             Engine::Online {
                 client: Box::new(client),
@@ -208,6 +249,7 @@ impl Session {
         );
         session.party_invite = Some(invite);
         session.party_discovery = discovery;
+        session.party_relay = relay;
         session.party_network = if automatic_network {
             "Finding your public IP and checking automatic UDP forwarding…".into()
         } else {
@@ -292,6 +334,8 @@ impl Session {
             party_invite: None,
             party_network: String::new(),
             party_discovery: None,
+            party_relay: None,
+            party_relay_ready: None,
             party_manual_address: false,
             engine,
             player,
@@ -300,6 +344,7 @@ impl Session {
             display,
             failure: None,
             notice: None,
+            action_result: None,
             events: Vec::with_capacity(512),
             predicted: None,
             predicted_tick: 0,
@@ -387,6 +432,16 @@ impl Session {
         }
     }
     pub fn update_network(&mut self, dt: f32, now: f64, _content: &Content) {
+        if let Some(status) = self.party_relay.as_ref().and_then(|relay| relay.poll()) {
+            let ready = matches!(status, tankyard_server::party_relay::Status::Ready);
+            self.party_relay_ready = Some(ready);
+            if !self.party_manual_address
+                && let Some(invite) = &mut self.party_invite
+            {
+                invite.relay = ready.then(|| self.party_relay.as_ref().expect("active relay").room);
+            }
+        }
+
         if let Some(status) = self
             .party_discovery
             .as_ref()
@@ -416,6 +471,9 @@ impl Session {
         let content = &self.bundle.content;
         if let Some(error) = &client.error {
             self.failure = Some(error.clone());
+        }
+        if let Some(accepted) = client.last_action_accepted.take() {
+            self.action_result = Some((accepted, client.last_action.clone().unwrap_or_default()));
         }
         if let Some(reason) = client.last_action.take() {
             self.notice = Some(reason);

@@ -26,6 +26,7 @@ pub struct NetworkClient {
     pub events: Vec<GameEvent>,
     pub error: Option<String>,
     pub last_action: Option<String>,
+    pub last_action_accepted: Option<bool>,
     pub match_settings: Option<MatchSettings>,
     party_key: Option<Ed25519KeyPair>,
     pub party_members: Vec<PartyMember>,
@@ -72,7 +73,12 @@ impl NetworkClient {
     pub fn connect(address: &str, name: &str, password: &str) -> Result<Self, NetError> {
         if address.starts_with("tankyard://party/") {
             let invite = crate::party::Invite::parse(address)?;
-            let mut client = Self::connect(&invite.address.to_string(), name, "")?;
+            if invite.relay.is_some()
+                && let Ok(client) = Self::party_via(&invite, name, crate::party_relay::RELAY)
+            {
+                return Ok(client);
+            }
+            let mut client = Self::connect_bridge(&invite.address.to_string(), name, "", None)?;
             client.party_key = Some(invite.key());
             return Ok(client);
         }
@@ -82,6 +88,28 @@ impl NetworkClient {
         let bridge = crate::websocket::websocket_url(address)
             .map(|url| crate::websocket::ClientBridge::connect(&url))
             .transpose()?;
+        Self::connect_bridge(address, name, password, bridge)
+    }
+    pub(crate) fn party_via(
+        invite: &crate::party::Invite,
+        name: &str,
+        base: &str,
+    ) -> Result<Self, NetError> {
+        let room = invite
+            .relay
+            .ok_or_else(|| NetError("Invite has no relay route.".into()))?;
+        let url = format!("{base}/party/join/{}", crate::party_relay::hex(&room));
+        let bridge = crate::websocket::ClientBridge::connect_party(&url, &invite.key(), &room)?;
+        let mut client = Self::connect_bridge(&invite.address.to_string(), name, "", Some(bridge))?;
+        client.party_key = Some(invite.key());
+        Ok(client)
+    }
+    fn connect_bridge(
+        address: &str,
+        name: &str,
+        password: &str,
+        bridge: Option<crate::websocket::ClientBridge>,
+    ) -> Result<Self, NetError> {
         let address = match &bridge {
             Some(bridge) => bridge.address,
             None => address
@@ -175,6 +203,7 @@ impl NetworkClient {
             events: Vec::new(),
             error: None,
             last_action: None,
+            last_action_accepted: None,
             match_settings: None,
             party_key: None,
             party_members: Vec::new(),
@@ -225,6 +254,17 @@ impl NetworkClient {
             server_notice: None,
         })
     }
+    fn handshake_failure(&self, reason: &str) -> String {
+        if self.party_key.is_some() && self.player_id.is_none() && !self.hello_sent {
+            if self._bridge.is_none() {
+                "No UDP reply from the party. Automatic IP discovery does not open a blocked router. The leader must allow Tank Yard through the firewall and forward the invite's UDP port, or enable an updated party relay. Both players need the same game version.".into()
+            } else {
+                "The party relay connected, but the leader's match did not respond. Ask the leader to reopen the party and send a new invite.".into()
+            }
+        } else {
+            reason.to_owned()
+        }
+    }
     pub fn update(&mut self, elapsed: Duration) -> Result<(), NetError> {
         self.events.clear();
         if let Some(failure) = self._bridge.as_ref().and_then(|bridge| bridge.failure()) {
@@ -233,7 +273,7 @@ impl NetworkClient {
         if self.player_id.is_none() {
             self.handshake_elapsed += elapsed;
             if self.handshake_elapsed > Duration::from_secs(15) {
-                return self.fail("Server handshake timed out. Check the address, UDP firewall, and server version.".into());
+                return self.fail(self.handshake_failure("Server handshake timed out."));
             }
         }
         self.client.update(elapsed);
@@ -241,10 +281,10 @@ impl NetworkClient {
             return self.fail(e.to_string());
         }
         if let Some(reason) = self.transport.disconnect_reason() {
-            return self.fail(reason.to_string());
+            return self.fail(self.handshake_failure(&reason.to_string()));
         }
         if let Some(reason) = self.client.disconnect_reason() {
-            return self.fail(reason.to_string());
+            return self.fail(self.handshake_failure(&reason.to_string()));
         }
         if self.client.is_connected() && !self.hello_sent {
             self.hello_sent = self.queue_control(self.hello.clone());
@@ -427,6 +467,7 @@ impl NetworkClient {
                     if reason.len() > 1024 || reason.chars().any(char::is_control) {
                         return self.fail("Invalid server response.".into());
                     }
+                    self.last_action_accepted = Some(accepted);
                     self.last_action = (!accepted || !reason.is_empty()).then_some(reason);
                 }
                 ServerControl::MatchSettings { settings } => {

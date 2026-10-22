@@ -17,8 +17,8 @@ pub use voice::*;
 mod party;
 pub use party::*;
 
-pub const PROTOCOL_VERSION: u32 = 19;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0013;
+pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0014;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -820,6 +820,7 @@ mod tests {
             map: "maze".into(),
             difficulty: "Advanced".into(),
             bots: 24,
+            party: None,
         };
         let message = ServerControl::MatchSettings {
             settings: settings.clone(),

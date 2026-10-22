@@ -7,6 +7,22 @@ pub struct MatchSettings {
     pub map: String,
     pub difficulty: String,
     pub bots: usize,
+    pub party: Option<PartyMatchOptions>,
+}
+/// Only the bounded settings a party leader may change between rounds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartyMatchOptions {
+    pub width: u16,
+    pub height: u16,
+    pub dynamic_arena: bool,
+    pub starting_level: u8,
+}
+impl PartyMatchOptions {
+    pub fn valid(&self) -> bool {
+        (900..=16000).contains(&self.width)
+            && (700..=16000).contains(&self.height)
+            && [1, 30, 45].contains(&self.starting_level)
+    }
 }
 impl MatchSettings {
     pub fn valid(&self) -> bool {
@@ -15,6 +31,10 @@ impl MatchSettings {
                 .iter()
                 .any(|name| self.difficulty.eq_ignore_ascii_case(name))
             && self.bots <= 128
+            && self
+                .party
+                .as_ref()
+                .is_none_or(|party| party.valid() && (2..=8).contains(&self.bots))
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +142,9 @@ pub enum ServerCommand {
         difficulty: String,
     },
     RestartRound,
+    ConfigureParty {
+        settings: MatchSettings,
+    },
 }
 impl ServerCommand {
     pub fn valid(&self) -> bool {
@@ -169,8 +192,10 @@ impl ServerCommand {
                 map: map.clone(),
                 difficulty: difficulty.clone(),
                 bots: 0,
+                party: None,
             }
             .valid(),
+            Self::ConfigureParty { settings } => settings.party.is_some() && settings.valid(),
             Self::ReloadMods | Self::ReadAudit | Self::RestartRound => true,
         }
     }
@@ -183,9 +208,10 @@ impl ServerCommand {
             Self::Mute { .. } => ServerPermission::Mute,
             Self::Nominate { .. } => ServerPermission::ManageRoles,
             Self::CreateRoom { .. } | Self::DeleteRoom { .. } => ServerPermission::ManageRooms,
-            Self::SetBots { .. } | Self::ConfigureMatch { .. } | Self::RestartRound => {
-                ServerPermission::Configure
-            }
+            Self::SetBots { .. }
+            | Self::ConfigureMatch { .. }
+            | Self::ConfigureParty { .. }
+            | Self::RestartRound => ServerPermission::Configure,
             Self::ReloadMods => ServerPermission::ReloadMods,
             Self::ReadAudit => ServerPermission::ViewAudit,
         }

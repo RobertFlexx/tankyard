@@ -747,7 +747,11 @@ impl World {
         }
     }
     pub(crate) fn spawn_position(&mut self, team: u8) -> V2 {
-        let mut best = V2::new(self.config.width * 0.5, self.config.height * 0.5);
+        let spawn_bounds = self
+            .config
+            .team_base(team)
+            .unwrap_or_else(|| self.config.bounds());
+        let mut best = spawn_bounds.center();
         let mut best_safety = -1.;
         for _ in 0..64 {
             let (x, y) = (self.random(), self.random());
@@ -755,7 +759,9 @@ impl World {
             let count = regions().count();
             let region = regions().nth(((x * count as f32) as usize).min(count.saturating_sub(1)));
             let bounds = self.config.bounds();
-            let p = if let Some(region) = region {
+            let p = if let Some(base) = self.config.team_base(team) {
+                base.clamp_circle(V2::new(base.x + x * base.w, base.y + y * base.h), 38.)
+            } else if let Some(region) = region {
                 let rect = region.rect;
                 V2::new(
                     bounds.x + (rect[0] + self.random() * rect[2]) * bounds.w,
@@ -802,10 +808,12 @@ impl World {
                 break;
             }
         }
-        crate::physics::clear_circle_position(best, 36., self.config.bounds(), &self.walls)
-            .unwrap_or(best)
+        crate::physics::clear_circle_position(best, 36., spawn_bounds, &self.walls).unwrap_or(best)
     }
     pub fn team_home(&self, team: u8) -> V2 {
+        if let Some(base) = self.config.team_base(team) {
+            return base.center();
+        }
         if let Some(base) = self.map.team_bases.iter().find(|b| b.team == team) {
             return self.config.arena_point(V2::new(
                 base.position[0] * self.config.width,
@@ -842,7 +850,11 @@ impl World {
                 radius + 50. + self.random() * (self.config.height - 2. * radius - 100.),
             );
             let pos = self.config.arena_point(base);
-            if self
+            if (1..=self.config.mode.teams()).any(|team| {
+                self.config
+                    .team_base(team)
+                    .is_some_and(|base| circle_rect(pos, radius + 8., base).is_some())
+            }) || self
                 .walls
                 .iter()
                 .any(|&w| circle_rect(pos, radius + 8., w).is_some())
@@ -964,6 +976,7 @@ impl World {
         if !t.alive
             || t.health <= 0.
             || t.protection > 0.
+            || self.config.base_protected(t.team, t.pos, t.radius)
             || self.sandbox_god.contains(&t.id)
             || self.admin_modifiers.get(&t.id).is_some_and(|m| m.god)
         {
@@ -1749,6 +1762,7 @@ impl World {
             if t.alive
                 && t.id != owner
                 && t.protection <= 0.
+                && !self.config.base_protected(t.team, t.pos, t.radius)
                 && self.hostile(team, t.team)
                 && d < best
             {

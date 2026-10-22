@@ -18,6 +18,8 @@ impl World {
             || d.health <= 0.
             || a.protection > 0.
             || d.protection > 0.
+            || self.config.base_protected(a.team, a.pos, a.radius)
+            || self.config.base_protected(d.team, d.pos, d.radius)
             || a.knockback > 0.
             || self.sandbox_god.contains(&a.id)
             || d.shield <= 0.

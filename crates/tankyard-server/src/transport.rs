@@ -794,6 +794,13 @@ impl UdpServer {
             }
             let name = sanitize_name(&name);
             let player = self.session.world.add_player(&name, false);
+            if let Some(party) = &self.settings.party
+                && party.starting_level > 1
+            {
+                self.session
+                    .world
+                    .set_practice_level(player, party.starting_level);
+            }
             if self.settings.party.is_some() && self.session.world.config.mode.teams() > 0 {
                 let team = if self.session.world.config.mode == Mode::Infection
                     && self.session.world.match_state.arena.wave > 0
@@ -1575,6 +1582,13 @@ impl UdpServer {
         self.pending_effects.clear();
         for (client, name) in players {
             let player = self.session.world.add_player(&name, false);
+            if let Some(party) = &self.settings.party
+                && party.starting_level > 1
+            {
+                self.session
+                    .world
+                    .set_practice_level(player, party.starting_level);
+            }
             if self.settings.party.is_some() && self.session.world.config.mode.teams() > 0 {
                 let team = if self.session.world.config.mode == Mode::Infection
                     && self.session.world.match_state.arena.wave > 0

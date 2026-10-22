@@ -1,3 +1,13 @@
+# v0.8.0 checks (2026-10-22)
+
+442 public Rust tests, five real-key private authorization tests and ten installer fixtures pass. Formatting, strict Clippy, 103 tank profiles, eight maps, both bundled mods and native cross-process clipboard exchange pass. Added coverage includes lossy translated UDP invitations, two live guests through a loopback relay with an unreachable direct address, chat/menu/round persistence, forged host and invite proofs, signature binding, membership cleanup, bounded backpressure and ordered recovery, eight-participant packet budgets, hostile-client party configuration, bounded match settings, and base spawning/protection across all maps, three sizes and animated border scales. Live projectile damage is blocked inside an owned base and resumes after exit.
+
+Native two-client checks at 1280×800 with 100% UI and 800×600 with 140% UI cover copying/pasting an invite, party membership, local voice mutes, text chat, retained main-menu connections, and two successive mode changes using the same party. The leader enters the new round after the server confirms it; guests, chat and local mutes persist. Team strips/corner bases and their minimap regions follow the current arena. Captures are in `artifacts/v080-review`. Edited invitation endpoints preserve existing relay connections.
+
+Compatible Linux public binaries and both private password-protected editions are rebuilt for v0.8.0. The packages are checked for plaintext signing seeds/passwords, allowed archive contents and checksums. Private authorization uses the existing real keys; the public source and release assets do not include them. Other desktop platforms are built and checked by the tagged release workflow; this workstation's interactive checks are Linux checks.
+
+Protocol **20** requires updating clients, regular servers and relays together. The automatic internet route needs the upgraded central relay; local tests do not deploy or establish the state of the friend's Pi. See [party setup](parties.md), the [scoped review](security-review-v080.md) and [Pi operator steps](central-pi-upgrade.md).
+
 # v0.7.0 checks (2026-10-21)
 
 430 public Rust tests, five real-key private authorization tests and ten installer fixtures pass. Formatting, strict Clippy, all 103 tank profiles, eight maps and both bundled mods pass. Added coverage includes server-issued party rosters, menu presence and chat across rounds, distant members, local-router SOAP requests, finite leases, ownership checks before deletion, permanent-lease rejection, response limits, URL confinement, XML depth/entities and party geometry at every supported interface scale.

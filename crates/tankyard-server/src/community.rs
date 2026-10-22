@@ -3,6 +3,16 @@ use tankyard_protocol::{ChatMessage, ServerCommand, ServerControl, ServerKind, S
 impl UdpServer {
     pub(crate) fn match_settings(&self) -> tankyard_protocol::MatchSettings {
         tankyard_protocol::MatchSettings {
+            party: self
+                .settings
+                .party
+                .as_ref()
+                .map(|party| tankyard_protocol::PartyMatchOptions {
+                    width: self.settings.world.width as u16,
+                    height: self.settings.world.height as u16,
+                    dynamic_arena: self.settings.world.dynamic_arena,
+                    starting_level: party.starting_level,
+                }),
             mode: self.session.world.config.mode,
             map: self.session.world.config.map.clone(),
             difficulty: self.settings.difficulty.name().into(),
@@ -228,6 +238,32 @@ impl UdpServer {
             } => {
                 let difficulty = crate::difficulty_from_name(&difficulty).map_err(NetError)?;
                 self.configure_match(mode, &map, difficulty)?;
+            }
+            ServerCommand::ConfigureParty { settings } => {
+                if self.settings.party.is_none() || !settings.valid() {
+                    return Err(NetError(
+                        "Only an active party leader can configure this party.".into(),
+                    ));
+                }
+                let options = settings
+                    .party
+                    .ok_or_else(|| NetError("Missing party settings.".into()))?;
+                let mut candidate = self.settings.configured_match(
+                    &self.session.bundle.maps,
+                    settings.mode,
+                    &settings.map,
+                    crate::difficulty_from_name(&settings.difficulty).map_err(NetError)?,
+                )?;
+                candidate.world.width = f32::from(options.width);
+                candidate.world.height = f32::from(options.height);
+                candidate.world.dynamic_arena = options.dynamic_arena;
+                candidate.world.modded |= options.starting_level > 1;
+                let party = candidate.party.as_mut().expect("active party");
+                party.ally_slots = settings.bots;
+                party.starting_level = options.starting_level;
+                candidate.validate()?;
+                self.settings = candidate;
+                self.restart_round();
             }
             ServerCommand::RestartRound => self.restart_round(),
             ServerCommand::ReadAudit => {

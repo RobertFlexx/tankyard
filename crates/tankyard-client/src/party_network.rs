@@ -438,7 +438,7 @@ fn run(local: SocketAddr, updates: &SyncSender<Status>, stop: &Receiver<()>) {
             send(
                 Some(SocketAddr::new(ip, local.port())),
                 format!(
-                    "Public invite ready; automatic forwarding unavailable. Forward UDP {} to {local}. Double NAT/CGNAT needs an upstream forward or a public IP from your ISP.",
+                    "Public IP found; UDP forwarding is required. Forward UDP {} to {local}. Double NAT/CGNAT needs an upstream forward or a public IP from your ISP.",
                     local.port()
                 ),
             );
@@ -447,7 +447,7 @@ fn run(local: SocketAddr, updates: &SyncSender<Status>, stop: &Receiver<()>) {
     }
     let message = if public.is_some() {
         format!(
-            "Public invite ready; router did not allow automatic forwarding. Forward UDP {} to {local}, and allow Tank Yard through your firewall.",
+            "Public IP found; router did not allow automatic forwarding. Forward UDP {} to {local}, and allow Tank Yard through your firewall.",
             local.port()
         )
     } else {

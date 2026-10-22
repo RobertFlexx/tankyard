@@ -96,9 +96,15 @@ impl UdpServer {
                 self.session.world.remove_player(id);
             }
             for i in current..desired {
-                self.session
+                let id = self
+                    .session
                     .world
                     .add_player(&format!("Outbreak {:02}", i + 1), true);
+                if party.starting_level > 1 {
+                    self.session
+                        .world
+                        .set_practice_level(id, party.starting_level);
+                }
             }
             return;
         }
@@ -155,6 +161,11 @@ impl UdpServer {
                     ),
                     true,
                 );
+                if party.starting_level > 1 {
+                    self.session
+                        .world
+                        .set_practice_level(id, party.starting_level);
+                }
                 if team > 0 {
                     self.session.world.assign_team(id, team);
                 }

@@ -51,6 +51,7 @@ pub enum Action {
     Offline,
     Host,
     CreateParty,
+    ApplyParty,
     JoinParty,
     CopyParty,
     ResumeParty,
@@ -72,6 +73,8 @@ pub struct Menu {
     party_focus: bool,
     pub party_roster: Vec<String>,
     pub party_active: bool,
+    pub party_leader: bool,
+    pub party_configuring: bool,
     pub party_network: String,
     pub mode: Mode,
     pub map: usize,
@@ -119,6 +122,8 @@ impl Menu {
             party_focus: false,
             party_roster: Vec::new(),
             party_active: false,
+            party_leader: false,
+            party_configuring: false,
             party_network: String::new(),
             mode: Mode::Ffa,
             map: 0,
@@ -236,7 +241,10 @@ impl Menu {
         ["Beginner", "Normal", "Advanced", "Expert"][self.difficulty.min(3)]
     }
     pub fn select_mode(&mut self, mode: Mode) {
-        if self.mode != mode && matches!(mode, Mode::CoopPve | Mode::BossRush) && !self.party_setup
+        if self.mode != mode
+            && matches!(mode, Mode::CoopPve | Mode::BossRush)
+            && !self.party_setup
+            && !self.party_active
         {
             self.bots = 3;
         }
@@ -266,6 +274,40 @@ impl Menu {
             })
             .unwrap_or(0);
         self.map_page = self.map / 8;
+    }
+    pub fn load_party_settings(&mut self, settings: &tankyard_protocol::MatchSettings) {
+        self.mode = settings.mode;
+        self.map = self
+            .maps
+            .iter()
+            .position(|map| map.id == settings.map)
+            .unwrap_or(0);
+        self.map_page = self.map / 8;
+        self.bots = settings.bots.clamp(2, 8);
+        self.difficulty = ["Beginner", "Normal", "Advanced", "Expert"]
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(&settings.difficulty))
+            .unwrap_or(1);
+        if let Some(party) = &settings.party {
+            self.width = f32::from(party.width);
+            self.height = f32::from(party.height);
+            self.dynamic_arena = party.dynamic_arena;
+            self.offline_level = party.starting_level;
+        }
+    }
+    pub fn party_match_settings(&self) -> tankyard_protocol::MatchSettings {
+        tankyard_protocol::MatchSettings {
+            mode: self.mode,
+            map: self.config().map,
+            difficulty: self.difficulty_name().into(),
+            bots: self.bots.clamp(2, 8),
+            party: Some(tankyard_protocol::PartyMatchOptions {
+                width: self.width as u16,
+                height: self.height as u16,
+                dynamic_arena: self.dynamic_arena,
+                starting_level: self.offline_level,
+            }),
+        }
     }
     pub fn config(&self) -> WorldConfig {
         WorldConfig {
@@ -364,15 +406,27 @@ impl Menu {
         } else {
             144.
         } * s;
-        let footer = if self.page == Page::Main { 12. } else { 78. };
+        let footer_space = if self.page == Page::Main { 12. } else { 78. };
+        let message = if self.error.is_empty() {
+            &self.info
+        } else {
+            &self.error
+        };
+        let message_height = if message.is_empty() {
+            0.
+        } else {
+            16. + wrapped_lines(message, w - margin * 2. - 24. * s, 13. * s)
+                .len()
+                .min(4) as f32
+                * 16.
+        };
         let bottom = h
-            - (footer
-                + if self.error.is_empty() && self.info.is_empty() {
-                    0.
-                } else {
-                    38.
-                })
-                * s;
+            - footer_space * s
+            - if message_height == 0. {
+                0.
+            } else {
+                message_height * s + 6. * s
+            };
         let anchor = self.scale_anchor.take();
         let canvas = self.scroll_panel.begin(s, top, bottom, anchor);
         let mut action = match self.page {
@@ -435,15 +489,19 @@ impl Menu {
             } else {
                 (&self.error, RED)
             };
-            let y = h - if self.page == Page::Main { 46. } else { 112. } * s;
-            panel(Rect::new(margin, y, w - margin * 2., 32. * s));
-            label(
-                &fitted_label(message, 14. * s, (w - margin * 2. - 24. * s).max(1.)),
-                margin + 12. * s,
-                y + 22. * s,
-                14. * s,
-                color,
-            );
+            let lines = wrapped_lines(message, (w - margin * 2. - 24. * s).max(1.), 13. * s);
+            let height = (16. + lines.len().min(4) as f32 * 16.) * s;
+            let y = h - (footer_space + 4.) * s - height;
+            panel(Rect::new(margin, y, w - margin * 2., height));
+            for (index, line) in lines.into_iter().take(4).enumerate() {
+                label(
+                    &line,
+                    margin + 12. * s,
+                    y + (22. + index as f32 * 16.) * s,
+                    13. * s,
+                    color,
+                );
+            }
         }
         action
     }
@@ -552,7 +610,14 @@ impl Menu {
         }
         let links_y = play_y + 122.0 * s;
         for (index, (title, page)) in [
-            ("Offline modes", Page::Modes),
+            (
+                if self.party_active {
+                    "Party modes"
+                } else {
+                    "Offline modes"
+                },
+                Page::Modes,
+            ),
             ("Tank tree", Page::Encyclopedia),
             ("Settings", Page::Settings),
             ("Parties", Page::Party),
@@ -629,7 +694,17 @@ impl Menu {
     fn modes(&mut self, _settings: &mut Settings, s: f32) -> Action {
         let x = 40.0 * s;
         let y = 152.0 * s;
-        label("Game modes", x, y + 12.0 * s, 25.0 * s, text_color());
+        label(
+            if self.party_active {
+                "Party modes · stay together"
+            } else {
+                "Game modes"
+            },
+            x,
+            y + 12.0 * s,
+            25.0 * s,
+            text_color(),
+        );
         let gap = 6.0 * s;
         let width = (screen_width() - 80.0 * s - gap * 3.0) / 4.0;
         let height = 64.0 * s;
@@ -696,13 +771,19 @@ impl Menu {
         let mut bots = self.bots as f32;
         slider_value(
             Rect::new(x, by + 80. * s, column, 48. * s),
-            if self.mode == Mode::CoopPve {
+            if self.party_active || self.party_setup {
+                "Team slots (friends + AI)"
+            } else if self.mode == Mode::CoopPve {
                 "AI teammates"
             } else {
                 "AI tanks"
             },
             &mut bots,
-            [0., 64.],
+            if self.party_active || self.party_setup {
+                [2., 8.]
+            } else {
+                [0., 64.]
+            },
             1.,
             s * 0.8,
             |n| format!("{n:.0}"),
@@ -805,16 +886,26 @@ impl Menu {
                 260.0 * s,
                 36.0 * s,
             ),
-            if self.party_setup {
+            if self.party_configuring {
+                "Starting round…"
+            } else if self.party_active {
+                if self.party_leader {
+                    "Start party round  →"
+                } else {
+                    "Leader chooses the mode"
+                }
+            } else if self.party_setup {
                 "Create party  →"
             } else {
                 "Launch offline  →"
             },
             true,
-            true,
+            (!self.party_active || self.party_leader) && !self.party_configuring,
             s * 0.85,
         ) {
-            return if self.party_setup {
+            return if self.party_active {
+                Action::ApplyParty
+            } else if self.party_setup {
                 Action::CreateParty
             } else {
                 Action::Offline
@@ -884,18 +975,24 @@ impl Menu {
                     text_color(),
                 );
             }
-            wrap(
-                if self.party_network.is_empty() {
-                    "The leader can change mode and map in Server tools. Changes keep everyone connected."
-                } else {
-                    &self.party_network
-                },
-                x + pad,
-                534. * s,
-                inner,
-                13. * s,
-                muted_color(),
-            );
+            let status = if self.party_network.is_empty() {
+                "Use Party modes in the main menu to start another mode with these members."
+            } else {
+                &self.party_network
+            };
+            for (index, line) in wrapped_lines(status, inner, 13. * s)
+                .into_iter()
+                .take(4)
+                .enumerate()
+            {
+                label(
+                    &line,
+                    x + pad,
+                    (534. + index as f32 * 16.) * s,
+                    13. * s,
+                    muted_color(),
+                );
+            }
         } else {
             label("HOST A PARTY", x + pad, 276. * s, 17. * s, CYAN);
             label(
@@ -984,7 +1081,7 @@ impl Menu {
                 return Action::OpenParty;
             }
             wrap(
-                "The online match keeps running while you browse menus. Leaving the leader's party closes it for everyone.",
+                "Change modes from the main menu without leaving your party. The leader starts the next round for everyone.",
                 right + pad,
                 540. * s,
                 inner,
@@ -1020,7 +1117,7 @@ impl Menu {
             return Action::JoinParty;
         }
         wrap(
-            "The leader detects their public IP and requests a temporary UDP router forward. If the router or ISP blocks it, the invite screen shows the port to forward manually. You can also enter a LAN address for local play.",
+            "Automatic setup tries an internet relay and a temporary UDP forward. The invite screen shows which route is ready. If neither is available, allow the game through your firewall and forward the displayed UDP port. LAN play works without either.",
             right + pad,
             495. * s,
             inner,

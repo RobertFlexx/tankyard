@@ -460,6 +460,7 @@ impl World {
             if tank.alive
                 && tank.id != owner
                 && tank.protection <= 0.
+                && !self.config.base_protected(tank.team, tank.pos, tank.radius)
                 && self.hostile(team, tank.team)
             {
                 candidate(tank.pos, 0.);

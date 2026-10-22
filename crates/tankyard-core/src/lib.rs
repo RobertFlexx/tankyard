@@ -22,6 +22,7 @@ mod scenarios;
 mod special_modes;
 mod spectating;
 mod stasis;
+mod team_bases;
 pub use stasis::{STASIS_RADIUS, STASIS_SECONDS};
 mod weapons;
 pub mod world;

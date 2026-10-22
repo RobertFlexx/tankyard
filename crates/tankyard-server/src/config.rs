@@ -174,6 +174,7 @@ impl ServerSettings {
         if (self.map_rotation_seconds != 0 && !(60..=604800).contains(&self.map_rotation_seconds))
             || self.party.as_ref().is_some_and(|p| {
                 !(2..=8).contains(&p.ally_slots)
+                    || ![1, 30, 45].contains(&p.starting_level)
                     || p.public_key == [0; 32]
                     || self.max_players > 8
                     || self.kind != tankyard_protocol::ServerKind::Community

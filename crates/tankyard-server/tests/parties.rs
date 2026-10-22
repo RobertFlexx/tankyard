@@ -363,3 +363,148 @@ fn co_op_wave_enemies_are_never_removed_by_teammate_replacement() {
         2
     );
 }
+
+#[test]
+fn leader_changes_modes_atomically_without_replacing_invites_members_or_chat() {
+    use tankyard_protocol::{MatchSettings, PartyMatchOptions, ServerCommand};
+    let (mut server, invite) = arena(Mode::CoopPve);
+    server.settings.allow_sandbox = true;
+    let original = invite.link();
+    let mut leader = NetworkClient::connect(&original, "Leader", "").unwrap();
+    let mut guest = NetworkClient::connect(&original, "Guest", "").unwrap();
+    ready(&mut server, &mut [&mut leader, &mut guest]);
+    let public: String = leader
+        .admin_public_key()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert!(
+        !server
+            .admin_command(&format!("owner-client {} {public}", leader.client_id()))
+            .message
+            .starts_with("Error:")
+    );
+    pump(&mut server, &mut [&mut leader, &mut guest], 65);
+    assert!(leader.party_presence(true));
+    assert!(guest.send_chat("lobby", "Staying together"));
+    pump(&mut server, &mut [&mut leader, &mut guest], 10);
+    let ids = [leader.client_id(), guest.client_id()];
+    // Even a custom client that bypasses its own permission checks cannot
+    // configure the party without the server's process-local host grant.
+    guest
+        .permissions
+        .push(tankyard_protocol::ServerPermission::Configure);
+    let forged = MatchSettings {
+        mode: Mode::Ffa,
+        map: "open".into(),
+        difficulty: "Normal".into(),
+        bots: 3,
+        party: Some(PartyMatchOptions {
+            width: 2400,
+            height: 1800,
+            dynamic_arena: false,
+            starting_level: 1,
+        }),
+    };
+    assert!(guest.admin(ServerCommand::ConfigureParty { settings: forged }));
+    pump(&mut server, &mut [&mut leader, &mut guest], 10);
+    assert_eq!(server.session.world.config.mode, Mode::CoopPve);
+    assert!(
+        guest
+            .last_action
+            .as_ref()
+            .is_some_and(|message| !message.is_empty())
+    );
+    guest.permissions.clear();
+    for mode in [
+        Mode::FourTeams,
+        Mode::Sandbox,
+        Mode::Infection,
+        Mode::CoopPve,
+    ] {
+        let before = leader.player_round.unwrap();
+        let settings = MatchSettings {
+            mode,
+            map: "open".into(),
+            difficulty: "Expert".into(),
+            bots: 3,
+            party: Some(PartyMatchOptions {
+                width: 2400,
+                height: 1800,
+                dynamic_arena: false,
+                starting_level: 30,
+            }),
+        };
+        assert!(!guest.admin(ServerCommand::ConfigureParty {
+            settings: settings.clone()
+        }));
+        assert!(leader.admin(ServerCommand::ConfigureParty { settings }));
+        pump(&mut server, &mut [&mut leader, &mut guest], 65);
+        assert_eq!(leader.player_round, Some(before + 1));
+        assert_eq!(guest.player_round, leader.player_round);
+        assert_eq!([leader.client_id(), guest.client_id()], ids);
+        assert_eq!(server.session.world.config.mode, mode);
+        assert_eq!(server.settings.world.width, 2400.);
+        assert_eq!(server.settings.party.as_ref().unwrap().ally_slots, 3);
+        for client in [&leader, &guest] {
+            assert!(client.is_ready());
+            assert_eq!(client.party_members.len(), 2);
+            assert!(
+                client
+                    .party_members
+                    .iter()
+                    .find(|member| member.client == ids[0])
+                    .unwrap()
+                    .in_menu
+            );
+            assert!(
+                client
+                    .chat_messages
+                    .iter()
+                    .any(|message| message.text == "Staying together")
+            );
+            assert_eq!(client.match_settings.as_ref().unwrap().mode, mode);
+        }
+        assert!(
+            server
+                .session
+                .world
+                .tanks
+                .iter()
+                .filter(|tank| !tank.bot)
+                .all(|tank| tank.level >= 30)
+        );
+    }
+    assert_eq!(invite.link(), original);
+    let mut late = NetworkClient::connect(&original, "Late guest", "").unwrap();
+    ready(&mut server, &mut [&mut leader, &mut guest, &mut late]);
+    assert_eq!(late.party_members.len(), 3);
+}
+
+#[test]
+fn invite_authentication_survives_udp_address_translation_and_packet_loss() {
+    use tankyard_server::netem::{EmulationConfig, NetworkEmulator};
+    let (mut server, mut invite) = arena(Mode::TwoTeams);
+    let proxy = NetworkEmulator::start(
+        server.address,
+        EmulationConfig {
+            latency_ms: 60,
+            jitter_ms: 10,
+            loss_percent: 3.,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    invite.address = proxy.address;
+    let mut guest = NetworkClient::connect(&invite.link(), "Forwarded guest", "").unwrap();
+    ready(&mut server, &mut [&mut guest]);
+    assert!(guest.is_ready());
+    assert!(guest.send_chat("lobby", "Translated UDP works"));
+    pump(&mut server, &mut [&mut guest], 120);
+    assert!(
+        guest
+            .chat_messages
+            .iter()
+            .any(|message| message.text == "Translated UDP works")
+    );
+}

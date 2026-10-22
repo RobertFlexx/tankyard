@@ -52,6 +52,7 @@ impl World {
                 tank.alive
                     && tank.health > 0.
                     && tank.protection <= 0.
+                    && !self.config.base_protected(tank.team, tank.pos, tank.radius)
                     && self.hostile(team, tank.team)
                     && (tank.level >= 15
                         || tank.id == boss.last_attacker
@@ -197,6 +198,7 @@ impl World {
                         && t.health > 0.
                         && self.hostile(b.team, t.team)
                         && t.protection <= 0.
+                        && !self.config.base_protected(t.team, t.pos, t.radius)
                         && t.pos.distance(b.pos) < 1600.
                         && (t.level >= 15
                             || b.kind.drone_limit() == 0

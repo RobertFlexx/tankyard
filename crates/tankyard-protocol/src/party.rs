@@ -54,4 +54,38 @@ mod tests {
         bad.class = "../vector".into();
         assert!(!valid_party_roster(&[bad]));
     }
+
+    #[test]
+    fn party_configuration_is_bounded_before_dispatch() {
+        use crate::{MatchSettings, PartyMatchOptions, ServerCommand};
+        let mut settings = MatchSettings {
+            mode: tankyard_core::Mode::Sandbox,
+            map: "open".into(),
+            difficulty: "Normal".into(),
+            bots: 4,
+            party: Some(PartyMatchOptions {
+                width: 3600,
+                height: 2600,
+                dynamic_arena: true,
+                starting_level: 45,
+            }),
+        };
+        assert!(
+            ServerCommand::ConfigureParty {
+                settings: settings.clone()
+            }
+            .valid()
+        );
+        settings.party.as_mut().unwrap().starting_level = 255;
+        assert!(!settings.valid());
+        settings.party.as_mut().unwrap().starting_level = 1;
+        settings.party.as_mut().unwrap().width = 1;
+        assert!(!settings.valid());
+        settings.party.as_mut().unwrap().width = 3600;
+        settings.bots = 9;
+        assert!(!settings.valid());
+        settings.bots = 4;
+        settings.party = None;
+        assert!(!ServerCommand::ConfigureParty { settings }.valid());
+    }
 }

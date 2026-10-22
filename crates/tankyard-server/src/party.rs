@@ -9,16 +9,23 @@ use std::net::{IpAddr, SocketAddr};
 pub struct PartySettings {
     pub public_key: [u8; 32],
     pub ally_slots: usize,
+    #[serde(default = "starting_level")]
+    pub starting_level: u8,
+}
+fn starting_level() -> u8 {
+    1
 }
 #[derive(Clone)]
 pub struct Invite {
     pub address: SocketAddr,
+    pub relay: Option<[u8; 32]>,
     seed: [u8; 32],
 }
 impl Invite {
     pub fn create(address: SocketAddr) -> Self {
         Self {
             address,
+            relay: None,
             seed: renet_netcode::generate_random_bytes(),
         }
     }
@@ -33,6 +40,14 @@ impl Invite {
             .ok_or_else(invalid)?
             .split_once('#')
             .ok_or_else(invalid)?;
+        let (address, relay) = if let Some((address, room)) = address.split_once("?r=") {
+            (
+                address,
+                Some(crate::party_relay::unhex(room).ok_or_else(invalid)?),
+            )
+        } else {
+            (address, None)
+        };
         let address: SocketAddr = address.parse().map_err(|_| invalid())?;
         if address.port() == 0
             || address.ip().is_unspecified()
@@ -46,11 +61,19 @@ impl Invite {
             *slot = u8::from_str_radix(std::str::from_utf8(pair).map_err(|_| invalid())?, 16)
                 .map_err(|_| invalid())?;
         }
-        Ok(Self { address, seed })
+        Ok(Self {
+            address,
+            relay,
+            seed,
+        })
     }
     pub fn link(&self) -> String {
         let token: String = self.seed.iter().map(|b| format!("{b:02x}")).collect();
-        format!("tankyard://party/{}#{token}", self.address)
+        let relay = self
+            .relay
+            .map(|room| format!("?r={}", crate::party_relay::hex(&room)))
+            .unwrap_or_default();
+        format!("tankyard://party/{}{relay}#{token}", self.address)
     }
     pub fn key(&self) -> Ed25519KeyPair {
         Ed25519KeyPair::from_seed_unchecked(&self.seed).expect("32-byte party seed")
@@ -61,6 +84,7 @@ impl Invite {
         PartySettings {
             public_key,
             ally_slots: ally_slots.clamp(2, 8),
+            starting_level: 1,
         }
     }
 }
@@ -125,9 +149,14 @@ mod tests {
     #[test]
     fn invitations_round_trip_and_reject_bad_endpoints_and_tokens() {
         for address in ["192.168.1.8:5000", "[::1]:5000"] {
-            let invite = Invite::create(address.parse().unwrap());
+            let mut invite = Invite::create(address.parse().unwrap());
             assert_eq!(Invite::parse(&invite.link()).unwrap().link(), invite.link());
             assert_eq!(invite.settings(4).ally_slots, 4);
+            invite.relay = Some([3; 32]);
+            let link = invite.link();
+            assert!(link.len() <= 256);
+            assert_eq!(Invite::parse(&link).unwrap().link(), link);
+            assert!(Invite::parse(&link.replace("?r=", "?untrusted=")).is_err());
         }
         for input in [
             "",

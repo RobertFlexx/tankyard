@@ -51,6 +51,7 @@ impl World {
                 tank.alive
                     && tank.id != owner
                     && tank.protection <= 0.
+                    && !self.config.base_protected(tank.team, tank.pos, tank.radius)
                     && self.hostile(team, tank.team)
             })
             .map(|tank| (tank.id, tank.pos));

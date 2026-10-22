@@ -27,7 +27,7 @@ use tungstenite::{
 };
 
 /// Netcode packets stay well under this; anything larger is not ours.
-const MAX_DATAGRAM: usize = 2048;
+pub(crate) const MAX_DATAGRAM: usize = 2048;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Netcode keepalives flow several times per second, so silence this long
 /// means the game or the remote side has gone away.
@@ -38,28 +38,36 @@ const WRITE_BUDGET: usize = 64 * 1024;
 // direction has its own budget, so a flood cannot sustain an unbounded pump.
 const DATAGRAMS_PER_SECOND: f64 = 2048.;
 const DATAGRAM_BURST: f64 = 4096.;
-struct DatagramBudget {
+pub(crate) struct DatagramBudget {
     tokens: f64,
     at: Instant,
+    cost: f64,
 }
 impl DatagramBudget {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             tokens: DATAGRAM_BURST,
             at: Instant::now(),
+            cost: 1.,
         }
     }
-    fn take(&mut self, now: Instant) -> Result<(), tungstenite::Error> {
+    pub(crate) fn shared(peers: usize) -> Self {
+        Self {
+            cost: 1. / peers.clamp(1, 8) as f64,
+            ..Self::new()
+        }
+    }
+    pub(crate) fn take(&mut self, now: Instant) -> Result<(), tungstenite::Error> {
         self.tokens = (self.tokens
             + now.saturating_duration_since(self.at).as_secs_f64() * DATAGRAMS_PER_SECOND)
             .min(DATAGRAM_BURST);
         self.at = now;
-        if self.tokens < 1. {
+        if self.tokens < self.cost {
             return Err(
                 io::Error::new(io::ErrorKind::InvalidData, "relay datagram rate exceeded").into(),
             );
         }
-        self.tokens -= 1.;
+        self.tokens -= self.cost;
         Ok(())
     }
 }
@@ -81,8 +89,8 @@ fn config() -> WebSocketConfig {
     WebSocketConfig::default()
         .write_buffer_size(16 * 1024)
         .max_write_buffer_size(WRITE_BUDGET)
-        .max_message_size(Some(MAX_DATAGRAM))
-        .max_frame_size(Some(MAX_DATAGRAM))
+        .max_message_size(Some(MAX_DATAGRAM + 8))
+        .max_frame_size(Some(MAX_DATAGRAM + 8))
 }
 
 // A per-read timeout alone lets a slow sender hold a handshake slot forever.
@@ -127,7 +135,7 @@ impl Write for RelayStream {
     }
 }
 
-enum Stream {
+pub(crate) enum Stream {
     Plain(TcpStream),
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
 }
@@ -176,7 +184,7 @@ fn tls_config() -> Result<Arc<rustls::ClientConfig>, NetError> {
     Ok(Arc::new(config))
 }
 
-fn open(url: &str) -> Result<WebSocket<Stream>, NetError> {
+pub(crate) fn open(url: &str) -> Result<WebSocket<Stream>, NetError> {
     let request = url
         .into_client_request()
         .map_err(|e| NetError(format!("invalid server URL: {e}")))?;
@@ -226,7 +234,7 @@ fn open(url: &str) -> Result<WebSocket<Stream>, NetError> {
     Ok(socket)
 }
 
-fn would_block(error: &tungstenite::Error) -> bool {
+pub(crate) fn would_block(error: &tungstenite::Error) -> bool {
     matches!(error, tungstenite::Error::Io(e) if e.kind() == io::ErrorKind::WouldBlock)
 }
 
@@ -301,7 +309,7 @@ fn pump<S: Read + Write>(
                 match ws.read() {
                     Ok(Message::Binary(data)) => {
                         ws_budget.take(Instant::now())?;
-                        if data.is_empty() {
+                        if data.is_empty() || data.len() > MAX_DATAGRAM {
                             continue;
                         }
                         active = true;
@@ -363,7 +371,23 @@ pub(crate) struct ClientBridge {
 }
 impl ClientBridge {
     pub fn connect(url: &str) -> Result<Self, NetError> {
-        let mut ws = open(url)?;
+        Self::from_socket(open(url)?, url)
+    }
+    pub(crate) fn connect_party(
+        url: &str,
+        key: &ring::signature::Ed25519KeyPair,
+        room: &[u8; 32],
+    ) -> Result<Self, NetError> {
+        let mut socket = open(url)?;
+        crate::party_relay::authenticate_guest(&mut socket, key, room).map_err(|_| {
+            NetError(
+                "Party relay could not authenticate this invite. Ask the leader for a fresh link."
+                    .into(),
+            )
+        })?;
+        Self::from_socket(socket, "party relay")
+    }
+    fn from_socket(mut ws: WebSocket<Stream>, url: &str) -> Result<Self, NetError> {
         let udp = UdpSocket::bind("127.0.0.1:0")?;
         crate::sockets::tune_udp(&udp, 64 * 1024);
         udp.set_nonblocking(true)?;
@@ -425,6 +449,7 @@ pub fn run_relay(listen: &str, server: SocketAddr, max_connections: usize) -> io
     // Relay connections end on their own; nothing asks them to stop early.
     static NEVER: AtomicBool = AtomicBool::new(false);
     let active = Arc::new(AtomicUsize::new(0));
+    let parties = Arc::new(crate::party_relay::Hub::default());
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(stream) => stream,
@@ -440,6 +465,7 @@ pub fn run_relay(listen: &str, server: SocketAddr, max_connections: usize) -> io
         }
         active.fetch_add(1, Ordering::Relaxed);
         let finished = active.clone();
+        let parties = parties.clone();
         let spawned = thread::Builder::new()
             .name("websocket-relay".into())
             .spawn(move || {
@@ -450,7 +476,7 @@ pub fn run_relay(listen: &str, server: SocketAddr, max_connections: usize) -> io
                     }
                 }
                 let _active = Active(finished);
-                relay_connection(stream, server, &NEVER);
+                relay_connection_with_parties(stream, server, &NEVER, &parties);
             });
         if let Err(e) = spawned {
             active.fetch_sub(1, Ordering::Relaxed);
@@ -462,7 +488,12 @@ pub fn run_relay(listen: &str, server: SocketAddr, max_connections: usize) -> io
 
 // tungstenite's handshake callback signature fixes the large error type.
 #[allow(clippy::result_large_err)]
-fn relay_connection(stream: TcpStream, server: SocketAddr, stop: &AtomicBool) {
+pub(crate) fn relay_connection_with_parties(
+    stream: TcpStream,
+    server: SocketAddr,
+    stop: &AtomicBool,
+    parties: &Arc<crate::party_relay::Hub>,
+) {
     let peer = stream.peer_addr().ok();
     let from = peer.map_or_else(|| "unknown".into(), |a| a.to_string());
     let _ = stream.set_nodelay(true);
@@ -471,7 +502,15 @@ fn relay_connection(stream: TcpStream, server: SocketAddr, stop: &AtomicBool) {
     // This header is diagnostic only. Accept it only from a local proxy and
     // parse a real IP so arbitrary headers cannot spoof or inject log lines.
     let mut client = from.clone();
+    let mut path = String::new();
     let callback = |request: &Request, response: Response| {
+        path = request.uri().path().to_owned();
+        if path != "/" && crate::party_relay::route(&path).is_none() {
+            return Err(tungstenite::http::Response::builder()
+                .status(404)
+                .body(Some("Unknown relay endpoint".into()))
+                .expect("valid response"));
+        }
         if peer.is_some_and(|address| address.ip().is_loopback())
             && let Some(ip) = request
                 .headers()
@@ -495,6 +534,12 @@ fn relay_connection(stream: TcpStream, server: SocketAddr, stop: &AtomicBool) {
         }
     };
     ws.get_mut().deadline = None;
+    if let Some((hosting, room)) = crate::party_relay::route(&path) {
+        if ws.get_ref().tcp.set_nonblocking(true).is_ok() {
+            let _ = crate::party_relay::serve(&mut ws, parties, hosting, room, stop);
+        }
+        return;
+    }
     let udp = match UdpSocket::bind(if server.is_ipv4() {
         "0.0.0.0:0"
     } else {
@@ -536,6 +581,22 @@ mod tests {
         }
         assert!(budget.take(later).is_err());
         budget.take(later + Duration::from_secs(1)).unwrap();
+    }
+
+    #[test]
+    fn multiplexed_budget_accounts_for_eight_simultaneous_participants() {
+        let mut shared = DatagramBudget::shared(8);
+        let now = shared.at;
+        for _ in 0..(DATAGRAM_BURST as usize * 8) {
+            shared.take(now).unwrap();
+        }
+        assert!(shared.take(now).is_err());
+        let mut single = DatagramBudget::new();
+        let now = single.at;
+        for _ in 0..DATAGRAM_BURST as usize {
+            single.take(now).unwrap();
+        }
+        assert!(single.take(now).is_err());
     }
 
     #[test]
