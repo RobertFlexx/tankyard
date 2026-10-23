@@ -1,3 +1,11 @@
+# v0.8.1 checks (2026-10-22)
+
+448 public Rust tests, five real-key authorization tests and ten installer fixtures pass. Formatting, strict Clippy, content validation and compatible Linux ABI checks pass. Two regression tests fail against the old forwarding logic: a full guest queue removes membership, and a full host queue rejects its guest. Both recover without disconnecting after the fix; closed receivers still leave independently.
+
+A 35-second real-time test runs eight members with combat, maximum-size voice frames, periodic relay heartbeats and a one-second guest update pause. All eight remain connected and voice packets continue. Further tests cover the server's closing handshake, the client's preserved closing reason, guest isolation and existing bounded backpressure recovery.
+
+Protocol **20** is unchanged. The running central `tankyard-relay` must be upgraded for the forwarding fix; a source release or client update alone cannot change that process. Existing v0.8.0 hosts and guests remain compatible. Private editions keep their existing passwords and keys and are packaged separately. The previous release workflow is left untouched; the v0.8.1 tag starts its own workflow.
+
 # v0.8.0 checks (2026-10-22)
 
 442 public Rust tests, five real-key private authorization tests and ten installer fixtures pass. Formatting, strict Clippy, 103 tank profiles, eight maps, both bundled mods and native cross-process clipboard exchange pass. Added coverage includes lossy translated UDP invitations, two live guests through a loopback relay with an unreachable direct address, chat/menu/round persistence, forged host and invite proofs, signature binding, membership cleanup, bounded backpressure and ordered recovery, eight-participant packet budgets, hostile-client party configuration, bounded match settings, and base spawning/protection across all maps, three sizes and animated border scales. Live projectile damage is blocked inside an owned base and resumes after exit.

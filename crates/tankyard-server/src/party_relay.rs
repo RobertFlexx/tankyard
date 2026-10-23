@@ -142,6 +142,41 @@ struct Room {
     incoming: Queue,
     guests: HashMap<u64, Queue>,
 }
+impl Room {
+    // These queues carry UDP datagrams, not reliable application messages.
+    // A full queue drops a packet; netcode retransmits reliable channels and
+    // replaces obsolete snapshots. Congestion must not revoke membership.
+    fn forward(&mut self, source: Option<u64>, data: &[u8]) -> Result<(), Error> {
+        if let Some(id) = source {
+            if data.is_empty() || data.len() > MAX_DATAGRAM {
+                return Err(invalid("Invalid guest datagram"));
+            }
+            let mut frame = id.to_le_bytes().to_vec();
+            frame.extend_from_slice(data);
+            match self.incoming.try_send(frame) {
+                Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    return Err(invalid("Party leader disconnected"));
+                }
+            }
+        } else {
+            if data.len() <= 8 || data.len() > MAX_DATAGRAM + 8 {
+                return Err(invalid("Invalid host datagram"));
+            }
+            let id = u64::from_le_bytes(data[..8].try_into().expect("checked length"));
+            if let Some(guest) = self.guests.get(&id)
+                && matches!(
+                    guest.try_send(data[8..].to_vec()),
+                    Err(mpsc::TrySendError::Disconnected(_))
+                )
+            {
+                self.guests.remove(&id);
+                let _ = self.incoming.try_send(id.to_le_bytes().to_vec());
+            }
+        }
+        Ok(())
+    }
+}
 #[derive(Default)]
 pub(crate) struct Hub {
     rooms: Mutex<HashMap<[u8; 32], Room>>,
@@ -361,28 +396,7 @@ pub(crate) fn serve<S: Read + Write>(
             let room = rooms
                 .get_mut(&key)
                 .ok_or_else(|| invalid("Party leader disconnected"))?;
-            if let Some(id) = member.guest {
-                if data.is_empty() || data.len() > MAX_DATAGRAM {
-                    return Err(invalid("Invalid guest datagram"));
-                }
-                let mut frame = id.to_le_bytes().to_vec();
-                frame.extend_from_slice(data);
-                room.incoming
-                    .try_send(frame)
-                    .map_err(|_| invalid("Party host connection is congested"))?;
-            } else {
-                if data.len() <= 8 || data.len() > MAX_DATAGRAM + 8 {
-                    return Err(invalid("Invalid host datagram"));
-                }
-                let id = u64::from_le_bytes(data[..8].try_into().expect("checked length"));
-                if let Some(guest) = room.guests.get(&id)
-                    && guest.try_send(data[8..].to_vec()).is_err()
-                {
-                    room.guests.remove(&id);
-                    let _ = room.incoming.try_send(id.to_le_bytes().to_vec());
-                }
-            }
-            Ok(())
+            room.forward(member.guest, data)
         },
     )
 }
@@ -889,5 +903,209 @@ mod tests {
         for index in 0..96 {
             assert_eq!(received.read().unwrap(), Message::binary(vec![index; 1024]));
         }
+    }
+
+    #[test]
+    fn a_full_guest_queue_preserves_membership_and_recovers_after_a_burst() {
+        let (incoming, _) = mpsc::sync_channel(1);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let mut room = Room {
+            entry: [1; 32],
+            incoming,
+            guests: HashMap::from([(7, sender)]),
+        };
+        let mut packet = 7u64.to_le_bytes().to_vec();
+        packet.extend_from_slice(b"snapshot");
+        room.forward(None, &packet).unwrap();
+        room.forward(None, &packet).unwrap();
+        assert!(
+            room.guests.contains_key(&7),
+            "a full queue is packet loss, not a departed member"
+        );
+        assert_eq!(receiver.try_recv().unwrap(), b"snapshot");
+        room.forward(None, &packet).unwrap();
+        assert_eq!(receiver.try_recv().unwrap(), b"snapshot");
+    }
+    #[test]
+    fn a_full_host_queue_does_not_kick_a_guest() {
+        let (incoming, receiver) = mpsc::sync_channel(1);
+        let mut room = Room {
+            entry: [1; 32],
+            incoming,
+            guests: HashMap::new(),
+        };
+        room.forward(Some(7), b"input").unwrap();
+        assert!(
+            room.forward(Some(7), b"input").is_ok(),
+            "brief congestion must not terminate a session"
+        );
+        assert!(receiver.try_recv().is_ok());
+        room.forward(Some(7), b"input").unwrap();
+        assert!(receiver.try_recv().is_ok());
+    }
+
+    #[test]
+    fn eight_members_survive_heartbeats_combat_voice_and_a_short_pause() {
+        use tankyard_core::{Mode, PlayerInput, V2, WorldConfig};
+        use tankyard_protocol::{MAX_VOICE_PAYLOAD, VoiceFrame};
+        let fixture = RelayFixture::start();
+        let mut invite = Invite::create("203.0.113.8:5000".parse().unwrap());
+        let mut server = UdpServer::bind(ServerSettings {
+            bind: "127.0.0.1:0".into(),
+            max_players: 8,
+            party: Some(invite.settings(4)),
+            creator_admin: Some(false),
+            ban_file: String::new(),
+            bot_count: 0,
+            adaptive_bots: false,
+            world: WorldConfig {
+                mode: Mode::TwoTeams,
+                dynamic_arena: false,
+                target_count: 180,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+        let mut local = invite.clone();
+        local.address = server.address;
+        let relay =
+            HostedRelay::start_at(&fixture.base, server.address, invite.settings(4).public_key)
+                .unwrap();
+        wait_ready(&relay);
+        invite.relay = Some(relay.room);
+        let mut clients = vec![NetworkClient::connect(&local.link(), "Leader", "").unwrap()];
+        for index in 1..8 {
+            clients.push(
+                NetworkClient::party_via(&invite, &format!("Guest {index}"), &fixture.base)
+                    .unwrap(),
+            );
+        }
+        let started = Instant::now();
+        let mut last = started;
+        let mut sent = started;
+        let mut sequence = 0;
+        let mut client_at = vec![started; clients.len()];
+        let mut positioned = false;
+        let mut paused = false;
+        let mut received_voice = false;
+        let mut last_voice = vec![None; clients.len()];
+        while started.elapsed() < Duration::from_secs(35) {
+            let now = Instant::now();
+            let elapsed = now.duration_since(last);
+            last = now;
+            let transmit = sent.elapsed() >= Duration::from_millis(20);
+            if transmit {
+                sequence += 1;
+                sent = now;
+            }
+            for (index, client) in clients.iter_mut().enumerate() {
+                // A short render/update pause must not forfeit a connected guest.
+                if index == 7 && started.elapsed().as_secs() == 12 && !paused {
+                    continue;
+                }
+                let client_elapsed = now.duration_since(client_at[index]);
+                client_at[index] = now;
+                client.update(client_elapsed).unwrap_or_else(|error| {
+                    panic!("client {index} at {:?}: {error}", started.elapsed())
+                });
+                if !client.voice_packets.is_empty() {
+                    received_voice = true;
+                    last_voice[index] = Some(Instant::now());
+                }
+                client.voice_packets.clear();
+                if transmit && client.is_ready() {
+                    let phase = started.elapsed().as_secs_f32() * 2.;
+                    client.send_input(PlayerInput {
+                        sequence,
+                        movement: V2::new(phase.cos(), phase.sin()) * 0.15,
+                        fire: true,
+                        aim: 0.,
+                        ..Default::default()
+                    });
+                    assert!(client.send_voice(VoiceFrame {
+                        round: client.player_round.unwrap(),
+                        sequence,
+                        samples: vec![0; MAX_VOICE_PAYLOAD]
+                    }));
+                }
+            }
+            if started.elapsed().as_secs() >= 13 {
+                paused = true;
+            }
+            server.update(elapsed).unwrap();
+            if !positioned && clients.iter().all(|client| client.is_ready()) {
+                for (index, client) in clients.iter().enumerate() {
+                    let tank = server
+                        .session
+                        .world
+                        .tanks
+                        .iter_mut()
+                        .find(|tank| Some(tank.id) == client.player_id)
+                        .unwrap();
+                    tank.pos = V2::new(120. + index as f32 * 30., 1000. + index as f32 * 45.);
+                }
+                positioned = true;
+            }
+            thread::sleep(Duration::from_millis(3));
+        }
+        assert!(positioned && paused && received_voice);
+        assert!(
+            last_voice
+                .iter()
+                .all(|time| time.is_some_and(|time| time.elapsed() < Duration::from_secs(2))),
+            "every member must still receive voice after the pause and all heartbeats"
+        );
+        assert_eq!(server.player_count(), 8);
+        assert!(
+            clients
+                .iter()
+                .all(|client| client.is_ready() && client.party_members.len() == 8)
+        );
+    }
+
+    #[test]
+    fn an_offline_party_sends_a_closing_reason_instead_of_a_reset() {
+        let fixture = RelayFixture::start();
+        let mut ws =
+            websocket::open(&format!("{}/party/join/{}", fixture.base, hex(&[7; 32]))).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match ws.read() {
+                Ok(Message::Close(Some(frame))) => {
+                    assert_eq!(
+                        frame.code,
+                        tungstenite::protocol::frame::coding::CloseCode::Away
+                    );
+                    assert!(frame.reason.contains("leader disconnected"));
+                    let _ = ws.flush();
+                    break;
+                }
+                Err(error) if websocket::would_block(&error) && Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(2))
+                }
+                other => panic!("expected a closing handshake, received {other:?}"),
+            }
+        }
+    }
+    #[test]
+    fn a_closed_guest_receiver_is_removed_without_affecting_other_members() {
+        let (incoming, _) = mpsc::sync_channel(1);
+        let (stale, stale_rx) = mpsc::sync_channel(1);
+        drop(stale_rx);
+        let (healthy, healthy_rx) = mpsc::sync_channel(1);
+        let mut room = Room {
+            entry: [1; 32],
+            incoming,
+            guests: HashMap::from([(7, stale), (8, healthy)]),
+        };
+        let mut packet = 7u64.to_le_bytes().to_vec();
+        packet.extend_from_slice(b"data");
+        room.forward(None, &packet).unwrap();
+        assert!(!room.guests.contains_key(&7));
+        packet[..8].copy_from_slice(&8u64.to_le_bytes());
+        room.forward(None, &packet).unwrap();
+        assert_eq!(healthy_rx.try_recv().unwrap(), b"data");
+        assert_eq!(room.guests.len(), 1);
     }
 }

@@ -316,8 +316,17 @@ fn pump<S: Read + Write>(
                         ws_activity = Instant::now();
                         data
                     }
-                    Ok(Message::Close(_)) => {
+                    Ok(Message::Close(frame)) => {
                         let _ = ws.flush();
+                        if let Some(frame) = frame
+                            && !frame.reason.is_empty()
+                        {
+                            let reason: String =
+                                frame.reason.chars().filter(|ch| !ch.is_control()).collect();
+                            return Err(
+                                io::Error::new(io::ErrorKind::ConnectionAborted, reason).into()
+                            );
+                        }
                         return Ok(());
                     }
                     Ok(_) => {
@@ -536,7 +545,19 @@ pub(crate) fn relay_connection_with_parties(
     ws.get_mut().deadline = None;
     if let Some((hosting, room)) = crate::party_relay::route(&path) {
         if ws.get_ref().tcp.set_nonblocking(true).is_ok() {
-            let _ = crate::party_relay::serve(&mut ws, parties, hosting, room, stop);
+            match crate::party_relay::serve(&mut ws, parties, hosting, room, stop) {
+                Ok(()) => {
+                    let _ = ws.close(None);
+                    let _ = ws.flush();
+                }
+                Err(error) => {
+                    log::info!(
+                        "Party {} connection ended: {error}",
+                        if hosting { "host" } else { "guest" }
+                    );
+                    close_after_error(&mut ws, &error);
+                }
+            }
         }
         return;
     }
@@ -559,7 +580,71 @@ pub(crate) fn relay_connection_with_parties(
     log::info!("{client} connected (relay port {port})");
     match pump(&mut ws, &udp, Some(server), stop) {
         Ok(()) => log::info!("{client} disconnected (relay port {port})"),
-        Err(e) => log::info!("{client} disconnected (relay port {port}): {e}"),
+        Err(e) => {
+            log::info!("{client} disconnected (relay port {port}): {e}");
+            close_after_error(&mut ws, &e);
+        }
+    }
+}
+
+/// Send a bounded closing handshake instead of turning every relay error into
+/// an unexplained TCP reset. Wire reasons are fixed strings, never credentials
+/// or arbitrary parser errors. Keep the detailed cause in the operator's log.
+fn close_after_error<S: Read + Write>(ws: &mut WebSocket<S>, error: &tungstenite::Error) {
+    use tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+    let detail = error.to_string();
+    let (code, reason) = if detail.contains("disconnected") || detail.contains("offline") {
+        (
+            CloseCode::Away,
+            "The party leader disconnected. Ask them to reopen the party.",
+        )
+    } else if detail.contains("full") {
+        (
+            CloseCode::Again,
+            "The party relay is full. Try again shortly.",
+        )
+    } else if detail.contains("timed out") {
+        (
+            CloseCode::Away,
+            "The relay connection timed out. Reconnect to continue.",
+        )
+    } else if detail.contains("proof") {
+        (
+            CloseCode::Policy,
+            "The party invitation could not be verified. Ask for a new invite.",
+        )
+    } else if detail.contains("rate exceeded") {
+        (CloseCode::Policy, "Connection packet rate exceeded.")
+    } else {
+        (
+            CloseCode::Error,
+            "The relay connection ended. Reconnect to continue.",
+        )
+    };
+    let _ = ws.close(Some(CloseFrame {
+        code,
+        reason: reason.into(),
+    }));
+    let until = Instant::now() + Duration::from_millis(250);
+    loop {
+        match ws.flush() {
+            Ok(()) => {}
+            Err(error) if would_block(&error) => {}
+            Err(_) => break,
+        }
+        match ws.read() {
+            Ok(Message::Close(_)) => {
+                let _ = ws.flush();
+                break;
+            }
+            Ok(_) => {}
+            Err(error) if would_block(&error) => {}
+            Err(_) => break,
+        }
+        if Instant::now() >= until {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
     }
 }
 
@@ -771,5 +856,35 @@ mod tests {
         let mut buffer = [0u8; 64];
         let (len, from) = game.recv_from(&mut buffer).unwrap();
         assert_eq!((&buffer[..len], from), (&b"tank"[..], bridge.address));
+    }
+
+    #[test]
+    fn the_client_preserves_a_relay_closing_reason() {
+        use tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            ws.close(Some(CloseFrame {
+                code: CloseCode::Away,
+                reason: "The party leader disconnected.".into(),
+            }))
+            .unwrap();
+            let _ = ws.read();
+        });
+        let bridge = ClientBridge::connect(&format!("ws://{address}")).unwrap();
+        let until = Instant::now() + Duration::from_secs(2);
+        while bridge.failure().is_none() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(2));
+        }
+        let failure = bridge.failure().expect("server closure was not delivered");
+        assert!(failure.contains("party leader disconnected"), "{failure}");
+        assert!(!failure.contains("without closing handshake"));
+        drop(bridge);
+        worker.join().unwrap();
     }
 }
