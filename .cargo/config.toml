@@ -1,5 +1,7 @@
 [env]
-# LuaJIT builds small host tools with $(HOST_CC), defaulting to `gcc`. Use the
-# platform compiler instead so clang-only systems and unrelated GCC toolchains
-# earlier on PATH cannot break the vendored build. An exported value still wins.
-HOST_CC = "cc"
+# LuaJIT's Makefile builds small host tools with `gcc` by default. Use the
+# platform compiler instead, so clang-only systems and unrelated GCC toolchains
+# earlier on PATH cannot break the vendored build. Only LuaJIT reads this
+# variable: HOST_CC or CC here would also replace the compiler the `cc` crate
+# uses for every other C dependency. An exported value still wins.
+DEFAULT_CC = "cc"

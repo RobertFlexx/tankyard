@@ -170,6 +170,17 @@ jobs:
               result = subprocess.run([str(executable), "--version"], check=True, text=True, capture_output=True)
               assert os.environ["RELEASE_TAG"][1:] in result.stdout, result.stdout
               print(result.stdout.strip())
+          tools = Path(os.environ["BINARY_DIR"]) / ("tankyard-tools" + suffix)
+          packs = ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler")
+          subprocess.run([str(tools), "validate-mods", *(arg for pack in packs for arg in ("--mod", f"mods/{pack}"))], check=True)
+          # A script error must unwind through the linked LuaJIT into a reported failure.
+          broken = Path(os.environ["RUNNER_TEMP"]) / "unwind_check"
+          broken.mkdir(exist_ok=True)
+          (broken / "mod.json").write_text('{"api_version": 2, "id": "unwind_check", "name": "Unwind check", "version": "1", "scripts": ["main.lua"]}', encoding="utf-8")
+          (broken / "main.lua").write_text('local ok, err = pcall(error, "caught")\nassert(not ok and tostring(err):find("caught"))\nerror("expected failure")\n', encoding="utf-8")
+          result = subprocess.run([str(tools), "validate-mods", "--mod", str(broken)], text=True, capture_output=True)
+          assert result.returncode == 1 and "expected failure" in result.stdout + result.stderr, (result.returncode, result.stdout, result.stderr)
+          print("Lua scripts load, and script errors are reported")
           PY
       - name: Check compatible Linux ABI
         if: matrix.platform == 'linux-x86_64'
