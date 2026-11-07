@@ -321,6 +321,7 @@ impl BotController {
             self.perception.query(tank.pos, 110., &mut self.seen);
             movement += local_steering(world, tank, class, &self.seen);
             movement += brain.dodge;
+            movement += guarded_base_repulsion(world, tank);
             movement = movement.clamp_length(1.);
             let steering_rate: f32 = if brain.danger > 0.75 { 21.0 } else { 7.5 };
             let smoothing = 1.0 - (-steering_rate / 60.0).exp();
@@ -436,6 +437,36 @@ impl BotController {
 
 fn hostile(team: u8, other: u8) -> bool {
     team == 0 || other == 0 || team != other
+}
+
+/// Bots respect enemy guardian zones the way experienced players do: they
+/// fight at the edge instead of driving into a garrisoned base.
+fn guarded_base_repulsion(world: &World, tank: &Tank) -> V2 {
+    let mut push = V2::ZERO;
+    for team in 1..=world.config.mode.teams() {
+        if team == tank.team || !world.config.base_guarded(team) {
+            continue;
+        }
+        let Some(base) = world.config.team_base(team) else {
+            continue;
+        };
+        let margin = world.config.base_alert_distance() + tank.radius + 140.;
+        let distance = base.distance(tank.pos);
+        if distance >= margin {
+            continue;
+        }
+        let nearest = V2::new(
+            tank.pos.x.clamp(base.x, base.x + base.w),
+            tank.pos.y.clamp(base.y, base.y + base.h),
+        );
+        let away = if distance > 0.5 {
+            (tank.pos - nearest) / distance
+        } else {
+            (tank.pos - base.center()).normalized()
+        };
+        push += away * (1. - distance / margin) * 2.;
+    }
+    push
 }
 
 fn noise(mut value: u64) -> f32 {
@@ -2658,6 +2689,34 @@ mod combat_regressions {
                 .iter()
                 .all(|tank| tank.input.valid() && tank.pos.finite())
         );
+    }
+
+    #[test]
+    fn bots_back_away_from_guarded_enemy_bases_but_not_their_own() {
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::TwoTeams,
+                target_count: 0,
+                dynamic_arena: false,
+                ..Default::default()
+            },
+            tankyard_content::Content::builtin(),
+        );
+        let bot = world.add_player("Raider", true);
+        world.assign_team(bot, 2);
+        let base = world.config.team_base(1).unwrap();
+        world.tanks[0].pos = V2::new(base.x + base.w + 60., base.center().y);
+        let push = guarded_base_repulsion(&world, &world.tanks[0]);
+        assert!(push.x > 0.5 && push.y.abs() < 0.01, "{push:?}");
+        world.tanks[0].pos = world.config.bounds().center();
+        assert_eq!(guarded_base_repulsion(&world, &world.tanks[0]), V2::ZERO);
+        world.assign_team(bot, 1);
+        world.tanks[0].pos = V2::new(base.x + base.w + 60., base.center().y);
+        assert_eq!(guarded_base_repulsion(&world, &world.tanks[0]), V2::ZERO);
+        world.config.mode = Mode::CaptureCore;
+        world.assign_team(bot, 2);
+        world.tanks[0].pos = V2::new(base.x + base.w + 60., base.center().y);
+        assert_eq!(guarded_base_repulsion(&world, &world.tanks[0]), V2::ZERO);
     }
 
     #[test]

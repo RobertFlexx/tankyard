@@ -119,4 +119,10 @@ impl Rect {
     pub fn contains(self, p: V2) -> bool {
         p.x >= self.x && p.x <= self.x + self.w && p.y >= self.y && p.y <= self.y + self.h
     }
+    /// Distance from a point to the rectangle; zero inside it.
+    pub fn distance(self, p: V2) -> f32 {
+        let dx = (self.x - p.x).max(p.x - (self.x + self.w)).max(0.);
+        let dy = (self.y - p.y).max(p.y - (self.y + self.h)).max(0.);
+        (dx * dx + dy * dy).sqrt()
+    }
 }

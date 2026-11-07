@@ -72,6 +72,8 @@ pub struct Settings {
     pub achievement_mode: tankyard_client::achievements::AchievementMode,
     pub practice_records: Vec<tankyard_client::practice::Record>,
     pub enabled_mods: Vec<String>,
+    /// Content digests of flagged packs the player reviewed and accepted.
+    pub approved_mods: Vec<String>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -116,6 +118,7 @@ impl Default for Settings {
             achievement_mode: Default::default(),
             practice_records: vec![],
             enabled_mods: vec![],
+            approved_mods: vec![],
         }
     }
 }
@@ -134,6 +137,7 @@ impl Settings {
             unlocked_achievements: std::mem::take(&mut self.unlocked_achievements),
             practice_records: std::mem::take(&mut self.practice_records),
             enabled_mods: std::mem::take(&mut self.enabled_mods),
+            approved_mods: std::mem::take(&mut self.approved_mods),
             ..Self::default()
         };
     }
@@ -256,6 +260,10 @@ impl Settings {
         self.enabled_mods.truncate(tankyard_mods::MAX_MODS);
         self.enabled_mods
             .retain(|p| !p.is_empty() && p.len() <= 512 && !p.chars().any(char::is_control));
+        self.approved_mods
+            .retain(|digest| digest.len() == 32 && digest.bytes().all(|b| b.is_ascii_hexdigit()));
+        let excess = self.approved_mods.len().saturating_sub(128);
+        self.approved_mods.drain(..excess);
         for (index, binding) in self.bindings.iter_mut().enumerate() {
             if key_from_name(binding).is_none() {
                 *binding = Settings::default().bindings[index].clone();

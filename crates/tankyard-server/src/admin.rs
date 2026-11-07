@@ -98,20 +98,29 @@ impl UdpServer {
             "help" => Ok("Commands: status, players, maps, owner-client <client> [public-key], role <entity> <player|moderator|admin|owner>, kick <entity>, ban <entity> [minutes], unban <ip>, bans, bots <count>, difficulty <name>, mode <name>, map <id>, restart, reload-mods, creator-admin [on|off|status], central-owner [on|off|status], save [path], shutdown".into()),
             "status" => {
                 let timing = self.metrics.tick_timing();
-                Ok(format!("{} | {} on {} | round {} | {} humans + {} bots | {} AI | tick {} | tick average/p95/p99/max {:.1} / {} / {} / {} us | snapshot last/max {} / {} us | {} projectiles, {} targets | {} snapshots, {} KiB payload | {} skipped snapshots | {} dropped catch-up ticks",
-                self.settings.name, self.session.world.config.mode.name(), self.session.world.map.name, self.session.world.match_state.round, self.player_count(), self.session.world.tanks.iter().filter(|t| t.bot).count(), self.settings.difficulty.name(), self.session.world.tick,
+                let world = &self.arenas[0].session.world;
+                let mut status = format!("{} | {} on {} | round {} | {} humans in {} arena{} | {} AI | tick {} | tick average/p95/p99/max {:.1} / {} / {} / {} us | snapshot last/max {} / {} us | {} snapshots, {} KiB payload | {} skipped snapshots | {} deferred notices | {} dropped catch-up ticks",
+                self.settings.name, world.config.mode.name(), world.map.name, world.match_state.round, self.player_count(), self.arenas.len(), if self.arenas.len() == 1 { "" } else { "s" }, self.settings.difficulty.name(), world.tick,
                 timing.average_micros, timing.p95_micros, timing.p99_micros, self.metrics.max_tick_micros,
-                self.metrics.last_snapshot_micros, self.metrics.max_snapshot_micros, self.session.world.projectiles.len(), self.session.world.targets.len(),
-                self.metrics.snapshots_sent, self.metrics.snapshot_bytes / 1024, self.metrics.snapshots_skipped, self.metrics.dropped_catchup_ticks))
+                self.metrics.last_snapshot_micros, self.metrics.max_snapshot_micros,
+                self.metrics.snapshots_sent, self.metrics.snapshot_bytes / 1024, self.metrics.snapshots_skipped, self.metrics.events_deferred, self.metrics.dropped_catchup_ticks);
+                for (index, arena) in self.arenas.iter().enumerate() {
+                    let world = &arena.session.world;
+                    status.push_str(&format!("\narena {}: {} on {} | round {} | {} humans + {} bots | {} projectiles, {} targets{}",
+                        index + 1, world.config.mode.name(), world.map.name, world.match_state.round, self.arena_humans(index),
+                        world.tanks.iter().filter(|t| t.bot).count(), world.projectiles.len(), world.targets.len(),
+                        if arena.empty_since.is_some() { " | paused" } else { "" }));
+                }
+                Ok(status)
             }
             "players" => {
                 let mut rows: Vec<_> = self.peers.iter().filter_map(|(&client, peer)| {
-                    let tank = self.session.world.tanks.iter().find(|t| Some(t.id) == peer.entity)?;
-                    Some(format!("entity={} client={} name={:?} level={} team={} score={} ip={}", tank.id, client, tank.name, tank.level, tank.team, tank.score,
+                    let tank = self.arenas.get(peer.arena)?.session.world.tanks.iter().find(|t| Some(t.id) == peer.entity)?;
+                    Some(format!("entity={} client={} arena={} name={:?} level={} team={} score={} ip={}", tank.id, client, peer.arena + 1, tank.name, tank.level, tank.team, tank.score,
                         self.transport.client_addr(client).map(|a| a.ip().to_string()).unwrap_or_default()))
                 }).collect(); rows.sort(); Ok(if rows.is_empty() { "No connected human players.".into() } else { rows.join("\n") })
             }
-            "maps" => Ok(self.session.bundle.maps.iter().map(|map| format!("{}: {}", map.id, map.name)).collect::<Vec<_>>().join("\n")),
+            "maps" => Ok(self.arenas[0].session.bundle.maps.iter().map(|map| format!("{}: {}", map.id, map.name)).collect::<Vec<_>>().join("\n")),
             "kick" | "ban" => {
                 let entity: u64 = args.next().ok_or_else(|| NetError("expected player entity ID".into()))?.parse().map_err(|_| NetError("invalid entity ID".into()))?;
                 let client = self.peers.iter().find_map(|(&client, peer)| (peer.entity == Some(entity)).then_some(client)).ok_or_else(|| NetError("player was not found".into()))?;
@@ -153,7 +162,9 @@ impl UdpServer {
             "difficulty" => {
                 let difficulty = difficulty_from_name(args.next().ok_or_else(|| NetError("expected a bot difficulty".into()))?).map_err(NetError)?;
                 self.settings.difficulty = difficulty;
-                self.session.bots.difficulty = difficulty;
+                for arena in &mut self.arenas {
+                    arena.session.bots.difficulty = difficulty;
+                }
                 self.broadcast_match_settings();
                 Ok(format!("Bot difficulty is now {}.", difficulty.name()))
             }

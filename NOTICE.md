@@ -34,3 +34,9 @@ Their notices are included in [licenses/clipboard-dependencies.txt](licenses/cli
 
 Party networking uses Ureq and XML parsers under the MIT license option.
 Their notices are included in [licenses/party-networking.txt](licenses/party-networking.txt).
+
+Mod scripts run on LuaJIT 2.1, built from vendored sources and linked statically,
+through the `mlua` bindings. Mod archives are read with the `zip`, `flate2` and
+`zlib-rs` crates. Their full notices (MIT and Zlib) are in
+[licenses/lua-and-archives.txt](licenses/lua-and-archives.txt), which release
+archives include.

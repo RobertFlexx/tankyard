@@ -103,6 +103,10 @@ pub struct WorldConfig {
     pub time_limit: f32,
     pub lives: u8,
     pub map: String,
+    /// First entity ID of this world. Arenas sharing one server use disjoint
+    /// ranges so player IDs stay unambiguous. Host-only; never serialized.
+    #[serde(skip)]
+    pub id_base: u64,
 }
 impl Default for WorldConfig {
     fn default() -> Self {
@@ -124,6 +128,7 @@ impl Default for WorldConfig {
             time_limit: 600.,
             lives: 1,
             map: "open".into(),
+            id_base: 0,
         }
     }
 }
@@ -739,4 +744,31 @@ pub struct Snapshot {
     pub objectives: Vec<Objective>,
     pub match_state: MatchState,
     pub events: Vec<GameEvent>,
+    /// Revision of the arena's wall geometry. Online snapshots repeat walls
+    /// only after they change; clients keep the last copy they received.
+    pub wall_revision: u32,
+    /// Whether `walls` holds this revision's geometry in this snapshot.
+    pub walls_included: bool,
+}
+
+/// Strip a distant opponent down to what the leaderboard and minimap need.
+/// Aim, cursor, motion and weapon timers stay with the server; the position
+/// is snapped to a coarse grid that is invisible at minimap scale.
+pub fn conceal_distant_tank(tank: &mut Tank) {
+    const GRID: f32 = 96.;
+    tank.pos = V2::new(
+        (tank.pos.x / GRID).round() * GRID,
+        (tank.pos.y / GRID).round() * GRID,
+    );
+    tank.vel = V2::ZERO;
+    tank.aim = 0.;
+    tank.input = PlayerInput {
+        sequence: tank.input.sequence,
+        ..Default::default()
+    };
+    tank.cooldowns.clear();
+    tank.barrel_shots.clear();
+    tank.barrel_aims.clear();
+    tank.charge = 0.;
+    tank.knockback = 0.;
 }

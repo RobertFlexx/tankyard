@@ -6,11 +6,17 @@ Play or Enter joins the main server at tankyard.kokonico.me. Play offline is bes
 
 Join server and Settings → Servers have separate Favorites and Recent tabs. Click Sort to cycle through saved/recency order, A–Z, and Z–A. Use × to remove an entry, the arrows to reorder favorites in saved order, or the star beside a recent entry to save it. Page controls reach every saved server. Each list can be cleared independently; changing its display order preserves connection history. Changes and sort preferences save immediately.
 
-On your first launch, choose Dark or Light from two live arena previews. The choice is saved; F9 or Settings changes it later. A small bar below your tank fills as your next manual shot reloads. Auto-firing and drone-only tanks hide the reload bar. Custom mods may still add charge weapons.
+On your first launch, choose Dark or Light from two live arena previews. The choice is saved; F9 or Settings changes it later. A small bar below your tank fills as your next manual shot reloads. Auto-firing and drone-only tanks hide the reload bar. Charge weapons fill the bar while you hold fire.
+
+Version 0.9 adds eight tanks. **Capacitor** (Sniper, level 30), **Overcharger** (45) and **Railstorm** (55) charge their shots: hold fire to build a heavy piercing round, which fires automatically at full charge, or let go early for a lighter one. **Caromer** (Twin, 30), **Billiard** (45) and **Pinball** (55) fire rounds that bounce off cover and the arena edge. **Bulldozer** (Smasher, 30) has self-repairing plates and a magnet pull and upgrades to Monolith. **Shepherd** (Overseer, 30) raises drones from two side ports, heals itself, and upgrades to Swarm Commander. The tank tree highlights a tank's whole lineage and lists the tanks it upgrades from and to; click one to jump to it.
 
 Reset to defaults appears beside Save settings on every Settings tab. It applies and saves the default preferences and controls, keeping your name, progress, achievements, practice records, saved servers, mods and signing keys. VSync changes still require restarting the game.
 
-Map cover has distinct artwork, including Garden planters and Circuit Maze walls. Cover follows the animated arena border. The adaptive arena reaches its configured full size at sixteen participants; arrivals get faster expansion while departures retain gradual shrinkage.
+**Team bases** protect their own team: a tank whose center is inside its own base takes no damage. Each base in Two Teams, Four Teams, Domination, Tag, Team Deathmatch and King of the Hill keeps guardian drones (six per side base, four per corner base). They patrol the inner edge and attack any opponent within the dashed line around the base, shred enemy bullets that fly in, never farm shapes, cannot be captured by parries, and are replaced one at a time if destroyed. Capture the Core and Mothership keep their objectives inside the bases, so those bases protect defenders but have no guardians. Bots stay outside guarded zones. The death screen names what destroyed you.
+
+The main server splits busy times into arenas of twenty players; the server name shows which arena you joined.
+
+Map cover has distinct artwork, including Garden planters and Circuit Maze walls. Each map's floor carries a faint tint of its palette, cover casts a soft shadow, and a band inside the border marks the arena edge. Cover follows the animated arena border. The adaptive arena reaches its configured full size at sixteen participants; arrivals get faster expansion while departures retain gradual shrinkage.
 
 ## Controls
 

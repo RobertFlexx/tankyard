@@ -47,7 +47,10 @@ impl Arena {
             ..Default::default()
         })
         .unwrap();
-        let player = server.session.world.add_player("Game Creator", false);
+        let player = server.arenas[0]
+            .session
+            .world
+            .add_player("Game Creator", false);
         server
             .access
             .add(CLIENT, None, unix_time().as_secs())
@@ -78,6 +81,11 @@ impl Arena {
                 last_owner_sequence: None,
                 party_nonce: None,
                 party_in_menu: false,
+                arena: 0,
+                walls_revision: None,
+                walls_sent_at: Duration::ZERO,
+                strikes: 0,
+                strike_window: Duration::ZERO,
             },
         );
         Self {
@@ -94,7 +102,7 @@ impl Arena {
             },
         );
         assert!(self.server.peers[&CLIENT].creator);
-        assert!(self.server.session.world.tanks[0].game_creator);
+        assert!(self.server.arenas[0].session.world.tanks[0].game_creator);
     }
     fn command(&mut self, name: &str) -> Result<String, NetError> {
         let fixture = &fixtures()["commands"][name];
@@ -122,8 +130,11 @@ fn valid_creator_identity_is_cosmetic_on_hosts_that_have_not_consented() {
                 .0
                 .contains("disabled by this host")
         );
-        assert_eq!(arena.server.session.world.tanks[0].speed_scale, 1.);
-        assert!(!arena.server.session.world.config.modded);
+        assert_eq!(
+            arena.server.arenas[0].session.world.tanks[0].speed_scale,
+            1.
+        );
+        assert!(!arena.server.arenas[0].session.world.config.modded);
         assert!(!arena.audit.exists());
     }
 }
@@ -144,7 +155,10 @@ fn official_default_authorizes_signed_tools_while_community_and_private_defaults
         assert_eq!(arena.command("speed").is_ok(), expected);
         assert_eq!(arena.audit.exists(), expected);
         if expected {
-            assert_eq!(arena.server.session.world.tanks[0].speed_scale, 3.);
+            assert_eq!(
+                arena.server.arenas[0].session.world.tanks[0].speed_scale,
+                3.
+            );
         }
     }
 }
@@ -158,12 +172,15 @@ fn consenting_official_and_community_hosts_execute_signed_bounded_commands_and_a
         assert!(arena.command("god").is_ok());
         assert!(arena.command("bots").is_ok());
         assert!(arena.command("freeze").is_ok());
-        assert_eq!(arena.server.session.world.tanks[0].speed_scale, 3.);
-        assert!(arena.server.session.world.admin_modifiers[&arena.player].god);
+        assert_eq!(
+            arena.server.arenas[0].session.world.tanks[0].speed_scale,
+            3.
+        );
+        assert!(arena.server.arenas[0].session.world.admin_modifiers[&arena.player].god);
         assert_eq!(arena.server.settings.bot_count, 4);
         assert!(!arena.server.settings.adaptive_bots);
-        assert!(arena.server.session.world.bots_frozen);
-        assert!(arena.server.session.world.config.modded);
+        assert!(arena.server.arenas[0].session.world.bots_frozen);
+        assert!(arena.server.arenas[0].session.world.config.modded);
         let audit = crate::access::read_audit(arena.audit.to_str().unwrap()).unwrap();
         assert_eq!(audit.len(), 8);
         assert!(audit[0].contains("creator_request"));
@@ -242,14 +259,20 @@ fn rejected_values_and_unwritable_audits_cannot_mutate_the_arena() {
     let mut arena = Arena::new(true, ServerKind::Official);
     arena.verify();
     assert!(arena.command("invalid_speed").is_err());
-    assert_eq!(arena.server.session.world.tanks[0].speed_scale, 1.);
-    assert!(!arena.server.session.world.config.modded);
+    assert_eq!(
+        arena.server.arenas[0].session.world.tanks[0].speed_scale,
+        1.
+    );
+    assert!(!arena.server.arenas[0].session.world.config.modded);
     let mut arena = Arena::new(true, ServerKind::Community);
     arena.verify();
     arena.server.settings.audit_file = std::env::temp_dir().to_string_lossy().into();
     assert!(arena.command("speed").is_err());
-    assert!(!arena.server.session.world.config.modded);
-    assert_eq!(arena.server.session.world.tanks[0].speed_scale, 1.);
+    assert!(!arena.server.arenas[0].session.world.config.modded);
+    assert_eq!(
+        arena.server.arenas[0].session.world.tanks[0].speed_scale,
+        1.
+    );
 }
 
 #[test]
@@ -266,10 +289,19 @@ fn operator_revocation_is_immediate_and_old_commands_cannot_survive_reenable() {
             .message
             .contains("revoked")
     );
-    assert!(arena.server.session.world.admin_modifiers.is_empty());
-    assert!(!arena.server.session.world.bots_frozen);
-    assert_eq!(arena.server.session.world.tanks[0].speed_scale, 1.);
-    assert!(arena.server.session.world.tanks[0].game_creator);
+    assert!(
+        arena.server.arenas[0]
+            .session
+            .world
+            .admin_modifiers
+            .is_empty()
+    );
+    assert!(!arena.server.arenas[0].session.world.bots_frozen);
+    assert_eq!(
+        arena.server.arenas[0].session.world.tanks[0].speed_scale,
+        1.
+    );
+    assert!(arena.server.arenas[0].session.world.tanks[0].game_creator);
     assert!(arena.command("bots").is_err());
     assert!(
         arena
@@ -307,8 +339,11 @@ fn signed_commands_still_observe_rate_limits() {
         assert!(arena.server.access.take_admin_token(CLIENT, budget_time));
     }
     assert!(arena.command("speed").unwrap_err().0.contains("Wait"));
-    assert_eq!(arena.server.session.world.tanks[0].speed_scale, 1.);
-    assert!(!arena.server.session.world.config.modded);
+    assert_eq!(
+        arena.server.arenas[0].session.world.tanks[0].speed_scale,
+        1.
+    );
+    assert!(!arena.server.arenas[0].session.world.config.modded);
     assert!(!arena.audit.exists());
 }
 
@@ -327,14 +362,20 @@ fn trusted_handler_failures_are_contained_and_the_outcome_is_audited() {
     let audit = crate::access::read_audit(arena.audit.to_str().unwrap()).unwrap();
     assert_eq!(audit.len(), 2);
     assert!(audit[1].contains("creator_result") && audit[1].contains("failed"));
-    assert_eq!(arena.server.session.world.tanks[0].speed_scale, 1.);
+    assert_eq!(
+        arena.server.arenas[0].session.world.tanks[0].speed_scale,
+        1.
+    );
 }
 
 #[test]
 fn creator_moderation_is_host_local_and_preserves_regular_achievement_eligibility() {
     let mut arena = Arena::new(true, ServerKind::Official);
     arena.verify();
-    let player = arena.server.session.world.add_player("Visitor", false);
+    let player = arena.server.arenas[0]
+        .session
+        .world
+        .add_player("Visitor", false);
     assert_eq!(player, 2);
     arena
         .server
@@ -365,15 +406,20 @@ fn creator_moderation_is_host_local_and_preserves_regular_achievement_eligibilit
         last_owner_sequence: None,
         party_nonce: None,
         party_in_menu: false,
+        arena: 0,
+        walls_revision: None,
+        walls_sent_at: Duration::ZERO,
+        strikes: 0,
+        strike_window: Duration::ZERO,
     };
     arena.server.peers.insert(42, peer);
     arena.command("mute").unwrap();
     assert!(arena.server.access.muted(42, unix_time().as_secs()));
-    assert!(!arena.server.session.world.config.modded);
+    assert!(!arena.server.arenas[0].session.world.config.modded);
     // Even a valid creator signature cannot turn a moderation request into a
     // host-code reload, role escalation, or policy change.
     let mut arena = Arena::new(true, ServerKind::Official);
     arena.verify();
     assert!(arena.command("bad_moderation").is_err());
-    assert!(!arena.server.session.world.config.modded);
+    assert!(!arena.server.arenas[0].session.world.config.modded);
 }

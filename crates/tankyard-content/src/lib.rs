@@ -595,8 +595,50 @@ mod tests {
                     .contains(&id.to_owned())
             );
         }
-        assert_eq!(content.classes.len(), 103);
+        assert_eq!(content.classes.len(), 111);
         content.validate().unwrap();
+    }
+
+    #[test]
+    fn charge_and_ricochet_lines_reach_level_55_and_join_existing_branches() {
+        let content = Content::builtin();
+        for (line, root) in [
+            (["capacitor", "overcharger", "railstorm"], "lance"),
+            (["caromer", "billiard", "pinball"], "fork"),
+        ] {
+            let mut parent = root;
+            for (step, id) in line.iter().enumerate() {
+                let class = content.class(id).unwrap();
+                assert_eq!(usize::from(class.tier), step + 2, "{id}");
+                assert!(class.parents.iter().any(|p| p == parent), "{id}");
+                parent = id;
+            }
+        }
+        assert!(
+            content
+                .class("capacitor")
+                .unwrap()
+                .barrels
+                .iter()
+                .all(|b| b.pattern == FirePattern::Charge)
+        );
+        assert!(
+            content
+                .class("pinball")
+                .unwrap()
+                .barrels
+                .iter()
+                .all(|b| b.ricochets >= 4)
+        );
+        for (id, child) in [("bulldozer", "monolith"), ("shepherd", "murmuration")] {
+            assert!(
+                content
+                    .class(child)
+                    .unwrap()
+                    .parents
+                    .contains(&id.to_owned())
+            );
+        }
     }
 
     #[test]
@@ -687,6 +729,7 @@ mod tests {
             FirePattern::Normal,
             FirePattern::Alternating,
             FirePattern::Burst,
+            FirePattern::Charge,
             FirePattern::Auto,
             FirePattern::Spin,
         ] {

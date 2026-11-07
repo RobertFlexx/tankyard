@@ -1,12 +1,128 @@
 # Modding
 
-Enable a pack in the Mods menu, pass `--mod path` to the client or server, or list directories in the server's `mods` setting. Packs work offline and on community servers. A pack has a `mod.json`; the examples in `mods/vampire` and `mods/fast_arena` run without rebuilding.
+Tank Yard has two kinds of packs, and both are a folder or a `.zip` archive with a `mod.json` at the root:
+
+- **Lua script packs** (manifest `api_version` 2) can change almost everything about a match: custom modes, scoring, physics nudges, new tanks and maps, timed events and rule changes. Scripts run on LuaJIT inside a sandbox with no file, network, process or native-code access.
+- **Data packs** (manifest `api_version` 1) add or replace tanks, maps, rules and textures, and can attach bounded JSON behavior hooks.
+
+In the game, open **Mods** and either paste the path of a `.zip` and press **Import**, or drop the `.zip` onto the window. Imported packs are copied into your library (`…/Tank Yard/mods` in your application data folder); folders in a `mods` directory next to the game are listed too. Enabled packs apply to offline games and servers you host. Community servers load packs with `--mod path` or the `mods` setting; joining players receive only validated data and never run server scripts.
 
 ```sh
-cargo run --locked -p tankyard-tools -- validate-mods --mod mods/vampire --mod mods/fast_arena
-./target/release/tankyard --offline --mod mods/vampire
-./target/release/tankyard-server --mod mods/fast_arena
+cargo run --locked -p tankyard-tools -- validate-mods --mod mods/bounty_hunt --mod mods/vampire
+cargo run --locked -p tankyard-tools -- scan-mod mods/bounty_hunt path/to/pack.zip
+./target/release/tankyard --offline --mod mods/gravity_wells
+./target/release/tankyard-server --mod mods/bounty_hunt
 ```
+
+## Review before a pack can run
+
+Every pack is reviewed statically before it can be enabled. The review never runs the pack. It tokenizes each Lua file properly, so comments, ordinary text, table keys such as `{ os = 1 }`, fields such as `player.os` and local variables that share a library's name are not reported. Findings have three levels:
+
+- **Danger** — attempts to reach the computer: `os.execute`, `io.popen`, `io.open`, `os.remove`, `os.getenv`, `loadfile`, `dofile`, `package.loadlib`, the LuaJIT FFI (`require "ffi"`, `ffi.load`, C declarations of `system`, `CreateProcess`, `LoadLibrary`, `dlopen`, `mprotect` and similar), debug-library escapes, network modules, embedded bytecode, executables or native libraries of any platform (PE, ELF, Mach-O, universal binaries, WebAssembly, shell and batch scripts), and code that decodes data and runs it.
+- **Review** — unusual content: shell, PowerShell, AppleScript, `launchctl`, `schtasks`, registry, `curl … | sh`, reverse-shell and keychain or SSH-key strings for Windows, macOS and Linux; long base64 or hex payloads; large byte arrays; escape-encoded binary strings; nested archives; files whose contents are not recognized; `load`/`loadstring`.
+- **Note** — harmless but useful advice, such as `os.time()` being unavailable (use `tankyard.time()`).
+
+A pack with only notes shows **Reviewed** and can be enabled directly. Anything else opens the findings, with file and line, and requires **Enable anyway**; packs that try to reach the computer also require ticking *I trust this pack's author*. Approval is bound to the pack's exact contents: if the pack changes, it is held back until reviewed again. `tankyard --mod` prints findings and refuses flagged packs unless `--accept-mod-risk` is passed. `tankyard-tools scan-mod` exits with 1 for review findings and 2 for danger findings.
+
+The sandbox blocks all of these attempts regardless of the review; the review tells you a pack was written to try.
+
+## Lua script packs
+
+```json
+{
+  "api_version": 2,
+  "id": "bounty_hunt",
+  "name": "Bounty Hunt",
+  "version": "1.0",
+  "author": "You",
+  "description": "The leader carries a bounty.",
+  "scripts": ["main.lua"]
+}
+```
+
+`scripts` lists entry files, run in order. Other `.lua` files in the pack are loaded with `require("lib.util")` (`lib/util.lua` or `lib/util/init.lua`); nothing outside the pack can be required. Script packs define behavior in Lua, so they cannot also carry JSON `hooks`. `dependencies`, `classes`, `maps`, `rules`, `mode_name` and `textures` work exactly as in data packs. See `mods/bounty_hunt`, `mods/gravity_wells` and `mods/sprinkler`.
+
+### Events
+
+```lua
+tankyard.on("kill", function(e)
+  tankyard.heal(e.actor, 15)
+end)
+tankyard.every(60 * 30, function(tick) tankyard.announce("Half a minute passed") end)
+```
+
+| Event | `actor` | `target` | `value` |
+| --- | --- | --- | --- |
+| `tick` | 0 | 0 | 0 |
+| `spawn` | the tank | 0 | 0 |
+| `kill` | the killer | the victim | XP awarded |
+| `death` | the victim | the killer (0 for the arena) | 0 |
+| `damage` | the damaged tank | the attacker | damage dealt |
+| `shot` | the shooter | 0 | projectile kind |
+| `level_up` | the tank | 0 | new level |
+| `evolve` | the tank | 0 | 0 |
+| `capture` | the scorer | 0 | team |
+| `round_start`, `round_end` | 0 | 0 | 0 |
+
+Each event table also has `type`, `x`, `y` and `tick`. `tankyard.every(n, f)` runs `f(tick)` every `n` ticks (60 ticks per second). A round starts with a fresh script state; `tankyard.state` is a table you can use for your own data during the round.
+
+### Reading the world (inside events)
+
+| Function | Returns |
+| --- | --- |
+| `tankyard.tanks()` / `tankyard.players()` | every tank / only humans |
+| `tankyard.tank(id)` | one tank or `nil` |
+| `tankyard.nearest(x, y, {enemy_of=team, exclude=id, humans=true})` | the nearest living tank and its distance |
+| `tankyard.shapes(x, y, radius)` / `tankyard.projectiles(x, y, radius)` | up to 256 nearby shapes / projectiles |
+| `tankyard.bosses()`, `tankyard.walls()`, `tankyard.objectives()` | arena contents |
+| `tankyard.arena()` | `width`, `height`, `mode`, `teams`, `map`, `round`, `elapsed`, `finished`, `winner`, `scores`, `bounds` |
+| `tankyard.base(team)` | a team base rectangle or `nil` |
+| `tankyard.class(id)`, `tankyard.classes()` | tank definitions (`name`, `tier`, `level`, `upgrades`, `parents`, `ability`) |
+| `tankyard.tick()`, `tankyard.time()`, `tankyard.distance(a, b)` | timing and helpers |
+
+Tank tables carry `id`, `name`, `class`, `team`, `x`, `y`, `vx`, `vy`, `aim`, `radius`, `health`, `max_health`, `level`, `xp`, `score`, `kills`, `deaths`, `alive`, `bot`, `points`, `stats` (1–8), `shield`, `protection`, `speed_scale`, `reload_scale`, `damage_scale` and `in_base`. World access exists only while an event runs; a function saved for later cannot reach the world outside an event.
+
+### Changing the match
+
+Every request is validated, and a pack's requests in one event either all apply or, if any is invalid, none do and the pack is disabled with its error shown.
+
+| Function | Effect |
+| --- | --- |
+| `heal(id, n)`, `damage(id, n)`, `kill(id)` | health |
+| `award(id, xp, score)`, `set_score(id, n)`, `set_team_score(team, n)` | progress and scoring |
+| `set_class(id, class)`, `set_level(id, level)`, `raise_stat(id, stat)` | builds (`stat` is 1–8 or a name such as `"reload"`) |
+| `set_team(id, team)` | teams |
+| `set_scales(id, {speed=, reload=, damage=})` | movement, reload and outgoing damage multipliers |
+| `set_armor(id, m)`, `set_shield(id, s)`, `set_protection(id, s)` | incoming damage, shield seconds, invulnerability seconds |
+| `push(id, vx, vy)`, `set_velocity(id, vx, vy)`, `teleport(id, x, y)` | movement (world units; teleports avoid walls) |
+| `fire(id, {speed, damage, radius, lifetime, angle})` | an extra bullet |
+| `control(id, {x=, y=, aim=, fire=, ability=})` | drive a tank this tick (bots, custom modes) |
+| `spawn_shape(x, y, {sides, health, xp})`, `spawn_boss(name)` | arena contents |
+| `clear_projectiles(id)` | remove a tank's projectiles (`0`: all except base guardians) |
+| `announce(text)`, `finish_round(team, reason)` | match flow |
+
+### Defining content from Lua
+
+During loading, `tankyard.define_class(t)`, `tankyard.define_map(t)`, `tankyard.set_rules(t)`, `tankyard.mode_name(s)` and `tankyard.texture(id, "file.png")` declare content with the same fields as `classes.json` and `maps.json`. `tankyard.base_class(id)` and `tankyard.base_map(id)` return editable copies of existing definitions, so a new tank can be attached to the tree by also redefining its parent:
+
+```lua
+local parent = tankyard.base_class("spray")
+table.insert(parent.upgrades, "sprinkler")
+tankyard.define_class(parent)
+local tank = tankyard.base_class("fan")
+tank.id, tank.name, tank.parents, tank.upgrades = "sprinkler", "Sprinkler", { "spray" }, {}
+tankyard.define_class(tank)
+```
+
+Definitions are validated like data packs and ignored while a round runs, so the same file serves both phases.
+
+### Sandbox and limits
+
+Scripts run on LuaJIT's interpreter, one isolated state per pack, recreated every round. They get the base functions, `string`, `table`, `math`, `bit` and `coroutine`. Removed: `os`, `io`, `debug`, `ffi`, `jit`, `package`, `load`, `loadstring`, `loadfile`, `dofile`, `getfenv`, `setfenv`, `collectgarbage`, `newproxy` and `string.dump`; only text source is accepted. `math.random` is seeded per round, and `print` writes to the pack's log (shown in the server console).
+
+The JIT trace compiler is off inside the sandbox because compiled traces skip LuaJIT's instruction hook; the interpreter keeps every instruction accountable. Each event handler may run 500,000 instructions and each pack 1,000,000 per tick (20,000,000 while loading), with 64 MiB of memory. `pcall`, `xpcall` and `coroutine.resume` cannot swallow a budget error. C-level library calls are bounded too: `string.rep` results to 1 MiB, pattern matching to 64 KiB subjects and a quantifier cost limit, and `table.sort` to 100,000 elements. Archives are limited to 8 MiB, 256 files, 2 MiB per file and safe relative names; links, encrypted entries and size-header mismatches are rejected.
+
+## Data packs
 
 API version 1 manifests require `api_version`, `id`, `name`, and `version`. Optional fields are `dependencies`, `classes`, `maps`, `rules`, `mode_name`, `textures`, and `hooks`. Dependencies load first; missing dependencies and cycles are rejected. Definitions replace an existing ID or add a new one. Among packs whose dependencies are ready, command-line order decides loading order. Later definitions win. A supplied `rules` object replaces the complete rule profile; omitted fields take standard defaults. Packs without a rules object keep the configured server physics. A custom `mode_name` labels the underlying mode, and hooks provide its extra behavior.
 
@@ -23,11 +139,11 @@ A behavior hook looks like this:
 }
 ```
 
-Events are `tick`, `spawn`, `kill`, `death`, `shot`, `level_up`, `evolve`, `capture`, `round_start`, and `round_end`. Targets are `actor`, `all_players`, and `alive_players`. `every_ticks` controls frequency; `cooldown_ticks` limits each actor independently. `conditions` combine health fraction, level, class, team, bot status, or module counters, with `any` and `not` expressions.
+Events are `tick`, `spawn`, `kill`, `death`, `shot`, `level_up`, `evolve`, `capture`, `round_start`, `round_end`, and `damage`. Targets are `actor`, `all_players`, and `alive_players`. `every_ticks` controls frequency; `cooldown_ticks` limits each actor independently. `conditions` combine health fraction, level, class, team, bot status, or module counters, with `any` and `not` expressions.
 
-Actions can heal or damage, award XP and score, change class or team, apply an impulse, teleport, update a counter, announce text, finish a round, spawn a polygon target, fire a bullet, or set movement/aim/fire controls. Teleports and spawned entities respect walls and arena limits. Bot control hooks run after bot decisions and before physics. Effects are validated as a batch before application. The Rust definitions in [tankyard-mods](../crates/tankyard-mods/src/lib.rs) specify every field and numeric bound.
+Actions can heal or damage, award XP and score, change class or team, apply an impulse, teleport, update a counter, announce text, finish a round, spawn a polygon target, fire a bullet, set movement/aim/fire controls, and use every Lua command above (`set_level`, `raise_stat`, `set_scales`, `set_armor`, `set_shield`, `set_protection`, `set_velocity`, `kill`, `set_score`, `set_team_score`, `spawn_boss`, `clear_projectiles`). Teleports and spawned entities respect walls and arena limits. Bot control hooks run after bot decisions and before physics. Effects are validated as a batch before application. The Rust definitions in [tankyard-mods](../crates/tankyard-mods/src/lib.rs) specify every field and numeric bound.
 
-JSON behavior runs on the server through bounded hooks. A module has at most 64 hooks, 16 conditions and actions per hook, four nested condition levels, 512 effect commands and 10,000 condition operations per tick, 4,096 counters, and 16,384 cooldown entries. Faulty modules are disabled without applying the failing batch. Hooks do not recursively dispatch their own effects. Reloading or restarting a round resets runtime state.
+JSON behavior runs on the server through bounded hooks, alongside Lua packs. A module has at most 64 hooks, 16 conditions and actions per hook, four nested condition levels, 512 effect commands and 10,000 condition operations per tick, 4,096 counters, and 16,384 cooldown entries. Faulty modules are disabled without applying the failing batch. Hooks do not recursively dispatch their own effects. Reloading or restarting a round resets runtime state.
 
 Trusted Rust extensions implement `tankyard_core::modding::ServerPlugin`, receiving a read-only `World`, a `HookEvent`, and validated `Commands`. Register a factory with `UdpServer::register_plugin`; the factory recreates the extension each round. [The example](../crates/tankyard-server/examples/plugin.rs) heals on kills. Compile it with `cargo check --locked -p tankyard-server --example plugin`. Native extensions execute inside the server process and must be trusted: panic handling does not stop infinite loops or restrict filesystem access. Joining clients receive validated data only and never execute server code.
 

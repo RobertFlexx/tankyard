@@ -60,7 +60,7 @@ fn host_badges_warnings_announcements_and_delegation_are_server_scoped() {
     );
     pump(&mut server, &mut [&mut host, &mut player], 8);
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -71,7 +71,7 @@ fn host_badges_warnings_announcements_and_delegation_are_server_scoped() {
         ServerBadge::Host
     );
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -109,7 +109,7 @@ fn host_badges_warnings_announcements_and_delegation_are_server_scoped() {
     pump(&mut server, &mut [&mut host, &mut player], 8);
     assert!(player.permissions.contains(&Permission::Warn));
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -133,7 +133,7 @@ fn host_badges_warnings_announcements_and_delegation_are_server_scoped() {
             .contains("equal or higher")
     );
     assert!(
-        !server
+        !server.arenas[0]
             .session
             .world
             .tanks
@@ -158,7 +158,7 @@ fn names_roles_and_forged_proofs_cannot_enable_private_creator_tools() {
     assert!(player.owner_extension(br#"{"action":"god","enabled":true}"#.to_vec(), vec![0; 64]));
     pump(&mut server, &mut [&mut player], 12);
     assert!(
-        !server
+        !server.arenas[0]
             .session
             .world
             .tanks
@@ -173,7 +173,7 @@ fn names_roles_and_forged_proofs_cannot_enable_private_creator_tools() {
             .as_deref()
             .is_some_and(|message| message.contains("Verified creator"))
     );
-    assert!(!server.session.world.config.modded);
+    assert!(!server.arenas[0].session.world.config.modded);
 }
 #[test]
 fn match_controls_preserve_connections_roles_and_report_authoritative_settings() {
@@ -192,11 +192,11 @@ fn match_controls_preserve_connections_roles_and_report_authoritative_settings()
     let result = server.admin_command(&format!("role {} owner", owner.player_id.unwrap()));
     assert!(!result.message.starts_with("Error:"));
     pump(&mut server, &mut [&mut owner, &mut player], 8);
-    let round = server.session.world.match_state.round;
+    let round = server.arenas[0].session.world.match_state.round;
     player.permissions.push(Permission::Configure);
     assert!(player.admin(ServerCommand::RestartRound));
     pump(&mut server, &mut [&mut owner, &mut player], 8);
-    assert_eq!(server.session.world.match_state.round, round);
+    assert_eq!(server.arenas[0].session.world.match_state.round, round);
     assert!(player.last_action.as_ref().unwrap().contains("denied"));
 
     assert!(owner.admin(ServerCommand::ConfigureMatch {
@@ -205,11 +205,11 @@ fn match_controls_preserve_connections_roles_and_report_authoritative_settings()
         difficulty: "Advanced".into(),
     }));
     pump(&mut server, &mut [&mut owner, &mut player], 16);
-    assert_eq!(server.session.world.match_state.round, round + 1);
-    assert_eq!(server.session.world.config.mode, Mode::Domination);
-    assert_eq!(server.session.world.map.id, "maze");
+    assert_eq!(server.arenas[0].session.world.match_state.round, round + 1);
+    assert_eq!(server.arenas[0].session.world.config.mode, Mode::Domination);
+    assert_eq!(server.arenas[0].session.world.map.id, "maze");
     assert_eq!(
-        server.session.bots.difficulty,
+        server.arenas[0].session.bots.difficulty,
         tankyard_ai::Difficulty::Advanced
     );
     assert_eq!(server.player_count(), 2);
@@ -230,8 +230,8 @@ fn match_controls_preserve_connections_roles_and_report_authoritative_settings()
         difficulty: "Normal".into(),
     }));
     pump(&mut server, &mut [&mut owner, &mut player], 8);
-    assert_eq!(server.session.world.match_state.round, round + 1);
-    assert_eq!(server.session.world.config.mode, Mode::Domination);
+    assert_eq!(server.arenas[0].session.world.match_state.round, round + 1);
+    assert_eq!(server.arenas[0].session.world.config.mode, Mode::Domination);
     assert!(
         owner
             .last_action
@@ -241,7 +241,7 @@ fn match_controls_preserve_connections_roles_and_report_authoritative_settings()
     );
     assert!(owner.admin(ServerCommand::RestartRound));
     pump(&mut server, &mut [&mut owner, &mut player], 16);
-    assert_eq!(server.session.world.match_state.round, round + 2);
+    assert_eq!(server.arenas[0].session.world.match_state.round, round + 2);
     assert!(owner.is_ready() && player.is_ready());
     assert_eq!(owner.role, Role::Owner);
 }
@@ -268,7 +268,8 @@ fn community_delegation_chat_privacy_and_muting_are_authoritative() {
     );
     assert_eq!(owner.role, Role::Owner);
     assert!(owner.chat_enabled);
-    owner.snapshot.as_mut().unwrap().match_state.round = server.session.world.match_state.round + 1;
+    owner.snapshot.as_mut().unwrap().match_state.round =
+        server.arenas[0].session.world.match_state.round + 1;
     assert!(owner.admin(ServerCommand::Kick {
         player: moderator_id,
         reason: String::new()
@@ -491,7 +492,7 @@ fn modded_catalog_rules_and_custom_maps_reach_an_unmodified_client() {
     assert!(client.evolve("custom_tank"));
     pump(&mut server, &mut [&mut client], 8);
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks

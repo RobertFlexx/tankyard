@@ -68,6 +68,7 @@ impl World {
             || shot.penetration <= 0.
             || shot.owner == tank.id
             || !self.hostile(tank.team, shot.team)
+            || crate::team_bases::base_guard_team(shot.owner).is_some()
         {
             return false;
         }

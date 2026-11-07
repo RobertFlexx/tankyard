@@ -100,7 +100,7 @@ fn roster_contains_every_party_member_independent_of_snapshot_interest() {
     ready(&mut server, &mut [&mut first, &mut second]);
     let a = first.player_id.unwrap();
     let b = second.player_id.unwrap();
-    for tank in &mut server.session.world.tanks {
+    for tank in &mut server.arenas[0].session.world.tanks {
         if tank.id == a {
             tank.pos = tankyard_core::V2::new(-1000., -1000.);
         }
@@ -172,7 +172,7 @@ fn friends_replace_only_allied_bots_stay_together_after_changes_and_never_claim_
         let mut first = NetworkClient::connect(&invite.link(), "Friend", "").unwrap();
         ready(&mut server, &mut [&mut first]);
         assert_eq!(
-            server
+            server.arenas[0]
                 .session
                 .world
                 .tanks
@@ -185,7 +185,7 @@ fn friends_replace_only_allied_bots_stay_together_after_changes_and_never_claim_
         ready(&mut server, &mut [&mut first, &mut second]);
         assert_eq!(server.player_count(), 2);
         assert!(
-            server
+            server.arenas[0]
                 .session
                 .world
                 .tanks
@@ -194,7 +194,7 @@ fn friends_replace_only_allied_bots_stay_together_after_changes_and_never_claim_
                 .all(|t| t.team == 1 && !t.game_creator && !t.creator_boss)
         );
         assert_eq!(
-            server
+            server.arenas[0]
                 .session
                 .world
                 .tanks
@@ -208,7 +208,7 @@ fn friends_replace_only_allied_bots_stay_together_after_changes_and_never_claim_
         assert!(!first.admin(tankyard_protocol::ServerCommand::RestartRound));
         if mode == Mode::TwoTeams {
             assert_eq!(
-                server
+                server.arenas[0]
                     .session
                     .world
                     .tanks
@@ -229,7 +229,7 @@ fn friends_replace_only_allied_bots_stay_together_after_changes_and_never_claim_
         assert!(first.is_ready() && second.is_ready());
         assert_eq!(first.player_round.unwrap(), round + 1);
         assert!(
-            server
+            server.arenas[0]
                 .session
                 .world
                 .tanks
@@ -241,7 +241,7 @@ fn friends_replace_only_allied_bots_stay_together_after_changes_and_never_claim_
         pump(&mut server, &mut [&mut first], 30);
         assert_eq!(server.player_count(), 1);
         assert_eq!(
-            server
+            server.arenas[0]
                 .session
                 .world
                 .tanks
@@ -258,9 +258,16 @@ fn infection_party_preserves_conversion_and_late_joiners_do_not_replenish_surviv
     let mut first = NetworkClient::connect(&invite.link(), "Leader", "").unwrap();
     ready(&mut server, &mut [&mut first]);
     pump(&mut server, &mut [&mut first], 510);
-    assert_eq!(server.session.world.tanks.len(), 8);
-    assert!(!server.session.world.match_state.arena.intermission);
-    let survivors = server
+    assert_eq!(server.arenas[0].session.world.tanks.len(), 8);
+    assert!(
+        !server.arenas[0]
+            .session
+            .world
+            .match_state
+            .arena
+            .intermission
+    );
+    let survivors = server.arenas[0]
         .session
         .world
         .tanks
@@ -271,7 +278,7 @@ fn infection_party_preserves_conversion_and_late_joiners_do_not_replenish_surviv
     ready(&mut server, &mut [&mut first, &mut second]);
     let id = second.player_id.unwrap();
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -282,7 +289,7 @@ fn infection_party_preserves_conversion_and_late_joiners_do_not_replenish_surviv
         2
     );
     assert!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -291,15 +298,15 @@ fn infection_party_preserves_conversion_and_late_joiners_do_not_replenish_surviv
             .count()
             <= survivors
     );
-    assert_eq!(server.session.world.tanks.len(), 8);
-    for tank in &mut server.session.world.tanks {
+    assert_eq!(server.arenas[0].session.world.tanks.len(), 8);
+    for tank in &mut server.arenas[0].session.world.tanks {
         if tank.bot {
             tank.team = 2;
         }
     }
     pump(&mut server, &mut [&mut first, &mut second], 5);
     assert!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -337,8 +344,8 @@ fn co_op_wave_enemies_are_never_removed_by_teammate_replacement() {
     let mut client = NetworkClient::connect(&invite.link(), "Friend", "").unwrap();
     ready(&mut server, &mut [&mut client]);
     pump(&mut server, &mut [&mut client], 510);
-    assert!(server.session.world.match_state.arena.wave > 0);
-    let enemy_ids: Vec<_> = server
+    assert!(server.arenas[0].session.world.match_state.arena.wave > 0);
+    let enemy_ids: Vec<_> = server.arenas[0]
         .session
         .world
         .tanks
@@ -350,10 +357,17 @@ fn co_op_wave_enemies_are_never_removed_by_teammate_replacement() {
     let mut friend = NetworkClient::connect(&invite.link(), "Second", "").unwrap();
     ready(&mut server, &mut [&mut client, &mut friend]);
     for id in enemy_ids {
-        assert!(server.session.world.tanks.iter().any(|t| t.id == id));
+        assert!(
+            server.arenas[0]
+                .session
+                .world
+                .tanks
+                .iter()
+                .any(|t| t.id == id)
+        );
     }
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -408,7 +422,7 @@ fn leader_changes_modes_atomically_without_replacing_invites_members_or_chat() {
     };
     assert!(guest.admin(ServerCommand::ConfigureParty { settings: forged }));
     pump(&mut server, &mut [&mut leader, &mut guest], 10);
-    assert_eq!(server.session.world.config.mode, Mode::CoopPve);
+    assert_eq!(server.arenas[0].session.world.config.mode, Mode::CoopPve);
     assert!(
         guest
             .last_action
@@ -443,7 +457,7 @@ fn leader_changes_modes_atomically_without_replacing_invites_members_or_chat() {
         assert_eq!(leader.player_round, Some(before + 1));
         assert_eq!(guest.player_round, leader.player_round);
         assert_eq!([leader.client_id(), guest.client_id()], ids);
-        assert_eq!(server.session.world.config.mode, mode);
+        assert_eq!(server.arenas[0].session.world.config.mode, mode);
         assert_eq!(server.settings.world.width, 2400.);
         assert_eq!(server.settings.party.as_ref().unwrap().ally_slots, 3);
         for client in [&leader, &guest] {
@@ -466,7 +480,7 @@ fn leader_changes_modes_atomically_without_replacing_invites_members_or_chat() {
             assert_eq!(client.match_settings.as_ref().unwrap().mode, mode);
         }
         assert!(
-            server
+            server.arenas[0]
                 .session
                 .world
                 .tanks

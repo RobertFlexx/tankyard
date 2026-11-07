@@ -1,4 +1,8 @@
-use crate::{menu::Action, render, ui::*};
+use crate::{
+    menu::Action,
+    render,
+    ui::{ui_circle, ui_line as draw_line, ui_rectangle, ui_rectangle_lines, *},
+};
 use macroquad::prelude::*;
 use std::collections::HashSet;
 use tankyard_content::Content;
@@ -14,7 +18,7 @@ pub struct PartyUi {
     last_seen: u64,
     revision: u64,
     scale: u32,
-    lines: Vec<String>,
+    lines: Vec<(String, String)>,
     scroll: usize,
     confirming_leave: bool,
     pub notice: String,
@@ -95,7 +99,13 @@ impl PartyUi {
             self.typing = false;
             self.notice.clear();
         }
-        center_label("PARTY", rect.center().x, rect.y + 19. * s, 11. * s, CYAN);
+        center_label(
+            &format!("PARTY · {}", client.party_members.len()),
+            rect.center().x,
+            rect.y + 19. * s,
+            11. * s,
+            CYAN,
+        );
         for (index, member) in client.party_members.iter().enumerate() {
             let center = vec2(
                 rect.x + (22. + (index % columns) as f32 * 36.) * s,
@@ -117,18 +127,43 @@ impl PartyUi {
                     0.,
                 );
             }
+            if member.leader {
+                // A small amber pip marks the host.
+                ui_rectangle(
+                    center.x + 7. * s,
+                    center.y - 13. * s,
+                    5. * s,
+                    5. * s,
+                    warm_text_color(),
+                );
+            }
         }
-        center_label(
-            &if unread > 0 {
-                format!("{} new", unread.min(64))
-            } else {
-                format!("{}/8 · open", client.party_members.len())
-            },
-            rect.center().x,
-            rect.bottom() - 10. * s,
-            10. * s,
-            if unread > 0 { CYAN } else { muted_color() },
-        );
+        if unread > 0 {
+            let text = format!("{} new", unread.min(64));
+            let pill_w = label_width(&text, 10. * s) + 12. * s;
+            let pill = Rect::new(
+                rect.center().x - pill_w * 0.5,
+                rect.bottom() - 19. * s,
+                pill_w,
+                15. * s,
+            );
+            ui_rectangle(pill.x, pill.y, pill.w, pill.h, CYAN);
+            center_label(
+                &text,
+                pill.center().x,
+                pill.bottom() - 4. * s,
+                10. * s,
+                WHITE,
+            );
+        } else {
+            center_label(
+                "Open · chat",
+                rect.center().x,
+                rect.bottom() - 10. * s,
+                10. * s,
+                muted_color(),
+            );
+        }
     }
     pub fn panel(
         &mut self,
@@ -139,19 +174,68 @@ impl PartyUi {
         in_menu: bool,
         requested: f32,
     ) -> Action {
+        if let Some(reason) = client.last_action.take() {
+            self.notice = reason;
+        }
+        let view = PartyView {
+            members: &client.party_members,
+            me: client.client_id(),
+            messages: &client.chat_messages,
+            revision: client.chat_revision,
+            chat_enabled: client.chat_enabled,
+        };
+        let (action, message) = self.panel_view(
+            &view,
+            content,
+            network,
+            has_public_invite,
+            in_menu,
+            requested,
+        );
+        if let Some(text) = message {
+            if client.send_chat("lobby", &text) {
+                self.draft.clear();
+                self.scroll = 0;
+                self.typing = true;
+            } else {
+                self.notice = "Message could not be sent. Check the connection.".into();
+            }
+        }
+        action
+    }
+    /// Draw the party overlay from plain data. Returns the chosen action and
+    /// a chat message to send, if any.
+    pub fn panel_view(
+        &mut self,
+        view: &PartyView<'_>,
+        content: &Content,
+        network: &str,
+        has_public_invite: bool,
+        in_menu: bool,
+        requested: f32,
+    ) -> (Action, Option<String>) {
         let (r, s) = panel_layout(screen_width(), screen_height(), requested);
         pointer_scope(840);
         panel(r);
         let x = r.x + 22. * s;
         let y = r.y;
+        let mut action = Action::None;
+        let mut outgoing = None;
+        // Header: who hosts, how full the party is, and how it is reached.
         label("YOUR PARTY", x, y + 35. * s, 22. * s, text_color());
+        let leader = view
+            .members
+            .iter()
+            .find(|member| member.leader)
+            .map_or_else(|| "the leader".to_owned(), |member| member.name.clone());
         label(
-            &format!(
-                "{} / 8 friends · hosted by the leader",
-                client.party_members.len()
+            &fitted_label(
+                &format!("{} of 8 players · hosted by {leader}", view.members.len()),
+                12. * s,
+                r.w - 230. * s,
             ),
             x,
-            y + 60. * s,
+            y + 58. * s,
             12. * s,
             muted_color(),
         );
@@ -162,71 +246,157 @@ impl PartyUi {
         ) {
             self.close();
         }
-        let left = Rect::new(x, y + 86. * s, 250. * s, 340. * s);
+        let link = if network.starts_with("Internet relay ready") {
+            ("Relay", CYAN)
+        } else if network.starts_with("Direct") {
+            ("Direct", CYAN)
+        } else if network.is_empty() {
+            ("Local", muted_color())
+        } else {
+            ("Network", warm_text_color())
+        };
+        let badge_w = label_width(link.0, 11. * s) + 30. * s;
+        let badge = Rect::new(r.right() - 67. * s - badge_w, y + 22. * s, badge_w, 22. * s);
+        ui_rectangle(
+            badge.x,
+            badge.y,
+            badge.w,
+            badge.h,
+            alpha(line_color(), 0.22),
+        );
+        ui_circle(badge.x + 11. * s, badge.center().y, 4. * s, link.1);
+        label(
+            link.0,
+            badge.x + 21. * s,
+            badge.bottom() - 6. * s,
+            11. * s,
+            text_color(),
+        );
+        draw_line(
+            r.x + 1.,
+            y + 74. * s,
+            r.right() - 1.,
+            y + 74. * s,
+            1.,
+            alpha(line_color(), 0.8),
+        );
+        // Members, with every open seat visible so inviting is obvious.
+        let left = Rect::new(x, y + 88. * s, 262. * s, 336. * s);
         let chat = Rect::new(
             left.right() + 18. * s,
             left.y,
             r.right() - left.right() - 40. * s,
-            340. * s,
+            336. * s,
         );
         label("MEMBERS", left.x, left.y + 12. * s, 11. * s, muted_color());
-        for (index, member) in client.party_members.iter().enumerate() {
+        for slot in 0..8 {
             let row = Rect::new(
                 left.x,
-                left.y + (24. + index as f32 * 38.) * s,
+                left.y + (22. + slot as f32 * 38.) * s,
                 left.w,
                 34. * s,
             );
-            draw_rectangle(row.x, row.y, row.w, row.h, alpha(line_color(), 0.16));
+            let Some(member) = view.members.get(slot) else {
+                ui_rectangle_lines(row.x, row.y, row.w, row.h, 1., alpha(line_color(), 0.45));
+                label(
+                    "Open seat",
+                    row.x + 12. * s,
+                    row.y + 22. * s,
+                    12. * s,
+                    alpha(
+                        muted_color(),
+                        if slot == view.members.len() { 1. } else { 0.55 },
+                    ),
+                );
+                if slot == view.members.len()
+                    && button(
+                        Rect::new(row.right() - 88. * s, row.y + 4. * s, 84. * s, 26. * s),
+                        "Invite",
+                        false,
+                        has_public_invite,
+                        s * 0.62,
+                    )
+                {
+                    action = Action::CopyParty;
+                }
+                continue;
+            };
+            let me = member.client == view.me;
+            ui_rectangle(
+                row.x,
+                row.y,
+                row.w,
+                row.h,
+                alpha(
+                    if me { CYAN } else { line_color() },
+                    if me { 0.10 } else { 0.16 },
+                ),
+            );
             if let Some(class) = content.class(&member.class) {
                 render::class_model(
                     class,
-                    vec2(row.x + 19. * s, row.center().y),
-                    9. * s,
+                    vec2(row.x + 18. * s, row.center().y),
+                    8. * s,
                     -0.4,
                     0.,
                     0.,
-                    player_color(),
+                    if self.muted.contains(&member.client) {
+                        muted_color()
+                    } else {
+                        player_color()
+                    },
                     0.,
                 );
             }
-            let me = member.client == client.client_id();
-            let name = format!("{}{}", member.name, if me { " · you" } else { "" });
+            let name = format!("{}{}", member.name, if me { " (you)" } else { "" });
+            let name = fitted_label(&name, 12. * s, 128. * s);
             label(
-                &fitted_label(&name, 12. * s, 128. * s),
-                row.x + 42. * s,
-                row.y + 14. * s,
+                &name,
+                row.x + 46. * s,
+                row.y + 15. * s,
                 12. * s,
                 text_color(),
             );
+            if member.leader {
+                label(
+                    "LEADER",
+                    row.x + 52. * s + label_width(&name, 12. * s),
+                    row.y + 15. * s,
+                    9. * s,
+                    warm_text_color(),
+                );
+            }
+            let class_name = content
+                .class(&member.class)
+                .map_or(member.class.as_str(), |class| class.name.as_str());
+            let state = if member.in_menu {
+                "In menus"
+            } else {
+                "In match"
+            };
             label(
-                if member.leader {
-                    "Leader"
-                } else if member.in_menu {
-                    "In menus"
-                } else {
-                    "In match"
-                },
-                row.x + 42. * s,
+                &fitted_label(&format!("{state} · {class_name}"), 10. * s, 140. * s),
+                row.x + 46. * s,
                 row.y + 28. * s,
                 10. * s,
                 muted_color(),
             );
-            if !me
-                && small_button(
-                    Rect::new(row.right() - 68. * s, row.y + 4. * s, 64. * s, 26. * s),
-                    if self.muted.contains(&member.client) {
-                        "Unmute"
-                    } else {
-                        "Mute"
-                    },
-                    s * 0.65,
-                )
-                && !self.muted.remove(&member.client)
-            {
-                self.muted.insert(member.client);
+            if !me {
+                let muted = self.muted.contains(&member.client);
+                let toggle = Rect::new(row.right() - 66. * s, row.y + 6. * s, 60. * s, 22. * s);
+                if button(
+                    toggle,
+                    if muted { "Muted" } else { "Mute" },
+                    muted,
+                    true,
+                    s * 0.58,
+                ) && !self.muted.remove(&member.client)
+                {
+                    self.muted.insert(member.client);
+                }
             }
         }
+        // Chat: names stand apart from text, newest at the bottom.
         label(
             "PARTY CHAT",
             chat.x,
@@ -234,37 +404,48 @@ impl PartyUi {
             11. * s,
             muted_color(),
         );
-        let transcript = Rect::new(chat.x, chat.y + 24. * s, chat.w, 258. * s);
-        draw_rectangle(
+        let transcript = Rect::new(chat.x, chat.y + 22. * s, chat.w, 252. * s);
+        ui_rectangle(
             transcript.x,
             transcript.y,
             transcript.w,
             transcript.h,
             alpha(line_color(), 0.16),
         );
-        if self.revision != client.chat_revision || self.scale != s.to_bits() {
+        if self.revision != view.revision || self.scale != s.to_bits() {
             let old = self.lines.len();
             self.lines.clear();
-            for message in client
-                .chat_messages
+            for message in view
+                .messages
                 .iter()
                 .filter(|message| message.room == "lobby")
             {
-                self.lines.extend(wrapped_lines(
+                let mut first = true;
+                for line in wrapped_lines(
                     &format!("{}: {}", message.name, message.text),
                     transcript.w - 20. * s,
                     12. * s,
-                ));
+                ) {
+                    // The sender's name is drawn separately on a message's first line.
+                    let body = if first {
+                        line.strip_prefix(&format!("{}:", message.name))
+                            .map(|rest| (message.name.clone(), rest.to_owned()))
+                    } else {
+                        None
+                    };
+                    first = false;
+                    self.lines.push(body.unwrap_or((String::new(), line)));
+                }
             }
             if self.scroll > 0 {
                 self.scroll = self
                     .scroll
                     .saturating_add(self.lines.len().saturating_sub(old));
             }
-            self.revision = client.chat_revision;
+            self.revision = view.revision;
             self.scale = s.to_bits();
         }
-        self.last_seen = client.chat_messages.back().map_or(0, |message| message.id);
+        self.last_seen = view.messages.back().map_or(0, |message| message.id);
         let count = 14;
         if contains(transcript) {
             let wheel = mouse_wheel().1;
@@ -286,19 +467,31 @@ impl PartyUi {
                 muted_color(),
             );
         }
-        for (index, line) in self.lines[end.saturating_sub(count)..end]
+        for (index, (name, line)) in self.lines[end.saturating_sub(count)..end]
             .iter()
             .enumerate()
         {
-            label(
-                line,
-                transcript.x + 10. * s,
-                transcript.y + (20. + index as f32 * 17.) * s,
-                12. * s,
-                text_color(),
-            );
+            let line_y = transcript.y + (20. + index as f32 * 17.) * s;
+            let mut text_x = transcript.x + 10. * s;
+            if !name.is_empty() {
+                let prefix = format!("{name}:");
+                label(&prefix, text_x, line_y, 12. * s, accent_color());
+                text_x += label_width(&prefix, 12. * s);
+            }
+            label(line, text_x, line_y, 12. * s, text_color());
         }
-        let input = Rect::new(chat.x, chat.y + 294. * s, chat.w - 68. * s, 36. * s);
+        if self.scroll > 0 {
+            let more = Rect::new(
+                transcript.right() - 108. * s,
+                transcript.bottom() - 24. * s,
+                100. * s,
+                18. * s,
+            );
+            if button(more, "Newest ↓", false, true, s * 0.5) {
+                self.scroll = 0;
+            }
+        }
+        let input = Rect::new(chat.x, chat.y + 282. * s, chat.w - 68. * s, 34. * s);
         text_field(
             input,
             &mut self.draft,
@@ -311,27 +504,26 @@ impl PartyUi {
             Rect::new(input.right() + 6. * s, input.y, 62. * s, input.h),
             "Send",
             true,
-            client.chat_enabled && !self.draft.trim().is_empty(),
+            view.chat_enabled && !self.draft.trim().is_empty(),
             s * 0.72,
         );
         if (send || (self.typing && !self.just_opened && is_key_pressed(KeyCode::Enter)))
             && !self.draft.trim().is_empty()
         {
-            if client.send_chat("lobby", self.draft.trim()) {
-                self.draft.clear();
-                self.scroll = 0;
-                self.typing = true;
-            } else {
-                self.notice = "Message could not be sent. Check the connection.".into();
-            }
+            outgoing = Some(self.draft.trim().to_owned());
         }
+        label(
+            "Enter sends · Esc closes · mutes only affect what you hear",
+            chat.x,
+            chat.y + 332. * s,
+            10. * s,
+            muted_color(),
+        );
         self.just_opened = false;
-        if let Some(reason) = client.last_action.take() {
-            self.notice = reason;
-        }
+        // Status and actions.
         let status = if self.notice.is_empty() {
             if network.is_empty() {
-                "Invite-only party · mutes affect the voice you hear. The match keeps running while you browse menus."
+                "Invite-only party. The match keeps running while you browse menus."
             } else {
                 network
             }
@@ -340,25 +532,25 @@ impl PartyUi {
         };
         for (index, line) in wrapped_lines(status, r.w - 44. * s, 12. * s)
             .into_iter()
-            .take(3)
+            .take(2)
             .enumerate()
         {
             label(
                 &line,
                 x,
-                y + (449. + index as f32 * 16.) * s,
+                y + (448. + index as f32 * 16.) * s,
                 12. * s,
-                muted_color(),
+                if self.notice.is_empty() {
+                    muted_color()
+                } else {
+                    text_color()
+                },
             );
         }
         let by = r.bottom() - 55. * s;
         if self.confirming_leave {
             label(
-                if client
-                    .party_members
-                    .iter()
-                    .any(|m| m.client == client.client_id() && m.leader)
-                {
+                if view.members.iter().any(|m| m.client == view.me && m.leader) {
                     "Leaving ends this party for everyone."
                 } else {
                     "Leave this party?"
@@ -375,7 +567,7 @@ impl PartyUi {
                 true,
                 s * 0.8,
             ) {
-                return Action::LeaveParty;
+                action = Action::LeaveParty;
             }
             if small_button(
                 Rect::new(x + 154. * s, by, 90. * s, 34. * s),
@@ -395,7 +587,7 @@ impl PartyUi {
                 has_public_invite,
                 s * 0.8,
             ) {
-                return Action::CopyParty;
+                action = Action::CopyParty;
             }
             if button(
                 Rect::new(r.right() - 294. * s, by, 124. * s, 34. * s),
@@ -405,7 +597,7 @@ impl PartyUi {
                 s * 0.8,
             ) {
                 self.close();
-                return Action::Page(crate::menu::Page::Party);
+                action = Action::Page(crate::menu::Page::Party);
             }
             if button(
                 Rect::new(r.right() - 160. * s, by, 138. * s, 34. * s),
@@ -419,11 +611,20 @@ impl PartyUi {
                 s * 0.8,
             ) {
                 self.close();
-                return Action::ResumeParty;
+                action = Action::ResumeParty;
             }
         }
-        Action::None
+        (action, outgoing)
     }
+}
+
+/// Everything the party overlay shows, independent of the network client.
+pub struct PartyView<'a> {
+    pub members: &'a [tankyard_protocol::PartyMember],
+    pub me: u64,
+    pub messages: &'a std::collections::VecDeque<tankyard_protocol::ChatMessage>,
+    pub revision: u64,
+    pub chat_enabled: bool,
 }
 
 fn panel_layout(width: f32, height: f32, requested: f32) -> (Rect, f32) {

@@ -67,12 +67,15 @@ fn displays() -> Vec<Monitor> {
             } else {
                 1.
             };
-            let pixels = (d.width, d.height);
-            #[cfg(target_os = "macos")]
-            let pixels = (
-                (d.width as f32 * scale).round() as u32,
-                (d.height as f32 * scale).round() as u32,
-            );
+            // macOS reports points; other platforms already report pixels.
+            let pixels = if cfg!(target_os = "macos") {
+                (
+                    (d.width as f32 * scale).round() as u32,
+                    (d.height as f32 * scale).round() as u32,
+                )
+            } else {
+                (d.width, d.height)
+            };
             ((640..=15360).contains(&pixels.0) && (480..=8640).contains(&pixels.1)).then_some(
                 Monitor {
                     id: d.id,

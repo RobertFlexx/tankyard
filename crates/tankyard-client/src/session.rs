@@ -151,7 +151,7 @@ impl Session {
         name: &str,
         paths: &[std::path::PathBuf],
     ) -> Result<Self, String> {
-        let loaded = tankyard_mods::load(paths)?;
+        let loaded = tankyard_lua::load(paths)?;
         let mut local = LocalSession::with_mods(config, bots, loaded)?;
         let id = local.world.add_player(name, false);
         let snapshot = local.world.snapshot();

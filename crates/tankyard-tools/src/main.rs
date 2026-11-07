@@ -21,6 +21,16 @@ enum Command {
         #[arg(long = "mod", required = true)]
         mods: Vec<PathBuf>,
     },
+    /// Review packs (folders or .zip archives) for system access, native
+    /// code and hidden payloads. Exits with status 2 if any pack is dangerous
+    /// and 1 if any needs review; prints every finding.
+    ScanMod {
+        #[arg(required = true)]
+        packs: Vec<PathBuf>,
+        /// Also list advisory notes.
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Validate the complete upgrade graph and all mechanical profiles.
     Validate {
         #[arg(long)]
@@ -123,8 +133,40 @@ fn main() {
 }
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     match Args::parse().command {
+        Command::ScanMod { packs, verbose } => {
+            use tankyard_mods::scan::{Severity, Verdict};
+            let mut worst = Verdict::Clean;
+            for path in &packs {
+                let pack = tankyard_mods::PackFiles::read(path)?;
+                let report = tankyard_mods::scan::scan_pack(&pack);
+                let verdict = report.verdict();
+                println!("{}: {verdict:?} ({} files)", path.display(), pack.len());
+                for finding in report
+                    .findings
+                    .iter()
+                    .filter(|f| verbose || f.severity != Severity::Info)
+                {
+                    let place = if finding.line > 0 {
+                        format!("{}:{}", finding.file, finding.line)
+                    } else {
+                        finding.file.clone()
+                    };
+                    println!("  {:?} {place}: {}", finding.severity, finding.message);
+                }
+                worst = match (worst, verdict) {
+                    (Verdict::Dangerous, _) | (_, Verdict::Dangerous) => Verdict::Dangerous,
+                    (Verdict::Review, _) | (_, Verdict::Review) => Verdict::Review,
+                    _ => Verdict::Clean,
+                };
+            }
+            match worst {
+                Verdict::Clean => {}
+                Verdict::Review => std::process::exit(1),
+                Verdict::Dangerous => std::process::exit(2),
+            }
+        }
         Command::ValidateMods { mods } => {
-            let loaded = tankyard_mods::load(&mods)?;
+            let loaded = tankyard_lua::load(&mods)?;
             println!(
                 "Validated {} mods, {} tanks, {} maps, {} hooks, {} textures",
                 loaded.bundle.mods.len(),

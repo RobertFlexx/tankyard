@@ -6,7 +6,11 @@ The Bastion keeps watch over fair play. Its small Credits mark uses the same Bas
 
 Finite input validation rejects impossible values and normalizes diagonal movement. Wrapping sequence comparison discards duplicate and reordered inputs. Large forward sequence gaps are allowed, including after a client pauses or loses traffic. Redundant input bundles, normal simulation deadlines, bounded packet processing, and rate limits remain in place. Packet floods can be dropped; they never increase the simulation rate.
 
-There are no suspicion scores, ping thresholds, client fingerprint checks, or automatic cheating bans. Lag, packet loss, repeated inputs, and differing render frame rates are not evidence of cheating. A malformed protocol packet can still close its connection under existing transport rules, and an idle/disconnected player can time out normally. Those outcomes do not create a cheat accusation or a persistent ban. Server operators retain explicit moderation tools.
+There are no suspicion scores, ping thresholds, client fingerprint checks, or automatic cheating bans. Lag, packet loss, repeated inputs, and differing render frame rates are not evidence of cheating. After the handshake, an undecodable or invalid packet is dropped and the request refused, never treated as an offense on its own; only a sustained stream (more than twelve within ten seconds), which no correct client produces on any link, closes the connection. A congested client misses cosmetic notices such as the kill feed instead of being disconnected, because every snapshot carries the authoritative state. Chat text with pasted tabs or line breaks is cleaned before sending rather than refused. An idle player can still time out normally. None of these outcomes creates a cheat accusation or a persistent ban. Server operators retain explicit moderation tools.
+
+## Information hiding
+
+Snapshots carry every tank for the leaderboard and minimap, but opponents more than the interest radius plus 400 units away are sent without aim, cursor distance, velocity, charge or weapon timers, and their positions are snapped to a 96-unit grid. Radar overlays and aim readers therefore get nothing that the minimap does not already show, and the snapshots are smaller. Teammates, the spectated tank and everything nearby keep full detail. Projectile hit histories, which only the server uses, are never sent.
 
 ## Creator authorization
 

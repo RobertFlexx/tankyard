@@ -9,3 +9,4 @@ serde.workspace = true
 serde_json.workspace = true
 tankyard-content.workspace = true
 image = { version="0.24.9",default-features=false,features=["png"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }

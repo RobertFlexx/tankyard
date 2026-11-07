@@ -1,0 +1,9 @@
+{
+  "api_version": 2,
+  "id": "gravity_wells",
+  "name": "Gravity Wells",
+  "version": "1.0",
+  "author": "Tank Yard",
+  "description": "Drifting wells pull tanks in and seed rare hexagons at their core.",
+  "scripts": ["main.lua"]
+}

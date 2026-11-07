@@ -1,15 +1,27 @@
 use crate::drones::DroneContacts;
 use crate::physics::{
-    Body, SpatialGrid, circle_rect, constrain_tank, move_tank, polygon_vertices_into, sweep_circle,
-    sweep_polygon, sweep_rect,
+    Body, SpatialGrid, WallIndex, circle_rect, constrain_tank, move_tank, polygon_vertices_into,
+    sweep_circle, sweep_polygon, sweep_rect,
 };
 use crate::*;
 use std::collections::BTreeMap;
 use tankyard_content::Content;
 use tankyard_content::ProjectileKind;
+/// Server-side record of one damage application, consumed by behavior mods.
+#[derive(Clone, Copy, Debug)]
+pub struct DamageRecord {
+    pub victim: EntityId,
+    pub attacker: EntityId,
+    pub amount: f32,
+    pub position: V2,
+}
 pub struct World {
     /// Trusted host state; never accepted from input packets or snapshots.
     pub admin_modifiers: BTreeMap<EntityId, crate::administration::Modifiers>,
+    /// Incoming damage multipliers set by behavior mods.
+    pub incoming_damage: BTreeMap<EntityId, f32>,
+    /// Damage dealt during the current tick; never replicated.
+    pub damage_log: Vec<DamageRecord>,
     pub bots_frozen: bool,
     pub config: WorldConfig,
     pub content: Content,
@@ -30,6 +42,7 @@ pub struct World {
     pub(crate) scratch: Vec<Body>,
     collision_hits: Vec<(f32, Body, EntityId)>,
     drone_contacts: DroneContacts,
+    wall_index: WallIndex,
     body_padding: f32,
     pub(crate) contributions: BTreeMap<EntityId, Vec<(EntityId, f32, u64)>>,
     pub(crate) mode_timer: f32,
@@ -38,6 +51,7 @@ pub struct World {
     pub(crate) sandbox_god: Vec<EntityId>,
     pub(crate) arena_velocity: f32,
     pub(crate) boss_roll_at: u64,
+    pub(crate) base_guard_timers: [f32; 4],
 }
 impl World {
     pub fn new(mut config: WorldConfig, content: Content) -> Self {
@@ -109,11 +123,14 @@ impl World {
         config.map = map.id.clone();
         let mut world = Self {
             admin_modifiers: BTreeMap::new(),
+            incoming_damage: BTreeMap::new(),
+            damage_log: Vec::with_capacity(64),
             bots_frozen: false,
             grid: SpatialGrid::new(config.width, config.height),
             drone_contacts: DroneContacts::new(config.width, config.height),
+            wall_index: WallIndex::new(config.width, config.height),
             rng: config.seed,
-            next_id: 1,
+            next_id: config.id_base.clamp(1, 1 << 52),
             tick: 0,
             tanks: Vec::with_capacity(128),
             projectiles: Vec::with_capacity(config.max_projectiles),
@@ -150,6 +167,7 @@ impl World {
             sandbox_god: vec![],
             arena_velocity: 0.,
             boss_roll_at: 60 * 60,
+            base_guard_timers: [0.; 4],
         };
         world.initialize_map();
         world.initialize_mode();
@@ -311,6 +329,7 @@ impl World {
     }
     pub fn remove_player(&mut self, id: EntityId) {
         self.admin_modifiers.remove(&id);
+        self.incoming_damage.remove(&id);
         self.tanks.retain(|t| t.id != id);
         if !self.tanks.iter().any(|tank| tank.game_creator && !tank.bot) {
             self.bots_frozen = false;
@@ -555,6 +574,7 @@ impl World {
     /// produced by the hook remain available to clients and later hooks.
     pub fn step_with(&mut self, before: impl FnOnce(&mut Self)) {
         self.events.clear();
+        self.damage_log.clear();
         before(self);
         if self.match_state.finished {
             return;
@@ -566,6 +586,7 @@ impl World {
         self.update_tanks();
         self.update_targets();
         self.update_bosses();
+        self.update_base_guards();
         self.fire_weapons();
         self.rebuild_grid();
         self.update_stasis();
@@ -683,35 +704,29 @@ impl World {
         }
     }
     fn update_targets(&mut self) {
+        self.wall_index.sync(&self.walls);
+        let bounds = self.config.bounds();
         for t in &mut self.targets {
             if t.kind != TargetKind::Mobile {
                 t.vel *= (-2.5 * DT).exp();
             }
             t.vel = t.vel.clamp_length(120.0);
-            for &wall in &self.walls {
-                if let Some((normal, depth)) = circle_rect(t.pos, t.radius, wall) {
-                    t.pos += normal * (depth + 0.01);
-                    t.vel -= normal * t.vel.dot(normal).min(0.0);
-                }
-            }
+            push_target_out_of_walls(t, &self.walls, &mut self.wall_index);
             t.angle += DT * 0.16;
             let old = t.pos;
             t.pos += t.vel * DT;
-            if t.pos.x < self.config.bounds().x + t.radius
-                || t.pos.x > self.config.bounds().x + self.config.bounds().w - t.radius
-            {
+            if t.pos.x < bounds.x + t.radius || t.pos.x > bounds.x + bounds.w - t.radius {
                 t.vel.x = -t.vel.x;
             }
-            if t.pos.y < self.config.bounds().y + t.radius
-                || t.pos.y > self.config.bounds().y + self.config.bounds().h - t.radius
-            {
+            if t.pos.y < bounds.y + t.radius || t.pos.y > bounds.y + bounds.h - t.radius {
                 t.vel.y = -t.vel.y;
             }
-            t.pos = self.config.bounds().clamp_circle(t.pos, t.radius);
+            t.pos = bounds.clamp_circle(t.pos, t.radius);
             if self
-                .walls
+                .wall_index
+                .query(t.pos, t.pos, t.radius)
                 .iter()
-                .any(|&w| circle_rect(t.pos, t.radius, w).is_some())
+                .any(|&wall| circle_rect(t.pos, t.radius, self.walls[wall]).is_some())
             {
                 t.pos = old;
                 t.vel *= -1.;
@@ -733,12 +748,7 @@ impl World {
                 self.body_padding = self.body_padding.max(t.radius);
             }
         }
-        for (i, b) in self.bosses.iter().enumerate() {
-            if b.health > 0. {
-                self.grid.insert(b.pos, Body::Boss(i));
-                self.body_padding = self.body_padding.max(b.radius);
-            }
-        }
+        // Bosses are checked directly; their radius would inflate every query.
         for (i, p) in self.projectiles.iter().enumerate() {
             if p.lifetime > 0. && p.penetration > 0. {
                 self.grid.insert(p.pos, Body::Deployable(i));
@@ -909,6 +919,7 @@ impl World {
         snapshot.objectives.clone_from(&self.objectives);
         snapshot.match_state.clone_from(&self.match_state);
         snapshot.events.clone_from(&self.events);
+        snapshot.walls_included = true;
     }
     pub fn snapshot_for(&self, center: V2, radius: f32) -> Snapshot {
         self.make_snapshot(Some((center, radius.clamp(400., 5000.))))
@@ -929,6 +940,7 @@ impl World {
         snapshot.objectives.clone_from(&self.objectives);
         snapshot.match_state.clone_from(&self.match_state);
         clone_filtered(&mut snapshot.events, &self.events, |e| visible(e.pos));
+        snapshot.walls_included = true;
     }
     fn make_snapshot(&self, view: Option<(V2, f32)>) -> Snapshot {
         let visible = |pos: V2| {
@@ -960,6 +972,8 @@ impl World {
                 .filter(|e| visible(e.pos))
                 .cloned()
                 .collect(),
+            wall_revision: 0,
+            walls_included: true,
         }
     }
     pub(crate) fn hostile(&self, team: u8, other: u8) -> bool {
@@ -982,7 +996,8 @@ impl World {
         {
             return;
         }
-        let reduction = if t.shield > 0. { 0.18 } else { 1. };
+        let reduction = if t.shield > 0. { 0.18 } else { 1. }
+            * self.incoming_damage.get(&t.id).copied().unwrap_or(1.);
         let amount = (damage * reduction).max(0.);
         t.vel = (t.vel + knockback).clamp_length(1200.);
         if amount <= 0.0 || !amount.is_finite() {
@@ -995,6 +1010,14 @@ impl World {
         let pos = t.pos;
         let team = t.team;
         self.record_damage(id, owner, amount);
+        if self.damage_log.len() < 4096 {
+            self.damage_log.push(DamageRecord {
+                victim: id,
+                attacker: owner,
+                amount,
+                position: pos,
+            });
+        }
         if amount > 0.5 {
             self.event(EventKind::Impact, pos, id, amount as u32, team);
         }
@@ -1346,6 +1369,7 @@ impl World {
     }
     fn update_projectiles(&mut self) {
         self.drone_contacts.prepare_walls(&self.walls);
+        self.wall_index.sync(&self.walls);
         let mut spawned = Vec::new();
         let mut hits = std::mem::take(&mut self.collision_hits);
         let count = self.projectiles.len();
@@ -1396,8 +1420,8 @@ impl World {
                 end = p.pos;
             } else {
                 let mut wallhit = None;
-                for wall in &self.walls {
-                    if let Some((t, n)) = sweep_rect(start, end, radius, *wall)
+                for &wall in self.wall_index.query(start, end, radius) {
+                    if let Some((t, n)) = sweep_rect(start, end, radius, self.walls[wall])
                         && wallhit.is_none_or(|h: (f32, V2)| t < h.0)
                     {
                         wallhit = Some((t, n));
@@ -1445,82 +1469,36 @@ impl World {
             if kind == ProjectileKind::Mine && self.projectiles[i].age < 0.4 {
                 continue;
             }
-            self.grid.query(
-                start,
-                end,
-                self.body_padding + radius + moving_padding,
-                &mut self.scratch,
-            );
             hits.clear();
-            for body in &self.scratch {
-                let (position, r, id, valid) = match *body {
-                    Body::Tank(j) => {
-                        let t = &self.tanks[j];
-                        (
-                            t.pos,
-                            t.radius,
-                            t.id,
-                            t.alive
-                                && t.health > 0.
-                                && t.id != owner
-                                && t.protection <= 0.
-                                && self.hostile(team, t.team),
-                        )
+            {
+                // Cells are visited in place; copying every candidate cost more
+                // than testing it. Bosses are few and large, so they stay out of
+                // the grid instead of inflating every projectile's query.
+                let world = &*self;
+                world.grid.for_each_in(
+                    start,
+                    end,
+                    world.body_padding + radius + moving_padding,
+                    |body| {
+                        if let Some(hit) =
+                            world.projectile_contact(i, body, start, end, radius, owner, team)
+                        {
+                            hits.push(hit);
+                        }
+                    },
+                );
+                for boss in 0..world.bosses.len() {
+                    if let Some(hit) = world.projectile_contact(
+                        i,
+                        Body::Boss(boss),
+                        start,
+                        end,
+                        radius,
+                        owner,
+                        team,
+                    ) {
+                        hits.push(hit);
                     }
-                    Body::Target(j) => {
-                        let t = &self.targets[j];
-                        (t.pos, t.radius, t.id, t.health > 0.)
-                    }
-                    Body::Boss(j) => {
-                        let b = &self.bosses[j];
-                        (
-                            b.pos,
-                            b.radius,
-                            b.id,
-                            b.health > 0. && b.id != owner && self.hostile(team, b.team),
-                        )
-                    }
-                    Body::Deployable(j) => {
-                        let d = &self.projectiles[j];
-                        (
-                            d.pos,
-                            d.radius,
-                            d.id,
-                            j != i
-                                && d.lifetime > 0.
-                                && d.owner != owner
-                                && self.hostile(team, d.team),
-                        )
-                    }
-                };
-                if !valid || self.projectiles[i].hit.contains(&id) {
-                    continue;
-                }
-                if sweep_circle(start, end, position, r + radius).is_none()
-                    && !matches!(body, Body::Deployable(_))
-                {
-                    continue;
-                }
-                let collision = if let Body::Target(j) = body {
-                    let target = &self.targets[*j];
-                    let sides = target_sides(target.kind);
-                    let mut vertices = [V2::ZERO; 8];
-                    let vertices = &mut vertices[..usize::from(sides)];
-                    polygon_vertices_into(position, r, target.angle, vertices);
-                    sweep_polygon(start, end, radius, vertices)
-                } else if let Body::Deployable(j) = body {
-                    let other = &self.projectiles[*j];
-                    let (other_start, other_end) = if *j < i {
-                        (other.previous, other.pos)
-                    } else {
-                        (other.pos, other.pos + other.vel * DT)
-                    };
-                    sweep_circle(start - other_start, end - other_end, V2::ZERO, r + radius)
-                } else {
-                    sweep_circle(start, end, position, r + radius)
-                };
-                if let Some(t) = collision {
-                    hits.push((t, *body, id));
                 }
             }
             hits.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.2.cmp(&b.2)));
@@ -1681,6 +1659,89 @@ impl World {
         self.projectiles.extend(spawned.into_iter().take(room));
         self.collision_hits = hits;
     }
+    /// Earliest contact between projectile `i`'s sweep and one candidate body.
+    #[allow(clippy::too_many_arguments)]
+    fn projectile_contact(
+        &self,
+        i: usize,
+        body: Body,
+        start: V2,
+        end: V2,
+        radius: f32,
+        owner: EntityId,
+        team: u8,
+    ) -> Option<(f32, Body, EntityId)> {
+        let (position, r, id, valid) = match body {
+            Body::Tank(j) => {
+                let t = &self.tanks[j];
+                (
+                    t.pos,
+                    t.radius,
+                    t.id,
+                    t.alive
+                        && t.health > 0.
+                        && t.id != owner
+                        && t.protection <= 0.
+                        && self.hostile(team, t.team),
+                )
+            }
+            Body::Target(j) => {
+                let t = &self.targets[j];
+                // Guardians defend their base; they never farm shapes.
+                (
+                    t.pos,
+                    t.radius,
+                    t.id,
+                    t.health > 0. && crate::team_bases::base_guard_team(owner).is_none(),
+                )
+            }
+            Body::Boss(j) => {
+                let b = &self.bosses[j];
+                (
+                    b.pos,
+                    b.radius,
+                    b.id,
+                    b.health > 0. && b.id != owner && self.hostile(team, b.team),
+                )
+            }
+            Body::Deployable(j) => {
+                let d = &self.projectiles[j];
+                (
+                    d.pos,
+                    d.radius,
+                    d.id,
+                    j != i && d.lifetime > 0. && d.owner != owner && self.hostile(team, d.team),
+                )
+            }
+        };
+        if !valid || self.projectiles[i].hit.contains(&id) {
+            return None;
+        }
+        if sweep_circle(start, end, position, r + radius).is_none()
+            && !matches!(body, Body::Deployable(_))
+        {
+            return None;
+        }
+        let collision = if let Body::Target(j) = body {
+            let target = &self.targets[j];
+            let sides = target_sides(target.kind);
+            let mut vertices = [V2::ZERO; 8];
+            let vertices = &mut vertices[..usize::from(sides)];
+            polygon_vertices_into(position, r, target.angle, vertices);
+            sweep_polygon(start, end, radius, vertices)
+        } else if let Body::Deployable(j) = body {
+            let other = &self.projectiles[j];
+            let (other_start, other_end) = if j < i {
+                (other.previous, other.pos)
+            } else {
+                (other.pos, other.pos + other.vel * DT)
+            };
+            sweep_circle(start - other_start, end - other_end, V2::ZERO, r + radius)
+        } else {
+            sweep_circle(start, end, position, r + radius)
+        };
+        collision.map(|t| (t, body, id))
+    }
     pub(crate) fn steer_projectile(&mut self, i: usize) {
         if self.projectiles[i].kind == ProjectileKind::Homing {
             self.steer_homing(i);
@@ -1691,6 +1752,18 @@ impl World {
             (p.kind, p.pos, p.owner, p.team, p.cruise_speed, p.id)
         };
         if kind.is_drone() {
+            if let Some(guard_team) = crate::team_bases::base_guard_team(owner) {
+                let Some(goal) = self.base_guard_goal(guard_team, id, pos) else {
+                    // The mode or arena no longer has this base.
+                    self.projectiles[i].lifetime = 0.;
+                    return;
+                };
+                let offset = goal - pos;
+                let desired_speed = speed * (offset.length() / 60.).clamp(0.0, 1.0);
+                let target = offset.normalized() * desired_speed;
+                self.projectiles[i].vel = self.projectiles[i].vel.lerp(target, (DT * 7.).min(1.));
+                return;
+            }
             let desired = if let Some(t) = self.tanks.iter().find(|t| t.id == owner && t.alive) {
                 let returning = self.projectiles[i].is_return_drone();
                 let commanded = if returning {
@@ -1800,8 +1873,9 @@ impl World {
     }
     pub(crate) fn explode(&mut self, pos: V2, radius: f32, damage: f32, owner: EntityId, team: u8) {
         self.grid.query(pos, pos, radius + 160., &mut self.scratch);
-        let bodies = self.scratch.clone();
-        for body in bodies {
+        let mut bodies = std::mem::take(&mut self.scratch);
+        bodies.extend((0..self.bosses.len()).map(Body::Boss));
+        for &body in &bodies {
             match body {
                 Body::Tank(i) => {
                     let t = &self.tanks[i];
@@ -1840,7 +1914,34 @@ impl World {
                 _ => {}
             }
         }
+        bodies.clear();
+        self.scratch = bodies;
         self.event(EventKind::Destroy, pos, owner, radius as u32, team);
+    }
+}
+/// Resolve shape/wall overlap in map order. Walls beyond the query margin can
+/// only matter after a push travels that far, which falls back to a full scan.
+fn push_target_out_of_walls(target: &mut Target, walls: &[Rect], index: &mut WallIndex) {
+    const MARGIN: f32 = 48.0;
+    let (origin, velocity) = (target.pos, target.vel);
+    let mut farthest = 0.0_f32;
+    for &wall in index.query(origin, origin, target.radius + MARGIN) {
+        if let Some((normal, depth)) = circle_rect(target.pos, target.radius, walls[wall]) {
+            target.pos += normal * (depth + 0.01);
+            target.vel -= normal * target.vel.dot(normal).min(0.0);
+            farthest = farthest.max(target.pos.distance(origin));
+        }
+    }
+    if farthest <= MARGIN {
+        return;
+    }
+    target.pos = origin;
+    target.vel = velocity;
+    for &wall in walls {
+        if let Some((normal, depth)) = circle_rect(target.pos, target.radius, wall) {
+            target.pos += normal * (depth + 0.01);
+            target.vel -= normal * target.vel.dot(normal).min(0.0);
+        }
     }
 }
 pub(crate) fn drone_phase(id: EntityId) -> f32 {

@@ -101,8 +101,15 @@ pub struct Menu {
     scale_edit: crate::ui_layout::ScaleEdit,
     scale_anchor: Option<f32>,
     pub maps: Vec<tankyard_content::MapDef>,
-    mod_catalog: Vec<(String, tankyard_mods::ModInfo)>,
-    mods_scanned: bool,
+    mod_entries: Vec<crate::mod_library::Entry>,
+    pub mods_scanned: bool,
+    mod_path: String,
+    mod_path_active: bool,
+    mod_review: Option<usize>,
+    mod_trust: bool,
+    mod_scroll: usize,
+    /// Open the first flagged pack's review (screenshot checks only).
+    pub preview_review: bool,
     map_page: usize,
     history: Vec<Page>,
     practice_content: Content,
@@ -150,8 +157,14 @@ impl Menu {
             scale_edit: Default::default(),
             scale_anchor: None,
             maps: tankyard_content::builtin_maps(),
-            mod_catalog: vec![],
+            mod_entries: vec![],
             mods_scanned: false,
+            mod_path: String::new(),
+            mod_path_active: false,
+            mod_review: None,
+            mod_trust: false,
+            mod_scroll: 0,
+            preview_review: false,
             map_page: 0,
             history: Vec::new(),
             practice_content: Content::builtin(),
@@ -332,6 +345,10 @@ impl Menu {
         s: f32,
     ) -> Action {
         pointer_scope(1 + self.page as u64);
+        // While a pack's review sheet is open, nothing beneath it responds.
+        let reviewing = self.page == Page::Mods && self.mod_review.is_some();
+        let interactive = set_interactive(false);
+        set_interactive(interactive && !reviewing);
         if is_key_pressed(KeyCode::Tab) && self.binding.is_none() {
             self.focus_next(is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift));
         }
@@ -444,6 +461,12 @@ impl Menu {
             Page::Party => self.party(settings, s),
         };
         drop(canvas);
+        if reviewing {
+            set_interactive(interactive);
+            self.mod_review_overlay(settings, s);
+            return action;
+        }
+        set_interactive(interactive);
         let footer = match self.page {
             Page::Modes => self.modes_footer(settings, s),
             Page::Controls => self.controls_footer(s),
@@ -689,6 +712,8 @@ impl Menu {
             13.0 * s,
             muted_color(),
         );
+        let pane = Rect::new(x, y - 60.0 * s, pane_w, t_y + 65.0 * s - (y - 60.0 * s));
+        bastion_badge(pane, self.motion_time, s);
         Action::None
     }
     fn modes(&mut self, _settings: &mut Settings, s: f32) -> Action {
@@ -2390,11 +2415,13 @@ impl Menu {
         Action::None
     }
     fn mods(&mut self, settings: &mut Settings, s: f32) -> Action {
+        use tankyard_mods::scan::Verdict;
         let x = 40.0 * s;
         let y = 169.0 * s;
+        let w = screen_width() - x * 2.0;
         label("Mods", x, y, 30.0 * s, text_color());
         label(
-            "Choose mods for your next offline game or hosted server.",
+            "Lua script packs and data packs for offline games and servers you host.",
             x,
             y + 31.0 * s,
             16.0 * s,
@@ -2414,121 +2441,468 @@ impl Menu {
         }
         if !self.mods_scanned {
             self.mods_scanned = true;
-            self.mod_catalog.clear();
-            if let Ok(entries) = std::fs::read_dir("mods") {
-                let mut paths: Vec<_> = entries
-                    .filter_map(Result::ok)
-                    .map(|e| e.path())
-                    .filter(|p| p.is_dir())
-                    .take(64)
-                    .collect();
-                paths.sort();
-                for path in paths {
-                    let parsed =
-                        tankyard_mods::read_bounded(&path.join("mod.json")).and_then(|bytes| {
-                            serde_json::from_slice::<tankyard_mods::Manifest>(&bytes)
-                                .map_err(|e| e.to_string())
-                        });
-                    if let Ok(m) = parsed
-                        && m.api_version == tankyard_mods::API_VERSION
-                        && tankyard_mods::identifier(&m.id)
-                        && !m.name.is_empty()
-                        && m.name.len() <= 64
-                        && !m.name.chars().any(char::is_control)
-                        && !m.version.is_empty()
-                        && m.version.len() <= 32
-                        && !m.version.chars().any(char::is_control)
-                    {
-                        self.mod_catalog.push((
-                            path.to_string_lossy().into_owned(),
-                            tankyard_mods::ModInfo {
-                                id: m.id,
-                                name: m.name,
-                                version: m.version,
-                                behavior_digest: 0,
-                            },
-                        ));
-                    }
-                }
+            self.mod_review = None;
+            self.mod_entries = crate::mod_library::discover();
+            // Forget enabled packs that no longer exist.
+            let known: Vec<_> = self.mod_entries.iter().map(|e| e.path.clone()).collect();
+            settings
+                .enabled_mods
+                .retain(|path| known.contains(path) || std::path::Path::new(path).exists());
+            if self.preview_review {
+                self.mod_review = self
+                    .mod_entries
+                    .iter()
+                    .position(|entry| entry.verdict() != tankyard_mods::scan::Verdict::Clean);
             }
         }
-        if self.mod_catalog.is_empty() {
+        // Import row.
+        let import_y = y + 52.0 * s;
+        label(
+            "IMPORT A .ZIP PACK",
+            x,
+            import_y + 12.0 * s,
+            11.0 * s,
+            muted_color(),
+        );
+        let field_w = (w - 136.0 * s).min(620.0 * s);
+        text_field(
+            Rect::new(x, import_y + 20.0 * s, field_w, 38.0 * s),
+            &mut self.mod_path,
+            &mut self.mod_path_active,
+            512,
+            s * 0.8,
+            false,
+        );
+        if button(
+            Rect::new(
+                x + field_w + 10.0 * s,
+                import_y + 20.0 * s,
+                120.0 * s,
+                38.0 * s,
+            ),
+            "Import",
+            true,
+            !self.mod_path.trim().is_empty(),
+            s * 0.85,
+        ) {
+            let path = self.mod_path.trim().trim_matches('"').to_owned();
+            self.import_result(crate::mod_library::import(std::path::Path::new(&path)));
+            self.mod_path.clear();
+        }
+        label(
+            "Paste the archive's path, or drop a .zip onto this window. Every pack is reviewed before it can run.",
+            x,
+            import_y + 76.0 * s,
+            12.0 * s,
+            muted_color(),
+        );
+        // Library list with its own scrolling.
+        let list = Rect::new(
+            x,
+            import_y + 92.0 * s,
+            w,
+            (screen_height() - import_y - 92.0 * s - 112.0 * s).max(70.0 * s),
+        );
+        let row_h = 64.0 * s;
+        let visible = ((list.h + 6.0 * s) / (row_h + 6.0 * s)).floor().max(1.0) as usize;
+        if contains(list) && self.mod_review.is_none() {
+            let wheel = mouse_wheel().1;
+            if wheel < 0. {
+                self.mod_scroll += 1;
+            } else if wheel > 0. {
+                self.mod_scroll = self.mod_scroll.saturating_sub(1);
+            }
+        }
+        self.mod_scroll = self
+            .mod_scroll
+            .min(self.mod_entries.len().saturating_sub(visible));
+        if self.mod_entries.is_empty() {
             label(
-                "Put a mod folder containing mod.json in the mods directory.",
+                "No packs yet. Import a .zip, or place a pack folder in the library below.",
                 x,
-                y + 88.0 * s,
-                18.0 * s,
+                list.y + 26.0 * s,
+                16.0 * s,
                 muted_color(),
             );
         }
-        let visible = ((screen_height() - y - 160.0 * s) / (58.0 * s))
-            .floor()
-            .max(1.0) as usize;
-        for (i, (path, info)) in self.mod_catalog.iter().take(visible).enumerate() {
+        let mut toggle = None;
+        for (slot, index) in (self.mod_scroll..self.mod_entries.len())
+            .take(visible)
+            .enumerate()
+        {
+            let entry = &self.mod_entries[index];
             let r = Rect::new(
-                x,
-                y + 60.0 * s + i as f32 * 58.0 * s,
-                screen_width() - x * 2.0,
-                49.0 * s,
+                list.x,
+                list.y + slot as f32 * (row_h + 6.0 * s),
+                list.w,
+                row_h,
             );
-            let enabled = settings.enabled_mods.contains(path);
+            let enabled = settings.enabled_mods.contains(&entry.path);
             panel(r);
+            if enabled {
+                draw_rectangle(r.x, r.y, 4.0 * s, r.h, CYAN);
+            }
+            let version = entry
+                .manifest
+                .as_ref()
+                .map_or(String::new(), |m| format!("  v{}", m.version));
             label(
-                &info.name,
-                r.x + 15.0 * s,
-                r.y + 23.0 * s,
+                &fitted_label(&format!("{}{version}", entry.name()), 18.0 * s, r.w * 0.5),
+                r.x + 16.0 * s,
+                r.y + 24.0 * s,
                 18.0 * s,
                 text_color(),
             );
+            let kind = match (entry.scripted(), entry.archive) {
+                (true, true) => "Lua script pack · zip",
+                (true, false) => "Lua script pack · folder",
+                (false, true) => "Data pack · zip",
+                (false, false) => "Data pack · folder",
+            };
+            let detail = match (&entry.manifest, &entry.error) {
+                (_, Some(error)) => format!("Cannot load: {error}"),
+                (Some(m), None) => {
+                    let mut parts = vec![m.id.clone(), kind.to_owned()];
+                    if let Some(author) = &m.author {
+                        parts.push(format!("by {author}"));
+                    }
+                    if let Some(description) = &m.description {
+                        parts.push(description.clone());
+                    }
+                    parts.join("  ·  ")
+                }
+                (None, None) => kind.to_owned(),
+            };
             label(
-                &format!("{}  ·  {}", info.id, info.version),
-                r.x + 15.0 * s,
-                r.y + 41.0 * s,
-                11.0 * s,
-                muted_color(),
+                &fitted_label(&detail, 12.0 * s, r.w - 420.0 * s),
+                r.x + 16.0 * s,
+                r.y + 46.0 * s,
+                12.0 * s,
+                if entry.error.is_some() {
+                    RED
+                } else {
+                    muted_color()
+                },
             );
-            if button(
-                Rect::new(r.x + r.w - 139.0 * s, r.y + 8.0 * s, 124.0 * s, 33.0 * s),
-                if enabled { "Enabled" } else { "Enable" },
-                enabled,
-                true,
+            let (badge, color) = match entry.verdict() {
+                Verdict::Clean => ("Reviewed", Color::new(0.30, 0.64, 0.30, 1.0)),
+                Verdict::Review if entry.approved(settings) => ("Accepted", warm_text_color()),
+                Verdict::Review => ("Needs review", warm_text_color()),
+                Verdict::Dangerous if entry.approved(settings) => ("Accepted risk", RED),
+                Verdict::Dangerous => ("Dangerous", RED),
+            };
+            let badge_w = label_width(badge, 11.0 * s) + 20.0 * s;
+            let badge_rect = Rect::new(r.right() - 392.0 * s, r.y + 20.0 * s, badge_w, 24.0 * s);
+            draw_rectangle(
+                badge_rect.x,
+                badge_rect.y,
+                badge_rect.w,
+                badge_rect.h,
+                alpha(color, 0.16),
+            );
+            draw_rectangle_lines(
+                badge_rect.x,
+                badge_rect.y,
+                badge_rect.w,
+                badge_rect.h,
+                1.5,
+                color,
+            );
+            center_label(
+                badge,
+                badge_rect.center().x,
+                badge_rect.bottom() - 7.0 * s,
+                11.0 * s,
+                color,
+            );
+            if small_button(
+                Rect::new(r.right() - 264.0 * s, r.y + 15.0 * s, 110.0 * s, 33.0 * s),
+                "Details",
                 s * 0.8,
             ) {
-                let previous = settings.enabled_mods.clone();
-                if enabled {
-                    settings.enabled_mods.retain(|p| p != path);
+                self.mod_review = Some(index);
+                self.mod_trust = false;
+            }
+            if button(
+                Rect::new(r.right() - 139.0 * s, r.y + 15.0 * s, 124.0 * s, 33.0 * s),
+                if enabled { "Enabled" } else { "Enable" },
+                enabled,
+                entry.error.is_none(),
+                s * 0.8,
+            ) {
+                if !enabled && !entry.approved(settings) {
+                    self.mod_review = Some(index);
+                    self.mod_trust = false;
                 } else {
-                    settings.enabled_mods.push(path.clone());
-                }
-                let paths: Vec<_> = settings
-                    .enabled_mods
-                    .iter()
-                    .map(std::path::PathBuf::from)
-                    .collect();
-                match tankyard_mods::load(&paths) {
-                    Ok(loaded) => {
-                        self.maps = loaded.bundle.maps;
-                        self.map = self.map.min(self.maps.len() - 1);
-                        self.error.clear();
-                        let _ = settings.save();
-                    }
-                    Err(error) => {
-                        settings.enabled_mods = previous;
-                        self.error = error;
-                    }
+                    toggle = Some(index);
                 }
             }
         }
+        if let Some(index) = toggle {
+            self.toggle_mod(settings, index);
+        }
         label(
-            "Modded servers provide tank and map data when you join.",
+            &fitted_label(
+                &format!(
+                    "Library: {}  ·  Scripts run in a LuaJIT sandbox with no file, network or system access.",
+                    crate::mod_library::library_dir().display()
+                ),
+                13.0 * s,
+                w,
+            ),
             x,
             screen_height() - 93.0 * s,
-            14.0 * s,
+            13.0 * s,
             muted_color(),
         );
         Action::None
     }
+    /// The review sheet for one pack, drawn above the page and its canvas.
+    fn mod_review_overlay(&mut self, settings: &mut Settings, s: f32) {
+        use tankyard_mods::scan::{Severity, Verdict};
+        if let Some(index) = self.mod_review
+            && let Some(entry) = self.mod_entries.get(index)
+        {
+            let panel_w = (720.0 * s).min(screen_width() - 48.0 * s);
+            let panel_h = (470.0 * s).min(screen_height() - 160.0 * s);
+            let r = Rect::new(
+                (screen_width() - panel_w) * 0.5,
+                (screen_height() - panel_h) * 0.5,
+                panel_w,
+                panel_h,
+            );
+            draw_rectangle(
+                0.,
+                0.,
+                screen_width(),
+                screen_height(),
+                alpha(bg_color(), 0.55),
+            );
+            panel(r);
+            let verdict = entry.verdict();
+            let (title, color) = match verdict {
+                Verdict::Clean => ("No problems found", Color::new(0.30, 0.64, 0.30, 1.0)),
+                Verdict::Review => ("Review before enabling", warm_text_color()),
+                Verdict::Dangerous => ("This pack tries to reach your computer", RED),
+            };
+            draw_rectangle(r.x, r.y, r.w, 5.0 * s, color);
+            label(
+                &fitted_label(entry.name(), 22.0 * s, r.w - 40.0 * s),
+                r.x + 20.0 * s,
+                r.y + 38.0 * s,
+                22.0 * s,
+                text_color(),
+            );
+            label(title, r.x + 20.0 * s, r.y + 62.0 * s, 14.0 * s, color);
+            let summary = match verdict {
+                Verdict::Clean => {
+                    "Nothing in this pack tries to use system commands, files, native code or hidden data."
+                }
+                Verdict::Review => {
+                    "Some contents are unusual for a game mod. The sandbox still blocks system access, but check that you expected them."
+                }
+                Verdict::Dangerous => {
+                    "The sandbox blocks these attempts, but a pack that makes them was probably written to cause harm. Only continue if you fully trust its author."
+                }
+            };
+            let mut ly = wrap(
+                summary,
+                r.x + 20.0 * s,
+                r.y + 88.0 * s,
+                r.w - 40.0 * s,
+                13.0 * s,
+                muted_color(),
+            ) + 8.0 * s;
+            let footer = r.bottom() - 62.0 * s;
+            let findings = &entry.report.findings;
+            if findings.is_empty() {
+                label(
+                    "No findings.",
+                    r.x + 20.0 * s,
+                    ly + 12.0 * s,
+                    13.0 * s,
+                    muted_color(),
+                );
+            }
+            for finding in findings {
+                if ly + 20.0 * s
+                    > footer
+                        - (if verdict == Verdict::Dangerous {
+                            30.0
+                        } else {
+                            0.0
+                        }) * s
+                {
+                    label("…", r.x + 20.0 * s, ly + 10.0 * s, 13.0 * s, muted_color());
+                    break;
+                }
+                let (tag, tint) = match finding.severity {
+                    Severity::Danger => ("DANGER", RED),
+                    Severity::Warning => ("REVIEW", warm_text_color()),
+                    Severity::Info => ("NOTE", muted_color()),
+                };
+                label(tag, r.x + 20.0 * s, ly + 12.0 * s, 10.0 * s, tint);
+                let place = if finding.line > 0 {
+                    format!("{}:{}", finding.file, finding.line)
+                } else {
+                    finding.file.clone()
+                };
+                label(
+                    &fitted_label(
+                        &format!("{place} — {}", finding.message),
+                        12.0 * s,
+                        r.w - 110.0 * s,
+                    ),
+                    r.x + 84.0 * s,
+                    ly + 12.0 * s,
+                    12.0 * s,
+                    text_color(),
+                );
+                ly += 20.0 * s;
+            }
+            let enabled = settings.enabled_mods.contains(&entry.path);
+            let needs_trust = verdict == Verdict::Dangerous && !entry.approved(settings);
+            if needs_trust {
+                crate::ui::toggle(
+                    Rect::new(r.x + 20.0 * s, footer - 34.0 * s, r.w - 40.0 * s, 30.0 * s),
+                    "I trust this pack's author and accept the risk",
+                    &mut self.mod_trust,
+                    s * 0.8,
+                );
+            }
+            let by = r.bottom() - 52.0 * s;
+            if small_button(
+                Rect::new(r.x + 20.0 * s, by, 110.0 * s, 36.0 * s),
+                "Close",
+                s * 0.85,
+            ) {
+                self.mod_review = None;
+            }
+            if !enabled
+                && entry.error.is_none()
+                && button(
+                    Rect::new(r.right() - 220.0 * s, by, 200.0 * s, 36.0 * s),
+                    if verdict == Verdict::Clean {
+                        "Enable"
+                    } else {
+                        "Enable anyway"
+                    },
+                    verdict == Verdict::Clean,
+                    !needs_trust || self.mod_trust,
+                    s * 0.85,
+                )
+            {
+                if verdict != Verdict::Clean && !settings.approved_mods.contains(&entry.digest) {
+                    settings.approved_mods.push(entry.digest.clone());
+                }
+                self.mod_review = None;
+                self.toggle_mod(settings, index);
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                self.mod_review = None;
+            }
+        }
+    }
+    fn toggle_mod(&mut self, settings: &mut Settings, index: usize) {
+        let Some(entry) = self.mod_entries.get(index) else {
+            return;
+        };
+        let path = entry.path.clone();
+        let previous = settings.enabled_mods.clone();
+        if settings.enabled_mods.contains(&path) {
+            settings.enabled_mods.retain(|p| p != &path);
+        } else if settings.enabled_mods.len() >= tankyard_mods::MAX_MODS {
+            self.error = "At most 16 packs can be enabled at once.".into();
+            return;
+        } else {
+            settings.enabled_mods.push(path);
+        }
+        let (ready, held) = crate::mod_library::ready_paths(settings);
+        match tankyard_lua::load(&ready) {
+            Ok(loaded) => {
+                self.maps = loaded.bundle.maps;
+                self.map = self.map.min(self.maps.len() - 1);
+                self.error = held.join(" ");
+                self.info.clear();
+                let _ = settings.save();
+            }
+            Err(error) => {
+                settings.enabled_mods = previous;
+                self.error = error;
+            }
+        }
+    }
+    pub fn import_result(&mut self, result: Result<crate::mod_library::Entry, String>) {
+        match result {
+            Ok(entry) => {
+                self.error.clear();
+                self.info = match entry.verdict() {
+                    tankyard_mods::scan::Verdict::Clean => {
+                        format!(
+                            "Imported {}. It passed review; enable it below.",
+                            entry.name()
+                        )
+                    }
+                    _ => format!(
+                        "Imported {}. Open Details to review its findings before enabling it.",
+                        entry.name()
+                    ),
+                };
+                self.mods_scanned = false;
+            }
+            Err(error) => {
+                self.info.clear();
+                self.error = format!("Import failed: {error}");
+            }
+        }
+    }
 }
+/// The Bastion mark and motto from Credits, in the main menu's lower right.
+/// It steps aside on windows too small to show it beside the menu.
+fn bastion_badge(pane: Rect, time: f32, s: f32) {
+    let w = screen_width();
+    let h = screen_height();
+    let name = tankyard_server::bastion::NAME;
+    let motto = tankyard_server::bastion::TAGLINE;
+    let text_width = label_width(name, 14.0 * s).max(label_width(motto, 11.0 * s));
+    let badge = Rect::new(
+        w - 22.0 * s - (74.0 * s + text_width + 18.0 * s),
+        h - 22.0 * s - 66.0 * s,
+        74.0 * s + text_width + 18.0 * s,
+        66.0 * s,
+    );
+    let clear_of_menu =
+        badge.x >= pane.x + pane.w + 12.0 * s || badge.y >= pane.y + pane.h + 8.0 * s;
+    if badge.x < 0.0 || !clear_of_menu {
+        return;
+    }
+    panel(badge);
+    tankyard_client::boss_model::boss_model_geometry(
+        tankyard_core::BossKind::Bastion,
+        vec2(badge.x + 36.0 * s, badge.center().y),
+        17.0 * s,
+        -0.2,
+        crate::accessibility::motion_time(time),
+        0,
+        None,
+        &mut render::draw_model_primitive,
+    );
+    label(
+        name,
+        badge.x + 74.0 * s,
+        badge.y + 29.0 * s,
+        14.0 * s,
+        text_color(),
+    );
+    label(
+        motto,
+        badge.x + 74.0 * s,
+        badge.y + 47.0 * s,
+        11.0 * s,
+        muted_color(),
+    );
+}
+
 pub fn mode_blurb(mode: Mode) -> &'static str {
     match mode {
         Mode::Ffa => "Earn score and fight every other tank.",

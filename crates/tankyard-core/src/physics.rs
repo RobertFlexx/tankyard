@@ -585,6 +585,20 @@ impl<T: Copy> SpatialGrid<T> {
             }
         }
     }
+    /// Visit the same candidates as [`Self::query`] without copying them.
+    pub fn for_each_in(&self, a: V2, b: V2, pad: f32, mut visit: impl FnMut(T)) {
+        let minx = ((a.x.min(b.x) - pad) / self.cell).max(0.) as usize;
+        let miny = ((a.y.min(b.y) - pad) / self.cell).max(0.) as usize;
+        let maxx = ((a.x.max(b.x) + pad) / self.cell).max(0.) as usize;
+        let maxy = ((a.y.max(b.y) + pad) / self.cell).max(0.) as usize;
+        for y in miny.min(self.rows - 1)..=maxy.min(self.rows - 1) {
+            for x in minx.min(self.cols - 1)..=maxx.min(self.cols - 1) {
+                for &body in &self.buckets[y * self.cols + x] {
+                    visit(body);
+                }
+            }
+        }
+    }
     pub fn query(&self, a: V2, b: V2, pad: f32, out: &mut Vec<T>) {
         out.clear();
         let minx = ((a.x.min(b.x) - pad) / self.cell).max(0.) as usize;
@@ -599,9 +613,90 @@ impl<T: Copy> SpatialGrid<T> {
     }
 }
 
+/// Cover indexed by cell for projectile and shape collisions. A long wall
+/// occupies several cells; queries return each wall once, in map order, so
+/// earliest-hit ties resolve exactly as a full scan of the wall list would.
+pub(crate) struct WallIndex {
+    grid: SpatialGrid<usize>,
+    walls: Vec<Rect>,
+    nearby: Vec<usize>,
+}
+impl WallIndex {
+    pub fn new(width: f32, height: f32) -> Self {
+        Self {
+            grid: SpatialGrid::new(width, height),
+            walls: Vec::new(),
+            nearby: Vec::with_capacity(16),
+        }
+    }
+    /// Walls are public world state; rebuild whenever their geometry differs.
+    pub fn sync(&mut self, walls: &[Rect]) {
+        if self.walls == walls {
+            return;
+        }
+        self.walls.clear();
+        self.walls.extend_from_slice(walls);
+        self.grid.clear();
+        for (index, &wall) in walls.iter().enumerate() {
+            self.grid.insert_rect(wall, index);
+        }
+    }
+    /// Every wall that can touch a circle of `pad` radius swept from `start`
+    /// to `end`. The one-unit margin absorbs floating-point edge cases.
+    pub fn query(&mut self, start: V2, end: V2, pad: f32) -> &[usize] {
+        if self.walls.is_empty() {
+            self.nearby.clear();
+        } else {
+            self.grid.query(start, end, pad + 1.0, &mut self.nearby);
+            self.nearby.sort_unstable();
+            self.nearby.dedup();
+        }
+        &self.nearby
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_wall_queries_find_every_wall_a_full_scan_would_hit() {
+        let mut walls = Vec::new();
+        for n in 0..90 {
+            let f = n as f32;
+            walls.push(Rect {
+                x: (f * 137.0) % 3400.0 - 40.0,
+                y: (f * 251.0) % 2500.0 - 30.0,
+                w: 20.0 + (f * 7.0) % 300.0,
+                h: 20.0 + (f * 13.0) % 260.0,
+            });
+        }
+        let mut index = WallIndex::new(3600.0, 2600.0);
+        index.sync(&walls);
+        for n in 0..4000 {
+            let f = n as f32;
+            let start = V2::new((f * 61.0) % 3700.0 - 50.0, (f * 97.0) % 2700.0 - 50.0);
+            let end = start + V2::from_angle(f * 0.37) * ((f * 3.0) % 140.0);
+            let radius = 2.0 + (f * 0.7) % 60.0;
+            let expected: Vec<_> = walls
+                .iter()
+                .enumerate()
+                .filter(|(_, wall)| sweep_rect(start, end, radius, **wall).is_some())
+                .map(|(i, _)| i)
+                .collect();
+            let candidates = index.query(start, end, radius).to_vec();
+            assert!(candidates.windows(2).all(|pair| pair[0] < pair[1]));
+            for wall in expected {
+                assert!(
+                    candidates.contains(&wall),
+                    "missed wall {wall} for query {n}"
+                );
+            }
+        }
+        walls.truncate(3);
+        index.sync(&walls);
+        assert!(index.query(V2::ZERO, V2::new(3600.0, 2600.0), 10.0).len() <= 3);
+    }
 
     #[test]
     fn resolving_contact_uses_a_nearby_wall_even_after_hundreds_of_distant_walls() {

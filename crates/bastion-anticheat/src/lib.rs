@@ -11,6 +11,8 @@ pub struct Counters {
     pub accepted_inputs: u64,
     pub stale_inputs: u64,
     pub invalid_inputs: u64,
+    /// Undecodable or invalid packets that were dropped without a disconnect.
+    pub rejected_requests: u64,
 }
 #[derive(Default)]
 pub struct Bastion {
@@ -19,6 +21,9 @@ pub struct Bastion {
 impl Bastion {
     pub fn counters(&self) -> Counters {
         self.counters
+    }
+    pub fn note_rejected_request(&mut self) {
+        self.counters.rejected_requests = self.counters.rejected_requests.saturating_add(1);
     }
     /// Sequence numbers establish ordering, never elapsed simulation time. A
     /// legitimate resumed client can advance by any forward half-range jump.

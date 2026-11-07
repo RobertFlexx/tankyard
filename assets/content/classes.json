@@ -71,7 +71,8 @@
       "upgrades": [
         "trident",
         "gearbox",
-        "crosswind"
+        "crosswind",
+        "caromer"
       ],
       "multipliers": [
         1.0,
@@ -149,7 +150,8 @@
       "upgrades": [
         "surveyor",
         "whisper",
-        "rail"
+        "rail",
+        "capacitor"
       ],
       "multipliers": [
         0.9,
@@ -343,7 +345,8 @@
       "upgrades": [
         "flock",
         "sentinel",
-        "foundry"
+        "foundry",
+        "shepherd"
       ],
       "multipliers": [
         1.0,
@@ -478,7 +481,8 @@
       "upgrades": [
         "pike",
         "citadel",
-        "comet"
+        "comet",
+        "bulldozer"
       ],
       "multipliers": [
         1.65,
@@ -5765,7 +5769,8 @@
       "tier": 3,
       "min_level": 45,
       "parents": [
-        "flock"
+        "flock",
+        "shepherd"
       ],
       "upgrades": [
         "harrier"
@@ -6688,7 +6693,8 @@
       "tier": 3,
       "min_level": 45,
       "parents": [
-        "citadel"
+        "citadel",
+        "bulldozer"
       ],
       "upgrades": [
         "juggernaut"
@@ -10438,6 +10444,598 @@
       "strengths": "Temporarily suspends your own and hostile bullets. Repositions a captured wave around cover.",
       "weaknesses": "Drones, traps and melee bypass the field. Eliminating the caster cancels conversion. Long cooldown.",
       "ai_range": 410
+    },
+    {
+      "id": "capacitor",
+      "name": "Capacitor",
+      "description": "Hold fire to charge one heavy piercing round; let go early for a quick, lighter shot.",
+      "tier": 2,
+      "min_level": 30,
+      "parents": [
+        "lance"
+      ],
+      "upgrades": [
+        "overcharger"
+      ],
+      "multipliers": [
+        0.95,
+        1,
+        1,
+        1.1,
+        1.1,
+        1,
+        0.9,
+        0.95
+      ],
+      "hull_sides": 0,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 56,
+          "width": 12,
+          "cooldown": 1.1,
+          "delay": 0,
+          "recoil": 42,
+          "pattern": "Charge",
+          "projectile": "Piercing",
+          "speed": 760,
+          "damage": 34,
+          "radius": 6.8,
+          "lifetime": 2.0,
+          "penetration": 6,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Shield",
+      "ability_cooldown": 10,
+      "passive_regen": 0,
+      "strengths": "A full charge pierces whole lines of enemies for heavy damage.",
+      "weaknesses": "Charging telegraphs the shot and leaves it slow to answer a rush.",
+      "ai_range": 620
+    },
+    {
+      "id": "overcharger",
+      "name": "Overcharger",
+      "description": "Twin capacitor barrels charge together and release side by side.",
+      "tier": 3,
+      "min_level": 45,
+      "parents": [
+        "capacitor"
+      ],
+      "upgrades": [
+        "railstorm"
+      ],
+      "multipliers": [
+        0.95,
+        1,
+        1,
+        1.1,
+        1.1,
+        1,
+        0.9,
+        0.95
+      ],
+      "hull_sides": 0,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            -8
+          ],
+          "angle": 0.03,
+          "length": 54,
+          "width": 11,
+          "cooldown": 1.15,
+          "delay": 0,
+          "recoil": 26,
+          "pattern": "Charge",
+          "projectile": "Piercing",
+          "speed": 760,
+          "damage": 24,
+          "radius": 6.2,
+          "lifetime": 2.0,
+          "penetration": 5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            0,
+            8
+          ],
+          "angle": -0.03,
+          "length": 54,
+          "width": 11,
+          "cooldown": 1.15,
+          "delay": 0,
+          "recoil": 26,
+          "pattern": "Charge",
+          "projectile": "Piercing",
+          "speed": 760,
+          "damage": 24,
+          "radius": 6.2,
+          "lifetime": 2.0,
+          "penetration": 5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Overdrive",
+      "ability_cooldown": 12,
+      "passive_regen": 0,
+      "strengths": "Two charged rounds cover a wider lane than one.",
+      "weaknesses": "Each round is lighter than a single Capacitor charge.",
+      "ai_range": 620
+    },
+    {
+      "id": "railstorm",
+      "name": "Railstorm",
+      "description": "A central rail and two flanking capacitors discharge in one volley.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "overcharger"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        1,
+        1,
+        1,
+        1.1,
+        1.15,
+        1,
+        0.9,
+        0.95
+      ],
+      "hull_sides": 6,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 62,
+          "width": 13,
+          "cooldown": 1.25,
+          "delay": 0,
+          "recoil": 48,
+          "pattern": "Charge",
+          "projectile": "Piercing",
+          "speed": 820,
+          "damage": 36,
+          "radius": 7,
+          "lifetime": 2.1,
+          "penetration": 7,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            -4,
+            -12
+          ],
+          "angle": 0.12,
+          "length": 44,
+          "width": 10,
+          "cooldown": 1.25,
+          "delay": 0,
+          "recoil": 14,
+          "pattern": "Charge",
+          "projectile": "Piercing",
+          "speed": 760,
+          "damage": 18,
+          "radius": 5.6,
+          "lifetime": 1.9,
+          "penetration": 4,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            -4,
+            12
+          ],
+          "angle": -0.12,
+          "length": 44,
+          "width": 10,
+          "cooldown": 1.25,
+          "delay": 0,
+          "recoil": 14,
+          "pattern": "Charge",
+          "projectile": "Piercing",
+          "speed": 760,
+          "damage": 18,
+          "radius": 5.6,
+          "lifetime": 1.9,
+          "penetration": 4,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Blink",
+      "ability_cooldown": 9,
+      "passive_regen": 0,
+      "strengths": "A fully charged volley breaks lines and bosses alike.",
+      "weaknesses": "A missed volley leaves a long, quiet recharge.",
+      "ai_range": 640
+    },
+    {
+      "id": "caromer",
+      "name": "Caromer",
+      "description": "Twin cannons fire rounds that bounce off walls and the arena edge.",
+      "tier": 2,
+      "min_level": 30,
+      "parents": [
+        "fork"
+      ],
+      "upgrades": [
+        "billiard"
+      ],
+      "multipliers": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        0.95,
+        1,
+        1
+      ],
+      "hull_sides": 0,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            -9
+          ],
+          "angle": 0,
+          "length": 40,
+          "width": 13,
+          "cooldown": 0.5,
+          "delay": 0,
+          "recoil": 14,
+          "pattern": "Alternating",
+          "projectile": "Bullet",
+          "speed": 420,
+          "damage": 10.5,
+          "radius": 5.5,
+          "lifetime": 2.6,
+          "penetration": 1.2,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 2
+        },
+        {
+          "offset": [
+            0,
+            9
+          ],
+          "angle": 0,
+          "length": 40,
+          "width": 13,
+          "cooldown": 0.5,
+          "delay": 0.25,
+          "recoil": 14,
+          "pattern": "Alternating",
+          "projectile": "Bullet",
+          "speed": 420,
+          "damage": 10.5,
+          "radius": 5.5,
+          "lifetime": 2.6,
+          "penetration": 1.2,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 2
+        }
+      ],
+      "ability": "None",
+      "ability_cooldown": 8,
+      "passive_regen": 0,
+      "strengths": "Banks shots around cover and keeps corridors dangerous.",
+      "weaknesses": "Bounced rounds lose time and are easier to dodge.",
+      "ai_range": 400
+    },
+    {
+      "id": "billiard",
+      "name": "Billiard",
+      "description": "A three-way spread of bouncing rounds rattles through cover.",
+      "tier": 3,
+      "min_level": 45,
+      "parents": [
+        "caromer"
+      ],
+      "upgrades": [
+        "pinball"
+      ],
+      "multipliers": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        0.95,
+        1,
+        1
+      ],
+      "hull_sides": 0,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 42,
+          "width": 16,
+          "cooldown": 0.7,
+          "delay": 0,
+          "recoil": 20,
+          "pattern": "Normal",
+          "projectile": "Bullet",
+          "speed": 430,
+          "damage": 9.5,
+          "radius": 5.4,
+          "lifetime": 2.8,
+          "penetration": 1.2,
+          "count": 3,
+          "spread": 0.5,
+          "ricochets": 3,
+          "profile": "trapezoid"
+        }
+      ],
+      "ability": "Magnet",
+      "ability_cooldown": 9,
+      "passive_regen": 0,
+      "strengths": "Fills mazes and base edges with angles opponents cannot predict.",
+      "weaknesses": "Spread fire is weak against a single target in the open.",
+      "ai_range": 380
+    },
+    {
+      "id": "pinball",
+      "name": "Pinball",
+      "description": "Front and rear launchers flood the arena with long-lived bouncing rounds.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "billiard"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        0.95,
+        1,
+        1.02
+      ],
+      "hull_sides": 4,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            -8
+          ],
+          "angle": 0.35,
+          "length": 40,
+          "width": 12,
+          "cooldown": 0.6,
+          "delay": 0,
+          "recoil": 10,
+          "pattern": "Alternating",
+          "projectile": "Bullet",
+          "speed": 440,
+          "damage": 9,
+          "radius": 5.2,
+          "lifetime": 3.2,
+          "penetration": 1.2,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 4
+        },
+        {
+          "offset": [
+            0,
+            8
+          ],
+          "angle": -0.35,
+          "length": 40,
+          "width": 12,
+          "cooldown": 0.6,
+          "delay": 0.3,
+          "recoil": 10,
+          "pattern": "Alternating",
+          "projectile": "Bullet",
+          "speed": 440,
+          "damage": 9,
+          "radius": 5.2,
+          "lifetime": 3.2,
+          "penetration": 1.2,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 4
+        },
+        {
+          "offset": [
+            0,
+            -8
+          ],
+          "angle": 2.791592653589793,
+          "length": 34,
+          "width": 11,
+          "cooldown": 0.6,
+          "delay": 0,
+          "recoil": 6,
+          "pattern": "Alternating",
+          "projectile": "Bullet",
+          "speed": 420,
+          "damage": 7,
+          "radius": 5,
+          "lifetime": 3.2,
+          "penetration": 1.1,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 4
+        },
+        {
+          "offset": [
+            0,
+            8
+          ],
+          "angle": -2.791592653589793,
+          "length": 34,
+          "width": 11,
+          "cooldown": 0.6,
+          "delay": 0.3,
+          "recoil": 6,
+          "pattern": "Alternating",
+          "projectile": "Bullet",
+          "speed": 420,
+          "damage": 7,
+          "radius": 5,
+          "lifetime": 3.2,
+          "penetration": 1.1,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 4
+        }
+      ],
+      "ability": "Dash",
+      "ability_cooldown": 7,
+      "passive_regen": 0,
+      "strengths": "Turns any walled space into a shooting gallery.",
+      "weaknesses": "Low damage per round; needs walls to shine.",
+      "ai_range": 360
+    },
+    {
+      "id": "bulldozer",
+      "name": "Bulldozer",
+      "description": "A heavy hexagonal hull with self-repairing plates that drags nearby shapes into its path.",
+      "tier": 2,
+      "min_level": 30,
+      "parents": [
+        "bulwark"
+      ],
+      "upgrades": [
+        "monolith"
+      ],
+      "multipliers": [
+        1.8,
+        1.2,
+        2.6,
+        0.7,
+        0.7,
+        0.7,
+        0.7,
+        1.08
+      ],
+      "hull_sides": 6,
+      "barrels": [],
+      "ability": "Magnet",
+      "ability_cooldown": 7,
+      "passive_regen": 2.5,
+      "strengths": "Pulls shapes and drifting shots away, and repairs itself between collisions.",
+      "weaknesses": "Slower than other smashers and still needs contact.",
+      "ai_range": 40,
+      "body_style": "smasher"
+    },
+    {
+      "id": "shepherd",
+      "name": "Shepherd",
+      "description": "Side ports raise a small flock of drones while it heals itself.",
+      "tier": 2,
+      "min_level": 30,
+      "parents": [
+        "hive"
+      ],
+      "upgrades": [
+        "murmuration"
+      ],
+      "multipliers": [
+        1.05,
+        1.1,
+        1,
+        1,
+        1,
+        0.95,
+        1,
+        0.95
+      ],
+      "hull_sides": 0,
+      "drone_limit": 7,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            -4
+          ],
+          "angle": 1.5707963267948966,
+          "length": 26,
+          "width": 18,
+          "cooldown": 1.2,
+          "delay": 0,
+          "recoil": 0,
+          "pattern": "Normal",
+          "projectile": "Drone",
+          "speed": 215,
+          "damage": 7,
+          "radius": 8,
+          "lifetime": 60,
+          "penetration": 4,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "trapezoid"
+        },
+        {
+          "offset": [
+            0,
+            4
+          ],
+          "angle": -1.5707963267948966,
+          "length": 26,
+          "width": 18,
+          "cooldown": 1.2,
+          "delay": 0.6,
+          "recoil": 0,
+          "pattern": "Normal",
+          "projectile": "Drone",
+          "speed": 215,
+          "damage": 7,
+          "radius": 8,
+          "lifetime": 60,
+          "penetration": 4,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "trapezoid"
+        }
+      ],
+      "ability": "Heal",
+      "ability_cooldown": 12,
+      "passive_regen": 0,
+      "strengths": "Sustains itself while drones keep pressure from both flanks.",
+      "weaknesses": "A smaller flock than the Overlord's.",
+      "ai_range": 520
     }
   ]
 }

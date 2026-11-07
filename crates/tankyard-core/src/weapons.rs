@@ -570,10 +570,5 @@ impl World {
                 self.grid.insert(t.pos, crate::physics::Body::Target(i));
             }
         }
-        for (i, b) in self.bosses.iter().enumerate() {
-            if b.health > 0. {
-                self.grid.insert(b.pos, crate::physics::Body::Boss(i));
-            }
-        }
     }
 }

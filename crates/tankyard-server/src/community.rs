@@ -13,8 +13,8 @@ impl UdpServer {
                     dynamic_arena: self.settings.world.dynamic_arena,
                     starting_level: party.starting_level,
                 }),
-            mode: self.session.world.config.mode,
-            map: self.session.world.config.map.clone(),
+            mode: self.arenas[0].session.world.config.mode,
+            map: self.arenas[0].session.world.config.map.clone(),
             difficulty: self.settings.difficulty.name().into(),
             bots: self
                 .settings
@@ -34,9 +34,12 @@ impl UdpServer {
         map: &str,
         difficulty: tankyard_ai::Difficulty,
     ) -> Result<(), NetError> {
-        let candidate =
-            self.settings
-                .configured_match(&self.session.bundle.maps, mode, map, difficulty)?;
+        let candidate = self.settings.configured_match(
+            &self.arenas[0].session.bundle.maps,
+            mode,
+            map,
+            difficulty,
+        )?;
         self.settings = candidate;
         self.restart_round();
         Ok(())
@@ -71,7 +74,7 @@ impl UdpServer {
         let player = self
             .player_id(client)
             .ok_or_else(|| NetError("Player is not connected.".into()))?;
-        let tank = self
+        let tank = self.arenas[self.arena_of(client)]
             .session
             .world
             .tanks
@@ -249,7 +252,7 @@ impl UdpServer {
                     .party
                     .ok_or_else(|| NetError("Missing party settings.".into()))?;
                 let mut candidate = self.settings.configured_match(
-                    &self.session.bundle.maps,
+                    &self.arenas[0].session.bundle.maps,
                     settings.mode,
                     &settings.map,
                     crate::difficulty_from_name(&settings.difficulty).map_err(NetError)?,

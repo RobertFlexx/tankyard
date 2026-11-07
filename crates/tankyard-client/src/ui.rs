@@ -19,6 +19,9 @@ pub(crate) fn ui_line(x: f32, y: f32, to_x: f32, to_y: f32, thickness: f32, colo
 use ui_line as draw_line;
 use ui_rectangle as draw_rectangle;
 use ui_rectangle_lines as draw_rectangle_lines;
+pub(crate) fn ui_circle(x: f32, y: f32, radius: f32, color: Color) {
+    draw_circle(x, y, radius, color);
+}
 fn draw_circle(x: f32, y: f32, radius: f32, color: Color) {
     let p = crate::ui_layout::position(vec2(x, y));
     macroquad::shapes::draw_circle(p.x, p.y, radius, color);
@@ -142,6 +145,14 @@ pub fn muted_color() -> Color {
         Color::new(0.70, 0.74, 0.78, 1.0)
     } else {
         MUTED
+    }
+}
+/// Amber for headings and tags; darker on light surfaces so it stays legible.
+pub fn warm_text_color() -> Color {
+    if is_dark() {
+        AMBER
+    } else {
+        Color::new(0.70, 0.45, 0.0, 1.0)
     }
 }
 pub fn hover_color() -> Color {
