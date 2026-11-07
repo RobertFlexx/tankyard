@@ -1,4 +1,5 @@
 # Signing and notarizing the macOS installer
+# for helpers/maintainers.
 
 Without these steps the release `.pkg` is unsigned, and macOS blocks it when it is downloaded in a browser ("Apple could not verify… is free of malware"). With them, the release workflow signs Tank Yard.app and the package with your Developer ID, has Apple notarize the package, and staples the result. The visual installer then opens with a double-click and no warning.
 
