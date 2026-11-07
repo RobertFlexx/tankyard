@@ -55,7 +55,7 @@ jobs:
           cargo test --locked --workspace
       - name: Check installers
         run: |
-          shellcheck install.sh scripts/build_linux_compatible.sh scripts/link_linux_compatible.sh scripts/compile_linux_compatible.sh
+          shellcheck install.sh install-macos.sh scripts/build_linux_compatible.sh scripts/link_linux_compatible.sh scripts/compile_linux_compatible.sh
           python -m unittest discover -s scripts/tests -v
       - name: Validate content and render offline
         run: |
@@ -275,10 +275,10 @@ jobs:
                ("macos-universal", "tar.gz"), ("windows-x86_64", "zip"))]
           names.append(f"tankyard-{tag}-windows-x86_64-setup.exe")
           names.append(f"tankyard-{tag}-macos-universal.pkg")
-          for name in ("install.sh", "install.ps1"):
+          for name in ("install.sh", "install-macos.sh", "install.ps1"):
               shutil.copyfile(name, directory / name)
           lines = []
-          for name in names + ["install.sh", "install.ps1"]:
+          for name in names + ["install.sh", "install-macos.sh", "install.ps1"]:
               with (directory / name).open("rb") as stream:
                   digest = hashlib.file_digest(stream, "sha256").hexdigest()
               line = f"{digest}  {name}\n"
@@ -296,7 +296,7 @@ jobs:
           else
             gh release create "$RELEASE_TAG" --verify-tag --draft --title "Tank Yard $RELEASE_TAG" --generate-notes
           fi
-          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/*-setup.exe dist/*.pkg dist/install.sh dist/install.ps1 dist/SHA256SUMS --clobber
+          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/*-setup.exe dist/*.pkg dist/install.sh dist/install-macos.sh dist/install.ps1 dist/SHA256SUMS --clobber
           gh release edit "$RELEASE_TAG" --draft=false --latest
 
   install:
@@ -327,6 +327,26 @@ jobs:
             test -s "$HOME/.local/share/icons/hicolor/256x256/apps/tankyard.png"
             grep -q '^StartupWMClass=tankyard$' "$HOME/.local/share/applications/tankyard.desktop"
           fi
+      - name: Install published macOS package with the fetch script
+        if: runner.os == 'macOS'
+        run: |
+          sh install-macos.sh --version "$RELEASE_TAG" --no-open
+          "/Applications/Tank Yard.app/Contents/MacOS/tankyard" --version
+          # A browser download carries a quarantine flag; --file verifies, then clears it.
+          pkg="$RUNNER_TEMP/tankyard-$RELEASE_TAG-macos-universal.pkg"
+          gh release download "$RELEASE_TAG" --pattern "tankyard-$RELEASE_TAG-macos-universal.pkg" --dir "$RUNNER_TEMP"
+          xattr -w com.apple.quarantine "0083;00000000;Safari;" "$pkg"
+          sh install-macos.sh --file "$pkg" --no-open
+          ! xattr -p com.apple.quarantine "$pkg" 2>/dev/null
+          # A tampered package is refused and stays blocked.
+          printf 'x' >> "$pkg"
+          xattr -w com.apple.quarantine "0083;00000000;Safari;" "$pkg"
+          ! sh install-macos.sh --file "$pkg" --no-open
+          xattr -p com.apple.quarantine "$pkg"
+          sudo rm -rf "/Applications/Tank Yard.app"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
       - name: Install published Windows build
         if: runner.os == 'Windows'
         shell: pwsh

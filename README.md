@@ -12,7 +12,13 @@ Choose **Play** for the public server or **Play offline** for a local game.
 
 Windows (64-bit): [NSIS installer (.exe)](https://github.com/RobertFlexx/tankyard/releases/download/v0.10.0/tankyard-v0.10.0-windows-x86_64-setup.exe) · [Portable ZIP](https://github.com/RobertFlexx/tankyard/releases/download/v0.10.0/tankyard-v0.10.0-windows-x86_64.zip). For the portable version, extract the ZIP and open `tankyard.exe`.
 
-macOS 11+ (Apple silicon and Intel): [Installer package (.pkg)](https://github.com/RobertFlexx/tankyard/releases/download/v0.10.0/tankyard-v0.10.0-macos-universal.pkg). Open it and follow the installer; Tank Yard appears in Applications. The package is not notarized yet, so the first time, Control-click it and choose **Open**.
+macOS 11+ (Apple silicon and Intel): [Installer package (.pkg)](https://github.com/RobertFlexx/tankyard/releases/download/v0.10.0/tankyard-v0.10.0-macos-universal.pkg). The package isn't notarized by Apple yet, so macOS blocks it when it comes from a browser. The easiest way around that is this command, which downloads the package, checks it against the release checksums and installs it into Applications:
+
+```sh
+curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/install-macos.sh | sh
+```
+
+Already downloaded the `.pkg`? Run `sh install-macos.sh --file ~/Downloads/tankyard-v0.10.0-macos-universal.pkg` to verify and install it. You can also open **System Settings → Privacy & Security** after macOS blocks it and click **Open Anyway**.
 
 Install or update on Linux and macOS:
 
