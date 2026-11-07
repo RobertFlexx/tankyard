@@ -163,7 +163,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bastion-anticheat"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "ring",
  "tankyard-core",
@@ -2409,7 +2409,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-ai"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "serde",
  "tankyard-content",
@@ -2418,7 +2418,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-client"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "arboard",
  "clap",
@@ -2453,7 +2453,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-content"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2461,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-core"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "serde",
  "tankyard-content",
@@ -2470,7 +2470,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-lua"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "mlua",
  "serde_json",
@@ -2481,7 +2481,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-mods"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "asefile",
  "gltf",
@@ -2498,7 +2498,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-protocol"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "lz4_flex",
  "postcard",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-server"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "bastion-anticheat",
  "clap",
@@ -2540,7 +2540,7 @@ dependencies = [
 
 [[package]]
 name = "tankyard-tools"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "clap",
  "postcard",

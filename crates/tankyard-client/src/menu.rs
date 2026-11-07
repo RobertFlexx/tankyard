@@ -676,21 +676,26 @@ impl Menu {
                 Page::Modes,
             ),
             ("Tank tree", Page::Encyclopedia),
+            ("Mods", Page::Mods),
             ("Settings", Page::Settings),
             ("Parties", Page::Party),
         ]
         .into_iter()
         .enumerate()
         {
+            // Wider cells for the longer labels keep every title on one line.
+            const WEIGHTS: [f32; 5] = [1.3, 1.05, 0.8, 0.95, 0.9];
+            let total: f32 = WEIGHTS.iter().sum();
+            let before: f32 = WEIGHTS[..index].iter().sum();
             if small_button(
                 Rect::new(
-                    x + index as f32 * (pane_w / 4.0),
+                    x + pane_w * before / total,
                     links_y,
-                    pane_w / 4.0 - 6.0 * s,
+                    pane_w * WEIGHTS[index] / total - 6.0 * s,
                     33.0 * s,
                 ),
                 title,
-                s * 0.88,
+                s * 0.84,
             ) {
                 let _ = settings.save();
                 return Action::Page(page);
