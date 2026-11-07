@@ -3154,9 +3154,10 @@ impl Menu {
         if small_button(
             Rect::new(
                 screen_width() - 165.0 * s,
-                y - 29.0 * s,
+                // Below the page's scroll clip, level with the title.
+                y - 20.0 * s,
                 125.0 * s,
-                32.0 * s,
+                30.0 * s,
             ),
             "Refresh",
             s,
@@ -3209,7 +3210,7 @@ impl Menu {
                 38.0 * s,
             ),
             "Import",
-            true,
+            !self.mod_path.trim().is_empty(),
             !self.mod_path.trim().is_empty(),
             s * 0.85,
         ) {
@@ -3284,8 +3285,12 @@ impl Menu {
             );
             let enabled = settings.enabled_mods.contains(&entry.path);
             let selected = self.mod_selected == index;
-            if button(r, "", selected, true, s) {
+            // An outline marks the selection, keeping status colors readable.
+            if button(r, "", false, true, s) {
                 self.mod_selected = index;
+            }
+            if selected {
+                draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.5 * s, CYAN);
             }
             if enabled {
                 draw_rectangle(r.x, r.y, 4.0 * s, r.h, CYAN);
@@ -3453,8 +3458,7 @@ impl Menu {
         let (status, color) = mod_status(entry, settings);
         let badge_w = label_width(status, 11.0 * s) + 20.0 * s;
         let badge = Rect::new(tx, r.y + 78.0 * s, badge_w, 22.0 * s);
-        draw_rectangle(badge.x, badge.y, badge.w, badge.h, alpha(color, 0.16));
-        draw_rectangle_lines(badge.x, badge.y, badge.w, badge.h, 1.5, color);
+        capsule(badge, mix(surface_color(), color, 0.22));
         center_label(
             status,
             badge.center().x,
@@ -3473,9 +3477,10 @@ impl Menu {
             if tag_x + tag_w > r.right() - 22.0 * s {
                 break;
             }
+            // Capsules overlap their parts, so they need an opaque color.
             capsule(
                 Rect::new(tag_x, badge.y, tag_w, badge.h),
-                alpha(line_color(), 0.5),
+                mix(surface_color(), line_color(), 0.5),
             );
             center_label(
                 &tag,
@@ -3630,12 +3635,20 @@ impl Menu {
             self.mod_review = Some(index);
             self.mod_trust = false;
         }
+        // Packs that still need confirmation say so instead of looking safe.
+        let needs_review = !enabled && !entry.approved(settings);
         if button(
             Rect::new(r.right() - 162.0 * s, footer, 140.0 * s, 34.0 * s),
-            if enabled { "Disable" } else { "Enable" },
-            !enabled,
+            if enabled {
+                "Disable"
+            } else if needs_review {
+                "Review & enable"
+            } else {
+                "Enable"
+            },
+            !enabled && !needs_review,
             entry.error.is_none(),
-            s * 0.82,
+            s * 0.78,
         ) {
             if !enabled && !entry.approved(settings) {
                 self.mod_review = Some(index);
@@ -3941,7 +3954,7 @@ fn toggle_switch(rect: Rect, on: &mut bool, s: f32) -> bool {
     if clicked {
         *on = !*on;
     }
-    capsule(rect, if *on { CYAN } else { alpha(line_color(), 0.9) });
+    capsule(rect, if *on { CYAN } else { line_color() });
     let knob = rect.h * 0.5 - 3.0 * s;
     let cx = if *on {
         rect.right() - rect.h * 0.5
