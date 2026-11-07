@@ -1,6 +1,6 @@
 use crate::{LocalSession, NetError, ServerSettings, unix_time};
 use renet::{Bytes, RenetServer, ServerEvent};
-use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
+use renet_netcode::{ServerAuthentication, ServerConfig};
 use std::{
     collections::HashMap,
     net::{SocketAddr, UdpSocket},
@@ -112,7 +112,7 @@ pub struct UdpServer {
     pub address: SocketAddr,
     pub metrics: ServerMetrics,
     pub(crate) server: RenetServer,
-    pub(crate) transport: NetcodeServerTransport,
+    pub(crate) transport: crate::netcode::Transport,
     pub(crate) peers: HashMap<u64, Peer>,
     pub(crate) bans: Vec<crate::admin::Ban>,
     pub(crate) elapsed: Duration,
@@ -133,6 +133,7 @@ pub struct UdpServer {
     pub(crate) chat: crate::chat::Chat,
     accounts_checked_at: u64,
     pub(crate) rotation_checked_at: Option<u64>,
+    status_published: Option<Duration>,
     pub(crate) next_rotation: u64,
     pub(crate) party_roster_checked_at: Option<u64>,
     pub(crate) party_roster: Vec<PartyMember>,
@@ -176,7 +177,7 @@ impl UdpServer {
                 "Server is listening without secure netcode authentication. Do not expose private data or assume a password encrypts traffic."
             );
         }
-        let transport = NetcodeServerTransport::new(
+        let transport = crate::netcode::Transport::new(
             ServerConfig {
                 current_time: unix_time(),
                 max_clients: settings.max_players,
@@ -210,6 +211,7 @@ impl UdpServer {
             arenas: vec![crate::arena::Arena::new(session)],
             next_rotation: u64::from(settings.map_rotation_seconds),
             rotation_checked_at: None,
+            status_published: None,
             party_roster_checked_at: None,
             party_roster: Vec::new(),
             settings,
@@ -252,6 +254,7 @@ impl UdpServer {
         }
         self.elapsed += elapsed;
         self.server.update(elapsed);
+        self.publish_status();
         self.transport
             .update(elapsed, &mut self.server)
             .map_err(|e| NetError(e.to_string()))?;
@@ -500,6 +503,7 @@ impl UdpServer {
                     self.party_roster_checked_at = None;
                     self.access.remove(client_id);
                     self.chat.remove(client_id);
+                    self.status_published = None;
                     if let Some(peer) = self.peers.remove(&client_id)
                         && let Some(entity) = peer.entity
                     {
@@ -752,6 +756,7 @@ impl UdpServer {
             account_token,
             admin_key,
             party_proof,
+            arena: preferred,
         } = message
         {
             if entity.is_some() {
@@ -849,7 +854,7 @@ impl UdpServer {
                 let _ = self.chat.join(client, "lobby", role);
             }
             let name = sanitize_name(&name);
-            let arena = match self.choose_arena() {
+            let arena = match self.choose_arena(preferred.map(usize::from)) {
                 Ok(arena) => arena,
                 Err(error) => {
                     log::error!("could not open an arena: {error}");
@@ -1082,6 +1087,7 @@ impl UdpServer {
 
     /// Add a connected client's tank to an arena and greet it.
     pub(crate) fn join_arena(&mut self, client: u64, arena: usize, name: &str) -> EntityId {
+        self.status_published = None;
         if let Some(peer) = self.peers.get_mut(&client) {
             peer.arena = arena;
             peer.walls_revision = None;
@@ -1113,6 +1119,70 @@ impl UdpServer {
         self.sync_bots();
         self.welcome(client, player);
         player
+    }
+
+    /// Refresh the status answer each second, and at once after a join or
+    /// leave so a probe never reports a stale population.
+    fn publish_status(&mut self) {
+        if self
+            .status_published
+            .is_none_or(|at| self.elapsed.saturating_sub(at) >= Duration::from_secs(1))
+        {
+            self.status_published = Some(self.elapsed);
+            self.transport.status = tankyard_protocol::encode_status(&self.status());
+        }
+    }
+
+    /// What a status query reports: the server and each open lobby.
+    pub(crate) fn status(&self) -> tankyard_protocol::ServerStatus {
+        let capacity = self.arena_capacity().max(1).min(self.settings.max_players);
+        let lobbies = self
+            .arenas
+            .iter()
+            .enumerate()
+            .map(|(index, arena)| {
+                let session = &arena.session;
+                tankyard_protocol::LobbyStatus {
+                    humans: self.arena_humans(index).min(255) as u8,
+                    bots: session
+                        .world
+                        .tanks
+                        .iter()
+                        .filter(|t| t.bot)
+                        .count()
+                        .min(255) as u8,
+                    capacity: capacity.min(255) as u8,
+                    mode: session
+                        .bundle
+                        .mode_name
+                        .clone()
+                        .unwrap_or_else(|| session.world.config.mode.name().to_owned()),
+                    map: session
+                        .bundle
+                        .maps
+                        .iter()
+                        .find(|map| map.id == session.world.config.map)
+                        .map_or_else(|| session.world.config.map.clone(), |map| map.name.clone()),
+                }
+            })
+            .collect::<Vec<_>>();
+        tankyard_protocol::ServerStatus {
+            protocol: tankyard_protocol::PROTOCOL_VERSION,
+            version: env!("CARGO_PKG_VERSION").into(),
+            name: self.settings.name.clone(),
+            players: lobbies.iter().map(|l| u16::from(l.humans)).sum(),
+            max_players: self.settings.max_players.min(u16::MAX as usize) as u16,
+            password: !self.settings.password.is_empty(),
+            official: self.settings.kind == tankyard_protocol::ServerKind::Official,
+            mods: self.arenas[0]
+                .session
+                .bundle
+                .mods
+                .iter()
+                .map(|m| m.name.clone())
+                .collect(),
+            lobbies,
+        }
     }
 
     fn welcome(&mut self, client: u64, player: EntityId) {

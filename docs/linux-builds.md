@@ -6,7 +6,7 @@ Build the release with Rust, Zig, and the locked Cargo dependencies available:
 
 Native voice uses ALSA. Install its development package (`libasound2-dev` on Debian/Ubuntu) to build the client; players need the shared `libasound.so.2` runtime. The headless server has no audio dependency. `--no-audio` disables device access while keeping gameplay available.
 
-Lua mod scripting compiles the vendored LuaJIT 2.1 sources during the Cargo build, so `make` and a C compiler (`build-essential` on Debian/Ubuntu) are needed alongside the CMake used for Opus. Host build tools are compiled with `cc`, set in `.cargo/config.toml`; override `HOST_CC` if `cc` on your `PATH` is not a working native compiler.
+Lua mod scripting compiles the vendored LuaJIT 2.1 sources during the Cargo build, so `make` and a C compiler (`build-essential` on Debian/Ubuntu) are needed alongside the CMake used for Opus. LuaJIT's host build tools use `cc` (`DEFAULT_CC` in `.cargo/config.toml`); export `DEFAULT_CC` to choose another native compiler. The compatible build links LuaJIT's standalone interpreter against Zig's bundled unwinder.
 
 ```sh
 scripts/build_linux_compatible.sh

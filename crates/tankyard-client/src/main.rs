@@ -13,7 +13,9 @@ mod credentials;
 mod effects;
 mod first_run;
 mod graphics;
+mod hosting;
 mod hud;
+mod links;
 mod menu;
 mod mod_library;
 mod native_resolution;
@@ -23,6 +25,7 @@ mod practice_ui;
 mod presentation;
 mod render;
 mod server_browser;
+mod server_status;
 mod session;
 mod settings;
 mod startup;
@@ -30,6 +33,7 @@ mod tank_tree;
 mod ui_layout;
 mod ui_text;
 mod unlock;
+mod upscale;
 use tankyard_client::achievements;
 use tankyard_client::clipboard;
 use tankyard_client::tank_model;
@@ -94,7 +98,7 @@ struct Cli {
     #[arg(long)]
     screenshot: Option<String>,
     /// Open a menu page instead of a game (for screenshots and checks).
-    #[arg(long, hide = true, value_parser = ["main", "mods", "tree", "credits", "settings", "party", "modes", "party-panel", "mods-review"])]
+    #[arg(long, hide = true, value_parser = ["main", "mods", "tree", "credits", "settings", "party", "modes", "party-panel", "mods-review", "lobbies", "community", "graphics", "join"])]
     page: Option<String>,
     #[arg(long = "mod")]
     mods: Vec<std::path::PathBuf>,
@@ -166,6 +170,9 @@ struct App {
     hud: Hud,
     session: Option<Session>,
     pending_join: Option<PendingJoin>,
+    /// The lobby picked on the main server card, for the next join.
+    join_lobby: Option<u8>,
+    presentation: presentation::Presentation,
     connecting_address: String,
     last_join: Option<(String, String)>,
     view: render::View,
@@ -266,6 +273,8 @@ impl App {
             central_owner: central_owner::CentralOwner::new(),
             session: None,
             pending_join: None,
+            join_lobby: None,
+            presentation: Default::default(),
             connecting_address: CENTRAL_SERVER.into(),
             last_join: None,
             view: render::View::new(),
@@ -334,13 +343,24 @@ impl App {
         } else if let Some(page) = cli.page.as_deref() {
             app.party_preview = page == "party-panel";
             app.menu.preview_review = page == "mods-review";
+            if page == "lobbies" {
+                app.menu.open_lobbies();
+            }
+            if page == "graphics" {
+                app.menu.settings_tab = 7;
+            }
+            if page == "community" {
+                app.menu.open_community();
+            }
             app.menu.page = match page {
                 "mods" | "mods-review" => Page::Mods,
                 "tree" => Page::Encyclopedia,
                 "credits" => Page::Credits,
-                "settings" => Page::Settings,
+                "settings" | "graphics" => Page::Settings,
                 "party" => Page::Party,
                 "modes" => Page::Modes,
+                "community" => Page::Host,
+                "join" => Page::Join,
                 _ => Page::Main,
             };
         } else if cli.offline || app.smoke.is_some() {
@@ -426,6 +446,7 @@ impl App {
             && matches!(
                 action,
                 Action::QuickPlay
+                    | Action::JoinLobby(_)
                     | Action::Offline
                     | Action::Host
                     | Action::CreateParty
@@ -493,7 +514,33 @@ impl App {
             }
             Action::QuickPlay => {
                 let _ = self.settings.save();
-                self.begin_join(CENTRAL_SERVER.into(), String::new(), Page::Main);
+                self.begin_join(settings::main_server().into(), String::new(), Page::Main);
+            }
+            Action::StartCommunity => {
+                let _ = self.settings.save();
+                let mods = self.ready_mods();
+                let result = hosting::settings(
+                    &self.settings.community_server,
+                    self.menu.config(),
+                    mods,
+                    self.menu.difficulty_name(),
+                )
+                .and_then(|settings| self.menu.dedicated.start(&settings));
+                match result {
+                    Ok(()) => self.menu.info = "Community server starting…".into(),
+                    Err(error) => self.menu.error = error,
+                }
+            }
+            Action::StopCommunity => self.menu.dedicated.stop(),
+            Action::JoinCommunity => {
+                let address = format!("127.0.0.1:{}", self.menu.dedicated.port);
+                let password = self.settings.community_server.password.clone();
+                self.begin_join(address, password, Page::Host);
+            }
+            Action::JoinLobby(lobby) => {
+                let _ = self.settings.save();
+                self.join_lobby = Some(lobby);
+                self.begin_join(settings::main_server().into(), String::new(), Page::Main);
             }
             Action::Offline => {
                 let paths = self.ready_mods();
@@ -647,11 +694,12 @@ impl App {
         let (sender, result) = std::sync::mpsc::channel();
         let name = self.settings.player_name.clone();
         let destination = address.clone();
+        let lobby = self.join_lobby.take();
         self.last_join = Some((address.clone(), password.clone()));
         match std::thread::Builder::new()
             .name("server-connect".into())
             .spawn(move || {
-                let _ = sender.send(Session::join(&destination, &name, &password));
+                let _ = sender.send(Session::join(&destination, &name, &password, lobby));
             }) {
             Ok(_) => {
                 self.connecting_address.clone_from(&address);
@@ -1868,6 +1916,7 @@ impl App {
                     && !session.practice.as_ref().is_some_and(|run| run.done()),
             );
             if let Some(snapshot) = &session.display {
+                self.presentation.begin_world(&self.settings);
                 render::world(
                     snapshot,
                     &self.content,
@@ -1897,6 +1946,7 @@ impl App {
                     };
                     draw_rectangle(0., 0., screen_width(), screen_height(), alpha(RED, flash));
                 }
+                self.presentation.finish_world();
                 self.hud.local_simulation = session.offline_mode();
                 self.hud.sandbox_allowed = match &session.engine {
                     session::Engine::Offline(_) => true,
@@ -2399,7 +2449,6 @@ async fn run(cli: Cli) {
         return;
     };
     let mut app = App::new(cli, dark_theme).await;
-    let mut presentation = presentation::Presentation::default();
     macroquad::texture::set_default_filter_mode(FilterMode::Linear);
     loop {
         if is_quit_requested() {
@@ -2451,9 +2500,13 @@ async fn run(cli: Cli) {
         );
         let s = app.scale();
         app.update(dt, s);
-        presentation.begin(&app.settings);
+        let post_error = app.presentation.post_processing_error();
+        if app.menu.post_error.as_deref() != post_error {
+            app.menu.post_error = post_error.map(str::to_owned);
+        }
+        app.presentation.begin(&app.settings);
         app.draw(s);
-        presentation.finish();
+        app.presentation.finish();
         // Discard characters that no field consumed this frame.
         while get_char_pressed().is_some() {}
         if let Some(session) = &mut app.session {

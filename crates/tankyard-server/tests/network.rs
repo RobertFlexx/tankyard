@@ -1271,3 +1271,116 @@ fn an_odd_malformed_packet_is_dropped_but_a_flood_still_disconnects() {
     }
     assert_eq!(closed.as_deref(), Some("Malformed player input."));
 }
+
+#[test]
+fn status_probes_list_lobbies_and_players_can_pick_one() {
+    let mut server = UdpServer::bind(ServerSettings {
+        name: "Probe Test".into(),
+        max_players: 8,
+        arena_capacity: 2,
+        world: WorldConfig {
+            mode: Mode::Ffa,
+            target_count: 0,
+            spawn_protection: 0.,
+            ..Default::default()
+        },
+        ..settings()
+    })
+    .unwrap();
+    let address = server.address.to_string();
+    let mut clients: Vec<NetworkClient> = (0..3)
+        .map(|n| NetworkClient::connect(&address, &format!("Pilot {n}"), "").unwrap())
+        .collect();
+    let mut refs: Vec<&mut NetworkClient> = clients.iter_mut().collect();
+    ready(&mut server, &mut refs);
+    pump(&mut server, &mut refs, 30);
+    // The server must keep running to answer, so probe from another thread.
+    let probe_address = address.clone();
+    let probe = std::thread::spawn(move || tankyard_server::probe::probe(&probe_address));
+    while !probe.is_finished() {
+        server.update(Duration::from_millis(5)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let probe = probe.join().unwrap().unwrap();
+    assert_eq!(probe.status.name, "Probe Test");
+    assert_eq!(probe.status.players, 3);
+    assert_eq!(probe.status.max_players, 8);
+    assert_eq!(probe.loss, 0.);
+    assert!(probe.rtt_ms.is_finite() && probe.rtt_ms < 500.);
+    let humans: Vec<_> = probe.status.lobbies.iter().map(|l| l.humans).collect();
+    assert_eq!(humans, [2, 1]);
+    assert!(probe.status.lobbies.iter().all(|l| l.capacity == 2));
+    assert_eq!(probe.status.lobbies[0].mode, "Free For All");
+
+    // With a seat free in both lobbies, a player's pick wins over the default.
+    clients.remove(0);
+    let mut refs: Vec<&mut NetworkClient> = clients.iter_mut().collect();
+    pump(&mut server, &mut refs, 120);
+    let mut picked = NetworkClient::connect(&address, "Picker", "").unwrap();
+    picked.prefer_arena(1);
+    let mut refs: Vec<&mut NetworkClient> = clients.iter_mut().collect();
+    refs.push(&mut picked);
+    ready(&mut server, &mut refs);
+    assert!(
+        picked.server_name.ends_with("· Arena 2"),
+        "{}",
+        picked.server_name
+    );
+}
+
+#[test]
+fn status_queries_are_rate_limited_per_source() {
+    let mut server = UdpServer::bind(settings()).unwrap();
+    server.update(Duration::from_millis(5)).unwrap();
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_millis(20)))
+        .unwrap();
+    for nonce in 0..100 {
+        socket
+            .send_to(&tankyard_protocol::status_request(nonce), server.address)
+            .unwrap();
+    }
+    server.update(Duration::from_millis(5)).unwrap();
+    let mut replies = 0;
+    let mut buffer = [0u8; 2048];
+    while let Ok((len, _)) = socket.recv_from(&mut buffer) {
+        assert!(tankyard_protocol::parse_status_reply(&buffer[..len]).is_some());
+        assert!(len <= tankyard_protocol::MAX_STATUS_REPLY_BYTES);
+        replies += 1;
+    }
+    assert!((1..=16).contains(&replies), "{replies} replies");
+}
+
+#[test]
+fn status_probes_work_through_the_websocket_relay() {
+    use std::net::TcpListener;
+    let mut server = UdpServer::bind(ServerSettings {
+        name: "Relayed".into(),
+        ..settings()
+    })
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let relay = listener.local_addr().unwrap();
+    drop(listener);
+    let address = server.address;
+    thread::spawn(move || tankyard_server::websocket::run_relay(&relay.to_string(), address, 4));
+    let url = format!("ws://{relay}");
+    let start = Instant::now();
+    let probe = loop {
+        let target = url.clone();
+        let probe = thread::spawn(move || tankyard_server::probe::probe(&target));
+        while !probe.is_finished() {
+            server.update(Duration::from_millis(5)).unwrap();
+            thread::sleep(Duration::from_millis(3));
+        }
+        match probe.join().unwrap() {
+            Ok(probe) => break probe,
+            Err(_) if start.elapsed() < Duration::from_secs(5) => {}
+            Err(error) => panic!("{error}"),
+        }
+    };
+    assert_eq!(probe.status.name, "Relayed");
+    assert_eq!(probe.status.lobbies.len(), 1);
+    assert!(probe.loss <= 0.2, "{}", probe.loss);
+}

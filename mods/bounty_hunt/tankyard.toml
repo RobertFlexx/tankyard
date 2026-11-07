@@ -1,0 +1,17 @@
+# Storefront details shown on the Mods page. Gameplay lives in mod.json.
+[mod]
+name = "Bounty Hunt"
+version = "1.0"
+description = "The leader carries a bounty: tougher, marked, and worth a fortune. Topple them for a huge score swing."
+license = "MIT"
+icon = "icon.svg"
+tags = ["mode", "pvp", "lua"]
+
+[creator]
+name = "Tank Yard"
+url = "https://github.com/RobertFlexx/tankyard"
+
+[links]
+source = "https://github.com/RobertFlexx/tankyard/tree/main/mods/bounty_hunt"
+download = "https://github.com/RobertFlexx/tankyard/releases/latest"
+issues = "https://github.com/RobertFlexx/tankyard/issues"

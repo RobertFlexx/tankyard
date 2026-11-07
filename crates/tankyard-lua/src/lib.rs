@@ -179,12 +179,16 @@ fn define(
         let texture = value.map_err(|e| fail("textures", e))?;
         let id: String = texture.get("id").map_err(|e| fail("texture", e))?;
         let file: String = texture.get("file").map_err(|e| fail("texture", e))?;
-        let bytes = scripts
-            .images
-            .get(&file)
-            .ok_or_else(|| format!("{}: texture file {file} is not a PNG in this pack", info.id))?;
+        let bytes = scripts.images.get(&file).ok_or_else(|| {
+            format!(
+                "{}: texture file {file} is not an image or model in this pack",
+                info.id
+            )
+        })?;
+        let files = |name: &str| scripts.images.get(name).cloned();
         result.textures.push(
-            tankyard_mods::decode_texture(&id, bytes).map_err(|e| format!("{}: {e}", info.id))?,
+            tankyard_mods::decode_texture(&id, &file, bytes, &files)
+                .map_err(|e| format!("{}: {file}: {e}", info.id))?,
         );
     }
     Ok(result)

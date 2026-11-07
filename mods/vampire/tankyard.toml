@@ -1,0 +1,17 @@
+# Storefront details shown on the Mods page. Gameplay lives in mod.json.
+[mod]
+name = "Vampire"
+version = "1.0"
+description = "Every kill heals the tank that made it. Aggression pays."
+license = "MIT"
+icon = "icon.svg"
+tags = ["rules", "pvp"]
+
+[creator]
+name = "Tank Yard"
+url = "https://github.com/RobertFlexx/tankyard"
+
+[links]
+source = "https://github.com/RobertFlexx/tankyard/tree/main/mods/vampire"
+download = "https://github.com/RobertFlexx/tankyard/releases/latest"
+issues = "https://github.com/RobertFlexx/tankyard/issues"

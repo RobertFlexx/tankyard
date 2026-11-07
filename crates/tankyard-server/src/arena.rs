@@ -102,9 +102,10 @@ impl UdpServer {
             .collect()
     }
 
-    /// The fullest arena with room keeps matches lively; a new arena opens
-    /// only when every existing one is full.
-    pub(crate) fn choose_arena(&mut self) -> Result<usize, NetError> {
+    /// A lobby the player picked, while it has room; otherwise the fullest
+    /// arena with room keeps matches lively, and a new arena opens only when
+    /// every existing one is full.
+    pub(crate) fn choose_arena(&mut self, preferred: Option<usize>) -> Result<usize, NetError> {
         let capacity = self.arena_capacity();
         if capacity == 0 {
             return Ok(0);
@@ -112,6 +113,9 @@ impl UdpServer {
         let counts: Vec<_> = (0..self.arenas.len())
             .map(|i| self.arena_humans(i))
             .collect();
+        if let Some(index) = preferred.filter(|&i| i < counts.len() && counts[i] < capacity) {
+            return Ok(index);
+        }
         if let Some(index) = (0..self.arenas.len())
             .filter(|&i| counts[i] < capacity)
             .max_by_key(|&i| (counts[i], std::cmp::Reverse(i)))

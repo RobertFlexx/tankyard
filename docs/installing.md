@@ -8,6 +8,8 @@ curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/inst
 
 The installer downloads a precompiled build, checks its SHA-256 checksum, installs it for your user, and adds an application shortcut with the Tank Yard icon. Run the same command to update. Your settings and progress stay where they are.
 
+macOS: download the **macOS installer (.pkg)** from [Releases](https://github.com/RobertFlexx/tankyard/releases/latest) and open it. The installer places **Tank Yard.app** in Applications; the dedicated server, bundled mods and documentation are inside the app. It runs natively on Apple silicon and Intel Macs with macOS 11 or newer. The package is not notarized yet, so the first time, Control-click it and choose **Open**. Install a newer package to update; your settings and mods are kept. The shell installer above still works on macOS too.
+
 Windows: download the **Windows setup (.exe)** from [Releases](https://github.com/RobertFlexx/tankyard/releases/latest), then open it and follow the installer. It installs for your Windows account without administrator access, creates a Start menu shortcut, offers a desktop shortcut, and appears in Windows Installed apps for removal. Run a newer setup to update. Player settings, progress, host configurations, and unrelated files survive updates and removal.
 
 PowerShell is also available:

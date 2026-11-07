@@ -178,6 +178,33 @@ fn scan_file(name: &str, data: &[u8], modules: &HashSet<String>, report: &mut Sc
         );
         return;
     }
+    if crate::assets::is_asset(name) || ext == "mtl" {
+        if !crate::assets::looks_like(&ext, data) {
+            report.push(
+                Severity::Warning,
+                Category::BinaryBlob,
+                name,
+                0,
+                format!("is named like a .{ext} file but its contents don't match"),
+            );
+        } else if ext == "svg" {
+            let lower = String::from_utf8_lossy(data).to_ascii_lowercase();
+            if lower.contains("<script") || lower.contains("javascript:") {
+                report.push(
+                    Severity::Info,
+                    Category::Compatibility,
+                    name,
+                    0,
+                    "contains SVG scripts, which the game never runs".into(),
+                );
+            }
+        } else if ext == "gltf"
+            && let Ok(text) = std::str::from_utf8(data)
+        {
+            scan_text_payloads(name, text, report);
+        }
+        return;
+    }
     if let Some(kind) = archive_magic(data) {
         report.push(
             Severity::Warning,
@@ -209,17 +236,6 @@ fn scan_file(name: &str, data: &[u8], modules: &HashSet<String>, report: &mut Sc
                     0,
                     "is not readable text".into(),
                 ),
-            }
-        }
-        "png" => {
-            if !data.starts_with(b"\x89PNG\r\n\x1a\n") {
-                report.push(
-                    Severity::Warning,
-                    Category::BinaryBlob,
-                    name,
-                    0,
-                    "is named like an image but is not a PNG".into(),
-                );
             }
         }
         "json" => {
@@ -1932,10 +1948,17 @@ mod tests {
                 b"\x89PNG\r\n\x1a\n....".to_vec(),
             ),
             ("README.md".to_owned(), b"# Hello".to_vec()),
+            ("art/icon.svg".to_owned(), b"<svg xmlns='http://www.w3.org/2000/svg'/>".to_vec()),
+            ("art/hull.glb".to_owned(), b"glTF\x02\0\0\0".to_vec()),
+            ("art/hull.obj".to_owned(), b"v 0 0 0\n".to_vec()),
+            (
+                "art/sketch.kra".to_owned(),
+                b"PK\x03\x04\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0mimetypeapplication/x-krita".to_vec(),
+            ),
         ])
         .unwrap();
         assert_eq!(scan_pack(&pack).verdict(), Verdict::Clean);
-        let cases: [(&str, &[u8], Verdict); 9] = [
+        let cases: [(&str, &[u8], Verdict); 10] = [
             ("tools/run.exe", b"MZ\x90\x00", Verdict::Dangerous),
             ("skin.png", b"\x7fELF\x02\x01\x01", Verdict::Dangerous),
             (
@@ -1952,6 +1975,7 @@ mod tests {
                 Verdict::Review,
             ),
             ("fake.png", b"GIF89a", Verdict::Review),
+            ("fake.psd", b"MZ-but-short", Verdict::Review),
             ("compiled.lua", b"\x1bLJ\x02\x00", Verdict::Dangerous),
         ];
         for (name, data, expected) in cases {

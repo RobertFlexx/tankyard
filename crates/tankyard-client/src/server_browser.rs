@@ -1,4 +1,5 @@
 use crate::{
+    server_status::{Monitor, State, quality},
     settings::{ServerList, ServerSort, Settings, same_server},
     ui::*,
 };
@@ -11,7 +12,13 @@ pub struct ServerBrowser {
 }
 
 impl ServerBrowser {
-    pub fn draw(&mut self, settings: &mut Settings, rect: Rect, s: f32) -> Result<(), String> {
+    pub fn draw(
+        &mut self,
+        settings: &mut Settings,
+        monitor: &mut Monitor,
+        rect: Rect,
+        s: f32,
+    ) -> Result<(), String> {
         panel(rect);
         let x = rect.x + 16. * s;
         let width = rect.w - 32. * s;
@@ -86,9 +93,10 @@ impl ServerBrowser {
             };
             let control_width = 30. * s;
             let reserved = controls as f32 * (control_width + 5. * s);
+            let row = Rect::new(x, y, width - reserved, 35. * s);
             if button(
-                Rect::new(x, y, width - reserved, 35. * s),
-                address,
+                row,
+                "",
                 same_server(&settings.server_address, address),
                 true,
                 s * 0.8,
@@ -96,6 +104,7 @@ impl ServerBrowser {
                 settings.server_address = address.clone();
                 changed = true;
             }
+            server_row(monitor, address, row, s);
             let cx = x + width - reserved + 5. * s;
             if manual {
                 let index = self.page * rows + slot;
@@ -193,5 +202,67 @@ impl ServerBrowser {
             settings.save()?;
         }
         Ok(())
+    }
+}
+
+/// A saved server's name, population and connection inside its row.
+fn server_row(monitor: &mut Monitor, address: &str, row: Rect, s: f32) {
+    monitor.watch(address, get_time());
+    let state = monitor.state(address).cloned();
+    let connection = monitor.connection(address);
+    let (bars, rtt) = match &state {
+        Some(State::Online(_)) => (
+            Some(connection.map_or(0, |(rtt, loss)| quality(rtt, loss))),
+            connection.map(|c| c.0),
+        ),
+        Some(State::Offline(_)) => (Some(0), None),
+        _ => (None, None),
+    };
+    // Signal and population on the right; the name takes the rest.
+    let signal_x = row.right() - 82. * s;
+    signal(signal_x, row.y + 23. * s, bars, rtt, s);
+    let mut right = signal_x - 10. * s;
+    let (name, detail) = match &state {
+        Some(State::Online(probe)) => {
+            let players = format!("{}/{}", probe.status.players, probe.status.max_players);
+            right_label(&players, right, row.y + 22. * s, 12. * s, text_color());
+            right -= label_width(&players, 12. * s) + 8. * s;
+            if probe.status.password {
+                lock_icon(right - 8. * s, row.y + 22. * s, s, muted_color());
+                right -= 16. * s;
+            }
+            let mods = match probe.status.mods.len() {
+                0 => String::new(),
+                1 => format!(" · {}", probe.status.mods[0]),
+                n => format!(" · {n} mods"),
+            };
+            (probe.status.name.clone(), format!("{address}{mods}"))
+        }
+        _ => (address.to_owned(), String::new()),
+    };
+    let left = row.x + 10. * s;
+    if detail.is_empty() {
+        label(
+            &fitted_label(&name, 14. * s, right - left),
+            left,
+            row.y + 22. * s,
+            14. * s,
+            text_color(),
+        );
+    } else {
+        label(
+            &fitted_label(&name, 13. * s, right - left),
+            left,
+            row.y + 15. * s,
+            13. * s,
+            text_color(),
+        );
+        label(
+            &fitted_label(&detail, 10.5 * s, right - left),
+            left,
+            row.y + 29. * s,
+            10.5 * s,
+            muted_color(),
+        );
     }
 }

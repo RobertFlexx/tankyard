@@ -5,6 +5,19 @@ use std::path::PathBuf;
 
 pub const CENTRAL_SERVER: &str = "tankyard.kokonico.me";
 
+/// The server behind Play and the main server card. `TANKYARD_MAIN_SERVER`
+/// points it elsewhere, for testing a server before it goes live.
+pub fn main_server() -> &'static str {
+    static ADDRESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ADDRESS.get_or_init(|| {
+        std::env::var("TANKYARD_MAIN_SERVER")
+            .ok()
+            .map(|a| a.trim().to_owned())
+            .filter(|a| !a.is_empty() && a.len() <= 256)
+            .unwrap_or_else(|| CENTRAL_SERVER.to_owned())
+    })
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerSort {
     #[default]
@@ -46,6 +59,13 @@ pub struct Settings {
     pub fullscreen: bool,
     pub vsync: bool,
     pub anti_aliasing: u8,
+    /// The arena's render resolution relative to the output, 0.5 to 2.0.
+    pub render_scale: f32,
+    /// Index into `upscale::UPSCALERS`.
+    pub upscaler: u8,
+    /// Contrast-adaptive sharpening strength, 0 to 1.
+    pub sharpness: f32,
+    pub fxaa: bool,
     pub shape_quality: u8,
     pub anisotropic_filtering: u8,
     pub camera_smoothing: f32,
@@ -74,6 +94,54 @@ pub struct Settings {
     pub enabled_mods: Vec<String>,
     /// Content digests of flagged packs the player reviewed and accepted.
     pub approved_mods: Vec<String>,
+    pub community_server: CommunityServer,
+}
+
+/// A dedicated community server launched from the Host page.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CommunityServer {
+    pub name: String,
+    pub port: u16,
+    pub max_players: u16,
+    /// Players per lobby; 0 keeps everyone in one lobby.
+    pub lobby_size: u16,
+    pub bots: u16,
+    pub password: String,
+}
+impl Default for CommunityServer {
+    fn default() -> Self {
+        Self {
+            name: "My Tank Yard server".into(),
+            port: 5000,
+            max_players: 24,
+            lobby_size: 0,
+            bots: 8,
+            password: String::new(),
+        }
+    }
+}
+impl CommunityServer {
+    pub fn clean(&mut self) {
+        self.name = self
+            .name
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(48)
+            .collect();
+        if self.name.trim().is_empty() {
+            self.name = Self::default().name;
+        }
+        self.port = self.port.max(1024);
+        self.max_players = self.max_players.clamp(2, 128);
+        if self.lobby_size != 0 {
+            self.lobby_size = self.lobby_size.clamp(2, self.max_players);
+            // A server has at most sixteen lobbies.
+            self.lobby_size = self.lobby_size.max(self.max_players.div_ceil(16));
+        }
+        self.bots = self.bots.min(48);
+        self.password.truncate(64);
+    }
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -92,6 +160,10 @@ impl Default for Settings {
             fullscreen: false,
             vsync: true,
             anti_aliasing: 4,
+            render_scale: 1.0,
+            upscaler: 1,
+            sharpness: 0.0,
+            fxaa: false,
             shape_quality: 2,
             anisotropic_filtering: 1,
             camera_smoothing: 0.75,
@@ -119,6 +191,7 @@ impl Default for Settings {
             practice_records: vec![],
             enabled_mods: vec![],
             approved_mods: vec![],
+            community_server: CommunityServer::default(),
         }
     }
 }
@@ -138,6 +211,7 @@ impl Settings {
             practice_records: std::mem::take(&mut self.practice_records),
             enabled_mods: std::mem::take(&mut self.enabled_mods),
             approved_mods: std::mem::take(&mut self.approved_mods),
+            community_server: std::mem::take(&mut self.community_server),
             ..Self::default()
         };
     }
@@ -148,6 +222,9 @@ impl Settings {
         self.height = 800;
         self.anti_aliasing = 1;
         self.anisotropic_filtering = 1;
+        self.render_scale = 1.0;
+        self.sharpness = 0.0;
+        self.fxaa = false;
     }
     pub fn record_session(&mut self, tracker: &tankyard_client::achievements::Tracker) {
         let (rounds, kills) = tracker.session_totals();
@@ -223,6 +300,18 @@ impl Settings {
         if !matches!(self.anti_aliasing, 1 | 4 | 8) {
             self.anti_aliasing = 4;
         }
+        // Snap to the steps the slider offers.
+        self.render_scale = if self.render_scale.is_finite() {
+            (self.render_scale.clamp(0.5, 2.0) * 20.).round() / 20.
+        } else {
+            1.0
+        };
+        self.upscaler = self.upscaler.min(crate::upscale::UPSCALERS.len() as u8 - 1);
+        self.sharpness = if self.sharpness.is_finite() {
+            self.sharpness.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         self.shape_quality = self.shape_quality.min(2);
         if !matches!(self.anisotropic_filtering, 1 | 2 | 4 | 8 | 16) {
             self.anisotropic_filtering = 1;
@@ -264,6 +353,7 @@ impl Settings {
             .retain(|digest| digest.len() == 32 && digest.bytes().all(|b| b.is_ascii_hexdigit()));
         let excess = self.approved_mods.len().saturating_sub(128);
         self.approved_mods.drain(..excess);
+        self.community_server.clean();
         for (index, binding) in self.bindings.iter_mut().enumerate() {
             if key_from_name(binding).is_none() {
                 *binding = Settings::default().bindings[index].clone();

@@ -1,5 +1,15 @@
 # Hosting
 
+## The quick way: from the game
+
+Open **Host server → Community server**. Name the server, pick a UDP port, maximum players, lobby size and bots per lobby, choose the mode and rules with **Configure arena**, and press **Start community server**. It runs as its own process, so it keeps going while you play anywhere, including on it (**Join**). The panel shows its live status (players, lobbies, mods and your connection to it), the address to share, and the server console. Your enabled mods load on the server; players download nothing.
+
+**Copy command for an always-on machine** saves the configuration and copies the exact command that runs the same server without the game, for a spare PC, a VPS, or a Raspberry Pi.
+
+Servers answer status queries, so anyone who saves yours sees its name, player count, lobbies, mods, whether it needs a password, and a measured connection quality in **Join server**. Clicking the main server card on the title screen lists its lobbies; picking one joins that lobby.
+
+## From the command line
+
 Build and start a community server:
 
 ```sh
@@ -11,11 +21,11 @@ cargo build --locked --release -p tankyard-server --bin tankyard-server
 
 The port is UDP 5000. Local players join `127.0.0.1:5000`; LAN players use the host's local address. Internet players need a reachable public address and a forwarded UDP port. IPv6 addresses use brackets, such as `[2001:db8::1234]:5000`.
 
-Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default. Protocol 21 is required on both clients and servers. Validated mod data is sent when joining, so clients do not need to install server packs.
+Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default. Protocol 22 is required on both clients and servers. Validated mod data is sent when joining, so clients do not need to install server packs.
 
 Inputs and menu commands are flushed before the client finishes each frame. Movement abilities use shared prediction rules. Remote movement can bridge a packet gap for up to 75 ms, constrained by walls and the arena boundary; longer gaps freeze until a new snapshot arrives. The server reuses snapshot storage between viewers and bounds catch-up work during overload.
 
-Edit `configs/server.toml` for mode, map, population, password, chat, and storage. Choose a unique `server_id` before using persistent access files. A file from another server ID is rejected. Generate a complete configuration with `--write-config my-server.toml`. CLI options override it:
+Edit `configs/server.toml` for mode, map, population, password, chat, and storage. Choose a unique `server_id` before using persistent access files. A file from another server ID is rejected. Generate a complete configuration with `--write-config my-server.toml`. CLI options override it; `--port 5001` listens on every interface at that port, and `--arena-capacity 20` splits players into lobbies of 20:
 
 ```sh
 ./target/release/tankyard-server --config my-server.toml --bind 0.0.0.0:5001 --mode domination --bots 16 --mod mods/vampire
@@ -23,7 +33,7 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 
 Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
 
-Current clients and servers use protocol 21. Proximity voice, spectator controls, and captured drones require matching versions. Update clients and servers together. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
+Current clients and servers use protocol 22. Proximity voice, spectator controls, and captured drones require matching versions. Update clients and servers together. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
 
 The ordinary server includes signed creator tools by default on official public arenas (`--central`); `creator_admin = false` overrides that policy. Default community/personal hosts are disabled; public community operators can explicitly opt in. Password-protected hosts cannot enable the tools. See [creator administration](creator-administration.md) for policy, immediate revocation, auditing, and updating the central Raspberry Pi/Docker deployment.
 

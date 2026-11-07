@@ -47,6 +47,12 @@ struct Args {
     no_console: bool,
     #[arg(long)]
     write_config: Option<PathBuf>,
+    /// Listen on all interfaces at this UDP port (shorthand for --bind).
+    #[arg(long, conflicts_with = "bind")]
+    port: Option<u16>,
+    /// Split players into lobbies of this size; 0 keeps one lobby.
+    #[arg(long)]
+    arena_capacity: Option<usize>,
     /// Stop after a fixed wall-clock interval, useful for automated smoke tests.
     #[arg(long)]
     seconds: Option<f64>,
@@ -79,6 +85,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(bind) = args.bind {
         settings.bind = bind;
+    }
+    if let Some(port) = args.port {
+        settings.bind = format!("0.0.0.0:{port}");
+    }
+    if let Some(capacity) = args.arena_capacity {
+        settings.arena_capacity = capacity;
     }
     if let Some(name) = args.name {
         settings.name = name;

@@ -83,6 +83,13 @@ fn restore_walls(snapshot: &mut Snapshot, cache: &mut Vec<tankyard_core::Rect>) 
 }
 
 impl NetworkClient {
+    /// Ask to join a specific lobby from the server's status. Takes effect
+    /// only before the handshake is sent.
+    pub fn prefer_arena(&mut self, lobby: u8) {
+        if let ClientControl::Hello { arena, .. } = &mut self.hello {
+            *arena = Some(lobby);
+        }
+    }
     pub fn connect(address: &str, name: &str, password: &str) -> Result<Self, NetError> {
         if address.starts_with("tankyard://party/") {
             let invite = crate::party::Invite::parse(address)?;
@@ -234,6 +241,7 @@ impl NetworkClient {
                 account_token,
                 admin_key: admin_public_key,
                 party_proof: None,
+                arena: None,
             },
             hello_sent: false,
             tick_rate: 60,

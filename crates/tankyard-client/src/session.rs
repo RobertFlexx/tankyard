@@ -161,13 +161,22 @@ impl Session {
             Some(snapshot),
         ))
     }
-    pub fn join(address: &str, name: &str, password: &str) -> Result<Self, String> {
+    pub fn join(
+        address: &str,
+        name: &str,
+        password: &str,
+        lobby: Option<u8>,
+    ) -> Result<Self, String> {
         let invite = address
             .starts_with("tankyard://party/")
             .then(|| tankyard_server::party::Invite::parse(address))
             .transpose()
             .map_err(|e| e.to_string())?;
-        let client = NetworkClient::connect(address, name, password).map_err(|e| e.to_string())?;
+        let mut client =
+            NetworkClient::connect(address, name, password).map_err(|e| e.to_string())?;
+        if let Some(lobby) = lobby {
+            client.prefer_arena(lobby);
+        }
         let mut session = Self::create(
             Engine::Online {
                 client: Box::new(client),

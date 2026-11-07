@@ -4,6 +4,8 @@
 
 A 600-tick release benchmark with 64 players, 24 bots and 3,000 projectiles on Apple Silicon measures Maze simulation at 0.9 ms per tick (p99 1.7 ms), down from 3.1 ms (p99 3.9 ms) before this release; Open stays at 0.5 ms. Native captures at 2560×1536 cover the Bastion mark, the Mods page and review sheet with a deliberately hostile local test pack (never committed), the tank tree, the party panel, two-team guardians and the map styling. LuaJIT was also cross-built for x86-64 macOS and run under Rosetta. Linux, Windows and the universal macOS packages are built by the tagged release workflow; this workstation's interactive checks are macOS checks.
 
+The first tagged workflow run stopped before publishing anything. A repository-wide `HOST_CC` made the Windows build compile Opus with MinGW instead of MSVC, and Zig linked LuaJIT's standalone interpreter without an unwinder. LuaJIT now reads its own `DEFAULT_CC`, the compatible Linux build links Zig's bundled unwinder, and every release binary must load the bundled packs and report a deliberate script error before packaging. The second run passed on Linux and Windows, but its macOS jobs never started because GitHub retired the macOS 14 Apple Silicon runners; macOS builds and install checks now use macOS 15.
+
 Protocol **21** requires updating clients, regular servers and relays together. Publishing does not deploy the central Pi. See [modding](modding.md), [hosting](hosting.md) and [Pi operator steps](central-pi-upgrade.md).
 
 # v0.8.1 checks (2026-10-22)

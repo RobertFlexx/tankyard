@@ -1023,6 +1023,74 @@ pub fn arcade_track_tinted(rect: Rect, ratio: f32, fill: Color, back: Color) {
     }
 }
 
+/// Move `value` toward `target` with a frame-rate independent ease. Reduced
+/// motion jumps straight to the target.
+pub fn ease_toward(value: &mut f32, target: f32, rate: f32) {
+    if REDUCED_MOTION.with(|value| value.get()) {
+        *value = target;
+        return;
+    }
+    let dt = get_frame_time().clamp(0.0, 0.05);
+    *value += (target - *value) * (1.0 - (-dt * rate).exp());
+    if (*value - target).abs() < 0.002 {
+        *value = target;
+    }
+}
+
+pub const SIGNAL_GOOD: Color = Color::new(0.33, 0.78, 0.45, 1.0);
+pub const SIGNAL_FAIR: Color = Color::new(0.93, 0.72, 0.22, 1.0);
+
+/// Four connection bars, bottom-aligned at `y`, plus the round trip beside
+/// them. `bars` is 0 (offline) to 4; `None` draws a pending pulse.
+pub fn signal(x: f32, y: f32, bars: Option<u8>, rtt_ms: Option<f32>, s: f32) -> f32 {
+    let color = match bars {
+        Some(4) | Some(3) => SIGNAL_GOOD,
+        Some(2) => SIGNAL_FAIR,
+        Some(_) => RED,
+        None => muted_color(),
+    };
+    let pulse = if bars.is_none() {
+        ((get_time() * 4.).sin() as f32 * 0.5 + 0.5) * 0.5 + 0.25
+    } else {
+        1.
+    };
+    for i in 0..4u8 {
+        let h = (4. + f32::from(i) * 3.) * s;
+        let lit = bars.is_some_and(|b| i < b);
+        draw_rectangle(
+            x + f32::from(i) * 5. * s,
+            y - h,
+            3.5 * s,
+            h,
+            if lit {
+                color
+            } else {
+                alpha(line_color(), 0.9 * pulse)
+            },
+        );
+    }
+    let text = match (bars, rtt_ms) {
+        (Some(0), _) => "offline".to_owned(),
+        (_, Some(rtt)) => format!("{} ms", rtt.round().max(1.) as u32),
+        _ => "…".to_owned(),
+    };
+    let size = 12. * s;
+    label(
+        &text,
+        x + 24. * s,
+        y,
+        size,
+        if bars == Some(0) { RED } else { muted_color() },
+    );
+    24. * s + label_width(&text, size)
+}
+
+/// A small padlock, bottom-aligned at `y`, for password-protected servers.
+pub fn lock_icon(x: f32, y: f32, s: f32, color: Color) {
+    draw_rectangle(x - 4. * s, y - 6. * s, 8. * s, 6. * s, color);
+    draw_circle_lines(x, y - 7. * s, 2.6 * s, 1.4 * s, color);
+}
+
 #[cfg(test)]
 mod slider_tests {
     use super::*;
