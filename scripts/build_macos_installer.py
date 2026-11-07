@@ -4,6 +4,14 @@
 The package installs `Tank Yard.app` into /Applications through the standard
 Installer app: welcome, license, destination and summary pages. It is built
 with Apple's own pkgbuild and productbuild, so it needs a Mac.
+
+Unsigned packages are blocked by Gatekeeper when downloaded in a browser. Set
+these to sign the app and package with Developer ID certificates already in a
+keychain, then notarize and staple the package so it opens without warnings:
+
+  TANKYARD_SIGN_APP        "Developer ID Application: Name (TEAMID)"
+  TANKYARD_SIGN_INSTALLER  "Developer ID Installer: Name (TEAMID)"
+  APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD   notarization credentials
 """
 import argparse
 import hashlib
@@ -43,6 +51,37 @@ def distribution(version: str, component: str) -> str:
 """
 
 
+APP_IDENTITY = os.environ.get("TANKYARD_SIGN_APP", "")
+INSTALLER_IDENTITY = os.environ.get("TANKYARD_SIGN_INSTALLER", "")
+
+
+def sign_app(app: Path) -> None:
+    """Developer ID signatures with the hardened runtime, inside out."""
+    common = ["codesign", "--force", "--timestamp", "--options", "runtime",
+              "--sign", APP_IDENTITY]
+    entitlements = RESOURCES / "entitlements.plist"
+    for binary in sorted((app / "Contents/MacOS").iterdir()):
+        if binary.name != "tankyard":
+            subprocess.run([*common, str(binary)], check=True)
+    subprocess.run([*common, "--entitlements", str(entitlements), str(app)], check=True)
+
+
+def notarize(installer: Path) -> None:
+    """Have Apple notarize the package and staple the ticket to it."""
+    credentials = {name: os.environ.get(name, "") for name in ("APPLE_ID", "APPLE_TEAM_ID", "APPLE_APP_PASSWORD")}
+    missing = [name for name, value in credentials.items() if not value]
+    if missing:
+        raise ValueError(f"notarization needs {', '.join(missing)}")
+    subprocess.run([
+        "xcrun", "notarytool", "submit", str(installer), "--wait", "--timeout", "30m",
+        "--apple-id", credentials["APPLE_ID"], "--team-id", credentials["APPLE_TEAM_ID"],
+        "--password", credentials["APPLE_APP_PASSWORD"],
+    ], check=True)
+    subprocess.run(["xcrun", "stapler", "staple", str(installer)], check=True)
+    # The same check Gatekeeper makes when a downloaded package is opened.
+    subprocess.run(["spctl", "--assess", "--type", "install", "-vv", str(installer)], check=True)
+
+
 def build(archive: Path, version: str, output: Path) -> Path:
     if not re.fullmatch(r"v\d+\.\d+\.\d+", version):
         raise ValueError("installer requires a stable v-prefixed version")
@@ -73,6 +112,8 @@ def build(archive: Path, version: str, output: Path) -> Path:
         # Build-machine attributes (quarantine, provenance) would otherwise ship
         # as AppleDouble "._" files.
         subprocess.run(["xattr", "-cr", str(root)], check=True)
+        if APP_IDENTITY:
+            sign_app(root / "Tank Yard.app")
         subprocess.run(["codesign", "--verify", "--strict", str(root / "Tank Yard.app")], check=True)
         components = work / "components.plist"
         subprocess.run(["pkgbuild", "--analyze", "--root", str(root), str(components)], check=True)
@@ -105,10 +146,13 @@ def build(archive: Path, version: str, output: Path) -> Path:
         shutil.copyfile(ROOT / "assets/icons/tankyard.png", resources / "background.png")
         definition = work / "distribution.xml"
         definition.write_text(distribution(version, component), encoding="utf-8")
+        signing = ["--sign", INSTALLER_IDENTITY, "--timestamp"] if INSTALLER_IDENTITY else []
         subprocess.run([
             "productbuild", "--distribution", str(definition), "--resources", str(resources),
-            "--package-path", str(packages), str(installer),
+            "--package-path", str(packages), *signing, str(installer),
         ], check=True)
+    if INSTALLER_IDENTITY:
+        notarize(installer)
     with installer.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     installer.with_name(installer.name + ".sha256").write_text(f"{digest}  {installer.name}\n", encoding="utf-8")

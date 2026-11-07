@@ -997,8 +997,27 @@ pub fn capsule(rect: Rect, color: Color) {
         rect.h,
         color,
     );
-    draw_circle(rect.x + cap, rect.y + rect.h * 0.5, cap, color);
-    draw_circle(rect.x + rect.w - cap, rect.y + rect.h * 0.5, cap, color);
+    let cy = rect.y + rect.h * 0.5;
+    if color.a >= 1.0 {
+        draw_circle(rect.x + cap, cy, cap, color);
+        draw_circle(rect.x + rect.w - cap, cy, cap, color);
+        return;
+    }
+    // Translucent colors would darken where full circles overlap the middle,
+    // so each end is a half disc that only touches it along an edge.
+    const STEPS: usize = 16;
+    for (cx, from) in [
+        (rect.x + cap, std::f32::consts::FRAC_PI_2),
+        (rect.x + rect.w - cap, -std::f32::consts::FRAC_PI_2),
+    ] {
+        let point = |i: usize| {
+            let angle = from + std::f32::consts::PI * i as f32 / STEPS as f32;
+            vec2(cx + angle.cos() * cap, cy + angle.sin() * cap)
+        };
+        for i in 0..STEPS {
+            draw_triangle(vec2(cx, cy), point(i), point(i + 1), color);
+        }
+    }
 }
 /// Rounded tracks scale their border with the actual framebuffer size.
 pub fn arcade_track(rect: Rect, ratio: f32, fill: Color) {
