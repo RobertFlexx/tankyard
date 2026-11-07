@@ -157,6 +157,6 @@ All text boxes support Ctrl/Cmd+A/C/X/V and Shift+Insert for paste. Clipboard wo
 - **Upscaler**: **AMD FSR 1** reconstructs edges while upscaling and pairs it with contrast-adaptive sharpening; **Bilinear** is plain filtering.
 - **Sharpening** restores crispness after upscaling or FXAA without halos.
 - **FXAA** smooths remaining stair-steps on edges at almost no cost.
-- **MSAA**, **shape quality** (circle detail) and **texture filtering** refine geometry and textured tanks.
+- **MSAA**, **shape quality** (circle detail) and **texture filtering** refine geometry and textured tanks. Apple silicon Macs offer up to 4x MSAA: their GPUs resolve 4 samples in fast tile memory, while 8x is emulated at several times the cost with no visible difference.
 
-DLSS and XeSS need DirectX 12 or Vulkan with vendor SDKs, and HDR output needs a display path that OpenGL windows don't offer, so Tank Yard doesn't support them. FSR 1 runs on every GPU the game supports. If a driver can't compile the post-processing shaders, the arena falls back to bilinear filtering and the Graphics tab says so.
+DLSS, XeSS, FSR 2/3 and MetalFX need DirectX 12, Vulkan or Metal with motion vectors and vendor SDKs (DLSS has no OpenGL or Metal path at all), and HDR output needs a display path that OpenGL windows don't offer, so Tank Yard doesn't support them. FSR 1 is the upscaler that runs on every GPU the game supports, including every Mac. FSR 1 runs on every GPU the game supports. If a driver can't compile the post-processing shaders, the arena falls back to bilinear filtering and the Graphics tab says so.
