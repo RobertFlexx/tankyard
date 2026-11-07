@@ -30,6 +30,7 @@ mod session;
 mod settings;
 mod startup;
 mod tank_tree;
+mod target;
 mod ui_layout;
 mod ui_text;
 mod unlock;
@@ -121,7 +122,7 @@ fn window_conf(cli: &Cli) -> Conf {
         window_height: settings.height as i32,
         high_dpi: true,
         // Native framebuffer MSAA, with a selectable quality level.
-        sample_count: match settings.anti_aliasing {
+        sample_count: match settings.anti_aliasing.min(graphics::MSAA_LIMIT) {
             8 => 8,
             4 => 4,
             _ => 1,
@@ -184,6 +185,9 @@ struct App {
     sequence: u32,
     frames: u64,
     smoke: Option<u64>,
+    /// Frame times in smoke runs, for the timing summary.
+    frame_times: Vec<f32>,
+    cpu_times: Vec<f32>,
     screenshot: Option<String>,
     quit: bool,
     respawn_requested: bool,
@@ -286,6 +290,8 @@ impl App {
             sequence: 0,
             frames: 0,
             smoke: cli.smoke_frames,
+            frame_times: Vec::new(),
+            cpu_times: Vec::new(),
             screenshot: cli.screenshot,
             quit: false,
             respawn_requested: false,
@@ -2426,7 +2432,21 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let conf = window_conf(&cli);
     startup::install(&conf);
-    macroquad::Window::from_config(conf, run(cli));
+    macroquad::Window::from_config(
+        macroquad::conf::Conf {
+            miniquad_conf: conf,
+            update_on: None,
+            default_filter_mode: FilterMode::Linear,
+            // Every macroquad draw call is its own render pass, and drivers
+            // that emulate OpenGL (macOS) reload and store the whole
+            // multisampled framebuffer per pass. Batches big enough for a
+            // full arena keep a frame to a handful of passes. Vertices are
+            // addressed with u16 indices, which caps them at 65535.
+            draw_call_vertex_capacity: 65_535,
+            draw_call_index_capacity: 196_605,
+        },
+        run(cli),
+    );
 }
 
 async fn run(cli: Cli) {
@@ -2512,6 +2532,23 @@ async fn run(cli: Cli) {
         if let Some(session) = &mut app.session {
             session.flush_network();
         }
+        if app.smoke.is_some() {
+            // Time the frame's CPU and GPU work, not the wait for vsync:
+            // submit the batch and wait for the GPU to finish it.
+            let cpu = (get_time() - start) as f32;
+            unsafe {
+                let mut gl = get_internal_gl();
+                gl.flush();
+                if gl.quad_context.info().backend == miniquad::Backend::OpenGl {
+                    miniquad::gl::glFinish();
+                }
+            }
+            // Skip startup frames, which include loading and shader compilation.
+            if app.frames > 60 {
+                app.frame_times.push((get_time() - start) as f32);
+                app.cpu_times.push(cpu);
+            }
+        }
         app.frames += 1;
         if app.smoke.is_some_and(|limit| app.frames >= limit) {
             if let Some(path) = &app.screenshot {
@@ -2527,13 +2564,37 @@ async fn run(cli: Cli) {
                 snapshot.map(|s| s.targets.len()).unwrap_or(0),
                 app.menu.mode.name()
             );
+            if !app.frame_times.is_empty() {
+                let mut times = app.frame_times.clone();
+                times.sort_by(f32::total_cmp);
+                let mean = times.iter().sum::<f32>() / times.len() as f32;
+                let p99 = times[(times.len() * 99 / 100).min(times.len() - 1)];
+                let cpu = app.cpu_times.iter().sum::<f32>() / app.cpu_times.len() as f32;
+                println!(
+                    "Tank Yard frame work: mean={:.2}ms p99={:.2}ms cpu={:.2}ms ({:.0} fps uncapped)",
+                    mean * 1000.,
+                    p99 * 1000.,
+                    cpu * 1000.,
+                    1. / mean.max(1e-6)
+                );
+            }
             break;
         }
         if app.quit {
             break;
         }
-        if app.settings.frame_cap > 0 {
-            let target = 1.0 / app.settings.frame_cap as f64;
+        // Menus don't need more than 60 fps, so without vsync they don't run
+        // the GPU flat out; games keep the chosen cap.
+        let cap = match (
+            app.session.is_none() && !app.settings.vsync,
+            app.settings.frame_cap,
+        ) {
+            (true, 0) => 60,
+            (true, cap) => cap.min(60),
+            (false, cap) => cap,
+        };
+        if cap > 0 && app.smoke.is_none() {
+            let target = 1.0 / f64::from(cap);
             let remaining = target - (get_time() - start);
             if remaining > 0.001 {
                 std::thread::sleep(std::time::Duration::from_secs_f64(remaining - 0.0005));

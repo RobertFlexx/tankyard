@@ -2593,7 +2593,7 @@ impl Menu {
                             31.0 * s,
                         ),
                         title,
-                        settings.anti_aliasing == samples,
+                        crate::graphics::samples(settings.anti_aliasing) == samples,
                         crate::graphics::supports_samples(samples),
                         s * 0.73,
                     ) {

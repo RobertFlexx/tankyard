@@ -6,7 +6,7 @@
 //! The FSR 1 passes follow AMD's published algorithm (MIT licensed) and run on
 //! GLSL ES 1.0, so they work wherever the game does. A driver that rejects a
 //! shader falls back to bilinear filtering.
-use crate::settings::Settings;
+use crate::{settings::Settings, target::Target};
 use macroquad::prelude::*;
 
 pub const UPSCALERS: [&str; 2] = ["Bilinear", "FSR 1"];
@@ -180,19 +180,6 @@ fn material(body: &str, sharpness: bool) -> Result<Material, String> {
     .map_err(|e| e.to_string())
 }
 
-fn target(size: (u32, u32), samples: u8) -> RenderTarget {
-    let target = render_target_ex(
-        size.0,
-        size.1,
-        RenderTargetParams {
-            sample_count: i32::from(samples),
-            ..Default::default()
-        },
-    );
-    target.texture.set_filter(FilterMode::Linear);
-    target
-}
-
 fn bounded(size: (f32, f32)) -> (u32, u32) {
     let factor = (4096. / size.0.max(1.)).min(4096. / size.1.max(1.)).min(1.);
     (
@@ -214,10 +201,10 @@ impl Plan {
     pub fn new(settings: &Settings, output: (u32, u32)) -> Option<Self> {
         let scale = settings.render_scale.clamp(0.5, 2.0);
         let scene = bounded((output.0 as f32 * scale, output.1 as f32 * scale));
-        let fsr = settings.upscaler == 1;
-        let easu = fsr && scene.0 < output.0;
-        // FSR always pairs its upscale with RCAS; elsewhere sharpening is opt-in.
-        let sharpness = if fsr {
+        let easu = settings.upscaler == 1 && scene.0 < output.0;
+        // FSR pairs its upscale with RCAS; elsewhere sharpening is opt-in, so
+        // FSR at native scale costs nothing.
+        let sharpness = if easu {
             settings.sharpness.clamp(0., 1.).max(0.1)
         } else {
             settings.sharpness.clamp(0., 1.)
@@ -235,24 +222,19 @@ impl Plan {
 #[derive(Default)]
 pub struct Scaler {
     materials: Option<Result<Materials, String>>,
-    scene: Option<((u32, u32, u8), RenderTarget)>,
-    smoothed: Option<((u32, u32), RenderTarget)>,
-    upscaled: Option<((u32, u32), RenderTarget)>,
+    scene: Option<(u8, Target)>,
+    smoothed: Option<Target>,
+    upscaled: Option<Target>,
     plan: Option<(Plan, (u32, u32))>,
 }
 
-fn reuse(slot: &mut Option<((u32, u32), RenderTarget)>, size: (u32, u32)) -> RenderTarget {
-    if slot.as_ref().is_none_or(|(s, _)| *s != size) {
-        *slot = Some((size, target(size, 1)));
+/// The slot's target, recreated only when its size or sampling changes.
+fn reuse(slot: &mut Option<Target>, size: (u32, u32)) -> &mut Target {
+    if slot.as_ref().is_none_or(|t| t.size() != size) {
+        *slot = None;
+        *slot = Some(Target::new(size, 1));
     }
-    slot.as_ref().unwrap().1.clone()
-}
-
-fn camera_for(target: &RenderTarget) -> Camera2D {
-    let mut camera =
-        Camera2D::from_display_rect(Rect::new(0., 0., screen_width(), screen_height()));
-    camera.render_target = Some(target.clone());
-    camera
+    slot.as_mut().unwrap()
 }
 
 /// Draw `source` over the whole current target, optionally through `material`.
@@ -295,6 +277,10 @@ impl Scaler {
     pub fn begin(&mut self, settings: &Settings, output: (u32, u32)) {
         self.plan = Plan::new(settings, output).map(|plan| (plan, output));
         let Some((plan, _)) = self.plan else {
+            // Free the targets once post-processing is off.
+            self.scene = None;
+            self.smoothed = None;
+            self.upscaled = None;
             return;
         };
         if self.materials.is_none() && (plan.fxaa || plan.easu || plan.sharpness > 0.) {
@@ -311,47 +297,56 @@ impl Scaler {
             self.materials = Some(loaded);
         }
         let samples = crate::graphics::samples(settings.anti_aliasing);
-        let key = (plan.scene.0, plan.scene.1, samples);
-        if self.scene.as_ref().is_none_or(|(k, _)| *k != key) {
-            self.scene = Some((key, target(plan.scene, samples)));
+        if self
+            .scene
+            .as_ref()
+            .is_none_or(|(s, t)| *s != samples || t.size() != plan.scene)
+        {
+            self.scene = None;
+            self.scene = Some((samples, Target::new(plan.scene, samples)));
         }
-        let scene = &self.scene.as_ref().unwrap().1;
-        set_camera(&camera_for(scene));
+        if !plan.fxaa {
+            self.smoothed = None;
+        }
+        let scene = &mut self.scene.as_mut().unwrap().1;
+        scene.select();
         clear_background(BLANK);
     }
 
     /// Resolve the world into the output. `restore` reselects the output.
-    pub fn finish(&mut self, restore: impl Fn()) {
+    pub fn finish(&mut self, mut restore: impl FnMut()) {
         let Some((plan, output)) = self.plan.take() else {
             return;
         };
-        let Some((_, scene)) = &self.scene else {
+        let Some((_, scene)) = &mut self.scene else {
             return;
         };
         let materials = match &self.materials {
             Some(Ok(materials)) => Some(materials),
             _ => None,
         };
-        let mut source = scene.texture.clone();
+        let mut source = scene.texture().clone();
         let mut size = plan.scene;
         if let (true, Some(m)) = (plan.fxaa, materials) {
             let smoothed = reuse(&mut self.smoothed, size);
-            set_camera(&camera_for(&smoothed));
+            smoothed.select();
             blit(&source, Some(&m.fxaa), size, 0.);
-            source = smoothed.texture.clone();
+            source = smoothed.texture().clone();
         }
         let sharpen = plan.sharpness > 0. && materials.is_some();
         if sharpen && size != output {
             let upscaled = reuse(&mut self.upscaled, output);
-            set_camera(&camera_for(&upscaled));
+            upscaled.select();
             blit(
                 &source,
                 materials.filter(|_| plan.easu).map(|m| &m.easu),
                 size,
                 0.,
             );
-            source = upscaled.texture.clone();
+            source = upscaled.texture().clone();
             size = output;
+        } else {
+            self.upscaled = None;
         }
         restore();
         let final_pass = match materials {
@@ -389,5 +384,8 @@ mod tests {
         let plan = Plan::new(&settings, (3000, 2000)).unwrap();
         assert_eq!(plan.scene, (4096, 2731));
         assert!(!plan.easu);
+        // FSR with nothing to upscale draws the world directly.
+        settings.render_scale = 1.;
+        assert_eq!(Plan::new(&settings, (1920, 1080)), None);
     }
 }

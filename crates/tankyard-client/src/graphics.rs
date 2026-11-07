@@ -12,6 +12,14 @@ thread_local! {
     static MAX_SAMPLES:Cell<u8>=const {Cell::new(1)};
     static MIPMAPS_READY:Cell<bool>=const {Cell::new(false)};
 }
+/// The most MSAA samples worth offering. Apple GPUs resolve up to 4 samples
+/// in tile memory; their drivers emulate 8, which costs several times more
+/// with no visible gain on flat shapes, so those Macs offer 4.
+pub const MSAA_LIMIT: u8 = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    4
+} else {
+    8
+};
 pub fn set_quality(quality: u8) {
     QUALITY.with(|q| q.set(quality.min(2)));
 }
@@ -69,7 +77,7 @@ pub fn refresh_capabilities(filter: u8) {
         {
             let mut maximum = 1;
             miniquad::graphics::raw_gl::glGetIntegerv(0x8D57, &mut maximum);
-            maximum.clamp(1, 8) as u8
+            maximum.clamp(1, MSAA_LIMIT.into()) as u8
         } else {
             1
         }

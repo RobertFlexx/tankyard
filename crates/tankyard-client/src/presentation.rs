@@ -1,6 +1,6 @@
 //! Render resolution is independent of desktop fullscreen geometry. Input and
 //! all UI layout remain in the same logical window coordinates at every scale.
-use crate::settings::Settings;
+use crate::{settings::Settings, target::Target};
 use macroquad::prelude::*;
 fn bounded_size(size: (u32, u32)) -> (u32, u32) {
     let (w, h) = (size.0.max(1), size.1.max(1));
@@ -10,21 +10,9 @@ fn bounded_size(size: (u32, u32)) -> (u32, u32) {
         (h as f32 * factor).round().max(1.) as u32,
     )
 }
-/// Draw into the frame's output: the resolution target, or else the window.
-fn select_output(target: Option<&RenderTarget>) {
-    match target {
-        Some(target) => {
-            let mut camera =
-                Camera2D::from_display_rect(Rect::new(0., 0., screen_width(), screen_height()));
-            camera.render_target = Some(target.clone());
-            set_camera(&camera);
-        }
-        None => set_default_camera(),
-    }
-}
 #[derive(Default)]
 pub struct Presentation {
-    target: Option<((u32, u32, u8), RenderTarget)>,
+    target: Option<((u32, u32, u8), Target)>,
     active: bool,
     output: (u32, u32),
     world: crate::upscale::Scaler,
@@ -52,16 +40,8 @@ impl Presentation {
         if self.target.as_ref().is_none_or(|(size, _)| *size != key) {
             // Preserve selected antialiasing when fullscreen resolution uses
             // an intermediate target; GL2 safely falls back to one sample.
-            let target = render_target_ex(
-                requested.0,
-                requested.1,
-                RenderTargetParams {
-                    sample_count: i32::from(key.2),
-                    ..Default::default()
-                },
-            );
-            target.texture.set_filter(FilterMode::Linear);
-            self.target = Some((key, target));
+            self.target = None;
+            self.target = Some((key, Target::new((key.0, key.1), key.2)));
             log::info!(
                 "Render resolution: {}x{} (window {}x{})",
                 requested.0,
@@ -70,7 +50,14 @@ impl Presentation {
                 physical.1
             );
         }
-        select_output(self.target.as_ref().map(|(_, t)| t));
+        self.select_output();
+    }
+    /// Draw into the frame's output: the resolution target, or else the window.
+    fn select_output(&mut self) {
+        match &mut self.target {
+            Some((_, target)) if self.active => target.select(),
+            _ => set_default_camera(),
+        }
     }
     /// The arena draws between `begin_world` and `finish_world`, at its own
     /// render scale and through the chosen upscaler.
@@ -78,26 +65,22 @@ impl Presentation {
         self.world.begin(settings, self.output);
     }
     pub fn finish_world(&mut self) {
-        let Self {
-            world,
-            target,
-            active,
-            ..
-        } = self;
-        let target = target.as_ref().filter(|_| *active).map(|(_, t)| t);
-        world.finish(|| select_output(target));
+        let mut world = std::mem::take(&mut self.world);
+        world.finish(|| self.select_output());
+        self.world = world;
     }
     pub fn post_processing_error(&self) -> Option<&str> {
         self.world.error()
     }
-    pub fn finish(&self) {
+    pub fn finish(&mut self) {
         if self.active
-            && let Some((_, target)) = &self.target
+            && let Some((_, target)) = &mut self.target
         {
+            let texture = target.texture().clone();
             set_default_camera();
             clear_background(BLACK);
             draw_texture_ex(
-                &target.texture,
+                &texture,
                 0.,
                 0.,
                 WHITE,
