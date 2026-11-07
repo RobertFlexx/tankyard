@@ -1,13 +1,14 @@
 #!/bin/sh
 # Install Tank Yard on macOS from the release .pkg without the Gatekeeper
-# block that affects packages not notarized by Apple.
+# block that affects packages not notarized by Apple. It opens the normal
+# visual Installer; --cli installs from the terminal instead.
 #
 #   curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/install-macos.sh | sh
 #
 # Browsers tag downloads with a quarantine flag that Gatekeeper checks; curl
 # does not. This script downloads the package with curl, verifies it against
 # the release's published SHA-256 checksums, and installs it with Apple's own
-# installer. With --file it verifies a package you already downloaded first,
+# Installer app. With --file it verifies a package you already downloaded first,
 # and only then clears its quarantine flag. A file that fails verification is
 # never unblocked or installed.
 set -eu
@@ -16,20 +17,22 @@ repository=RobertFlexx/tankyard
 version=latest
 file=
 open_app=yes
+cli=no
 
 die() { printf 'Tank Yard: %s\n' "$*" >&2; exit 1; }
 usage() {
     cat <<'HELP'
 Tank Yard macOS installer
 
-  sh install-macos.sh [--version v0.10.0] [--file PATH] [--no-open]
+  sh install-macos.sh [--version v0.10.0] [--file PATH] [--cli] [--no-open]
 
-Downloads the release .pkg, verifies its checksum and installs Tank Yard.app
-into /Applications. Your password is needed because the package installs for
-every user. Run the same command to update; settings and mods are kept.
+Downloads the release .pkg, verifies its checksum and opens it in the macOS
+Installer, which installs Tank Yard.app into /Applications. Run the same
+command to update; settings and mods are kept.
 
-  --file PATH   Install a .pkg you already downloaded, after verifying it.
-  --no-open     Don't open Tank Yard when the installation finishes.
+  --file PATH   Use a .pkg you already downloaded, after verifying it.
+  --cli         Install from the terminal instead of the visual Installer.
+  --no-open     With --cli, don't open Tank Yard afterwards.
 HELP
 }
 while [ "$#" -gt 0 ]; do
@@ -39,6 +42,7 @@ while [ "$#" -gt 0 ]; do
             case "$1" in --version) version=$2 ;; --file) file=$2 ;; esac
             shift 2 ;;
         --no-open) open_app=no; shift ;;
+        --cli) cli=yes; shift ;;
         --help|-h) usage; exit 0 ;;
         *) die "Unknown option: $1. Use --help." ;;
     esac
@@ -81,7 +85,13 @@ expected=$(awk -v name="$package" '$2 == name { print $1 }' "$work_dir/SHA256SUM
 case "$expected" in *[!0-9a-f]*) die "Invalid checksum." ;; esac
 if [ -z "$file" ]; then
     printf 'Downloading %s…\n' "$package"
-    file="$work_dir/$package"
+    if [ "$cli" = yes ]; then
+        file="$work_dir/$package"
+    else
+        # The Installer app reads the package after this script exits.
+        mkdir -p "$HOME/Downloads"
+        file="$HOME/Downloads/$package"
+    fi
     download "$base/download/$version/$package" "$file" || die "Download failed; nothing was changed."
 fi
 actual=$(shasum -a 256 "$file" | awk '{print $1}')
@@ -89,6 +99,11 @@ actual=$(shasum -a 256 "$file" | awk '{print $1}')
 printf 'Verified against the official release checksum.\n'
 # Only a verified package is unblocked. Missing flags are fine.
 xattr -d com.apple.quarantine "$file" 2>/dev/null || true
+if [ "$cli" = no ]; then
+    printf 'Opening the installer. Follow its steps to finish.\n'
+    open "$file" || die "Could not open the Installer. Run again with --cli to install from the terminal."
+    exit 0
+fi
 printf 'Installing (macOS asks for your password)…\n'
 sudo installer -pkg "$file" -target / || die "The installer did not finish; nothing else was changed."
 app="/Applications/Tank Yard.app"

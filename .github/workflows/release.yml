@@ -92,6 +92,9 @@ jobs:
             runner: windows-2022
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
+    env:
+      # Signing and notarizing the macOS installer happen only when configured.
+      HAS_MACOS_SIGNING: ${{ secrets.MACOS_CERTIFICATE != '' }}
     defaults:
       run:
         shell: bash
@@ -215,8 +218,34 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "NSIS installation failed." }
           python scripts/build_windows_installer.py --version $env:RELEASE_TAG
           if ($LASTEXITCODE -ne 0) { throw "Graphical installer compilation failed." }
+      - name: Load Developer ID certificates
+        if: runner.os == 'macOS' && env.HAS_MACOS_SIGNING == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificates.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/certificates.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/productsign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/certificates.p12"
+          app=$(security find-identity -v -p codesigning "$keychain" | awk -F '"' '/Developer ID Application/ { print $2; exit }')
+          installer=$(security find-identity -v "$keychain" | awk -F '"' '/Developer ID Installer/ { print $2; exit }')
+          test -n "$app" || { echo "The certificate file has no Developer ID Application identity."; exit 1; }
+          test -n "$installer" || { echo "The certificate file has no Developer ID Installer identity."; exit 1; }
+          printf 'TANKYARD_SIGN_APP=%s\nTANKYARD_SIGN_INSTALLER=%s\n' "$app" "$installer" >> "$GITHUB_ENV"
       - name: Build graphical macOS installer
         if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: python scripts/build_macos_installer.py --version "$RELEASE_TAG"
       - name: Test macOS installer before publishing
         if: runner.os == 'macOS'
@@ -330,18 +359,18 @@ jobs:
       - name: Install published macOS package with the fetch script
         if: runner.os == 'macOS'
         run: |
-          sh install-macos.sh --version "$RELEASE_TAG" --no-open
+          sh install-macos.sh --version "$RELEASE_TAG" --cli --no-open
           "/Applications/Tank Yard.app/Contents/MacOS/tankyard" --version
           # A browser download carries a quarantine flag; --file verifies, then clears it.
           pkg="$RUNNER_TEMP/tankyard-$RELEASE_TAG-macos-universal.pkg"
           gh release download "$RELEASE_TAG" --pattern "tankyard-$RELEASE_TAG-macos-universal.pkg" --dir "$RUNNER_TEMP"
           xattr -w com.apple.quarantine "0083;00000000;Safari;" "$pkg"
-          sh install-macos.sh --file "$pkg" --no-open
+          sh install-macos.sh --file "$pkg" --cli --no-open
           ! xattr -p com.apple.quarantine "$pkg" 2>/dev/null
           # A tampered package is refused and stays blocked.
           printf 'x' >> "$pkg"
           xattr -w com.apple.quarantine "0083;00000000;Safari;" "$pkg"
-          ! sh install-macos.sh --file "$pkg" --no-open
+          ! sh install-macos.sh --file "$pkg" --cli --no-open
           xattr -p com.apple.quarantine "$pkg"
           sudo rm -rf "/Applications/Tank Yard.app"
         env:
