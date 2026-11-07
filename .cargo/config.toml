@@ -1,0 +1,5 @@
+[env]
+# LuaJIT builds small host tools with $(HOST_CC), defaulting to `gcc`. Use the
+# platform compiler instead so clang-only systems and unrelated GCC toolchains
+# earlier on PATH cannot break the vendored build. An exported value still wins.
+HOST_CC = "cc"

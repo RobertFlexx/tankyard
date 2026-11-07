@@ -12,7 +12,10 @@ audit_file = "configs/creator-audit.jsonl"
 require_accounts = false
 bot_count = 12
 adaptive_bots = true
-max_players = 64
+# Groups of 20 players share this process and port; up to four arenas open
+# as the server fills, and quiet arenas merge when a new round starts.
+max_players = 80
+arena_capacity = 20
 ban_file = "configs/official-bans.json"
 
 # Uptime-based map rotation; zero disables it.

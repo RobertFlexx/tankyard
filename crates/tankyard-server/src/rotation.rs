@@ -19,7 +19,7 @@ impl UdpServer {
         }
         self.rotation_checked_at = Some(now);
         if now >= self.next_rotation {
-            let maps = &self.session.bundle.maps;
+            let maps = &self.arenas[0].session.bundle.maps;
             if !maps.is_empty() {
                 let current = maps
                     .iter()
@@ -68,12 +68,12 @@ impl UdpServer {
     }
     pub(crate) fn sync_party_bots(&mut self, humans: usize) {
         let party = self.settings.party.as_ref().expect("party settings");
-        let teams = self.session.world.config.mode.teams();
+        let teams = self.arenas[0].session.world.config.mode.teams();
         let slots = party.ally_slots.max(humans.min(8));
-        if self.session.world.config.mode == tankyard_core::Mode::Infection {
+        if self.arenas[0].session.world.config.mode == tankyard_core::Mode::Infection {
             // Conversion must not replenish the survivor team indefinitely.
             let desired = (slots * 2).saturating_sub(humans);
-            let current = self
+            let current = self.arenas[0]
                 .session
                 .world
                 .tanks
@@ -83,7 +83,7 @@ impl UdpServer {
             if current == desired {
                 return;
             }
-            let mut bots: Vec<_> = self
+            let mut bots: Vec<_> = self.arenas[0]
                 .session
                 .world
                 .tanks
@@ -93,15 +93,16 @@ impl UdpServer {
                 .collect();
             bots.sort_unstable();
             for (_, _, id) in bots.into_iter().take(current.saturating_sub(desired)) {
-                self.session.world.remove_player(id);
+                self.arenas[0].session.world.remove_player(id);
             }
             for i in current..desired {
-                let id = self
+                let id = self.arenas[0]
                     .session
                     .world
                     .add_player(&format!("Outbreak {:02}", i + 1), true);
                 if party.starting_level > 1 {
-                    self.session
+                    self.arenas[0]
+                        .session
                         .world
                         .set_practice_level(id, party.starting_level);
                 }
@@ -113,7 +114,7 @@ impl UdpServer {
         let first = if teams == 0 { 0 } else { 1 };
         let last = if teams == 0 { 0 } else { teams };
         for team in first..=last {
-            let humans_on_team = self
+            let humans_on_team = self.arenas[0]
                 .session
                 .world
                 .tanks
@@ -121,7 +122,7 @@ impl UdpServer {
                 .filter(|t| !t.bot && t.team == team)
                 .count();
             let desired = slots.saturating_sub(humans_on_team);
-            let current = self
+            let current = self.arenas[0]
                 .session
                 .world
                 .tanks
@@ -131,7 +132,7 @@ impl UdpServer {
             if current == desired {
                 continue;
             }
-            let mut ids: Vec<_> = self
+            let mut ids: Vec<_> = self.arenas[0]
                 .session
                 .world
                 .tanks
@@ -140,7 +141,7 @@ impl UdpServer {
                 .map(|t| t.id)
                 .collect();
             ids.sort_by_key(|id| {
-                let tank = self
+                let tank = self.arenas[0]
                     .session
                     .world
                     .tanks
@@ -150,10 +151,10 @@ impl UdpServer {
                 (tank.alive, tank.score, std::cmp::Reverse(tank.id))
             });
             for id in ids.iter().take(current.saturating_sub(desired)) {
-                self.session.world.remove_player(*id);
+                self.arenas[0].session.world.remove_player(*id);
             }
             for i in ids.len()..desired {
-                let id = self.session.world.add_player(
+                let id = self.arenas[0].session.world.add_player(
                     &format!(
                         "{} {:02}",
                         if team == 1 { "Wingmate" } else { "Rival" },
@@ -162,12 +163,13 @@ impl UdpServer {
                     true,
                 );
                 if party.starting_level > 1 {
-                    self.session
+                    self.arenas[0]
+                        .session
                         .world
                         .set_practice_level(id, party.starting_level);
                 }
                 if team > 0 {
-                    self.session.world.assign_team(id, team);
+                    self.arenas[0].session.world.assign_team(id, team);
                 }
             }
         }
@@ -192,20 +194,20 @@ mod tests {
         server.elapsed = Duration::from_secs(7199);
         server.update_map_rotation();
         assert_eq!(server.settings.world.map, first);
-        assert_eq!(server.session.world.tick, 0);
+        assert_eq!(server.arenas[0].session.world.tick, 0);
         server.elapsed = Duration::from_secs(7200);
         server.update_map_rotation();
         assert_ne!(server.settings.world.map, first);
         assert_eq!(server.next_rotation, 14400);
         server.restart_round();
         assert_eq!(server.next_rotation, 14400);
-        let round = server.session.world.match_state.round;
+        let round = server.arenas[0].session.world.match_state.round;
         server.elapsed = Duration::from_secs(36001);
         server.update_map_rotation();
-        assert_eq!(server.session.world.match_state.round, round + 1);
+        assert_eq!(server.arenas[0].session.world.match_state.round, round + 1);
         assert_eq!(server.next_rotation, 43200);
         server.update_map_rotation();
-        assert_eq!(server.session.world.match_state.round, round + 1);
+        assert_eq!(server.arenas[0].session.world.match_state.round, round + 1);
     }
     #[test]
     fn private_matches_can_disable_rotation() {
@@ -219,6 +221,6 @@ mod tests {
         .unwrap();
         server.elapsed = Duration::from_secs(100000);
         server.update_map_rotation();
-        assert_eq!(server.session.world.match_state.round, 1);
+        assert_eq!(server.arenas[0].session.world.match_state.round, 1);
     }
 }

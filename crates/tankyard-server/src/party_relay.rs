@@ -1036,7 +1036,7 @@ mod tests {
             server.update(elapsed).unwrap();
             if !positioned && clients.iter().all(|client| client.is_ready()) {
                 for (index, client) in clients.iter().enumerate() {
-                    let tank = server
+                    let tank = server.arenas[0]
                         .session
                         .world
                         .tanks

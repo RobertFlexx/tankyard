@@ -1,12 +1,21 @@
-//! Versioned data packs and bounded server-side behavior hooks.
+//! Versioned data packs, sandboxed script packs and bounded server-side
+//! behavior hooks. Packs are folders or `.zip` archives.
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
 };
 use tankyard_content::{ClassDef, Content, MapDef, builtin_maps, validate_maps};
 
+pub mod pack;
+pub mod scan;
+pub use pack::PackFiles;
+
+/// Wire version of validated game data and of JSON-only manifests.
 pub const API_VERSION: u32 = 1;
+/// Manifests that also run sandboxed Lua scripts.
+pub const SCRIPT_API_VERSION: u32 = 2;
+pub const MAX_SCRIPTS: usize = 16;
 pub const MAX_PACK_BYTES: usize = 1024 * 1024;
 pub const MAX_MODS: usize = 16;
 pub const MAX_COMMANDS: usize = 512;
@@ -187,6 +196,13 @@ pub struct Manifest {
     pub name: String,
     pub version: String,
     #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Lua entry scripts, run in order inside the sandbox (API version 2).
+    #[serde(default)]
+    pub scripts: Vec<String>,
+    #[serde(default)]
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub classes: Vec<ClassDef>,
@@ -216,6 +232,41 @@ pub enum Trigger {
     Capture,
     RoundStart,
     RoundEnd,
+    /// A tank lost health; the actor is the victim and the target its attacker.
+    Damage,
+}
+impl Trigger {
+    pub const ALL: [Self; 11] = [
+        Self::Tick,
+        Self::Spawn,
+        Self::Kill,
+        Self::Death,
+        Self::Shot,
+        Self::LevelUp,
+        Self::Evolve,
+        Self::Capture,
+        Self::RoundStart,
+        Self::RoundEnd,
+        Self::Damage,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Tick => "tick",
+            Self::Spawn => "spawn",
+            Self::Kill => "kill",
+            Self::Death => "death",
+            Self::Shot => "shot",
+            Self::LevelUp => "level_up",
+            Self::Evolve => "evolve",
+            Self::Capture => "capture",
+            Self::RoundStart => "round_start",
+            Self::RoundEnd => "round_end",
+            Self::Damage => "damage",
+        }
+    }
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|trigger| trigger.name() == name)
+    }
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -310,6 +361,47 @@ pub enum Effect {
         lifetime: f32,
         angle: f32,
     },
+    /// Jump to a level; skill points follow the normal level budget.
+    SetLevel {
+        level: u8,
+    },
+    /// Raise one skill without spending a point, up to the normal maximum.
+    RaiseStat {
+        stat: u8,
+    },
+    /// Authoritative movement, reload and outgoing damage multipliers.
+    SetScales {
+        speed: f32,
+        reload: f32,
+        damage: f32,
+    },
+    /// Multiplier applied to incoming damage; 1 restores normal damage.
+    SetArmor {
+        multiplier: f32,
+    },
+    SetShield {
+        seconds: f32,
+    },
+    SetProtection {
+        seconds: f32,
+    },
+    SetVelocity {
+        velocity: [f32; 2],
+    },
+    Kill,
+    SetScore {
+        score: u32,
+    },
+    SetTeamScore {
+        team: u8,
+        score: u32,
+    },
+    /// Spawn a boss by its display or enum name, such as "Guardian".
+    SpawnBoss {
+        boss: String,
+    },
+    /// Remove the actor's projectiles, or every non-guardian projectile for actor 0.
+    ClearProjectiles,
 }
 impl Effect {
     pub fn validate(&self, content: &Content) -> Result<(), String> {
@@ -345,6 +437,26 @@ impl Effect {
                     && finite_range(*lifetime, 0.05, 30.0)
                     && finite_range(*angle, -6.3, 6.3)
             }
+            Self::SetLevel { level } => (1..=tankyard_content::MAX_LEVEL).contains(level),
+            Self::RaiseStat { stat } => *stat < 8,
+            Self::SetScales {
+                speed,
+                reload,
+                damage,
+            } => {
+                finite_range(*speed, 0.25, 6.0)
+                    && finite_range(*reload, 0.25, 6.0)
+                    && finite_range(*damage, 0.25, 8.0)
+            }
+            Self::SetArmor { multiplier } => finite_range(*multiplier, 0.0, 10.0),
+            Self::SetShield { seconds } | Self::SetProtection { seconds } => {
+                finite_range(*seconds, 0.0, 30.0)
+            }
+            Self::SetVelocity { velocity } => vector(*velocity, -2000.0, 2000.0),
+            Self::Kill | Self::ClearProjectiles => true,
+            Self::SetScore { score } => *score <= 1_000_000_000,
+            Self::SetTeamScore { team, score } => (1..=4).contains(team) && *score <= 1_000_000,
+            Self::SpawnBoss { boss } => display_text(boss, 48),
         };
         if !valid {
             return Err("invalid hook action or class reference".into());
@@ -391,11 +503,40 @@ impl Condition {
         }
     }
 }
+#[derive(Clone, Debug, Default)]
+pub struct ScriptPack {
+    /// Entry scripts in run order.
+    pub entries: Vec<String>,
+    /// Every Lua file in the pack, available to `require`.
+    pub sources: BTreeMap<String, String>,
+    /// PNG files a script may register as textures.
+    pub images: BTreeMap<String, Vec<u8>>,
+}
+impl ScriptPack {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
 #[derive(Clone, Debug)]
 pub struct LoadedMod {
     pub info: ModInfo,
     pub hooks: Vec<Hook>,
+    pub scripts: ScriptPack,
 }
+
+/// Content a script pack declares while it is loaded. The loader validates
+/// and merges it exactly like manifest definitions, in dependency order.
+#[derive(Clone, Debug, Default)]
+pub struct ScriptDefinitions {
+    pub classes: Vec<ClassDef>,
+    pub maps: Vec<MapDef>,
+    pub rules: Option<GameRules>,
+    pub mode_name: Option<String>,
+    pub textures: Vec<TextureData>,
+}
+/// Runs a script pack's definition phase. Supplied by the script runtime.
+pub type DefineScripts<'a> =
+    dyn FnMut(&ModInfo, &ScriptPack, &Content) -> Result<ScriptDefinitions, String> + 'a;
 #[derive(Clone, Debug)]
 pub struct LoadedMods {
     pub bundle: GameBundle,
@@ -412,35 +553,69 @@ impl Default for LoadedMods {
     }
 }
 
-/// Dependency order is deterministic. Packs never execute downloaded code.
+/// Load JSON-only packs. Script packs need [`load_with`] and a runtime.
 pub fn load(paths: &[PathBuf]) -> Result<LoadedMods, String> {
+    load_with(paths, None)
+}
+
+/// Read a pack's manifest and files. Used by loaders, tools and menus.
+pub fn read_pack(path: &Path) -> Result<(Manifest, PackFiles), String> {
+    let pack = PackFiles::read(path)?;
+    let manifest = parse_manifest(&pack).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((manifest, pack))
+}
+
+pub fn parse_manifest(pack: &PackFiles) -> Result<Manifest, String> {
+    let bytes = pack.get("mod.json").ok_or("missing mod.json")?;
+    if bytes.len() > MAX_PACK_BYTES {
+        return Err("mod.json exceeds 1 MiB".into());
+    }
+    let manifest: Manifest = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let scripts_allowed = manifest.api_version == SCRIPT_API_VERSION;
+    if !(manifest.api_version == API_VERSION || scripts_allowed)
+        || !identifier(&manifest.id)
+        || !display_text(&manifest.name, 64)
+        || !display_text(&manifest.version, 32)
+        || manifest
+            .description
+            .as_ref()
+            .is_some_and(|text| !display_text(text, 280))
+        || manifest
+            .author
+            .as_ref()
+            .is_some_and(|text| !display_text(text, 64))
+        || manifest.dependencies.len() > MAX_MODS
+        || manifest.dependencies.iter().any(|d| !identifier(d))
+        || (!manifest.scripts.is_empty() && !scripts_allowed)
+        || manifest.scripts.len() > MAX_SCRIPTS
+        || manifest.scripts.iter().collect::<HashSet<_>>().len() != manifest.scripts.len()
+        || manifest
+            .scripts
+            .iter()
+            .any(|script| !script.ends_with(".lua") || !pack.contains(script))
+    {
+        return Err("invalid, duplicate, or incompatible mod manifest".into());
+    }
+    if !manifest.scripts.is_empty() && !manifest.hooks.is_empty() {
+        return Err("script packs define behavior in Lua; remove the JSON hooks".into());
+    }
+    Ok(manifest)
+}
+
+/// Dependency order is deterministic. Script packs run only inside the
+/// supplied sandboxed runtime; nothing here executes downloaded code.
+pub fn load_with(
+    paths: &[PathBuf],
+    mut define: Option<&mut DefineScripts<'_>>,
+) -> Result<LoadedMods, String> {
     if paths.len() > MAX_MODS {
         return Err("at most 16 mods can be enabled".into());
     }
     let mut manifests = Vec::with_capacity(paths.len());
     let mut ids = HashSet::new();
     for path in paths {
-        let root = path
-            .canonicalize()
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        let file = root
-            .join("mod.json")
-            .canonicalize()
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        if !file.starts_with(&root) {
-            return Err("mod manifest symlinks cannot leave their directory".into());
-        }
-        let bytes = read_bounded(&file)?;
-        let manifest: Manifest =
-            serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-        if manifest.api_version != API_VERSION
-            || !identifier(&manifest.id)
-            || !display_text(&manifest.name, 64)
-            || !display_text(&manifest.version, 32)
-            || !ids.insert(manifest.id.clone())
-            || manifest.dependencies.len() > MAX_MODS
-            || manifest.dependencies.iter().any(|d| !identifier(d))
-        {
+        let (manifest, pack) = read_pack(path)?;
+        if !ids.insert(manifest.id.clone()) {
             return Err("invalid, duplicate, or incompatible mod manifest".into());
         }
         if manifest.classes.len() > 1024
@@ -474,55 +649,80 @@ pub fn load(paths: &[PathBuf]) -> Result<LoadedMods, String> {
         }
         let mut textures = Vec::new();
         for source in &manifest.textures {
-            if !identifier(&source.id)
-                || source.file.len() > 256
-                || !Path::new(&source.file)
-                    .components()
-                    .all(|part| matches!(part, std::path::Component::Normal(_)))
-            {
+            if !identifier(&source.id) || !pack_path(&source.file) {
                 return Err("invalid texture file path".into());
             }
-            let path = root
-                .join(&source.file)
-                .canonicalize()
-                .map_err(|e| e.to_string())?;
-            if !path.starts_with(&root) {
-                return Err("texture symlink cannot leave the mod directory".into());
-            }
-            let bytes = read_bounded(&path)?;
-            let mut reader = image::io::Reader::with_format(
-                std::io::Cursor::new(bytes),
-                image::ImageFormat::Png,
-            );
-            let mut limits = image::io::Limits::default();
-            limits.max_image_width = Some(256);
-            limits.max_image_height = Some(256);
-            limits.max_alloc = Some(1024 * 1024);
-            reader.limits(limits);
-            let pixels = reader
-                .decode()
-                .map_err(|e| format!("invalid mod PNG: {e}"))?
-                .into_rgba8();
-            textures.push(TextureData {
-                id: source.id.clone(),
-                width: pixels.width() as u16,
-                height: pixels.height() as u16,
-                rgba: pixels.into_raw(),
-            });
+            let bytes = pack
+                .get(&source.file)
+                .ok_or_else(|| format!("{}: missing texture {}", path.display(), source.file))?;
+            textures.push(decode_texture(&source.id, bytes)?);
         }
-        manifests.push((manifest, textures));
+        let mut scripts = ScriptPack {
+            entries: manifest.scripts.clone(),
+            ..Default::default()
+        };
+        if !scripts.entries.is_empty() {
+            for (name, data) in pack.files() {
+                if name.ends_with(".lua") {
+                    let text = std::str::from_utf8(data)
+                        .map_err(|_| format!("{name}: Lua files must be UTF-8 text"))?;
+                    scripts.sources.insert(name.to_owned(), text.to_owned());
+                } else if name.ends_with(".png") {
+                    scripts.images.insert(name.to_owned(), data.to_vec());
+                }
+            }
+        }
+        manifests.push((manifest, textures, scripts));
     }
     let mut result = LoadedMods::default();
     let mut installed = HashSet::new();
     while !manifests.is_empty() {
         let Some(index) = manifests
             .iter()
-            .position(|(m, _)| m.dependencies.iter().all(|d| installed.contains(d)))
+            .position(|(m, _, _)| m.dependencies.iter().all(|d| installed.contains(d)))
         else {
             return Err("mod dependency is missing or cyclic".into());
         };
-        let (manifest, textures) = manifests.remove(index);
-        for texture in textures {
+        let (manifest, textures, scripts) = manifests.remove(index);
+        let mut info = ModInfo {
+            id: manifest.id.clone(),
+            name: manifest.name.clone(),
+            version: manifest.version.clone(),
+            behavior_digest: digest(
+                &serde_json::to_vec(&manifest.hooks).map_err(|e| e.to_string())?,
+            ),
+        };
+        let mut definitions = ScriptDefinitions {
+            classes: manifest.classes,
+            maps: manifest.maps,
+            rules: manifest.rules,
+            mode_name: manifest.mode_name,
+            textures,
+        };
+        if !scripts.is_empty() {
+            let Some(define) = define.as_mut() else {
+                return Err(format!(
+                    "{} contains Lua scripts; this tool cannot run them",
+                    info.id
+                ));
+            };
+            let scripted = define(&info, &scripts, &result.bundle.content)?;
+            definitions.classes.extend(scripted.classes);
+            definitions.maps.extend(scripted.maps);
+            definitions.textures.extend(scripted.textures);
+            if scripted.rules.is_some() {
+                definitions.rules = scripted.rules;
+            }
+            if scripted.mode_name.is_some() {
+                definitions.mode_name = scripted.mode_name;
+            }
+            let mut fingerprint = info.behavior_digest;
+            for (name, source) in &scripts.sources {
+                fingerprint ^= digest(name.as_bytes()).rotate_left(7) ^ digest(source.as_bytes());
+            }
+            info.behavior_digest = fingerprint;
+        }
+        for texture in definitions.textures {
             if let Some(existing) = result
                 .bundle
                 .textures
@@ -534,7 +734,7 @@ pub fn load(paths: &[PathBuf]) -> Result<LoadedMods, String> {
                 result.bundle.textures.push(texture);
             }
         }
-        for class in manifest.classes {
+        for class in definitions.classes {
             if let Some(existing) = result
                 .bundle
                 .content
@@ -547,34 +747,27 @@ pub fn load(paths: &[PathBuf]) -> Result<LoadedMods, String> {
                 result.bundle.content.classes.push(class);
             }
         }
-        for map in manifest.maps {
+        for map in definitions.maps {
             if let Some(existing) = result.bundle.maps.iter_mut().find(|m| m.id == map.id) {
                 *existing = map;
             } else {
                 result.bundle.maps.push(map);
             }
         }
-        if let Some(rules) = manifest.rules {
+        if let Some(rules) = definitions.rules {
             rules.validate()?;
             result.bundle.rules = rules;
             result.rules_override = true;
         }
-        if manifest.mode_name.is_some() {
-            result.bundle.mode_name = manifest.mode_name;
+        if definitions.mode_name.is_some() {
+            result.bundle.mode_name = definitions.mode_name;
         }
-        let info = ModInfo {
-            id: manifest.id.clone(),
-            name: manifest.name,
-            version: manifest.version,
-            behavior_digest: digest(
-                &serde_json::to_vec(&manifest.hooks).map_err(|e| e.to_string())?,
-            ),
-        };
         installed.insert(manifest.id);
         result.bundle.mods.push(info.clone());
         result.behaviors.push(LoadedMod {
             info,
             hooks: manifest.hooks,
+            scripts,
         });
     }
     result.bundle.validate()?;
@@ -582,6 +775,39 @@ pub fn load(paths: &[PathBuf]) -> Result<LoadedMods, String> {
         validate_hooks(&m.hooks, &result.bundle.content)?;
     }
     Ok(result)
+}
+
+/// A relative path that stays inside its pack.
+pub fn pack_path(path: &str) -> bool {
+    path.len() <= 256
+        && !path.is_empty()
+        && Path::new(path)
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+}
+
+/// Decode a bounded PNG body skin.
+pub fn decode_texture(id: &str, bytes: &[u8]) -> Result<TextureData, String> {
+    if !identifier(id) {
+        return Err("invalid texture ID".into());
+    }
+    let mut reader =
+        image::io::Reader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
+    let mut limits = image::io::Limits::default();
+    limits.max_image_width = Some(256);
+    limits.max_image_height = Some(256);
+    limits.max_alloc = Some(1024 * 1024);
+    reader.limits(limits);
+    let pixels = reader
+        .decode()
+        .map_err(|e| format!("invalid mod PNG: {e}"))?
+        .into_rgba8();
+    Ok(TextureData {
+        id: id.to_owned(),
+        width: pixels.width() as u16,
+        height: pixels.height() as u16,
+        rgba: pixels.into_raw(),
+    })
 }
 pub fn validate_hooks(hooks: &[Hook], content: &Content) -> Result<(), String> {
     if hooks.len() > 64 {
@@ -608,17 +834,21 @@ pub fn validate_hooks(hooks: &[Hook], content: &Content) -> Result<(), String> {
     Ok(())
 }
 pub fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
-    if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > MAX_PACK_BYTES as u64 {
-        return Err("mod file exceeds 1 MiB".into());
+    read_bounded_limit(path, MAX_PACK_BYTES).map_err(|e| e.replace("2 MiB", "1 MiB"))
+}
+pub(crate) fn read_bounded_limit(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
+    let megabytes = limit / (1024 * 1024);
+    if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > limit as u64 {
+        return Err(format!("mod file exceeds {megabytes} MiB"));
     }
     use std::io::Read;
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
-    file.take((MAX_PACK_BYTES + 1) as u64)
+    file.take((limit + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    if bytes.len() > MAX_PACK_BYTES {
-        return Err("mod file grew beyond 1 MiB".into());
+    if bytes.len() > limit {
+        return Err(format!("mod file grew beyond {megabytes} MiB"));
     }
     Ok(bytes)
 }

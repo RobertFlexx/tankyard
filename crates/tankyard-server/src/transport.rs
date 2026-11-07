@@ -34,6 +34,14 @@ pub(crate) struct Peer {
     pub last_owner_sequence: Option<u64>,
     pub party_nonce: Option<[u8; 32]>,
     pub party_in_menu: bool,
+    /// The arena this connection plays in.
+    pub arena: usize,
+    /// Wall geometry revision last carried in this peer's snapshots.
+    pub walls_revision: Option<u32>,
+    pub walls_sent_at: Duration,
+    /// Malformed or invalid packets within the current strike window.
+    pub strikes: u32,
+    pub strike_window: Duration,
 }
 #[derive(Default, Clone, Debug)]
 pub struct ServerMetrics {
@@ -42,6 +50,8 @@ pub struct ServerMetrics {
     pub snapshots_sent: u64,
     pub snapshots_skipped: u64,
     pub snapshot_bytes: u64,
+    /// Reliable notices not queued to a congested client.
+    pub events_deferred: u64,
     pub rejected_packets: u64,
     pub last_tick_micros: u64,
     pub max_tick_micros: u64,
@@ -96,7 +106,8 @@ mod creator_tests;
 
 pub struct UdpServer {
     pub bastion: bastion_anticheat::Bastion,
-    pub session: LocalSession,
+    /// Independent matches on this server; arena 0 always exists.
+    pub arenas: Vec<crate::arena::Arena>,
     pub settings: ServerSettings,
     pub address: SocketAddr,
     pub metrics: ServerMetrics,
@@ -107,17 +118,15 @@ pub struct UdpServer {
     pub(crate) elapsed: Duration,
     accumulator: Duration,
     snapshot_accumulator: Duration,
-    pending_effects: Vec<GameEvent>,
     important_events: Vec<GameEvent>,
     client_ids: Vec<u64>,
     snapshot_buffer: tankyard_core::Snapshot,
     snapshot_encoder: SnapshotEncoder,
-    finished_for: f32,
     pub(crate) shutting_down: bool,
     content_hash: u64,
-    loaded_mods: tankyard_mods::LoadedMods,
+    pub(crate) loaded_mods: tankyard_mods::LoadedMods,
     game_data: Bytes,
-    native_plugins: Vec<fn() -> Box<dyn tankyard_core::modding::ServerPlugin>>,
+    pub(crate) native_plugins: Vec<fn() -> Box<dyn tankyard_core::modding::ServerPlugin>>,
     pub(crate) access: crate::access::Access,
     pub(crate) account_verifier: Option<std::sync::Arc<dyn crate::access::AccountVerifier>>,
     global_authority: Option<std::sync::Arc<dyn crate::access::GlobalAuthority>>,
@@ -149,7 +158,7 @@ impl UdpServer {
             crate::access::Access::new(settings.server_id.clone(), settings.access_file.clone())
                 .map_err(NetError)?;
         let chat = crate::chat::Chat::new(settings.kind, settings.chat_enabled);
-        let loaded_mods = tankyard_mods::load(&settings.mods).map_err(NetError)?;
+        let loaded_mods = tankyard_lua::load(&settings.mods).map_err(NetError)?;
         let mut session = LocalSession::with_mods(
             settings.world.clone(),
             settings.desired_bots(0),
@@ -198,7 +207,7 @@ impl UdpServer {
         }
         Ok(Self {
             bastion: Default::default(),
-            session,
+            arenas: vec![crate::arena::Arena::new(session)],
             next_rotation: u64::from(settings.map_rotation_seconds),
             rotation_checked_at: None,
             party_roster_checked_at: None,
@@ -216,12 +225,10 @@ impl UdpServer {
             elapsed: Duration::ZERO,
             accumulator: Duration::ZERO,
             snapshot_accumulator: Duration::ZERO,
-            pending_effects: Vec::with_capacity(1024),
             important_events: Vec::with_capacity(128),
             client_ids,
             snapshot_buffer,
             snapshot_encoder: SnapshotEncoder::default(),
-            finished_for: 0.,
             shutting_down: false,
             content_hash,
             loaded_mods,
@@ -264,14 +271,14 @@ impl UdpServer {
         self.update_map_rotation();
         self.update_party_roster();
         self.sync_bots();
-        let occupied = self
-            .peers
-            .values()
-            .any(|peer| peer.entity.is_some() && peer.disconnect_at.is_none());
+        self.trim_arenas();
+        // Transport and joins keep running; an empty arena pauses, and idle
+        // time is discarded so the first player does not inherit catch-up work.
+        let occupied: Vec<bool> = (0..self.arenas.len())
+            .map(|arena| self.arena_humans(arena) > 0)
+            .collect();
         let tick_time = Duration::from_secs_f64(1. / f64::from(TICK_RATE));
-        // Transport and joins keep running; discard idle simulation time so
-        // the first player does not inherit an empty arena's catch-up work.
-        if occupied {
+        if occupied.contains(&true) {
             self.accumulator += elapsed;
         } else {
             self.accumulator = Duration::ZERO;
@@ -281,16 +288,25 @@ impl UdpServer {
             self.accumulator -= tick_time;
             catchup += 1;
             let started = std::time::Instant::now();
-            self.session.step();
+            for (arena, &busy) in occupied.iter().enumerate() {
+                if !busy || arena >= self.arenas.len() {
+                    continue;
+                }
+                self.arenas[arena].session.step();
+                self.replicate_events(arena);
+                let restart = {
+                    let state = &mut self.arenas[arena];
+                    if state.session.world.match_state.finished {
+                        state.finished_for += DT;
+                    }
+                    state.finished_for >= self.settings.round_restart_seconds
+                };
+                if restart {
+                    self.restart_arena(arena);
+                }
+            }
             self.metrics
                 .record_tick(started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64);
-            self.replicate_events();
-            if self.session.world.match_state.finished {
-                self.finished_for += DT;
-            }
-            if self.finished_for >= self.settings.round_restart_seconds {
-                self.restart_round();
-            }
         }
         if self.accumulator >= tick_time {
             let skipped = (self.accumulator.as_secs_f64() / tick_time.as_secs_f64()) as u64;
@@ -306,7 +322,9 @@ impl UdpServer {
                 self.snapshot_accumulator.as_secs_f64() % snapshot_time.as_secs_f64(),
             );
             self.replicate_snapshots();
-            self.pending_effects.clear();
+            for arena in &mut self.arenas {
+                arena.pending_effects.clear();
+            }
         }
         self.transport.send_packets(&mut self.server);
         Ok(())
@@ -316,36 +334,34 @@ impl UdpServer {
         self.peers.values().filter(|p| p.entity.is_some()).count()
     }
     pub(crate) fn sync_bots(&mut self) {
-        let humans = self
-            .peers
-            .values()
-            .filter(|p| p.entity.is_some() && p.disconnect_at.is_none())
-            .count();
         if self.settings.party.is_some() {
+            let humans = self.arena_humans(0);
             self.sync_party_bots(humans);
             return;
         }
-        let desired = self.settings.desired_bots(humans);
-        let world = &mut self.session.world;
-        // Wave enemies are managed by co-op, not the arena population policy.
-        let is_arena_bot = |tank: &&tankyard_core::Tank| {
-            tank.bot && !(world.config.mode == Mode::CoopPve && tank.team == 2)
-        };
-        let current = world.tanks.iter().filter(is_arena_bot).count();
-        if current > desired {
-            let ids: Vec<_> = world
-                .tanks
-                .iter()
-                .filter(is_arena_bot)
-                .skip(desired)
-                .map(|t| t.id)
-                .collect();
-            for id in ids {
-                world.remove_player(id);
-            }
-        } else {
-            for i in current..desired {
-                world.add_player(&format!("Vector {:02}", i + 1), true);
+        for arena in 0..self.arenas.len() {
+            let desired = self.settings.desired_bots(self.arena_humans(arena));
+            let world = &mut self.arenas[arena].session.world;
+            // Wave enemies are managed by co-op, not the arena population policy.
+            let is_arena_bot = |tank: &&tankyard_core::Tank| {
+                tank.bot && !(world.config.mode == Mode::CoopPve && tank.team == 2)
+            };
+            let current = world.tanks.iter().filter(is_arena_bot).count();
+            if current > desired {
+                let ids: Vec<_> = world
+                    .tanks
+                    .iter()
+                    .filter(is_arena_bot)
+                    .skip(desired)
+                    .map(|t| t.id)
+                    .collect();
+                for id in ids {
+                    world.remove_player(id);
+                }
+            } else {
+                for i in current..desired {
+                    world.add_player(&format!("Vector {:02}", i + 1), true);
+                }
             }
         }
     }
@@ -456,6 +472,11 @@ impl UdpServer {
                             last_owner_sequence: None,
                             party_nonce: None,
                             party_in_menu: false,
+                            arena: 0,
+                            walls_revision: None,
+                            walls_sent_at: Duration::ZERO,
+                            strikes: 0,
+                            strike_window: Duration::ZERO,
                         },
                     );
                     let blocked = self
@@ -479,9 +500,12 @@ impl UdpServer {
                     self.party_roster_checked_at = None;
                     self.access.remove(client_id);
                     self.chat.remove(client_id);
-                    if let Some(entity) = self.peers.remove(&client_id).and_then(|p| p.entity) {
-                        self.session.world.remove_player(entity);
-                        self.broadcast_control(&ServerControl::PlayerLeft { player: entity });
+                    if let Some(peer) = self.peers.remove(&client_id)
+                        && let Some(entity) = peer.entity
+                    {
+                        let arena = peer.arena.min(self.arenas.len() - 1);
+                        self.arenas[arena].session.world.remove_player(entity);
+                        self.broadcast_arena(arena, &ServerControl::PlayerLeft { player: entity });
                     }
                     log::info!("client {client_id} disconnected: {reason}");
                 }
@@ -519,8 +543,21 @@ impl UdpServer {
                 Ok(message) => self.handle_control(client, message),
                 Err(_) => {
                     self.metrics.rejected_packets += 1;
-                    self.reject(client, "Malformed control request.");
-                    return;
+                    self.bastion.note_rejected_request();
+                    // The handshake must be well formed. Afterwards a bad
+                    // request is refused on its own; only sustained abuse,
+                    // never one odd packet, ends the connection.
+                    let joined = self.peers.get(&client).is_some_and(|p| p.entity.is_some());
+                    if !joined || self.strike(client) {
+                        self.reject(client, "Malformed control request.");
+                        return;
+                    }
+                    self.community_result(
+                        client,
+                        Err(crate::NetError(
+                            "The server could not accept that request.".into(),
+                        )),
+                    );
                 }
             }
             if self
@@ -547,8 +584,12 @@ impl UdpServer {
                 Ok(inputs) => inputs,
                 Err(_) => {
                     self.metrics.rejected_packets += 1;
-                    self.reject(client, "Malformed player input.");
-                    return;
+                    self.bastion.note_rejected_request();
+                    if self.strike(client) {
+                        self.reject(client, "Malformed player input.");
+                        return;
+                    }
+                    continue;
                 }
             };
             for input in inputs.iter() {
@@ -573,18 +614,20 @@ impl UdpServer {
                 newest = Some(input);
             }
         }
+        let last = self.arenas.len() - 1;
         if let Some(input) = newest
             && let Some(peer) = self.peers.get_mut(&client)
             && let Some(entity) = peer.entity
         {
+            let world = &mut self.arenas[peer.arena.min(last)].session.world;
             // A fresh connection may start anywhere in the u32 sequence space.
             // Later sequence gaps establish order without advancing game time.
             if peer.last_sequence.is_none()
-                && let Some(tank) = self.session.world.tanks.iter_mut().find(|t| t.id == entity)
+                && let Some(tank) = world.tanks.iter_mut().find(|t| t.id == entity)
             {
                 tank.last_input = input.sequence;
             }
-            if self.session.world.set_input(entity, input) {
+            if world.set_input(entity, input) {
                 peer.last_sequence = Some(input.sequence);
                 peer.last_input_at = self.elapsed;
             }
@@ -609,10 +652,12 @@ impl UdpServer {
                 self.metrics.rejected_packets += 1;
                 continue;
             };
+            let arena = peer.arena.min(self.arenas.len() - 1);
+            let world = &self.arenas[arena].session.world;
             if !self.settings.voice_enabled
                 || peer.disconnect_at.is_some()
-                || self.session.world.match_state.finished
-                || frame.round != self.session.world.match_state.round
+                || world.match_state.finished
+                || frame.round != world.match_state.round
                 || peer
                     .last_voice_sequence
                     .is_some_and(|last| !sequence_newer(frame.sequence, last))
@@ -624,9 +669,8 @@ impl UdpServer {
             if self.access.muted(client, unix_time().as_secs()) {
                 continue;
             }
-            let Some(speaker) = self
-                .session
-                .world
+            let world = &self.arenas[arena].session.world;
+            let Some(speaker) = world
                 .tanks
                 .iter()
                 .find(|t| t.id == player && t.alive && t.health > 0.)
@@ -640,12 +684,10 @@ impl UdpServer {
                 .peers
                 .iter()
                 .filter_map(|(&id, peer)| {
-                    if id == client || peer.disconnect_at.is_some() {
+                    if id == client || peer.disconnect_at.is_some() || peer.arena != arena {
                         return None;
                     }
-                    let listener = self
-                        .session
-                        .world
+                    let listener = world
                         .tanks
                         .iter()
                         .find(|t| Some(t.id) == peer.entity && t.alive && t.health > 0.)?;
@@ -668,6 +710,20 @@ impl UdpServer {
                 }
             }
         }
+    }
+
+    /// Count a malformed packet. True once a peer sends a sustained stream of
+    /// them, which no correct client does, even on a lossy link.
+    fn strike(&mut self, client: u64) -> bool {
+        let Some(peer) = self.peers.get_mut(&client) else {
+            return true;
+        };
+        if self.elapsed.saturating_sub(peer.strike_window) > Duration::from_secs(10) {
+            peer.strike_window = self.elapsed;
+            peer.strikes = 0;
+        }
+        peer.strikes += 1;
+        peer.strikes > 12
     }
 
     fn take_token(&mut self, client: u64, control: bool) -> bool {
@@ -793,35 +849,18 @@ impl UdpServer {
                 let _ = self.chat.join(client, "lobby", role);
             }
             let name = sanitize_name(&name);
-            let player = self.session.world.add_player(&name, false);
-            if let Some(party) = &self.settings.party
-                && party.starting_level > 1
-            {
-                self.session
-                    .world
-                    .set_practice_level(player, party.starting_level);
-            }
-            if self.settings.party.is_some() && self.session.world.config.mode.teams() > 0 {
-                let team = if self.session.world.config.mode == Mode::Infection
-                    && self.session.world.match_state.arena.wave > 0
-                {
-                    2
-                } else {
-                    1
-                };
-                self.session.world.assign_team(player, team);
-            }
-            self.sync_bots();
-            if let Some(peer) = self.peers.get_mut(&client) {
-                peer.entity = Some(player);
-                if let Some(tank) = self.session.world.tanks.iter_mut().find(|t| t.id == player) {
-                    tank.game_creator = peer.creator;
+            let arena = match self.choose_arena() {
+                Ok(arena) => arena,
+                Err(error) => {
+                    log::error!("could not open an arena: {error}");
+                    self.reject(client, "The server could not open another arena.");
+                    return;
                 }
-            }
+            };
+            let player = self.join_arena(client, arena, &name);
             if let Some(peer) = self.peers.get_mut(&client) {
                 peer.admin_key = Some(admin_key);
             }
-            self.welcome(client, player);
             self.admin_challenge(client);
             let nonce = renet_netcode::generate_random_bytes::<32>();
             if let Some(peer) = self.peers.get_mut(&client) {
@@ -835,12 +874,18 @@ impl UdpServer {
                     server_id: self.settings.server_id.clone(),
                 },
             );
-            self.broadcast_control(&ServerControl::PlayerJoined {
-                player,
-                name: name.clone(),
-            });
+            self.broadcast_arena(
+                arena,
+                &ServerControl::PlayerJoined {
+                    player,
+                    name: name.clone(),
+                },
+            );
             self.party_roster_checked_at = None;
-            log::info!("{name} joined as entity {player} (client {client})");
+            log::info!(
+                "{name} joined arena {} as entity {player} (client {client})",
+                arena + 1
+            );
             return;
         }
         let Some(player) = entity else {
@@ -850,8 +895,9 @@ impl UdpServer {
             );
             return;
         };
-        let permitted =
-            self.settings.allow_sandbox && self.session.world.config.mode == Mode::Sandbox;
+        let arena = self.arena_of(client);
+        let permitted = self.settings.allow_sandbox
+            && self.arenas[arena].session.world.config.mode == Mode::Sandbox;
         let accepted = match message {
             ClientControl::PartyPresence { in_menu } => {
                 if self.settings.party.is_some() {
@@ -882,7 +928,13 @@ impl UdpServer {
                         p.creator = true;
                         p.creator_session_nonce = proof;
                     }
-                    if let Some(t) = self.session.world.tanks.iter_mut().find(|t| t.id == player) {
+                    if let Some(t) = self.arenas[arena]
+                        .session
+                        .world
+                        .tanks
+                        .iter_mut()
+                        .find(|t| t.id == player)
+                    {
                         t.game_creator = true;
                     }
                 }
@@ -909,15 +961,15 @@ impl UdpServer {
                 return;
             }
             ClientControl::Spectate { round, target } => {
-                let tanks = &self.session.world.tanks;
-                let valid = round == self.session.world.match_state.round
+                let tanks = &self.arenas[arena].session.world.tanks;
+                let valid = round == self.arenas[arena].session.world.match_state.round
                     && tanks.iter().any(|t| t.id == player && !t.alive)
                     && target.is_none_or(|requested| {
                         tankyard_core::spectator_target(
                             tanks,
                             player,
                             target,
-                            self.session.world.config.mode,
+                            self.arenas[arena].session.world.config.mode,
                         )
                         .is_some_and(|t| t.id == requested)
                     });
@@ -964,26 +1016,44 @@ impl UdpServer {
             ClientControl::UpgradeStat { stat, count } => {
                 let mut accepted = false;
                 for _ in 0..count {
-                    if !self.session.world.upgrade_stat(player, usize::from(stat)) {
+                    if !self.arenas[arena]
+                        .session
+                        .world
+                        .upgrade_stat(player, usize::from(stat))
+                    {
                         break;
                     }
                     accepted = true;
                 }
                 accepted
             }
-            ClientControl::Evolve { class } => self.session.world.evolve(player, &class),
+            ClientControl::Evolve { class } => {
+                self.arenas[arena].session.world.evolve(player, &class)
+            }
             ClientControl::SandboxLevel { level } => {
-                permitted && self.session.world.sandbox_level(player, level)
+                permitted
+                    && self.arenas[arena]
+                        .session
+                        .world
+                        .sandbox_level(player, level)
             }
             ClientControl::SandboxClass { class } => {
-                permitted && self.session.world.sandbox_class(player, &class)
+                permitted
+                    && self.arenas[arena]
+                        .session
+                        .world
+                        .sandbox_class(player, &class)
             }
             ClientControl::SandboxInvulnerability { enabled } => {
-                permitted && self.session.world.sandbox_invulnerability(player, enabled)
+                permitted
+                    && self.arenas[arena]
+                        .session
+                        .world
+                        .sandbox_invulnerability(player, enabled)
             }
             ClientControl::SandboxBoss { kind } => {
-                if permitted && self.session.world.bosses.len() < 12 {
-                    self.session.world.spawn_boss(kind) != 0
+                if permitted && self.arenas[arena].session.world.bosses.len() < 12 {
+                    self.arenas[arena].session.world.spawn_boss(kind) != 0
                 } else {
                     false
                 }
@@ -1007,10 +1077,60 @@ impl UdpServer {
         );
         // Evolution events are emitted by validated control requests between
         // simulation steps; publish them before World::step clears its events.
-        self.replicate_events();
+        self.replicate_events(arena);
+    }
+
+    /// Add a connected client's tank to an arena and greet it.
+    pub(crate) fn join_arena(&mut self, client: u64, arena: usize, name: &str) -> EntityId {
+        if let Some(peer) = self.peers.get_mut(&client) {
+            peer.arena = arena;
+            peer.walls_revision = None;
+        }
+        let world = &mut self.arenas[arena].session.world;
+        let player = world.add_player(name, false);
+        if let Some(party) = &self.settings.party
+            && party.starting_level > 1
+        {
+            world.set_practice_level(player, party.starting_level);
+        }
+        if self.settings.party.is_some() && world.config.mode.teams() > 0 {
+            let team = if world.config.mode == Mode::Infection && world.match_state.arena.wave > 0 {
+                2
+            } else {
+                1
+            };
+            world.assign_team(player, team);
+        }
+        if let Some(peer) = self.peers.get_mut(&client) {
+            peer.entity = Some(player);
+            peer.last_sequence = None;
+            peer.spectating = None;
+            peer.last_voice_sequence = None;
+            if let Some(tank) = world.tanks.iter_mut().find(|t| t.id == player) {
+                tank.game_creator = peer.creator;
+            }
+        }
+        self.sync_bots();
+        self.welcome(client, player);
+        player
     }
 
     fn welcome(&mut self, client: u64, player: EntityId) {
+        let arena = self.arena_of(client);
+        // Players in a split server see which group they joined.
+        let server_name = if self.max_arenas() > 1 {
+            let suffix = format!(" · Arena {}", arena + 1);
+            let mut name = String::new();
+            for c in self.settings.name.chars() {
+                if name.len() + c.len_utf8() + suffix.len() > 96 {
+                    break;
+                }
+                name.push(c);
+            }
+            name + &suffix
+        } else {
+            self.settings.name.clone()
+        };
         self.send_control_bytes(client, self.game_data.clone());
         self.send_control(
             client,
@@ -1018,8 +1138,8 @@ impl UdpServer {
                 protocol: PROTOCOL_VERSION,
                 content: self.content_hash,
                 player,
-                round: self.session.world.match_state.round,
-                server_name: self.settings.name.clone(),
+                round: self.arenas[arena].session.world.match_state.round,
+                server_name,
                 sandbox_allowed: self.settings.allow_sandbox
                     && self.settings.world.mode == Mode::Sandbox,
                 tick_rate: TICK_RATE,
@@ -1064,7 +1184,7 @@ impl UdpServer {
         );
     }
     pub fn reload_mods(&mut self) -> Result<(), NetError> {
-        let loaded = tankyard_mods::load(&self.settings.mods).map_err(NetError)?;
+        let loaded = tankyard_lua::load(&self.settings.mods).map_err(NetError)?;
         let mut candidate = LocalSession::with_mods(
             self.settings.world.clone(),
             self.settings.bot_count,
@@ -1075,6 +1195,7 @@ impl UdpServer {
             candidate.install_plugin(factory()).map_err(NetError)?;
         }
         let data = encode_game_data_message(&candidate.bundle)?;
+        self.content_hash = candidate.bundle.fingerprint();
         self.loaded_mods = loaded;
         self.game_data = data;
         self.restart_round();
@@ -1117,10 +1238,9 @@ impl UdpServer {
                 "Creator administration is disabled by this host.".into(),
             ));
         }
-        if round != self.session.world.match_state.round
-            || payload.is_empty()
-            || payload.len() > 1024
-        {
+        let arena = self.arena_of(client);
+        let current_round = self.arenas[arena].session.world.match_state.round;
+        if round != current_round || payload.is_empty() || payload.len() > 1024 {
             return Err(NetError("Invalid or outdated extension command.".into()));
         }
         let peer = self
@@ -1135,7 +1255,7 @@ impl UdpServer {
             nonce: &nonce,
             server: &self.settings.server_id,
             round,
-            current_round: self.session.world.match_state.round,
+            current_round,
             sequence,
             previous_sequence: peer.last_owner_sequence,
             payload,
@@ -1161,16 +1281,16 @@ impl UdpServer {
             },
         )
         .map_err(NetError)?;
-        let was_modified = self.session.world.config.modded;
+        let was_modified = self.arenas[arena].session.world.config.modded;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             handler(self, player, payload)
         }))
         .map_err(|_| NetError("Owner extension failed.".into()))
         .and_then(|result| result.map_err(NetError));
         if self.owner_extension.is_some() {
-            self.session.world.config.modded = true;
+            self.arenas[arena].session.world.config.modded = true;
         }
-        if !was_modified && self.session.world.config.modded {
+        if !was_modified && self.arenas[arena].session.world.config.modded {
             self.broadcast_control(&ServerControl::Action {
                 accepted: true,
                 reason: "Creator tools changed this arena. Regular achievements are disabled for this round.".into(),
@@ -1220,7 +1340,9 @@ impl UdpServer {
         }
         self.settings.creator_admin = Some(enabled);
         if !enabled {
-            self.session.world.reset_administration();
+            for arena in &mut self.arenas {
+                arena.session.world.reset_administration();
+            }
         }
         // Rotate session authorization on every policy change. Commands signed
         // before revocation cannot execute later if the operator opts in again.
@@ -1268,9 +1390,11 @@ impl UdpServer {
         if self.player_count() > 0 {
             return Err(NetError("register plugins before players connect".into()));
         }
-        self.session.install_plugin(factory()).map_err(NetError)?;
-        self.game_data = encode_game_data_message(&self.session.bundle)?;
-        self.content_hash = self.session.bundle.fingerprint();
+        for arena in &mut self.arenas {
+            arena.session.install_plugin(factory()).map_err(NetError)?;
+        }
+        self.game_data = encode_game_data_message(&self.arenas[0].session.bundle)?;
+        self.content_hash = self.arenas[0].session.bundle.fingerprint();
         self.native_plugins.push(factory);
         Ok(())
     }
@@ -1323,6 +1447,7 @@ impl UdpServer {
             self.send_rooms(client);
             self.send_rotation(client);
         }
+        let last_arena = self.arenas.len() - 1;
         for index in 0..self.client_ids.len() {
             let client = self.client_ids[index];
             let Some(peer) = self.peers.get(&client) else {
@@ -1348,7 +1473,12 @@ impl UdpServer {
                     .saturating_sub(peer.last_input_at)
                     .as_secs_f32()
                     > self.settings.input_timeout
-                && let Some(tank) = self.session.world.tanks.iter_mut().find(|t| t.id == entity)
+                && let Some(tank) = self.arenas[peer.arena.min(last_arena)]
+                    .session
+                    .world
+                    .tanks
+                    .iter_mut()
+                    .find(|t| t.id == entity)
             {
                 tank.input.movement = V2::ZERO;
                 tank.input.fire = false;
@@ -1361,41 +1491,71 @@ impl UdpServer {
     fn replicate_snapshots(&mut self) {
         let started = std::time::Instant::now();
         let effect_radius = (self.settings.interest_radius + 300.).powi(2);
-        for (&client, peer) in &self.peers {
+        // Hostile tanks this far from the viewer are sent without aim,
+        // motion, cursor or weapon state: enough for the leaderboard and the
+        // minimap, too coarse for a radar or aim overlay.
+        let detail_radius = (self.settings.interest_radius + 400.).powi(2);
+        for arena in &mut self.arenas {
+            arena
+                .walls
+                .refresh(&arena.session.world.walls, self.elapsed);
+        }
+        let elapsed = self.elapsed;
+        for (&client, peer) in &mut self.peers {
             if peer.disconnect_at.is_some() {
                 continue;
             }
             let Some(entity) = peer.entity else {
                 continue;
             };
-            let Some(tank) = self
-                .session
-                .world
-                .tanks
-                .iter()
-                .find(|tank| tank.id == entity)
-            else {
+            let arena = &self.arenas[peer.arena.min(self.arenas.len() - 1)];
+            let world = &arena.session.world;
+            let Some(tank) = world.tanks.iter().find(|tank| tank.id == entity) else {
                 continue;
             };
-            let center = tankyard_core::spectator_target(
-                &self.session.world.tanks,
+            let viewer_team = tank.team;
+            let focus = tankyard_core::spectator_target(
+                &world.tanks,
                 entity,
                 peer.spectating,
-                self.session.world.config.mode,
-            )
-            .map_or(tank.pos, |target| target.pos);
+                world.config.mode,
+            );
+            let center = focus.map_or(tank.pos, |target| target.pos);
+            let focus_id = focus.map_or(entity, |target| target.id);
             let snapshot = &mut self.snapshot_buffer;
-            self.session
-                .world
-                .snapshot_for_into(snapshot, center, self.settings.interest_radius);
+            world.snapshot_for_into(snapshot, center, self.settings.interest_radius);
             snapshot.events.clear();
             snapshot.events.extend(
-                self.pending_effects
+                arena
+                    .pending_effects
                     .iter()
                     .filter(|e| (e.pos - center).length_squared() < effect_radius)
                     .take(2048)
                     .cloned(),
             );
+            // Hit histories are server bookkeeping that clients never read.
+            for projectile in &mut snapshot.projectiles {
+                projectile.hit.clear();
+            }
+            for other in &mut snapshot.tanks {
+                let hostile = viewer_team == 0 || other.team != viewer_team;
+                if other.id != entity
+                    && other.id != focus_id
+                    && hostile
+                    && (other.pos - center).length_squared() > detail_radius
+                {
+                    tankyard_core::conceal_distant_tank(other);
+                }
+            }
+            let walls = &arena.walls;
+            let include_walls = peer.walls_revision != Some(walls.revision)
+                || elapsed.saturating_sub(walls.changed_at) < Duration::from_secs(1)
+                || elapsed.saturating_sub(peer.walls_sent_at) >= Duration::from_secs(2);
+            snapshot.wall_revision = walls.revision;
+            snapshot.walls_included = include_walls;
+            if !include_walls {
+                snapshot.walls.clear();
+            }
             let bytes = match bounded_snapshot(snapshot, center, &mut self.snapshot_encoder) {
                 Ok(bytes) => bytes,
                 Err(e) => {
@@ -1411,6 +1571,10 @@ impl UdpServer {
                 self.metrics.snapshots_sent += 1;
                 self.metrics.snapshot_bytes += bytes.len() as u64;
                 self.server.send_message(client, REALTIME_CHANNEL, bytes);
+                if include_walls {
+                    peer.walls_revision = Some(walls.revision);
+                    peer.walls_sent_at = elapsed;
+                }
             } else {
                 self.metrics.snapshots_skipped += 1;
             }
@@ -1423,9 +1587,10 @@ impl UdpServer {
             .max(self.metrics.last_snapshot_micros);
     }
 
-    pub(crate) fn replicate_events(&mut self) {
+    pub(crate) fn replicate_events(&mut self, arena: usize) {
         self.important_events.clear();
-        for event in self.session.world.events.drain(..) {
+        let state = &mut self.arenas[arena];
+        for event in state.session.world.events.drain(..) {
             match event.kind {
                 EventKind::LevelUp
                 | EventKind::Evolve
@@ -1436,7 +1601,7 @@ impl UdpServer {
                 | EventKind::BodyParry
                 | EventKind::StasisRelease
                 | EventKind::BossAttack => self.important_events.push(event),
-                _ if self.pending_effects.len() < 4096 => self.pending_effects.push(event),
+                _ if state.pending_effects.len() < 4096 => state.pending_effects.push(event),
                 _ => {}
             }
         }
@@ -1444,7 +1609,7 @@ impl UdpServer {
             return;
         }
         let packets = match encode_event_batches(
-            self.session.world.match_state.round,
+            state.session.world.match_state.round,
             &self.important_events,
         ) {
             Ok(packets) => packets,
@@ -1453,21 +1618,13 @@ impl UdpServer {
                 return;
             }
         };
-        let clients: Vec<_> = self
-            .peers
-            .iter()
-            .filter_map(|(&id, p)| (p.entity.is_some() && p.disconnect_at.is_none()).then_some(id))
-            .collect();
+        let clients = self.arena_clients(arena);
         for bytes in packets {
             let bytes = Bytes::from(bytes);
             for &client in &clients {
-                if self
-                    .peers
-                    .get(&client)
-                    .is_some_and(|p| p.disconnect_at.is_some())
-                {
-                    continue;
-                }
+                // A congested reliable channel only loses cosmetic notices;
+                // authoritative state still arrives in every snapshot. Lag
+                // never disconnects a player here.
                 if self
                     .server
                     .can_send_message(client, EVENT_CHANNEL, bytes.len())
@@ -1475,7 +1632,7 @@ impl UdpServer {
                     self.server
                         .send_message(client, EVENT_CHANNEL, bytes.clone());
                 } else {
-                    self.reject(client, "Client cannot keep up with reliable events.");
+                    self.metrics.events_deferred += 1;
                 }
             }
         }
@@ -1515,6 +1672,24 @@ impl UdpServer {
             }
         }
     }
+    /// Send to the players of one arena only.
+    pub(crate) fn broadcast_arena(&mut self, arena: usize, message: &ServerControl) {
+        let Ok(bytes) = encode(message, MAX_SERVER_CONTROL_BYTES) else {
+            return;
+        };
+        let bytes = Bytes::from(bytes);
+        for client in self.arena_clients(arena) {
+            if self
+                .server
+                .can_send_message(client, CONTROL_CHANNEL, bytes.len())
+            {
+                self.server
+                    .send_message(client, CONTROL_CHANNEL, bytes.clone());
+            } else {
+                self.server.disconnect(client);
+            }
+        }
+    }
     pub(crate) fn reject(&mut self, client: u64, reason: &str) {
         self.access.remove(client);
         self.chat.remove(client);
@@ -1529,87 +1704,111 @@ impl UdpServer {
         }
     }
 
+    /// Start a new round in every arena, regrouping players into as few
+    /// arenas as their group sizes allow.
     pub(crate) fn restart_round(&mut self) {
-        self.party_roster_checked_at = None;
-        let players: Vec<_> = self
+        let players = self.connected_players(None);
+        let placement = self.regroup(
+            &players
+                .iter()
+                .map(|(client, _, arena)| (*client, *arena))
+                .collect::<Vec<_>>(),
+        );
+        let arenas = placement
+            .iter()
+            .map(|(_, arena)| arena + 1)
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        // Regrouped players may change arenas; a shared round and tick keep
+        // every client's round sequence increasing wherever it lands.
+        let round = self
+            .arenas
+            .iter()
+            .map(|arena| arena.session.world.match_state.round)
+            .max()
+            .unwrap_or(1);
+        let tick = self
+            .arenas
+            .iter()
+            .map(|arena| arena.session.world.tick)
+            .max()
+            .unwrap_or(0);
+        let mut next = Vec::with_capacity(arenas);
+        for index in 0..arenas {
+            next.push(self.next_round(index, round, tick));
+        }
+        self.arenas = next;
+        self.after_restart();
+        for (client, arena) in placement {
+            if let Some((_, name, _)) = players.iter().find(|(id, _, _)| *id == client) {
+                self.join_arena(client, arena, name);
+            }
+        }
+    }
+
+    /// Start a new round in one arena; its players stay together.
+    pub(crate) fn restart_arena(&mut self, index: usize) {
+        let players = self.connected_players(Some(index));
+        let session = &self.arenas[index].session;
+        let next = self.next_round(index, session.world.match_state.round, session.world.tick);
+        self.arenas[index] = next;
+        self.after_restart();
+        for (client, name, _) in players {
+            self.join_arena(client, index, &name);
+        }
+    }
+
+    fn connected_players(&self, arena: Option<usize>) -> Vec<(u64, String, usize)> {
+        let mut players: Vec<_> = self
             .peers
             .iter()
             .filter_map(|(&client, peer)| {
-                if peer.disconnect_at.is_some() {
+                if peer.disconnect_at.is_some() || arena.is_some_and(|a| a != peer.arena) {
                     return None;
                 }
                 let tank = self
+                    .arenas
+                    .get(peer.arena)?
                     .session
                     .world
                     .tanks
                     .iter()
                     .find(|tank| Some(tank.id) == peer.entity)?;
-                Some((client, tank.name.clone()))
+                Some((client, tank.name.clone(), peer.arena))
             })
             .collect();
-        let tick = self.session.world.tick;
-        let mut config = self.settings.world.clone();
-        config.seed = config
-            .seed
-            .wrapping_add(u64::from(self.session.world.match_state.round));
-        let round = self.session.world.match_state.round.saturating_add(1);
-        let mut next = LocalSession::with_mods(
-            config,
-            self.settings.desired_bots(players.len()),
-            self.loaded_mods.clone(),
-        )
-        .expect("previously validated mod pack");
-        let previous_bots = self.session.world.tanks.iter().filter(|tank| tank.bot);
-        let next_bots = next.world.tanks.iter().filter(|tank| tank.bot);
-        let pairs: Vec<_> = previous_bots
-            .zip(next_bots)
-            .map(|(a, b)| (a.id, b.id))
-            .collect();
-        next.bots.inherit_models(&self.session.bots, &pairs);
-        self.session = next;
-        self.session.bots.difficulty = self.settings.difficulty;
-        for factory in &self.native_plugins {
-            self.session
-                .install_plugin(factory())
-                .expect("previously registered native plugin");
+        // Map iteration order is arbitrary; joins are deterministic by client.
+        players.sort_unstable_by_key(|(client, _, _)| *client);
+        players
+    }
+
+    fn next_round(&self, index: usize, round: u32, tick: u64) -> crate::arena::Arena {
+        let previous = self.arenas.get(index).map(|arena| &arena.session);
+        let mut next = self
+            .arena_session(index, round)
+            .expect("previously validated mod pack");
+        if let Some(previous) = previous {
+            let previous_bots = previous.world.tanks.iter().filter(|tank| tank.bot);
+            let next_bots = next.world.tanks.iter().filter(|tank| tank.bot);
+            let pairs: Vec<_> = previous_bots
+                .zip(next_bots)
+                .map(|(a, b)| (a.id, b.id))
+                .collect();
+            next.bots.inherit_models(&previous.bots, &pairs);
         }
-        self.content_hash = self.session.bundle.fingerprint();
+        next.world.tick = tick.saturating_add(1);
+        next.world.match_state.round = round.saturating_add(1);
+        crate::arena::Arena::new(next)
+    }
+
+    fn after_restart(&mut self) {
+        self.party_roster_checked_at = None;
+        self.content_hash = self.arenas[0].session.bundle.fingerprint();
         self.game_data =
-            encode_game_data_message(&self.session.bundle).expect("validated game data");
-        self.session.world.tick = tick.saturating_add(1);
-        self.session.world.match_state.round = round;
-        self.finished_for = 0.;
-        self.pending_effects.clear();
-        for (client, name) in players {
-            let player = self.session.world.add_player(&name, false);
-            if let Some(party) = &self.settings.party
-                && party.starting_level > 1
-            {
-                self.session
-                    .world
-                    .set_practice_level(player, party.starting_level);
-            }
-            if self.settings.party.is_some() && self.session.world.config.mode.teams() > 0 {
-                let team = if self.session.world.config.mode == Mode::Infection
-                    && self.session.world.match_state.arena.wave > 0
-                {
-                    2
-                } else {
-                    1
-                };
-                self.session.world.assign_team(player, team);
-            }
-            self.sync_bots();
-            if let Some(peer) = self.peers.get_mut(&client) {
-                peer.entity = Some(player);
-                if let Some(tank) = self.session.world.tanks.iter_mut().find(|t| t.id == player) {
-                    tank.game_creator = peer.creator;
-                }
-                peer.last_sequence = None;
-                peer.spectating = None;
-                peer.last_voice_sequence = None;
-            }
-            self.welcome(client, player);
+            encode_game_data_message(&self.arenas[0].session.bundle).expect("validated game data");
+        for peer in self.peers.values_mut() {
+            peer.walls_revision = None;
         }
     }
 

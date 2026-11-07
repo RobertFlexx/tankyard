@@ -12,6 +12,23 @@ pub struct HookEvent {
     pub actor: EntityId,
     pub position: V2,
     pub tick: u64,
+    /// The other participant: a kill's victim, a death's killer, or the
+    /// attacker that caused damage. Zero when there is none.
+    pub target: EntityId,
+    /// Damage dealt, level reached, XP awarded or projectile kind.
+    pub value: f32,
+}
+impl HookEvent {
+    pub fn new(trigger: Trigger, actor: EntityId, position: V2, tick: u64) -> Self {
+        Self {
+            trigger,
+            actor,
+            position,
+            tick,
+            target: 0,
+            value: 0.,
+        }
+    }
 }
 
 pub struct Commands {
@@ -41,12 +58,20 @@ pub trait ServerPlugin: Send {
     fn version(&self) -> &str {
         "1"
     }
+    /// Skip events a plugin never handles; scripts register handlers lazily.
+    fn handles(&self, _trigger: Trigger) -> bool {
+        true
+    }
     fn on_event(
         &mut self,
         world: &World,
         event: HookEvent,
         commands: &mut Commands,
     ) -> Result<(), String>;
+    /// Bounded diagnostic lines, collected once per tick.
+    fn drain_log(&mut self) -> Vec<String> {
+        Vec::new()
+    }
 }
 struct Module {
     id: String,
@@ -66,13 +91,17 @@ pub struct ModRuntime {
     seen: HashMap<EntityId, (u32, bool)>,
     round: Option<u32>,
     pub errors: Vec<String>,
+    /// Recent script output, oldest first.
+    pub log: std::collections::VecDeque<String>,
 }
 impl ModRuntime {
     pub fn new(mods: &LoadedMods) -> Self {
         Self {
+            // Script packs are installed as plugins by the script runtime.
             modules: mods
                 .behaviors
                 .iter()
+                .filter(|m| m.scripts.is_empty())
                 .map(|m| Module {
                     id: m.info.id.clone(),
                     hooks: m.hooks.clone(),
@@ -124,12 +153,7 @@ impl ModRuntime {
             }
             self.dispatch(
                 world,
-                HookEvent {
-                    trigger: Trigger::RoundStart,
-                    actor: 0,
-                    position: V2::ZERO,
-                    tick: world.tick,
-                },
+                HookEvent::new(Trigger::RoundStart, 0, V2::ZERO, world.tick),
             );
         }
         let spawned: Vec<_> = world
@@ -152,23 +176,13 @@ impl ModRuntime {
         for (actor, position) in spawned {
             self.dispatch(
                 world,
-                HookEvent {
-                    trigger: Trigger::Spawn,
-                    actor,
-                    position,
-                    tick: world.tick,
-                },
+                HookEvent::new(Trigger::Spawn, actor, position, world.tick),
             );
         }
         if !world.match_state.finished {
             self.dispatch(
                 world,
-                HookEvent {
-                    trigger: Trigger::Tick,
-                    actor: 0,
-                    position: V2::ZERO,
-                    tick: world.tick,
-                },
+                HookEvent::new(Trigger::Tick, 0, V2::ZERO, world.tick),
             );
         }
     }
@@ -187,18 +201,32 @@ impl ModRuntime {
                     .iter()
                     .filter(|e| matches!(e.kind, EventKind::Shot)),
             );
-        let events: Vec<_> = ordered
+        let mut events: Vec<_> = ordered
             .take(1024)
             .filter_map(|e| {
-                let trigger = match e.kind {
-                    EventKind::Shot => Trigger::Shot,
-                    EventKind::Kill => Trigger::Kill,
-                    EventKind::LevelUp => Trigger::LevelUp,
-                    EventKind::Evolve => Trigger::Evolve,
-                    EventKind::Capture => Trigger::Capture,
-                    EventKind::Victory => Trigger::RoundEnd,
+                let (trigger, target) = match e.kind {
+                    EventKind::Shot => (Trigger::Shot, 0),
+                    EventKind::Kill => (
+                        Trigger::Kill,
+                        e.elimination.as_ref().map_or(0, |victim| victim.victim),
+                    ),
+                    EventKind::LevelUp => (Trigger::LevelUp, 0),
+                    EventKind::Evolve => (Trigger::Evolve, 0),
+                    EventKind::Capture => (Trigger::Capture, 0),
+                    EventKind::Victory => (Trigger::RoundEnd, 0),
                     EventKind::Destroy if world.tanks.iter().any(|t| t.id == e.subject) => {
-                        Trigger::Death
+                        let killer = world
+                            .events
+                            .iter()
+                            .find(|kill| {
+                                matches!(kill.kind, EventKind::Kill)
+                                    && kill
+                                        .elimination
+                                        .as_ref()
+                                        .is_some_and(|victim| victim.victim == e.subject)
+                            })
+                            .map_or(0, |kill| kill.subject);
+                        (Trigger::Death, killer)
                     }
                     _ => return None,
                 };
@@ -207,16 +235,38 @@ impl ModRuntime {
                     actor: e.subject,
                     position: e.pos,
                     tick: e.tick,
+                    target,
+                    value: e.value as f32,
                 })
             })
             .collect();
+        if self.modules.iter().any(|m| m.wants(Trigger::Damage)) {
+            events.extend(world.damage_log.iter().take(1024).map(|record| HookEvent {
+                trigger: Trigger::Damage,
+                actor: record.victim,
+                position: record.position,
+                tick: world.tick,
+                target: record.attacker,
+                value: record.amount,
+            }));
+        }
         for e in events {
             self.dispatch(world, e);
+        }
+        for module in &mut self.modules {
+            if let Some(plugin) = module.plugin.as_mut() {
+                for line in plugin.drain_log().into_iter().take(64) {
+                    if self.log.len() >= 200 {
+                        self.log.pop_front();
+                    }
+                    self.log.push_back(format!("[{}] {line}", module.id));
+                }
+            }
         }
     }
     pub fn dispatch(&mut self, world: &mut World, event: HookEvent) {
         for module in &mut self.modules {
-            if module.disabled {
+            if module.disabled || !module.wants(event.trigger) {
                 continue;
             }
             if module.command_tick != event.tick {
@@ -254,6 +304,22 @@ impl ModRuntime {
         }
     }
 }
+impl Module {
+    fn wants(&self, trigger: Trigger) -> bool {
+        match &self.plugin {
+            Some(plugin) => plugin.handles(trigger),
+            None => self.hooks.iter().any(|hook| hook.event == trigger),
+        }
+    }
+}
+/// Bosses named by scripts and JSON hooks, by display or enum name.
+pub fn boss_by_name(name: &str) -> Option<BossKind> {
+    let wanted = name.trim().to_ascii_lowercase().replace([' ', '_'], "");
+    BossKind::ALL.into_iter().find(|kind| {
+        kind.name().to_ascii_lowercase().replace(' ', "") == wanted
+            || format!("{kind:?}").to_ascii_lowercase() == wanted
+    })
+}
 fn validate_commands(module: &Module, world: &World) -> Result<(), String> {
     if module.commands_this_tick + module.commands.queued.len() > MAX_COMMANDS {
         return Err("per-tick command budget exceeded".into());
@@ -261,6 +327,16 @@ fn validate_commands(module: &Module, world: &World) -> Result<(), String> {
     let mut counters = std::collections::HashSet::new();
     for (actor, effect) in &module.commands.queued {
         effect.validate(&world.content)?;
+        if let Effect::SpawnBoss { boss } = effect
+            && boss_by_name(boss).is_none()
+        {
+            return Err(format!("unknown boss {boss:?}"));
+        }
+        if let Effect::SetTeamScore { team, .. } = effect
+            && *team > world.config.mode.teams()
+        {
+            return Err("team score outside this mode's teams".into());
+        }
         if let Effect::Counter { name, .. } = effect
             && !module.counters.contains_key(&(*actor, name.clone()))
         {
@@ -497,6 +573,98 @@ fn apply(world: &mut World, actor: EntityId, effect: Effect) {
                 }
             }
         }
+        Effect::SetLevel { level } => {
+            if index.is_some() {
+                world.set_level_unchecked(actor, level);
+                world.config.modded = true;
+            }
+        }
+        Effect::RaiseStat { stat } => {
+            if let Some(i) = index {
+                let stat = usize::from(stat);
+                if world.tanks[i].alive && world.tanks[i].stats[stat] < 7 {
+                    world.tanks[i].points = world.tanks[i].points.saturating_add(1).min(38);
+                    world.upgrade_stat(actor, stat);
+                }
+            }
+        }
+        Effect::SetScales {
+            speed,
+            reload,
+            damage,
+        } => {
+            if let Some(i) = index {
+                let t = &mut world.tanks[i];
+                t.speed_scale = speed;
+                t.reload_scale = reload;
+                t.damage_scale = damage;
+            }
+        }
+        Effect::SetArmor { multiplier } => {
+            if index.is_some() {
+                if (multiplier - 1.).abs() < f32::EPSILON {
+                    world.incoming_damage.remove(&actor);
+                } else if world.incoming_damage.len() < 4096
+                    || world.incoming_damage.contains_key(&actor)
+                {
+                    world.incoming_damage.insert(actor, multiplier);
+                }
+            }
+        }
+        Effect::SetShield { seconds } => {
+            if let Some(i) = index
+                && world.tanks[i].alive
+            {
+                world.tanks[i].shield = seconds;
+            }
+        }
+        Effect::SetProtection { seconds } => {
+            if let Some(i) = index
+                && world.tanks[i].alive
+            {
+                world.tanks[i].protection = seconds;
+            }
+        }
+        Effect::SetVelocity { velocity } => {
+            if let Some(i) = index {
+                world.tanks[i].vel = V2::new(velocity[0], velocity[1]).clamp_length(2000.0);
+            }
+        }
+        Effect::Kill => {
+            if let Some(i) = index
+                && world.tanks[i].alive
+            {
+                // Environmental death: resolved by the normal death phase.
+                world.tanks[i].health = -1.;
+            }
+        }
+        Effect::SetScore { score } => {
+            if let Some(i) = index {
+                world.tanks[i].score = score;
+            }
+        }
+        Effect::SetTeamScore { team, score } => {
+            if let Some(slot) = world
+                .match_state
+                .scores
+                .get_mut(usize::from(team.max(1)) - 1)
+            {
+                *slot = score;
+            }
+        }
+        Effect::SpawnBoss { boss } => {
+            if let Some(kind) = boss_by_name(&boss)
+                && world.bosses.len() < 12
+            {
+                world.spawn_boss(kind);
+            }
+        }
+        Effect::ClearProjectiles => {
+            world.projectiles.retain(|p| {
+                crate::team_bases::base_guard_team(p.owner).is_some()
+                    || (actor != 0 && p.owner != actor)
+            });
+        }
         Effect::Counter { .. } => {}
     }
 }
@@ -526,18 +694,11 @@ mod tests {
                 behavior_digest: 1,
             },
             hooks: vec![hook],
+            scripts: Default::default(),
         });
         let mut runtime = ModRuntime::new(&loaded);
         for _ in 0..MAX_COMMANDS + 20 {
-            runtime.dispatch(
-                &mut w,
-                HookEvent {
-                    trigger: Trigger::Shot,
-                    actor,
-                    position: V2::ZERO,
-                    tick: 5,
-                },
-            );
+            runtime.dispatch(&mut w, HookEvent::new(Trigger::Shot, actor, V2::ZERO, 5));
         }
         assert_eq!(w.tanks[0].score, MAX_COMMANDS as u32);
         assert_eq!(runtime.errors.len(), 1);
@@ -578,26 +739,10 @@ mod tests {
         w.tanks[0].health = 20.0;
         let mut runtime = ModRuntime::default();
         runtime.install(Box::new(BadPlugin)).unwrap();
-        runtime.dispatch(
-            &mut w,
-            HookEvent {
-                trigger: Trigger::Kill,
-                actor: id,
-                position: V2::ZERO,
-                tick: 1,
-            },
-        );
+        runtime.dispatch(&mut w, HookEvent::new(Trigger::Kill, id, V2::ZERO, 1));
         assert_eq!(w.tanks[0].health, 20.0);
         assert_eq!(runtime.errors.len(), 1);
-        runtime.dispatch(
-            &mut w,
-            HookEvent {
-                trigger: Trigger::Kill,
-                actor: id,
-                position: V2::ZERO,
-                tick: 2,
-            },
-        );
+        runtime.dispatch(&mut w, HookEvent::new(Trigger::Kill, id, V2::ZERO, 2));
         assert_eq!(runtime.errors.len(), 1);
     }
     #[test]
@@ -626,18 +771,11 @@ mod tests {
                 behavior_digest: 1,
             },
             hooks: vec![hook],
+            scripts: Default::default(),
         });
         let mut runtime = ModRuntime::new(&mods);
         for tick in [1, 20, 61] {
-            runtime.dispatch(
-                &mut w,
-                HookEvent {
-                    trigger: Trigger::Kill,
-                    actor: id,
-                    position: V2::ZERO,
-                    tick,
-                },
-            );
+            runtime.dispatch(&mut w, HookEvent::new(Trigger::Kill, id, V2::ZERO, tick));
         }
         assert_eq!(w.tanks[0].health, 40.0);
         assert_eq!(w.tanks[0].score, 10);
@@ -677,5 +815,83 @@ mod tests {
             w.step();
             assert!(predicted.pos.distance(w.tanks[0].pos) < 0.01);
         }
+    }
+
+    struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<HookEvent>>>);
+    impl ServerPlugin for Recorder {
+        fn id(&self) -> &str {
+            "recorder"
+        }
+        fn handles(&self, trigger: Trigger) -> bool {
+            matches!(trigger, Trigger::Damage | Trigger::Kill | Trigger::Death)
+        }
+        fn on_event(&mut self, _: &World, e: HookEvent, c: &mut Commands) -> Result<(), String> {
+            self.0.lock().unwrap().push(e);
+            if e.trigger == Trigger::Damage && e.target != 0 {
+                c.push(e.actor, Effect::SetArmor { multiplier: 0.5 })?;
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn damage_events_name_the_attacker_and_new_effects_are_bounded() {
+        let mut w = world();
+        let victim = w.add_player("Victim", false);
+        let attacker = w.add_player("Attacker", false);
+        for tank in &mut w.tanks {
+            tank.protection = 0.;
+            tank.spawn_immunity = false;
+        }
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut runtime = ModRuntime::default();
+        runtime.install(Box::new(Recorder(events.clone()))).unwrap();
+        let before = w.tanks[0].health;
+        w.step_with(|world| runtime.before_step(world));
+        w.damage_tank(0, 10., attacker, V2::ZERO);
+        runtime.after_step(&mut w);
+        assert_eq!(w.tanks[0].health, before - 10.);
+        {
+            let seen = events.lock().unwrap();
+            let damage = seen.iter().find(|e| e.trigger == Trigger::Damage).unwrap();
+            assert_eq!((damage.actor, damage.target), (victim, attacker));
+            assert_eq!(damage.value, 10.);
+        }
+        // The armor command from the damage handler halves the next hit.
+        w.damage_tank(0, 10., attacker, V2::ZERO);
+        assert_eq!(w.tanks[0].health, before - 15.);
+        let content = &w.content;
+        for invalid in [
+            Effect::SetScales {
+                speed: 0.1,
+                reload: 1.,
+                damage: 1.,
+            },
+            Effect::SetArmor {
+                multiplier: f32::NAN,
+            },
+            Effect::SetShield { seconds: 31. },
+            Effect::SetLevel { level: 0 },
+            Effect::RaiseStat { stat: 8 },
+            Effect::SetTeamScore { team: 0, score: 1 },
+        ] {
+            assert!(invalid.validate(content).is_err(), "{invalid:?}");
+        }
+        assert_eq!(
+            boss_by_name("Guardian of the Pentagons"),
+            Some(BossKind::Guardian)
+        );
+        assert_eq!(
+            boss_by_name("fallen_booster"),
+            Some(BossKind::FallenBooster)
+        );
+        assert_eq!(boss_by_name("nope"), None);
+        apply(&mut w, victim, Effect::Kill);
+        w.step_with(|world| runtime.before_step(world));
+        runtime.after_step(&mut w);
+        assert!(!w.tanks[0].alive);
+        let seen = events.lock().unwrap();
+        let death = seen.iter().find(|e| e.trigger == Trigger::Death).unwrap();
+        assert_eq!(death.actor, victim);
     }
 }

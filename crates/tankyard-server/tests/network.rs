@@ -56,7 +56,7 @@ fn delayed_reliable_controls_are_deferred_without_disconnects_or_lost_requests()
     pump(&mut server, &mut [&mut client], 240);
     assert!(client.is_ready());
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -132,7 +132,7 @@ fn proximity_voice_routes_only_to_nearby_living_players_and_rejects_replays() {
         (&far, V2::new(2400., 600.), true),
         (&dead, V2::new(520., 600.), false),
     ] {
-        let tank = server
+        let tank = server.arenas[0]
             .session
             .world
             .tanks
@@ -169,7 +169,7 @@ fn proximity_voice_routes_only_to_nearby_living_players_and_rejects_replays() {
     assert!(speaker.send_voice(voice_frame(&speaker, 0)));
     pump(&mut server, &mut [&mut speaker, &mut near], 4);
     assert_eq!(near.voice_packets.pop_front().unwrap().frame.sequence, 0);
-    server
+    server.arenas[0]
         .session
         .world
         .tanks
@@ -193,7 +193,7 @@ fn server_mute_and_voice_disable_are_enforced_even_if_a_client_bypasses_its_ui()
     let mut owner = NetworkClient::connect(&address, "Owner", "").unwrap();
     let mut speaker = NetworkClient::connect(&address, "Speaker", "").unwrap();
     ready(&mut server, &mut [&mut owner, &mut speaker]);
-    for (index, tank) in server.session.world.tanks.iter_mut().enumerate() {
+    for (index, tank) in server.arenas[0].session.world.tanks.iter_mut().enumerate() {
         tank.pos = V2::new(500. + index as f32 * 90., 500.);
     }
     let reply = server.admin_command(&format!("owner-client {}", owner.client_id()));
@@ -245,7 +245,7 @@ fn spectator_interest_follows_the_watched_player_and_stops_on_respawn() {
         (first_id, V2::new(1600., 1600.)),
         (second_id, V2::new(3000., 2100.)),
     ] {
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -254,7 +254,7 @@ fn spectator_interest_follows_the_watched_player_and_stops_on_respawn() {
             .unwrap()
             .pos = pos;
     }
-    let dead = server
+    let dead = server.arenas[0]
         .session
         .world
         .tanks
@@ -263,8 +263,18 @@ fn spectator_interest_follows_the_watched_player_and_stops_on_respawn() {
         .unwrap();
     dead.alive = false;
     dead.last_attacker = first_id;
-    assert!(server.session.world.sandbox_class(first_id, "anchor"));
-    assert!(server.session.world.sandbox_class(second_id, "anchor"));
+    assert!(
+        server.arenas[0]
+            .session
+            .world
+            .sandbox_class(first_id, "anchor")
+    );
+    assert!(
+        server.arenas[0]
+            .session
+            .world
+            .sandbox_class(second_id, "anchor")
+    );
     assert!(first.send_input(PlayerInput {
         sequence: 1,
         fire: true,
@@ -281,7 +291,7 @@ fn spectator_interest_follows_the_watched_player_and_stops_on_respawn() {
     assert!(snapshot.projectiles.iter().any(|p| p.owner == second_id));
     assert!(snapshot.projectiles.iter().all(|p| p.owner != first_id));
     // Removing the selected target must immediately restore an eligible view.
-    server
+    server.arenas[0]
         .session
         .world
         .tanks
@@ -299,7 +309,7 @@ fn spectator_interest_follows_the_watched_player_and_stops_on_respawn() {
             .iter()
             .any(|p| p.owner == first_id)
     );
-    let tank = server
+    let tank = server.arenas[0]
         .session
         .world
         .tanks
@@ -353,22 +363,23 @@ fn empty_online_arenas_sleep_and_resume_when_a_player_joins() {
     let mut config = settings();
     config.bot_count = 12;
     let mut server = UdpServer::bind(config).unwrap();
-    let before = tankyard_protocol::encode_snapshot(&server.session.world.snapshot()).unwrap();
+    let before =
+        tankyard_protocol::encode_snapshot(&server.arenas[0].session.world.snapshot()).unwrap();
     pump(&mut server, &mut [], 120);
     assert_eq!(
-        tankyard_protocol::encode_snapshot(&server.session.world.snapshot()).unwrap(),
+        tankyard_protocol::encode_snapshot(&server.arenas[0].session.world.snapshot()).unwrap(),
         before
     );
     let mut client = NetworkClient::connect(&server.address.to_string(), "Pilot", "").unwrap();
     ready(&mut server, &mut [&mut client]);
     pump(&mut server, &mut [&mut client], 30);
-    assert!(server.session.world.tick > 0);
+    assert!(server.arenas[0].session.world.tick > 0);
     client.disconnect();
     pump(&mut server, &mut [], 30);
     assert_eq!(server.player_count(), 0);
-    let tick = server.session.world.tick;
+    let tick = server.arenas[0].session.world.tick;
     pump(&mut server, &mut [], 120);
-    assert_eq!(server.session.world.tick, tick);
+    assert_eq!(server.arenas[0].session.world.tick, tick);
 }
 
 #[test]
@@ -387,7 +398,7 @@ fn delayed_input_bursts_are_coalesced_without_kicking_the_player() {
     pump(&mut server, &mut [&mut client], 12);
     assert!(client.is_ready());
     assert_eq!(server.player_count(), 1);
-    let player = server
+    let player = server.arenas[0]
         .session
         .world
         .tanks
@@ -422,7 +433,7 @@ fn delayed_input_bursts_are_coalesced_without_kicking_the_player() {
     }));
     pump(&mut server, &mut [&mut client], 8);
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -440,7 +451,7 @@ fn delayed_click_and_ability_taps_survive_input_coalescing() {
     let mut server = UdpServer::bind(settings()).unwrap();
     let mut client = NetworkClient::connect(&server.address.to_string(), "Tap", "").unwrap();
     ready(&mut server, &mut [&mut client]);
-    server
+    server.arenas[0]
         .session
         .world
         .sandbox_class(client.player_id.unwrap(), "riposte");
@@ -457,7 +468,7 @@ fn delayed_click_and_ability_taps_survive_input_coalescing() {
     }));
     client.flush().unwrap();
     pump(&mut server, &mut [&mut client], 1);
-    let tank = server
+    let tank = server.arenas[0]
         .session
         .world
         .tanks
@@ -485,7 +496,7 @@ fn online_bots_scale_with_join_leave_restart_and_admin_limits() {
     config.bot_count = 12;
     let mut server = UdpServer::bind(config).unwrap();
     let bots = |server: &UdpServer| {
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -535,7 +546,7 @@ fn fixed_bot_policy_is_available_and_offline_population_is_unchanged() {
     let mut client = NetworkClient::connect(&server.address.to_string(), "Pilot", "").unwrap();
     ready(&mut server, &mut [&mut client]);
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -644,7 +655,7 @@ fn coop_wave_snapshots_and_bot_settings_keep_raiders_separate_from_teammates() {
     }));
     pump(&mut server, &mut [&mut client], 8);
     assert!(
-        !server
+        !server.arenas[0]
             .session
             .world
             .tanks
@@ -663,7 +674,7 @@ fn coop_wave_snapshots_and_bot_settings_keep_raiders_separate_from_teammates() {
     assert_eq!(snapshot.match_state.arena.wave, 1);
     assert!(!snapshot.match_state.arena.intermission);
     assert!(snapshot.match_state.arena.enemies > 0);
-    let raiders: Vec<_> = server
+    let raiders: Vec<_> = server.arenas[0]
         .session
         .world
         .tanks
@@ -676,7 +687,7 @@ fn coop_wave_snapshots_and_bot_settings_keep_raiders_separate_from_teammates() {
     assert!(!reply.message.starts_with("Error:"), "{}", reply.message);
     assert_eq!(server.settings.bot_count, 0);
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -685,11 +696,14 @@ fn coop_wave_snapshots_and_bot_settings_keep_raiders_separate_from_teammates() {
             .count(),
         0
     );
-    assert!(
-        raiders
+    assert!(raiders.iter().all(|id| {
+        server.arenas[0]
+            .session
+            .world
+            .tanks
             .iter()
-            .all(|id| server.session.world.tanks.iter().any(|tank| tank.id == *id))
-    );
+            .any(|tank| tank.id == *id)
+    }));
 }
 
 #[test]
@@ -704,7 +718,7 @@ fn round_restarts_keep_each_client_bound_to_its_own_human_tank() {
     for mode in ["ffa", "deathmatch", "random-events", "coop-pve", "sandbox"] {
         let reply = server.admin_command(&format!("mode {mode}"));
         assert!(!reply.message.starts_with("Error:"), "{}", reply.message);
-        let round = server.session.world.match_state.round;
+        let round = server.arenas[0].session.world.match_state.round;
         for _ in 0..240 {
             pump(&mut server, &mut [&mut a, &mut b], 1);
             for (client, name) in [(&a, "Alpha"), (&b, "Beta")] {
@@ -744,7 +758,7 @@ fn two_real_udp_clients_move_evolve_damage_and_disconnect() {
     assert_eq!(server.player_count(), 2);
     let alpha = a.player_id.unwrap();
     let beta = b.player_id.unwrap();
-    for tank in &mut server.session.world.tanks {
+    for tank in &mut server.arenas[0].session.world.tanks {
         tank.pos = if tank.id == alpha {
             V2::new(600., 600.)
         } else {
@@ -760,7 +774,7 @@ fn two_real_udp_clients_move_evolve_damage_and_disconnect() {
             .iter()
             .any(|t| t.id == beta)
     );
-    let initial = server
+    let initial = server.arenas[0]
         .session
         .world
         .tanks
@@ -777,7 +791,7 @@ fn two_real_udp_clients_move_evolve_damage_and_disconnect() {
         pump(&mut server, &mut [&mut a, &mut b], 1);
     }
     assert!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -817,7 +831,7 @@ fn two_real_udp_clients_move_evolve_damage_and_disconnect() {
     assert_eq!(tank.level, 45);
     assert!(a.sandbox_class("vector"));
     pump(&mut server, &mut [&mut a, &mut b], 6);
-    for tank in &mut server.session.world.tanks {
+    for tank in &mut server.arenas[0].session.world.tanks {
         tank.protection = 0.;
         tank.vel = V2::ZERO;
         tank.input = PlayerInput::default();
@@ -836,7 +850,7 @@ fn two_real_udp_clients_move_evolve_damage_and_disconnect() {
             ..Default::default()
         });
         pump(&mut server, &mut [&mut a, &mut b], 1);
-        let defender = server
+        let defender = server.arenas[0]
             .session
             .world
             .tanks
@@ -888,7 +902,7 @@ fn multiplayer_sandbox_is_server_permission_controlled() {
     assert!(client.sandbox_level(45));
     pump(&mut server, &mut [&mut client], 12);
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -908,7 +922,7 @@ fn bastion_accepts_resumed_sequence_gaps_without_advancing_movement_or_weapon_ti
         NetworkClient::connect(&server.address.to_string(), "Resumed pilot", "").unwrap();
     ready(&mut server, &mut [&mut client]);
     let id = client.player_id.unwrap();
-    let tank = server
+    let tank = server.arenas[0]
         .session
         .world
         .tanks
@@ -918,7 +932,7 @@ fn bastion_accepts_resumed_sequence_gaps_without_advancing_movement_or_weapon_ti
     tank.pos = V2::new(1800., 1300.);
     tank.vel = V2::ZERO;
     for sequence in [1, 90_000, 90_001, 1_000_000] {
-        let before = server
+        let before = server.arenas[0]
             .session
             .world
             .tanks
@@ -926,7 +940,7 @@ fn bastion_accepts_resumed_sequence_gaps_without_advancing_movement_or_weapon_ti
             .find(|t| t.id == id)
             .unwrap()
             .pos;
-        let tick = server.session.world.tick;
+        let tick = server.arenas[0].session.world.tick;
         assert!(client.send_input(PlayerInput {
             sequence,
             movement: V2::new(1., 1.),
@@ -934,7 +948,7 @@ fn bastion_accepts_resumed_sequence_gaps_without_advancing_movement_or_weapon_ti
             ..Default::default()
         }));
         pump(&mut server, &mut [&mut client], 2);
-        let tank = server
+        let tank = server.arenas[0]
             .session
             .world
             .tanks
@@ -946,12 +960,12 @@ fn bastion_accepts_resumed_sequence_gaps_without_advancing_movement_or_weapon_ti
             tank.pos.distance(before) < 20.,
             "client sequence advanced movement"
         );
-        assert!(server.session.world.tick - tick <= 3);
+        assert!(server.arenas[0].session.world.tick - tick <= 3);
         assert!(client.is_ready());
     }
     assert_eq!(server.bastion.counters().invalid_inputs, 0);
     assert!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -971,7 +985,7 @@ fn input_packets_cannot_speed_up_weapons_and_stale_input_becomes_neutral() {
     ready(&mut server, &mut [&mut client]);
     let id = client.player_id.unwrap();
     let cooldown = Content::builtin().class("vector").unwrap().barrels[0].cooldown;
-    let before = server
+    let before = server.arenas[0]
         .session
         .world
         .tanks
@@ -992,7 +1006,7 @@ fn input_packets_cannot_speed_up_weapons_and_stale_input_becomes_neutral() {
         }
         pump(&mut server, &mut [&mut client], 1);
     }
-    let shots = server
+    let shots = server.arenas[0]
         .session
         .world
         .tanks
@@ -1007,7 +1021,7 @@ fn input_packets_cannot_speed_up_weapons_and_stale_input_becomes_neutral() {
         "extra packets accelerated weapon firing"
     );
     pump(&mut server, &mut [&mut client], 45);
-    let tank = server
+    let tank = server.arenas[0]
         .session
         .world
         .tanks
@@ -1019,7 +1033,7 @@ fn input_packets_cannot_speed_up_weapons_and_stale_input_becomes_neutral() {
     let stopped_shots = tank.shot_count;
     pump(&mut server, &mut [&mut client], 30);
     assert_eq!(
-        server
+        server.arenas[0]
             .session
             .world
             .tanks
@@ -1128,4 +1142,132 @@ fn dedicated_server_process_accepts_independent_client_sockets() {
         success,
         "separate headless process did not replicate sequenced client inputs"
     );
+}
+
+#[test]
+fn large_servers_split_into_isolated_arenas_and_regroup_on_restart() {
+    let mut server = UdpServer::bind(ServerSettings {
+        max_players: 8,
+        arena_capacity: 2,
+        world: WorldConfig {
+            mode: Mode::Ffa,
+            target_count: 0,
+            spawn_protection: 0.,
+            ..Default::default()
+        },
+        ..settings()
+    })
+    .unwrap();
+    let address = server.address.to_string();
+    let mut clients: Vec<NetworkClient> = (0..5)
+        .map(|n| NetworkClient::connect(&address, &format!("Pilot {n}"), "").unwrap())
+        .collect();
+    let mut refs: Vec<&mut NetworkClient> = clients.iter_mut().collect();
+    ready(&mut server, &mut refs);
+    pump(&mut server, &mut refs, 30);
+    assert_eq!(server.arena_count(), 3);
+    for arena in &server.arenas {
+        let humans = arena.session.world.tanks.iter().filter(|t| !t.bot).count();
+        assert!((1..=2).contains(&humans), "{humans} humans in one arena");
+    }
+    // Every client sees only its own arena, and IDs never collide.
+    let mut ids: Vec<_> = clients.iter().map(|c| c.player_id.unwrap()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 5);
+    for client in &clients {
+        let snapshot = client.snapshot.as_ref().unwrap();
+        let humans = snapshot.tanks.iter().filter(|t| !t.bot).count();
+        assert!(humans <= 2);
+        assert!(
+            client.server_name.contains("· Arena"),
+            "{}",
+            client.server_name
+        );
+    }
+    // Two players leave the second arena; a restart merges the rest.
+    let rounds: Vec<_> = clients.iter().map(|c| c.player_round.unwrap()).collect();
+    let movers: Vec<_> = server.arenas[1]
+        .session
+        .world
+        .tanks
+        .iter()
+        .filter(|t| !t.bot)
+        .map(|t| t.id)
+        .collect();
+    clients.retain(|client| !movers.contains(&client.player_id.unwrap()));
+    let mut refs: Vec<&mut NetworkClient> = clients.iter_mut().collect();
+    pump(&mut server, &mut refs, 120);
+    server.admin_command("restart");
+    pump(&mut server, &mut refs, 120);
+    assert!(clients.iter().all(NetworkClient::is_ready));
+    assert!(server.arena_count() <= 2);
+    let after: Vec<_> = clients.iter().map(|c| c.player_round.unwrap()).collect();
+    assert!(
+        after
+            .iter()
+            .all(|round| rounds.iter().all(|before| round > before))
+    );
+}
+
+#[test]
+fn unchanged_walls_are_omitted_but_clients_always_hold_the_current_geometry() {
+    let mut server = UdpServer::bind(ServerSettings {
+        world: WorldConfig {
+            mode: Mode::Maze,
+            map: "maze".into(),
+            target_count: 0,
+            dynamic_arena: false,
+            ..Default::default()
+        },
+        ..settings()
+    })
+    .unwrap();
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Mapper", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    let walls = server.arenas[0].session.world.walls.clone();
+    assert!(walls.len() > 10);
+    let bytes_before = server.metrics.snapshot_bytes;
+    let sent_before = server.metrics.snapshots_sent;
+    pump(&mut server, &mut [&mut client], 60 * 3);
+    let average = (server.metrics.snapshot_bytes - bytes_before)
+        / (server.metrics.snapshots_sent - sent_before).max(1);
+    for _ in 0..90 {
+        pump(&mut server, &mut [&mut client], 1);
+        assert_eq!(client.snapshot.as_ref().unwrap().walls, walls);
+    }
+    // A full maze snapshot is far larger than the steady-state average.
+    let full = tankyard_protocol::encode_snapshot(&server.arenas[0].session.world.snapshot())
+        .unwrap()
+        .len() as u64;
+    assert!(average < full, "{average} >= {full}");
+}
+
+#[test]
+fn an_odd_malformed_packet_is_dropped_but_a_flood_still_disconnects() {
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Lossy", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    // One corrupt input and one invalid request: refused, never fatal.
+    client.send_raw(tankyard_protocol::REALTIME_CHANNEL, vec![0xff; 40]);
+    client.send_raw(tankyard_protocol::CONTROL_CHANNEL, vec![0xff; 12]);
+    pump(&mut server, &mut [&mut client], 90);
+    assert!(client.is_ready(), "{:?}", client.error);
+    assert!(server.bastion.counters().rejected_requests >= 2);
+    assert!(client.send_chat("lobby", "tab\there\nnewline") || !client.chat_enabled);
+    pump(&mut server, &mut [&mut client], 30);
+    assert!(client.is_ready());
+    // A sustained stream of garbage is not a lossy link.
+    let mut closed = None;
+    for _ in 0..120 {
+        if closed.is_none() {
+            client.send_raw(tankyard_protocol::REALTIME_CHANNEL, vec![0xff; 40]);
+        }
+        if let Err(error) = client.update(STEP) {
+            closed.get_or_insert(error.to_string());
+        }
+        server.update(STEP).unwrap();
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(closed.as_deref(), Some("Malformed player input."));
 }

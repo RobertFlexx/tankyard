@@ -66,7 +66,20 @@ pub struct NetworkClient {
     event_queue: Vec<GameEvent>,
     handshake_elapsed: Duration,
     input_history: InputBundle,
+    /// Walls are sent when they change; snapshots without them reuse these.
+    walls: Vec<tankyard_core::Rect>,
     _bridge: Option<crate::websocket::ClientBridge>,
+}
+
+/// Keep the newest geometry a snapshot carried, and complete snapshots that
+/// omit unchanged walls. A missed update is replaced by the next repeat.
+fn restore_walls(snapshot: &mut Snapshot, cache: &mut Vec<tankyard_core::Rect>) {
+    if snapshot.walls_included {
+        cache.clone_from(&snapshot.walls);
+    } else {
+        snapshot.walls.clone_from(cache);
+        snapshot.walls_included = true;
+    }
 }
 
 impl NetworkClient {
@@ -227,6 +240,7 @@ impl NetworkClient {
             event_queue: Vec::with_capacity(128),
             handshake_elapsed: Duration::ZERO,
             input_history: InputBundle::default(),
+            walls: Vec::new(),
             _bridge: bridge,
             bundle,
             bundle_revision,
@@ -449,6 +463,7 @@ impl NetworkClient {
                         self.event_queue.clear();
                         self.events.clear();
                         self.voice_packets.clear();
+                        self.walls.clear();
                     }
                     self.player_id = Some(player);
                     self.input_history = InputBundle::default();
@@ -543,7 +558,7 @@ impl NetworkClient {
             let Some(bytes) = self.client.receive_message(REALTIME_CHANNEL) else {
                 break;
             };
-            let snapshot = match decode_snapshot(&bytes) {
+            let mut snapshot = match decode_snapshot(&bytes) {
                 Ok(snapshot) => snapshot,
                 Err(e) => return self.fail(e.to_string()),
             };
@@ -563,6 +578,7 @@ impl NetworkClient {
             {
                 return self.fail("Snapshot does not match the server's game data.".into());
             }
+            restore_walls(&mut snapshot, &mut self.walls);
             let baseline = latest
                 .as_ref()
                 .map(|s: &Snapshot| s.tick)
@@ -656,7 +672,15 @@ impl NetworkClient {
         })
     }
     pub fn send_chat(&mut self, room: &str, text: &str) -> bool {
-        self.chat_enabled
+        // Pasted tabs and line breaks become spaces instead of a refused message.
+        let text: String = text
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .take(160)
+            .collect();
+        let text = text.trim();
+        !text.is_empty()
+            && self.chat_enabled
             && self.queue_control(ClientControl::Chat {
                 room: room.into(),
                 text: text.into(),
@@ -801,6 +825,13 @@ impl NetworkClient {
         self.transport.disconnect();
         self.client.disconnect();
     }
+    /// Send arbitrary bytes on a channel. For transport tests only.
+    #[doc(hidden)]
+    pub fn send_raw(&mut self, channel: u8, bytes: Vec<u8>) {
+        if self.client.can_send_message(channel, bytes.len()) {
+            self.client.send_message(channel, bytes);
+        }
+    }
     fn queue_control(&mut self, control: ClientControl) -> bool {
         if !self.client.is_connected() || !control.valid() {
             return false;
@@ -875,7 +906,7 @@ mod tests {
         }
         assert!(client.is_ready());
         let id = client.player_id.unwrap();
-        assert!(server.session.world.sandbox_class(id, "riposte"));
+        assert!(server.arenas[0].session.world.sandbox_class(id, "riposte"));
         let mut history = InputBundle::default();
         history.push(PlayerInput {
             sequence: u32::MAX - 1,
@@ -899,7 +930,7 @@ mod tests {
             .send_message(REALTIME_CHANNEL, encode(&history, MAX_INPUT_BYTES).unwrap());
         client.flush().unwrap();
         server.update(step).unwrap();
-        let tank = server
+        let tank = server.arenas[0]
             .session
             .world
             .tanks
@@ -910,7 +941,7 @@ mod tests {
         assert_eq!(tank.input.movement, V2::new(0., 1.));
         assert_eq!(tank.shot_count, 1);
         assert!(tank.ability_cooldown > 0.);
-        let tank = server
+        let tank = server.arenas[0]
             .session
             .world
             .tanks
@@ -928,7 +959,7 @@ mod tests {
             .send_message(REALTIME_CHANNEL, encode(&history, MAX_INPUT_BYTES).unwrap());
         client.flush().unwrap();
         server.update(step).unwrap();
-        let tank = server
+        let tank = server.arenas[0]
             .session
             .world
             .tanks

@@ -117,6 +117,8 @@ impl crate::UdpServer {
                     return None;
                 }
                 let tank = self
+                    .arenas
+                    .get(peer.arena)?
                     .session
                     .world
                     .tanks

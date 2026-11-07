@@ -77,7 +77,8 @@ impl UdpServer {
         command: ServerCommand,
         signature: &[u8],
     ) -> Result<(), NetError> {
-        if round != self.session.world.match_state.round || !command.valid() {
+        let arena = self.arena_of(client);
+        if round != self.arenas[arena].session.world.match_state.round || !command.valid() {
             return Err(NetError(
                 "Match changed or command is invalid. Select the player again.".into(),
             ));
@@ -134,7 +135,8 @@ impl UdpServer {
                 ServerRole::Owner => ServerBadge::Host,
             }
         };
-        if let Some(tank) = self
+        let arena = peer.arena.min(self.arenas.len() - 1);
+        if let Some(tank) = self.arenas[arena]
             .session
             .world
             .tanks
@@ -233,7 +235,7 @@ mod tests {
             settings.audit_file = audit.to_string_lossy().into();
             let mut server = UdpServer::bind(settings).unwrap();
             let key = Ed25519KeyPair::from_seed_unchecked(&[17; 32]).unwrap();
-            let player = server
+            let player = server.arenas[0]
                 .session
                 .world
                 .add_player("Central Server Owner", false);
@@ -264,6 +266,11 @@ mod tests {
                     last_admin_sequence: None,
                     central_owner: false,
                     central_proof_used: false,
+                    arena: 0,
+                    walls_revision: None,
+                    walls_sent_at: Duration::ZERO,
+                    strikes: 0,
+                    strike_window: Duration::ZERO,
                 },
             );
             Self { server, key, audit }
@@ -325,12 +332,18 @@ mod tests {
             ServerRole::Owner
         );
         assert_eq!(
-            arena.server.session.world.tanks[0].server_badge,
+            arena.server.arenas[0].session.world.tanks[0].server_badge,
             ServerBadge::CentralOwner
         );
-        assert!(!arena.server.session.world.tanks[0].game_creator);
-        assert!(arena.server.session.world.admin_modifiers.is_empty());
-        let round = arena.server.session.world.match_state.round;
+        assert!(!arena.server.arenas[0].session.world.tanks[0].game_creator);
+        assert!(
+            arena.server.arenas[0]
+                .session
+                .world
+                .admin_modifiers
+                .is_empty()
+        );
+        let round = arena.server.arenas[0].session.world.match_state.round;
         let command = ServerCommand::Announce {
             text: "Hello arena".into(),
         };
@@ -377,7 +390,7 @@ mod tests {
             ServerRole::Player
         );
         assert_eq!(
-            arena.server.session.world.tanks[0].server_badge,
+            arena.server.arenas[0].session.world.tanks[0].server_badge,
             ServerBadge::Player
         );
         arena.server.set_central_owner_admin(true).unwrap();
@@ -426,10 +439,10 @@ mod tests {
                 .starts_with("Error:")
         );
         assert_eq!(
-            arena.server.session.world.tanks[0].server_badge,
+            arena.server.arenas[0].session.world.tanks[0].server_badge,
             ServerBadge::Host
         );
-        let round = arena.server.session.world.match_state.round;
+        let round = arena.server.arenas[0].session.world.match_state.round;
         let command = ServerCommand::SetBots { count: 0 };
         assert!(
             arena
@@ -449,8 +462,7 @@ mod tests {
             .unwrap();
         arena.server.restart_round();
         assert_eq!(
-            arena
-                .server
+            arena.server.arenas[0]
                 .session
                 .world
                 .tanks

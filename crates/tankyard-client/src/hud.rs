@@ -388,6 +388,10 @@ pub enum HudAction {
 }
 pub struct Hud {
     pub spectating: Option<EntityId>,
+    /// The local tank's most recent killer, from reliable kill events.
+    pub killed_by: Option<EntityId>,
+    /// The current map's palette accent, which tints minimap cover.
+    pub palette: Color,
     pub practice: bool,
     pub evolution: bool,
     pub sandbox: bool,
@@ -408,6 +412,8 @@ impl Hud {
     pub fn new() -> Self {
         Self {
             spectating: None,
+            killed_by: None,
+            palette: tankyard_client::map_model::palette("slate"),
             practice: false,
             evolution: false,
             sandbox: false,
@@ -1023,7 +1029,7 @@ impl Hud {
             {
                 self.spectator_bar(tank, watched, snapshot.config.mode, &mut actions, s);
             } else {
-                self.death(tank, snapshot.config.mode, &mut actions, s);
+                self.death(tank, snapshot, content, &mut actions, s);
             }
         }
         if snapshot.match_state.finished {
@@ -1189,13 +1195,14 @@ impl Hud {
             1.0 * s,
             alpha(text_color(), 0.28),
         );
+        let wall_color = mix(line_color(), self.palette, 0.35);
         for wall in &snapshot.walls {
             draw_rectangle(
                 x + 6.0 * s + wall.x * sx,
                 y + 6.0 * s + wall.y * sy,
                 wall.w * sx,
                 wall.h * sy,
-                line_color(),
+                wall_color,
             );
         }
         for objective in &snapshot.objectives {
@@ -1509,7 +1516,15 @@ impl Hud {
             self.sandbox_level_pending = None;
         }
     }
-    fn death(&self, tank: &Tank, mode: Mode, actions: &mut Vec<HudAction>, s: f32) {
+    fn death(
+        &self,
+        tank: &Tank,
+        snapshot: &Snapshot,
+        content: &Content,
+        actions: &mut Vec<HudAction>,
+        s: f32,
+    ) {
+        let mode = snapshot.config.mode;
         let waiting_wave = mode == Mode::CoopPve;
         draw_rectangle(
             0.0,
@@ -1521,6 +1536,22 @@ impl Hud {
         let x = screen_width() * 0.5;
         let y = screen_height() * 0.42;
         center_label("You died", x, y, 48.0 * s, RED);
+        if let Some(killer) = self
+            .killed_by
+            .and_then(|id| killer_name(snapshot, content, id))
+        {
+            center_label(
+                &fitted_label(
+                    &format!("Destroyed by {killer}"),
+                    15.0 * s,
+                    screen_width() - 40.0 * s,
+                ),
+                x,
+                y - 46.0 * s,
+                15.0 * s,
+                muted_color(),
+            );
+        }
         center_label(
             &format!("Score: {}    Kills: {}", tank.score, tank.kills),
             x,
@@ -1648,6 +1679,26 @@ impl Hud {
             actions.push(HudAction::Spectate(1));
         }
     }
+}
+/// A readable name for whatever destroyed the local tank.
+fn killer_name(snapshot: &Snapshot, content: &Content, id: EntityId) -> Option<String> {
+    if id == 0 {
+        return None;
+    }
+    if tankyard_core::base_guard_team(id).is_some() {
+        return Some("the enemy base guardians".into());
+    }
+    if let Some(tank) = snapshot.tanks.iter().find(|tank| tank.id == id) {
+        let class = content
+            .class(&tank.class)
+            .map_or(tank.class.as_str(), |class| class.name.as_str());
+        return Some(format!("{} · {class}", tank.display_name()));
+    }
+    snapshot
+        .bosses
+        .iter()
+        .find(|boss| boss.id == id)
+        .map(|boss| format!("the {}", boss.kind.name()))
 }
 pub(crate) fn boss_banner_layout(width: f32, s: f32) -> Rect {
     let left = 320. * s;

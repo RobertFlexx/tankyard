@@ -24,6 +24,7 @@ mod spectating;
 mod stasis;
 mod team_bases;
 pub use stasis::{STASIS_RADIUS, STASIS_SECONDS};
+pub use team_bases::{BASE_ALERT_DISTANCE, BASE_GUARD_OWNER, base_guard_owner, base_guard_team};
 mod weapons;
 pub mod world;
 pub use arena::PVE_WAVES;

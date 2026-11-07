@@ -26,6 +26,15 @@ impl WallStyle {
         }
     }
 }
+/// A map's palette accent, used to tint its floor, grid and minimap.
+pub fn palette(background: &str) -> Color {
+    color(match background {
+        "teal" => [0.30, 0.64, 0.63],
+        "violet" => [0.57, 0.52, 0.76],
+        "sand" => [0.78, 0.64, 0.40],
+        _ => [0.43, 0.58, 0.67],
+    })
+}
 fn color(rgb: [f32; 3]) -> Color {
     Color::new(rgb[0], rgb[1], rgb[2], 1.)
 }

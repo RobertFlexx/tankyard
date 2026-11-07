@@ -70,7 +70,10 @@ pub(crate) fn handle(
 ) -> Result<String, String> {
     let command: Command =
         serde_json::from_slice(payload).map_err(|_| "Invalid creator command.")?;
-    creator_index(&server.session, player)?;
+    let arena = server
+        .arena_of_entity(player)
+        .ok_or("Verified creator player was not found.")?;
+    creator_index(&server.arenas[arena].session, player)?;
     if let Command::Moderate { command } = command {
         if !command.valid() {
             return Err("Invalid moderation command.".into());
@@ -134,20 +137,20 @@ pub(crate) fn handle(
         server.settings.bot_count = count;
         server.sync_bots();
         server.broadcast_match_settings();
-        server.session.world.config.modded = true;
+        server.arenas[arena].session.world.config.modded = true;
         return Ok(format!("Bot population: {count}"));
     }
     let map_changed = matches!(&command, Command::Map { .. });
-    let message = apply(&mut server.session, player, command)?;
+    let message = apply(&mut server.arenas[arena].session, player, command)?;
     if map_changed {
         server
             .settings
             .world
             .map
-            .clone_from(&server.session.world.config.map);
+            .clone_from(&server.arenas[arena].session.world.config.map);
         server.broadcast_match_settings();
     }
-    server.replicate_events();
+    server.replicate_events(arena);
     Ok(message)
 }
 

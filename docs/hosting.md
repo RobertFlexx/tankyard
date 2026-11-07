@@ -11,7 +11,7 @@ cargo build --locked --release -p tankyard-server --bin tankyard-server
 
 The port is UDP 5000. Local players join `127.0.0.1:5000`; LAN players use the host's local address. Internet players need a reachable public address and a forwarded UDP port. IPv6 addresses use brackets, such as `[2001:db8::1234]:5000`.
 
-Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default. Protocol 15 is required on both clients and servers. Validated mod data is sent when joining, so clients do not need to install server packs.
+Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default. Protocol 21 is required on both clients and servers. Validated mod data is sent when joining, so clients do not need to install server packs.
 
 Inputs and menu commands are flushed before the client finishes each frame. Movement abilities use shared prediction rules. Remote movement can bridge a packet gap for up to 75 ms, constrained by walls and the arena boundary; longer gaps freeze until a new snapshot arrives. The server reuses snapshot storage between viewers and bounds catch-up work during overload.
 
@@ -23,7 +23,7 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 
 Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
 
-Current clients and servers use protocol 15. Proximity voice, spectator controls, and captured drones require matching versions. Update clients and servers together. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
+Current clients and servers use protocol 21. Proximity voice, spectator controls, and captured drones require matching versions. Update clients and servers together. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
 
 The ordinary server includes signed creator tools by default on official public arenas (`--central`); `creator_admin = false` overrides that policy. Default community/personal hosts are disabled; public community operators can explicitly opt in. Password-protected hosts cannot enable the tools. See [creator administration](creator-administration.md) for policy, immediate revocation, auditing, and updating the central Raspberry Pi/Docker deployment.
 
@@ -74,6 +74,12 @@ cargo run --locked --release -p tankyard-server --bin tankyard-load -- --local -
 The load tool also supports `--latency-ms 100 --jitter-ms 20 --loss-percent 5`. It fails if clients cannot join, disconnect before the finish, or stop receiving snapshots for more than two seconds.
 
 ## Scaling arenas
+
+### Arena groups on one server
+
+`arena_capacity` splits a busy server into independent arenas of that many human players, all on the same process, port and relay. Players join the fullest arena that still has room; a new arena opens only when every arena is full, up to `ceil(max_players / arena_capacity)` arenas (at most 16). Each arena has its own match, bots, mods, round timer and spectators; voice, effects, kill feed and player join/leave notices stay within the arena, while chat rooms, roles, bans and announcements remain server-wide. Entity IDs are unique across arenas, so `kick`, `ban` and `role` keep working by entity ID. A quiet trailing arena closes after a minute without players. When a server-wide round starts (map rotation, `restart`, a settings change), players are regrouped into as few arenas as their groups allow, never splitting the players of one arena. `status` lists every arena; `players` shows each player's arena; clients see `· Arena n` after the server name.
+
+The central profile uses `arena_capacity = 20` with `max_players = 80`, so up to four groups of twenty. The default, `arena_capacity = 0`, keeps one arena of any size, as before. Party servers always use one arena.
 
 `adaptive_bots = true` is the default for official and community servers. `bot_count` is a ceiling: the arena fills to six participants, with zero bots at six human players. Co-op wave enemies are separate. With no humans connected, the simulation and round timers pause while networking continues to accept joins. Use `adaptive_bots = false` or `--fixed-bots` for a fixed bot population.
 

@@ -1,0 +1,9 @@
+{
+  "api_version": 2,
+  "id": "sprinkler",
+  "name": "Sprinkler",
+  "version": "1.0",
+  "author": "Tank Yard",
+  "description": "Adds the Sprinkler, a wide-arc Machine Gun branch, and rewards close-range kills.",
+  "scripts": ["main.lua"]
+}

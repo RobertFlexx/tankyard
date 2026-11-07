@@ -17,8 +17,8 @@ pub use voice::*;
 mod party;
 pub use party::*;
 
-pub const PROTOCOL_VERSION: u32 = 20;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0014;
+pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0015;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -1069,5 +1069,39 @@ mod state_regressions {
         snapshot.tanks[0].max_health = 100.0;
         snapshot.tanks[0].cooldowns.push(0.0);
         assert!(decode_snapshot(&encode_snapshot(&snapshot).unwrap()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod concealment_tests {
+    use super::*;
+    use tankyard_core::{World, WorldConfig};
+
+    #[test]
+    fn concealed_distant_tanks_keep_a_valid_compact_snapshot() {
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        let viewer = world.add_player("Viewer", false);
+        world.add_player("Far", false);
+        world.sandbox_level(viewer, 1);
+        for _ in 0..30 {
+            world.step();
+        }
+        let mut snapshot = world.snapshot();
+        let full = encode(&snapshot, MAX_STATE_BYTES).unwrap().len();
+        let far = &mut snapshot.tanks[1];
+        far.input.aim = 1.2;
+        far.input.aim_distance = 800.;
+        tankyard_core::conceal_distant_tank(far);
+        assert_eq!(far.input.aim_distance, PlayerInput::default().aim_distance);
+        assert!(far.cooldowns.is_empty() && far.barrel_aims.is_empty());
+        assert_eq!(far.pos.x % 96., 0.);
+        assert!(encode(&snapshot, MAX_STATE_BYTES).unwrap().len() < full);
+        assert!(decode_snapshot(&encode_snapshot(&snapshot).unwrap()).is_ok());
     }
 }

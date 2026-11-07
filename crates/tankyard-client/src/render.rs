@@ -55,6 +55,30 @@ impl View {
         self.shake = vec2((t * 73.0).sin(), (t * 97.0).cos()) * shake;
     }
 }
+/// A dashed outline in world space, skipping edges on the arena border.
+fn dashed_rect(view: &View, rect: tankyard_core::Rect, color: Color, thickness: f32) {
+    let corners = [
+        V2::new(rect.x, rect.y),
+        V2::new(rect.x + rect.w, rect.y),
+        V2::new(rect.x + rect.w, rect.y + rect.h),
+        V2::new(rect.x, rect.y + rect.h),
+    ];
+    for side in 0..4 {
+        let (a, b) = (corners[side], corners[(side + 1) % 4]);
+        let length = a.distance(b);
+        let dashes = (length / 36.).floor().max(1.) as usize;
+        for dash in 0..dashes {
+            let from = a.lerp(b, dash as f32 / dashes as f32);
+            let to = a.lerp(b, (dash as f32 + 0.55) / dashes as f32);
+            if !view.visible(from, 40.) && !view.visible(to, 40.) {
+                continue;
+            }
+            let (p, q) = (view.screen(from), view.screen(to));
+            draw_line(p.x, p.y, q.x, q.y, thickness, color);
+        }
+    }
+}
+
 pub fn team_color(team: u8, local: bool, colorblind: bool) -> Color {
     if colorblind {
         use crate::accessibility::{BLUE, GREEN, ORANGE, PURPLE};
@@ -257,7 +281,7 @@ fn cannon(p: Vec2, angle: f32, length: f32, width: f32, color: Color, recoil: f3
 pub fn world(
     snapshot: &Snapshot,
     content: &Content,
-    _map: Option<&tankyard_content::MapDef>,
+    map: Option<&tankyard_content::MapDef>,
     local: EntityId,
     view: &View,
     effects: &Effects,
@@ -268,16 +292,27 @@ pub fn world(
     previous_positions: &HashMap<EntityId, (V2, f32)>,
 ) {
     let dark = settings.dark_arena;
-    clear_background(if dark {
-        Color::new(0.14, 0.17, 0.20, 1.0)
-    } else {
-        BG
-    });
-    let grid_color = if dark {
-        Color::new(0.20, 0.23, 0.27, 1.0)
-    } else {
-        Color::new(0.765, 0.765, 0.765, 1.0)
-    };
+    // Each map keeps the classic floor, faintly tinted by its palette.
+    let accent =
+        tankyard_client::map_model::palette(map.map_or("slate", |m| m.background.as_str()));
+    clear_background(mix(
+        if dark {
+            Color::new(0.14, 0.17, 0.20, 1.0)
+        } else {
+            BG
+        },
+        accent,
+        if dark { 0.07 } else { 0.06 },
+    ));
+    let grid_color = mix(
+        if dark {
+            Color::new(0.20, 0.23, 0.27, 1.0)
+        } else {
+            Color::new(0.765, 0.765, 0.765, 1.0)
+        },
+        accent,
+        if dark { 0.10 } else { 0.09 },
+    );
     let z = view.zoom;
     let top = view.world(vec2(0.0, 0.0));
     let bottom = view.world(vec2(screen_width(), screen_height()));
@@ -335,6 +370,25 @@ pub fn world(
         (screen_height() - far.y).max(0.0),
         outside,
     );
+    // A faint band inside the border marks the edge before you reach it.
+    let band = 26. * z;
+    let edge_tint = alpha(mix(accent, BLACK, 0.35), if dark { 0.10 } else { 0.06 });
+    draw_rectangle(origin.x, origin.y, bounds.w * z, band, edge_tint);
+    draw_rectangle(origin.x, far.y - band, bounds.w * z, band, edge_tint);
+    draw_rectangle(
+        origin.x,
+        origin.y + band,
+        band,
+        (bounds.h * z - band * 2.).max(0.),
+        edge_tint,
+    );
+    draw_rectangle(
+        far.x - band,
+        origin.y + band,
+        band,
+        (bounds.h * z - band * 2.).max(0.),
+        edge_tint,
+    );
     draw_rectangle_lines(
         origin.x,
         origin.y,
@@ -349,6 +403,29 @@ pub fn world(
             let color = team_color(team, false, settings.colorblind);
             draw_rectangle(p.x, p.y, base.w * z, base.h * z, alpha(color, 0.14));
             draw_rectangle_lines(p.x, p.y, base.w * z, base.h * z, 1.5, alpha(color, 0.36));
+            if snapshot.config.base_guarded(team) {
+                // Where this base's guardians engage raiders.
+                let reach = snapshot.config.base_alert_distance();
+                let bounds = snapshot.config.bounds();
+                let zone = tankyard_core::Rect {
+                    x: (base.x - reach).max(bounds.x),
+                    y: (base.y - reach).max(bounds.y),
+                    w: 0.,
+                    h: 0.,
+                };
+                let right = (base.x + base.w + reach).min(bounds.x + bounds.w);
+                let bottom = (base.y + base.h + reach).min(bounds.y + bounds.h);
+                dashed_rect(
+                    view,
+                    tankyard_core::Rect {
+                        w: right - zone.x,
+                        h: bottom - zone.y,
+                        ..zone
+                    },
+                    alpha(color, 0.30),
+                    (1.2 * z).max(1.),
+                );
+            }
         }
     }
     let wall_scale = scale / snapshot.config.arena_scale.max(0.5);
@@ -392,13 +469,28 @@ pub fn world(
             draw_model_primitive(transformed);
         },
     );
-    for wall in &snapshot.walls {
-        let wall = tankyard_core::Rect {
-            x: arena_center.x + (wall.x - arena_center.x) * wall_scale,
-            y: arena_center.y + (wall.y - arena_center.y) * wall_scale,
-            w: wall.w * wall_scale,
-            h: wall.h * wall_scale,
+    let scaled = |wall: &tankyard_core::Rect| tankyard_core::Rect {
+        x: arena_center.x + (wall.x - arena_center.x) * wall_scale,
+        y: arena_center.y + (wall.y - arena_center.y) * wall_scale,
+        w: wall.w * wall_scale,
+        h: wall.h * wall_scale,
+    };
+    // Soft drop shadows first, so cover reads as raised above the floor.
+    if settings.shape_quality > 0 {
+        let shadow = if dark {
+            Color::new(0.0, 0.0, 0.0, 0.24)
+        } else {
+            Color::new(0.10, 0.12, 0.14, 0.11)
         };
+        for wall in snapshot.walls.iter().map(scaled) {
+            if !view.visible(wall.center(), wall.w.max(wall.h)) {
+                continue;
+            }
+            let p = view.screen(V2::new(wall.x + 6., wall.y + 8.));
+            draw_rectangle(p.x, p.y, wall.w * z, wall.h * z, shadow);
+        }
+    }
+    for wall in snapshot.walls.iter().map(scaled) {
         if !view.visible(wall.center(), wall.w.max(wall.h)) {
             continue;
         }
@@ -592,6 +684,13 @@ pub fn world(
                 };
                 if projectile.is_return_drone() {
                     draw_circle_lines(p.x, p.y, r + 5.0 * z, 2.0 * z, alpha(CYAN, opacity * 0.7));
+                }
+                if tankyard_core::base_guard_team(projectile.owner).is_some() {
+                    // Base guardians: a heavier, darker sentry with a pale core.
+                    polygon(p, 3, r + 3.5 * z, angle, alpha(OUTLINE, opacity));
+                    polygon(p, 3, r, angle, alpha(mix(c, BLACK, 0.18), opacity));
+                    polygon(p, 3, r * 0.42, angle, alpha(mix(c, WHITE, 0.55), opacity));
+                    continue;
                 }
                 polygon(p, sides, r + 2.0 * z, angle, alpha(OUTLINE, opacity));
                 polygon(p, sides, r, angle, alpha(c, opacity));

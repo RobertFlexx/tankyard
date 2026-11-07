@@ -36,10 +36,13 @@ impl LocalSession {
         for i in 0..bot_count.min(128) {
             world.add_player(&format!("Vector {:02}", i + 1), true);
         }
+        // Script packs get a fresh sandboxed state every round.
+        let mut mods = tankyard_core::modding::ModRuntime::new(&loaded);
+        tankyard_lua::install(&mut mods, &loaded, world.config.seed)?;
         Ok(Self {
             world,
             bots: BotController::new(Difficulty::Normal),
-            mods: tankyard_core::modding::ModRuntime::new(&loaded),
+            mods,
             bundle: loaded.bundle,
         })
     }
@@ -107,6 +110,7 @@ mod tests {
                 behavior_digest: 0,
             },
             hooks: vec![serde_json::from_str(json).unwrap()],
+            scripts: Default::default(),
         });
         let mut session = LocalSession::with_mods(
             WorldConfig {
@@ -136,6 +140,7 @@ mod tests {
                 behavior_digest: 0,
             },
             hooks: vec![serde_json::from_str(json).unwrap()],
+            scripts: Default::default(),
         });
         let mut session = LocalSession::with_mods(
             WorldConfig {
@@ -150,5 +155,63 @@ mod tests {
         assert!(session.world.tanks[0].vel.x > 0.0);
         assert_eq!(session.world.tanks[0].vel.y, 0.0);
         assert!(!session.world.tanks[0].input.fire);
+    }
+}
+
+#[cfg(test)]
+mod shipped_mods {
+    use super::*;
+
+    /// Every pack in the repository loads together and runs a full bot match
+    /// without a script error.
+    #[test]
+    fn bundled_packs_load_together_and_run_cleanly() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods");
+        let mut paths: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.join("mod.json").is_file())
+            .collect();
+        paths.sort();
+        assert!(paths.len() >= 5, "{paths:?}");
+        for path in &paths {
+            let pack = tankyard_mods::PackFiles::read(path).unwrap();
+            let report = tankyard_mods::scan::scan_pack(&pack);
+            assert_eq!(
+                report.verdict(),
+                tankyard_mods::scan::Verdict::Clean,
+                "{}: {:?}",
+                path.display(),
+                report.findings
+            );
+        }
+        let loaded = tankyard_lua::load(&paths).unwrap();
+        assert!(loaded.bundle.content.class("sprinkler").is_some());
+        assert_eq!(loaded.bundle.mode_name.as_deref(), Some("Bounty Hunt"));
+        for mode in [tankyard_core::Mode::Ffa, tankyard_core::Mode::TwoTeams] {
+            let mut session = LocalSession::with_mods(
+                WorldConfig {
+                    mode,
+                    target_count: 60,
+                    ..Default::default()
+                },
+                10,
+                loaded.clone(),
+            )
+            .unwrap();
+            for _ in 0..(60 * 50) {
+                session.step();
+            }
+            assert!(session.mods.errors.is_empty(), "{:?}", session.mods.errors);
+            assert!(
+                session
+                    .world
+                    .targets
+                    .iter()
+                    .any(|t| t.kind == tankyard_core::TargetKind::Custom(6)),
+                "gravity wells seeded hexagons"
+            );
+        }
     }
 }

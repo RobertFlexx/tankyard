@@ -1,0 +1,9 @@
+{
+  "api_version": 2,
+  "id": "bounty_hunt",
+  "name": "Bounty Hunt",
+  "version": "1.0",
+  "author": "Tank Yard",
+  "description": "The leader carries a bounty: tougher, marked, and worth a fortune.",
+  "scripts": ["main.lua"]
+}

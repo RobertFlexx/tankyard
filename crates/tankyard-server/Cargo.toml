@@ -18,6 +18,7 @@ renet.workspace = true
 renet_netcode.workspace = true
 tankyard-content.workspace = true
 tankyard-mods.workspace = true
+tankyard-lua.workspace = true
 tankyard-core.workspace = true
 tankyard-ai.workspace = true
 tankyard-protocol.workspace = true

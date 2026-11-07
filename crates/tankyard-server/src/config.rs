@@ -27,6 +27,9 @@ pub struct ServerSettings {
     pub bind: String,
     pub public_addresses: Vec<std::net::SocketAddr>,
     pub max_players: usize,
+    /// Human players per arena. Larger populations open more arenas on the
+    /// same port; zero keeps everyone in one arena.
+    pub arena_capacity: usize,
     pub bot_count: usize,
     pub adaptive_bots: bool,
     pub difficulty: Difficulty,
@@ -64,6 +67,7 @@ impl Default for ServerSettings {
             bind: "0.0.0.0:5000".into(),
             public_addresses: vec![],
             max_players: 64,
+            arena_capacity: 0,
             bot_count: 12,
             adaptive_bots: true,
             difficulty: Difficulty::Normal,
@@ -249,6 +253,12 @@ impl ServerSettings {
         {
             return invalid("player/bot limits exceed 128 each or 256 total");
         }
+        if self.arena_capacity != 0
+            && (!(2..=self.max_players).contains(&self.arena_capacity)
+                || self.max_players.div_ceil(self.arena_capacity) > 16)
+        {
+            return invalid("arena_capacity must be 0, or 2 to max_players with at most 16 arenas");
+        }
         if self.password.len() > 128 {
             return invalid("password exceeds 128 bytes");
         }
@@ -307,7 +317,7 @@ impl ServerSettings {
         let maps = if self.mods.is_empty() {
             tankyard_content::builtin_maps()
         } else {
-            tankyard_mods::load(&self.mods)
+            tankyard_lua::load(&self.mods)
                 .map_err(NetError)?
                 .bundle
                 .maps

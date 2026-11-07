@@ -82,6 +82,8 @@ pub struct Effects {
     pub notice_life: f32,
     pub boss_arrival: Option<(tankyard_core::BossKind, f32)>,
     pub arena_scale: Option<f32>,
+    /// Who destroyed the local tank most recently; zero for the arena itself.
+    pub killed_by: Option<EntityId>,
     last_tick: u64,
     random: u64,
 }
@@ -107,6 +109,7 @@ impl Effects {
             notice_life: 0.0,
             boss_arrival: None,
             arena_scale: None,
+            killed_by: None,
             last_tick: 0,
             random: 7919,
         }
@@ -214,6 +217,14 @@ impl Effects {
                     spin: 0.0,
                     spark: false,
                 });
+            }
+            if matches!(event.kind, EventKind::Kill)
+                && event
+                    .elimination
+                    .as_ref()
+                    .is_some_and(|elimination| elimination.victim == local)
+            {
+                self.killed_by = Some(event.subject);
             }
             if matches!(event.kind, EventKind::Kill) && event.subject == local {
                 self.shake = (self.shake + 1.0).min(4.0);

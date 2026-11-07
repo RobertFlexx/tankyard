@@ -15,6 +15,7 @@ mod first_run;
 mod graphics;
 mod hud;
 mod menu;
+mod mod_library;
 mod native_resolution;
 mod notifications;
 mod party_ui;
@@ -92,8 +93,14 @@ struct Cli {
     smoke_frames: Option<u64>,
     #[arg(long)]
     screenshot: Option<String>,
+    /// Open a menu page instead of a game (for screenshots and checks).
+    #[arg(long, hide = true, value_parser = ["main", "mods", "tree", "credits", "settings", "party", "modes", "party-panel", "mods-review"])]
+    page: Option<String>,
     #[arg(long = "mod")]
     mods: Vec<std::path::PathBuf>,
+    /// Load --mod packs even when review flags them (findings are printed).
+    #[arg(long)]
+    accept_mod_risk: bool,
     #[arg(long)]
     connect_token: Option<std::path::PathBuf>,
     #[arg(long)]
@@ -148,6 +155,8 @@ struct App {
     party_copy: Option<clipboard::Request<()>>,
     party_restart: Option<(u32, std::time::Instant)>,
     party_ui: party_ui::PartyUi,
+    /// Draw the party overlay with sample data (screenshot checks only).
+    party_preview: bool,
     creator: creator::CreatorUi,
     central_owner: central_owner::CentralOwner,
     settings: Settings,
@@ -194,6 +203,22 @@ impl App {
                 .iter()
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect();
+            for path in &cli.mods {
+                let entry = mod_library::inspect(path);
+                for finding in &entry.report.findings {
+                    eprintln!(
+                        "{}: {:?} {}:{} {}",
+                        entry.name(),
+                        finding.severity,
+                        finding.file,
+                        finding.line,
+                        finding.message
+                    );
+                }
+                if cli.accept_mod_risk && !entry.approved(&settings) {
+                    settings.approved_mods.push(entry.digest.clone());
+                }
+            }
         }
         if let Some(name) = cli.name {
             settings.player_name = name;
@@ -205,12 +230,9 @@ impl App {
         }
         let mut menu = Menu::new();
         menu.difficulty = settings.bot_difficulty;
-        let paths: Vec<_> = settings
-            .enabled_mods
-            .iter()
-            .map(std::path::PathBuf::from)
-            .collect();
-        match tankyard_mods::load(&paths) {
+        let (paths, held) = mod_library::ready_paths(&settings);
+        menu.error = held.join(" ");
+        match tankyard_lua::load(&paths) {
             Ok(loaded) => {
                 graphics::load(&loaded.bundle.textures, settings.anisotropic_filtering);
                 content = loaded.bundle.content;
@@ -266,6 +288,7 @@ impl App {
             community: community_ui::CommunityUi::default(),
             voice: voice::VoiceChat::new(cli.no_audio),
             party_ui: party_ui::PartyUi::default(),
+            party_preview: false,
             catalog_paths,
         };
         if let Some(id) = cli.practice {
@@ -308,6 +331,18 @@ impl App {
             app.handle(Action::Join);
         } else if cli.host {
             app.handle(Action::Host);
+        } else if let Some(page) = cli.page.as_deref() {
+            app.party_preview = page == "party-panel";
+            app.menu.preview_review = page == "mods-review";
+            app.menu.page = match page {
+                "mods" | "mods-review" => Page::Mods,
+                "tree" => Page::Encyclopedia,
+                "credits" => Page::Credits,
+                "settings" => Page::Settings,
+                "party" => Page::Party,
+                "modes" => Page::Modes,
+                _ => Page::Main,
+            };
         } else if cli.offline || app.smoke.is_some() {
             app.handle(Action::Offline);
         }
@@ -461,12 +496,7 @@ impl App {
                 self.begin_join(CENTRAL_SERVER.into(), String::new(), Page::Main);
             }
             Action::Offline => {
-                let paths: Vec<_> = self
-                    .settings
-                    .enabled_mods
-                    .iter()
-                    .map(std::path::PathBuf::from)
-                    .collect();
+                let paths = self.ready_mods();
                 let attempt = if paths.is_empty() {
                     Ok(Session::offline(
                         self.menu.config(),
@@ -502,17 +532,14 @@ impl App {
                 }
             }
             Action::CreateParty => {
+                let mods = self.ready_mods();
                 match Session::party(
                     self.menu.config(),
                     self.menu.bots.clamp(2, 8),
                     self.menu.offline_level,
                     &self.settings.player_name,
                     self.menu.difficulty_name(),
-                    self.settings
-                        .enabled_mods
-                        .iter()
-                        .map(std::path::PathBuf::from)
-                        .collect(),
+                    mods,
                     self.settings.auto_party_network,
                 ) {
                     Ok(session) => {
@@ -554,18 +581,7 @@ impl App {
                     }
                 }
             }
-            Action::Host => match Session::host(
-                self.menu.config(),
-                self.menu.bots,
-                &self.settings.player_name,
-                &self.menu.password,
-                self.settings
-                    .enabled_mods
-                    .iter()
-                    .map(std::path::PathBuf::from)
-                    .collect(),
-                self.menu.difficulty_name(),
-            ) {
+            Action::Host => match self.host_session() {
                 Ok(session) => {
                     if let session::Engine::Online {
                         host: Some(host), ..
@@ -703,13 +719,8 @@ impl App {
         }
     }
     fn restore_menu(&mut self) {
-        let paths: Vec<_> = self
-            .settings
-            .enabled_mods
-            .iter()
-            .map(std::path::PathBuf::from)
-            .collect();
-        match tankyard_mods::load(&paths) {
+        let paths = self.ready_mods();
+        match tankyard_lua::load(&paths) {
             Ok(loaded) => {
                 self.content = loaded.bundle.content;
                 self.menu.maps = loaded.bundle.maps;
@@ -747,6 +758,40 @@ impl App {
         }) = &mut self.session
         {
             client.party_presence(true);
+        }
+    }
+    fn host_session(&mut self) -> Result<Session, String> {
+        let mods = self.ready_mods();
+        Session::host(
+            self.menu.config(),
+            self.menu.bots,
+            &self.settings.player_name,
+            &self.menu.password,
+            mods,
+            self.menu.difficulty_name(),
+        )
+    }
+    /// Enabled packs that passed review or were confirmed by the player.
+    /// Anything held back is reported on the menu instead of loading.
+    fn ready_mods(&mut self) -> Vec<std::path::PathBuf> {
+        let (ready, held) = mod_library::ready_paths(&self.settings);
+        if !held.is_empty() {
+            self.menu.error = held.join(" ");
+        }
+        ready
+    }
+    /// Archives dropped onto the window are imported and reviewed.
+    fn dropped_files(&mut self) {
+        for file in get_dropped_files() {
+            let result = match (&file.path, &file.bytes) {
+                (Some(path), _) => mod_library::import(path),
+                (None, Some(bytes)) => mod_library::import_bytes(bytes),
+                _ => continue,
+            };
+            self.menu.import_result(result);
+            if self.session.is_none() {
+                self.menu.go(Page::Mods);
+            }
         }
     }
     fn active_party(&self) -> bool {
@@ -1055,6 +1100,53 @@ impl App {
                     })
             })
     }
+    /// Overlays drawn after the HUD or pause menu test the same press as the
+    /// controls underneath them; while one is under the pointer, only it may
+    /// respond. This keeps a click on the party rail from also choosing an
+    /// upgrade or a menu entry beneath it.
+    fn overlay_captures_pointer(&self, s: f32, menu: bool) -> bool {
+        let Some(session) = &self.session else {
+            return false;
+        };
+        let voice = !menu
+            && !self.paused
+            && !self.creator.open
+            && !self.community.admin_open
+            && session.failure.is_none()
+            && session.display.is_some()
+            && self.voice.captures_pointer(s);
+        let session::Engine::Online { client, .. } = &session.engine else {
+            return voice;
+        };
+        let rail = self.active_party()
+            && if menu {
+                self.menu.page == Page::Main
+                    && self
+                        .party_ui
+                        .captures_pointer(client.party_members.len(), s, true, false)
+            } else {
+                !self.paused
+                    && !self.hud.sandbox
+                    && !self.creator.open
+                    && !self.community.admin_open
+                    && self.party_ui.captures_pointer(
+                        client.party_members.len(),
+                        s,
+                        false,
+                        self.hud.evolution,
+                    )
+            };
+        let community = !menu
+            && !self.paused
+            && !self.creator.open
+            && self.community.captures_pointer(
+                client,
+                s,
+                self.creator.enabled(),
+                self.central_owner.enabled(),
+            );
+        voice || rail || community
+    }
     fn show_achievement_toasts(&self) -> bool {
         if self.creator.open {
             return false;
@@ -1071,6 +1163,7 @@ impl App {
             })
     }
     fn update(&mut self, dt: f32, s: f32) {
+        self.dropped_files();
         let party_key = self.party_ui.keys();
         if let Some(result) = self.party_copy.as_ref().and_then(|request| request.poll()) {
             self.party_copy = None;
@@ -1114,12 +1207,8 @@ impl App {
         }
         if self.session.is_none() && self.catalog_paths != self.settings.enabled_mods {
             self.catalog_paths.clone_from(&self.settings.enabled_mods);
-            let paths: Vec<_> = self
-                .catalog_paths
-                .iter()
-                .map(std::path::PathBuf::from)
-                .collect();
-            match tankyard_mods::load(&paths) {
+            let paths = self.ready_mods();
+            match tankyard_lua::load(&paths) {
                 Ok(loaded) => {
                     self.content = loaded.bundle.content;
                     self.menu.maps = loaded.bundle.maps;
@@ -1569,6 +1658,65 @@ impl App {
         }
     }
     fn draw(&mut self, s: f32) {
+        if self.party_preview {
+            render::menu_grid();
+            let members: Vec<_> = [
+                ("Mira", "hive", true, false),
+                ("Pilot", "fork", false, false),
+                ("Kestrel", "lance", false, true),
+                ("Juno", "bulwark", false, false),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(
+                |(n, (name, class, leader, in_menu))| tankyard_protocol::PartyMember {
+                    client: n as u64 + 1,
+                    player: n as u64 + 10,
+                    name: name.into(),
+                    class: class.into(),
+                    leader,
+                    in_menu,
+                },
+            )
+            .collect();
+            let messages: std::collections::VecDeque<_> = [
+                ("Mira", "Welcome! Two Teams on Open, bases are guarded now."),
+                ("Kestrel", "brb grabbing a drink"),
+                (
+                    "Pilot",
+                    "Let's push the left lane together, then rotate to the hill when it moves.",
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(n, (name, text))| tankyard_protocol::ChatMessage {
+                id: n as u64 + 1,
+                room: "lobby".into(),
+                player: 0,
+                name: name.into(),
+                game_creator: false,
+                server_badge: Default::default(),
+                text: text.into(),
+                time: 0,
+            })
+            .collect();
+            let view = party_ui::PartyView {
+                members: &members,
+                me: 2,
+                messages: &messages,
+                revision: 1,
+                chat_enabled: true,
+            };
+            let _ = self.party_ui.panel_view(
+                &view,
+                &self.content,
+                "Internet relay ready · no port forwarding needed. The match runs on your computer.",
+                true,
+                false,
+                s,
+            );
+            return;
+        }
         if self.party_ui.open && self.active_party() {
             render::menu_grid();
             self.draw_party(s);
@@ -1628,6 +1776,9 @@ impl App {
                         _ => false,
                     });
             let menu_scale = s;
+            set_interactive(true);
+            let covered = self.overlay_captures_pointer(s, true);
+            set_interactive(!covered);
             self.menu.party_roster =
                 self.session
                     .as_ref()
@@ -1646,6 +1797,7 @@ impl App {
                 menu_scale,
             );
             self.handle(action);
+            set_interactive(true);
             if self.menu.page == Page::Main
                 && self.active_party()
                 && let Some(Session {
@@ -1698,9 +1850,12 @@ impl App {
         overlays.notice_y += axiom_height;
         overlays.achievement_y += axiom_height;
         let mut actions = Vec::new();
+        set_interactive(true);
+        let covered = self.overlay_captures_pointer(s, false);
         if let Some(session) = &self.session {
             set_interactive(
-                !self.paused
+                !covered
+                    && !self.paused
                     && !self.creator.open
                     && !self.community.focused()
                     && !server_notice.is_some_and(|notice| {
@@ -1751,6 +1906,15 @@ impl App {
                     self.hud.sandbox = false;
                     self.hud.evolution = false;
                 }
+                self.hud.killed_by = self.effects.killed_by;
+                self.hud.palette = tankyard_client::map_model::palette(
+                    session
+                        .bundle
+                        .maps
+                        .iter()
+                        .find(|map| map.id == snapshot.config.map)
+                        .map_or("slate", |map| map.background.as_str()),
+                );
                 actions = self.hud.draw(
                     snapshot,
                     &self.content,
