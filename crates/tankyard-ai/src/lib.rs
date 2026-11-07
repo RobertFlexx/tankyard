@@ -5,16 +5,20 @@
 //! follow the same rules. During a match, bots estimate visible tanks' motion and
 //! adjust spacing after damage, kills, and deaths. Outcome networks influence
 //! legal tank and skill choices. That memory lasts across lives, within a match.
+//! Each bot also has a stable personality and its own verdicts on the classes
+//! it has played, so bots differ in temperament and choices like people do.
 mod learning;
 mod navigation;
 mod neural;
 mod perception;
+mod personality;
 mod policy;
 mod relationships;
 mod tactics;
 
 use navigation::{Navigation, clear_line};
 use perception::{Perception, Seen};
+use personality::Personality;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use tankyard_content::{Ability, ClassDef, ProjectileKind};
@@ -139,6 +143,18 @@ struct Brain {
     parry_timing: f32,
     escape: V2,
     steering: V2,
+    /// Where and when a hostile tank was last seen, so a hurt bot keeps
+    /// backing off briefly after losing sight instead of freezing.
+    last_threat: Option<(V2, u64)>,
+    /// Where something worth doing was last seen, for purposeful roaming.
+    interest: Option<(V2, u64)>,
+    /// Circle-strafe direction around the current target: 1 or -1.
+    orbit: f32,
+    /// Position at the last progress check, for detecting a stuck bot.
+    progress: (V2, u64),
+    stuck_checks: u8,
+    /// A sidestep that frees a stuck bot, until the given tick.
+    unstick: Option<(V2, u64)>,
 }
 
 enum Command {
@@ -322,6 +338,7 @@ impl BotController {
             movement += local_steering(world, tank, class, &self.seen);
             movement += brain.dodge;
             movement += guarded_base_repulsion(world, tank);
+            movement = human_motion(world, tank, class, brain, movement);
             movement = movement.clamp_length(1.);
             let steering_rate: f32 = if brain.danger > 0.75 { 21.0 } else { 7.5 };
             let smoothing = 1.0 - (-steering_rate / 60.0).exp();
@@ -433,6 +450,96 @@ impl BotController {
             world.set_input(id, input);
         }
     }
+}
+
+fn is_melee(class: &ClassDef) -> bool {
+    class.multipliers[2] >= 2.
+        && (class.ai_range < 120.
+            || class
+                .barrels
+                .iter()
+                .all(|barrel| barrel.pattern == tankyard_content::FirePattern::Auto))
+}
+
+/// Movement habits that make a bot read as a person: circle-strafing instead
+/// of parking at range, never standing perfectly still, and noticing when it
+/// is stuck against something and stepping out of it.
+fn human_motion(
+    world: &World,
+    tank: &Tank,
+    class: &ClassDef,
+    brain: &mut Brain,
+    movement: V2,
+) -> V2 {
+    let personality = Personality::of(tank.id);
+    let mut movement = movement;
+    if brain.orbit == 0. {
+        brain.orbit = if noise(tank.id ^ 0x0b17) < 0.5 {
+            -1.
+        } else {
+            1.
+        };
+    }
+    if let Some(target) = brain.target
+        && !is_melee(class)
+        && matches!(
+            brain.state,
+            BotState::Attacking | BotState::BossEngagement | BotState::Farming
+        )
+    {
+        // Reverse now and then on a personal rhythm, so strafes can't be read.
+        let period = 150 + (personality.patience * 210.) as u64 + tank.id % 60;
+        if world
+            .tick
+            .wrapping_add(tank.id.wrapping_mul(13))
+            .is_multiple_of(period)
+            && noise(tank.id ^ world.tick) < 0.6
+        {
+            brain.orbit = -brain.orbit;
+        }
+        let outward = (tank.pos - target.pos).normalized();
+        let tangent = V2::new(-outward.y, outward.x) * brain.orbit;
+        let strength = if brain.state == BotState::Farming {
+            0.3
+        } else {
+            0.45 + personality.aggression * 0.2
+        };
+        movement += tangent * strength * (1. - movement.length() * 0.5).max(0.2);
+    }
+    if movement.length() < 0.12 {
+        // People fidget: a slow, personal drift instead of freezing in place.
+        let phase = world.tick as f32 / 95. + noise(tank.id ^ 0xf1d6) * std::f32::consts::TAU;
+        movement += V2::from_angle(phase) * 0.32;
+    }
+    if world.tick.saturating_sub(brain.progress.1) >= 45 {
+        let moved = tank.pos.distance(brain.progress.0);
+        if tank.input.movement.length() > 0.5 && moved < 22. {
+            brain.stuck_checks = brain.stuck_checks.saturating_add(1);
+            let away = tank.input.movement.normalized() * -1.;
+            let side = V2::new(-away.y, away.x) * brain.orbit;
+            brain.unstick = Some(((away * 0.6 + side).normalized(), world.tick + 40));
+            brain.orbit = -brain.orbit;
+            brain.path.clear();
+            brain.next_path = world.tick;
+            if brain.stuck_checks >= 3 {
+                // This plan isn't working; rethink it instead of grinding.
+                brain.initialized = false;
+                brain.interest = None;
+                brain.stuck_checks = 0;
+            }
+        } else {
+            brain.stuck_checks = 0;
+        }
+        brain.progress = (tank.pos, world.tick);
+    }
+    if let Some((direction, until)) = brain.unstick {
+        if world.tick < until {
+            movement = direction * 0.85 + movement * 0.3;
+        } else {
+            brain.unstick = None;
+        }
+    }
+    movement
 }
 
 fn hostile(team: u8, other: u8) -> bool {
@@ -550,12 +657,20 @@ fn decide(
     brain: &mut Brain,
 ) {
     let health = tank.health / tank.max_health.max(1.);
-    let melee = class.multipliers[2] >= 2.
-        && (class.ai_range < 120.
-            || class
-                .barrels
-                .iter()
-                .all(|barrel| barrel.pattern == tankyard_content::FirePattern::Auto));
+    let personality = Personality::of(tank.id);
+    // Maxed tanks gain little from shapes, so players turn to hunting.
+    let hunger = (f32::from(tank.level) / f32::from(tankyard_core::MAX_LEVEL)).min(1.);
+    let free_for_all = tank.team == 0 || world.config.mode.teams() == 0;
+    // Each bot keeps its own rhythm for changing its mind about where to go.
+    let wander_epoch = world.tick / (200 + tank.id % 120);
+    let teams = world.config.mode.teams();
+    // In team modes, the home base and the enemy base this bot leans toward.
+    let front = (teams > 1 && tank.team > 0).then(|| {
+        let offset = wander_epoch % u64::from(teams - 1);
+        let enemy = 1 + ((u64::from(tank.team) + offset) % u64::from(teams)) as u8;
+        (world.team_home(tank.team), world.team_home(enemy))
+    });
+    let melee = is_melee(class);
     let mut best_target: Option<(f32, TargetSample, BotState)> = None;
     let mut nearest_enemy: Option<(f32, TargetSample)> = None;
     let mut enemy_pressure = 0.;
@@ -626,6 +741,19 @@ fn decide(
                 if !visible {
                     continue;
                 }
+                let peaceful = tank.last_attacker != other.id
+                    || world.tick.saturating_sub(tank.damaged_at) > 600;
+                if free_for_all
+                    && distance < 600.
+                    && peaceful
+                    && brain.target.is_none_or(|target| target.id != other.id)
+                {
+                    brain.learning.relationships.tolerate(
+                        other.id,
+                        personality.sociability,
+                        world.tick,
+                    );
+                }
                 let motion = brain.learning.observe(other.id, other.pos, world.tick);
                 let disposition = brain.learning.relationships.get(other.id, world.tick);
                 pressure *= 1. + disposition.fear * 0.4;
@@ -670,8 +798,11 @@ fn decide(
                     * (1. - disposition.friendship * 0.65);
                 let respect = 1.
                     / (1. + disposition.fear * strength.clamp(0.5, 2.) * (0.65 - boldness * 0.5));
-                let utility = (1.15 + weak * 1.2) * caution * persistence * rivalry * respect
-                    / (1. + distance / 420.);
+                let temperament = (0.8 + personality.aggression * 0.4)
+                    * (1. + hunger * personality.aggression * 0.6);
+                let utility =
+                    (1.15 + weak * 1.2) * caution * persistence * rivalry * respect * temperament
+                        / (1. + distance / 420.);
                 (sample, utility, BotState::Attacking)
             }
             Seen::Target(index) => {
@@ -699,7 +830,17 @@ fn decide(
                 } else {
                     1.0
                 };
-                let utility = (0.4 + efficiency * 0.18) * persistence / (1. + distance / 300.);
+                let mut appetite = 1. - hunger * (0.35 + personality.aggression * 0.4);
+                if let Some((home, enemy)) = front {
+                    // Farm toward the fight, not in the safety of the base.
+                    let across = enemy - home;
+                    let progress = ((target.pos - home).dot(across)
+                        / across.length_squared().max(1.))
+                    .clamp(0., 1.);
+                    appetite *= 0.7 + progress * (0.5 + personality.aggression * 0.5);
+                }
+                let utility =
+                    (0.4 + efficiency * 0.18) * persistence * appetite / (1. + distance / 300.);
                 (
                     TargetSample {
                         id: target.id,
@@ -750,12 +891,32 @@ fn decide(
             best_target = Some((utility, sample, state));
         }
     }
-    let wander_epoch = world.tick / 240;
-    let mut goal = V2::new(
-        100. + noise(tank.id ^ wander_epoch.wrapping_mul(31)) * (world.config.width - 200.),
-        100. + noise(tank.id.wrapping_mul(17) ^ wander_epoch.wrapping_mul(43))
-            * (world.config.height - 200.),
-    );
+    if let Some((_, enemy)) = nearest_enemy {
+        brain.last_threat = Some((enemy.pos, world.tick));
+    }
+    if let Some((_, sample, _)) = best_target {
+        brain.interest = Some((sample.pos, world.tick));
+    }
+    let roam = |salt: u64| noise(tank.id.wrapping_mul(salt) ^ wander_epoch.wrapping_mul(salt));
+    let mut goal = if let Some((spot, _)) = brain.interest.filter(|(spot, seen)| {
+        world.tick.saturating_sub(*seen) < 1500
+            && tank.pos.distance(*spot) > 160.
+            && roam(59) < 0.35 + personality.curiosity * 0.5
+    }) {
+        // Go back to where the action was, as a player would.
+        spot + V2::new(roam(61) - 0.5, roam(67) - 0.5) * 260.
+    } else if let Some((home, enemy)) = front {
+        // Team players drift toward the front line rather than idling at home;
+        // bolder ones push further.
+        let line = home.lerp(enemy, 0.3 + personality.aggression * 0.45);
+        let across = (enemy - home).normalized();
+        line + V2::new(-across.y, across.x) * (roam(71) - 0.5) * world.config.height * 0.6
+    } else {
+        V2::new(
+            100. + roam(31) * (world.config.width - 200.),
+            100. + roam(43) * (world.config.height - 200.),
+        )
+    };
     let mut state = BotState::Exploring;
     let mut priority = 0.06;
     let mut target = best_target.map(|(_, sample, _)| sample);
@@ -772,6 +933,7 @@ fn decide(
                 * (0.9 + noise(tank.id.wrapping_mul(53)) * 0.2)
                 * (1. + (brain.learning.caution - 0.35) * 0.3)
                 * (1. + disposition.fear * 0.22)
+                * (1.08 - personality.aggression * 0.16)
                 + sample.radius)
                 .min(difficulty.perception_radius() * 0.82)
         };
@@ -814,11 +976,25 @@ fn decide(
     let personal_fear = nearest_enemy.map_or(0., |(_, enemy)| {
         brain.learning.relationships.get(enemy.id, world.tick).fear
     });
+    // A bot that keeps losing with this class plays it more carefully.
+    let doubt = brain
+        .learning
+        .build
+        .verdict(class)
+        .map_or(0., |verdict| (-verdict).max(0.) * 0.1);
     let recovering = health
         < difficulty.retreat_health()
             + (brain.learning.caution - 0.35) * 0.12
             + personal_fear * 0.12
-        || (brain.state == BotState::Retreating && health < 0.68);
+            + (0.5 - personality.aggression) * 0.12
+            + doubt
+        || (brain.state == BotState::Retreating && health < 0.68 - personality.aggression * 0.12);
+    // Retreat while a threat is in sight or was seen moments ago. With nobody
+    // around, a hurt bot heals while farming and roaming instead of freezing.
+    let threatened = nearest_enemy.is_some()
+        || brain.last_threat.is_some_and(|(_, seen)| {
+            world.tick.saturating_sub(seen) < 150 + (personality.patience * 90.) as u64
+        });
     let pressure_limit = match difficulty {
         Difficulty::Beginner => f32::INFINITY,
         Difficulty::Normal => 2.2,
@@ -827,9 +1003,7 @@ fn decide(
     };
     let outnumbered =
         nearby_enemies >= 2 && health < 0.85 && enemy_pressure > (1. + support) * pressure_limit;
-    if (recovering && (nearest_enemy.is_some() || brain.state == BotState::Retreating))
-        || outnumbered
-    {
+    if (recovering && threatened) || outnumbered {
         priority = 5.;
         state = if recovering {
             BotState::Retreating
@@ -845,6 +1019,8 @@ fn decide(
                 enemy.pos
             };
             tank.pos + (tank.pos - threat).normalized() * 650.
+        } else if let Some((threat, _)) = brain.last_threat {
+            tank.pos + (tank.pos - threat).normalized() * 500.
         } else {
             brain.goal
         };
@@ -1488,6 +1664,84 @@ fn intercept(origin: V2, position: V2, velocity: V2, speed: f32) -> V2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_hurt_bot_with_nobody_around_keeps_moving_instead_of_camping() {
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::Sandbox,
+                width: 2400.,
+                height: 1800.,
+                target_count: 0,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        let bot = world.add_player("Hurt", true);
+        let tank = world.tanks.iter_mut().find(|tank| tank.id == bot).unwrap();
+        tank.health = tank.max_health * 0.2;
+        let mut bots = BotController::new(Difficulty::Normal);
+        let mut still = 0;
+        let mut travelled = 0.;
+        for _ in 0..1200 {
+            let before = world.tanks[0].pos;
+            bots.update(&mut world);
+            world.step();
+            let step = world.tanks[0].pos.distance(before);
+            travelled += step;
+            if step < 0.3 {
+                still += 1;
+            }
+        }
+        assert!(still < 120, "stood still for {still} of 1200 ticks");
+        assert!(travelled > 1500., "travelled only {travelled}");
+        assert_ne!(bots.state(bot), Some(BotState::Retreating));
+    }
+
+    #[test]
+    fn bots_circle_strafe_their_target_instead_of_parking_at_range() {
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::Sandbox,
+                width: 1600.,
+                height: 1200.,
+                target_count: 0,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        let bot = world.add_player("Strafer", true);
+        let dummy = world.add_player("Dummy", false);
+        world.sandbox_invulnerability(dummy, true);
+        world.sandbox_invulnerability(bot, true);
+        for (id, pos) in [(bot, V2::new(500., 600.)), (dummy, V2::new(800., 600.))] {
+            world
+                .tanks
+                .iter_mut()
+                .find(|tank| tank.id == id)
+                .unwrap()
+                .pos = pos;
+        }
+        let mut bots = BotController::new(Difficulty::Normal);
+        let mut swept = 0.;
+        let mut previous: Option<f32> = None;
+        for _ in 0..900 {
+            bots.update(&mut world);
+            world.step();
+            let (b, d) = (
+                world.tanks.iter().find(|t| t.id == bot).unwrap().pos,
+                world.tanks.iter().find(|t| t.id == dummy).unwrap().pos,
+            );
+            let angle = (b - d).angle();
+            if let Some(previous) = previous {
+                swept += wrapped_angle(angle - previous).abs();
+            }
+            previous = Some(angle);
+        }
+        assert!(swept > 1.5, "swept only {swept} radians around the target");
+    }
+
     #[test]
     fn outbreak_bots_evade_observed_threats_and_patrol_without_hidden_positions() {
         let mut world = World::new(

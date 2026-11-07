@@ -90,6 +90,38 @@ impl Relationships {
         };
     }
 
+    /// Sharing space with someone who doesn't attack slowly builds a wary
+    /// truce, as players in a free-for-all often settle into. It never grows
+    /// past mild trust, so a truce eases targeting without ending all fights,
+    /// and one hit (`hurt_by`) breaks it.
+    pub fn tolerate(&mut self, id: EntityId, sociability: f32, tick: u64) {
+        const TRUCE: f32 = 0.35;
+        if id == 0 || !sociability.is_finite() {
+            return;
+        }
+        let disposition = self.get(id, tick);
+        if disposition.animosity > 0.2 || disposition.fear > 0.15 || disposition.friendship >= TRUCE
+        {
+            return;
+        }
+        let previous_tick = self
+            .people
+            .iter()
+            .find(|p| p.id == id)
+            .map_or(tick.saturating_sub(12), |p| p.tick);
+        let elapsed = tick.saturating_sub(previous_tick).min(30) as f32 / 60.;
+        if elapsed <= 0. {
+            return;
+        }
+        let person = self.remember(id, tick);
+        person.disposition = Disposition {
+            friendship: (disposition.friendship
+                + elapsed * 0.006 * (0.4 + sociability.clamp(0., 1.)))
+            .min(TRUCE),
+            ..disposition
+        };
+    }
+
     fn remember(&mut self, id: EntityId, tick: u64) -> &mut Relationship {
         let index = if let Some(index) = self.people.iter().position(|person| person.id == id) {
             index
@@ -164,5 +196,24 @@ mod tests {
         assert!(betrayed.animosity > 0.15 && betrayed.fear > 0.3);
         memory.cooperate(42, f32::NAN, 3602);
         assert_eq!(memory.get(42, 3602).friendship, 0.);
+    }
+
+    #[test]
+    fn peaceful_neighbours_reach_a_bounded_truce_that_a_hit_breaks() {
+        let mut memory = Relationships::default();
+        for tick in (0..7200).step_by(12) {
+            memory.tolerate(7, 0.8, tick);
+        }
+        let truce = memory.get(7, 7200).friendship;
+        assert!(truce > 0.3 && truce <= 0.35);
+        memory.hurt_by(7, 0.3, false, 7201);
+        assert!(memory.get(7, 7201).friendship < 0.1);
+        for tick in (7202..9000).step_by(12) {
+            memory.tolerate(7, 0.8, tick);
+        }
+        assert!(
+            memory.get(7, 9000).friendship < 0.1,
+            "wariness blocks a new truce"
+        );
     }
 }

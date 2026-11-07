@@ -48,7 +48,20 @@ pub struct BuildLearning {
     outcomes: u32,
     class_outcomes: u32,
     players: Vec<VisiblePlayer>,
+    /// This bot's own verdict on each class it has played: a running mean of
+    /// its results with that class. Unlike the shared-shape network, this is
+    /// personal: one bot can sour on a branch another bot loves.
+    verdicts: Vec<Verdict>,
 }
+
+#[derive(Clone, Copy)]
+struct Verdict {
+    class_key: u64,
+    mean: f32,
+    samples: u16,
+}
+
+const VERDICT_LIMIT: usize = 24;
 
 fn class_key(class: &ClassDef) -> u64 {
     class.id.bytes().fold(0xcbf29ce484222325, |key, byte| {
@@ -96,6 +109,7 @@ impl BuildLearning {
         // Reuse trained weights, not per-player sightings or reward windows.
         self.classes = previous.classes.clone();
         self.builds = previous.builds.clone();
+        self.verdicts = previous.verdicts.clone();
     }
     /// Learn class traits from a human only while that person stays visible.
     /// Hidden gaps discard the sample; private skill allocations are not copied.
@@ -181,7 +195,9 @@ impl BuildLearning {
                         reward,
                         ..previous.experience
                     };
+                    let class_key = previous.class_key;
                     self.record(experience, tick);
+                    self.judge(class_key, reward);
                 }
             }
         }
@@ -217,6 +233,34 @@ impl BuildLearning {
         }
     }
 
+    fn judge(&mut self, class_key: u64, reward: f32) {
+        if let Some(verdict) = self.verdicts.iter_mut().find(|v| v.class_key == class_key) {
+            verdict.samples = verdict.samples.saturating_add(1);
+            // Recent lives count more than the first impression.
+            let rate = (1. / f32::from(verdict.samples)).max(0.15);
+            verdict.mean += (reward - verdict.mean) * rate;
+            return;
+        }
+        if self.verdicts.len() == VERDICT_LIMIT {
+            self.verdicts.remove(0);
+        }
+        self.verdicts.push(Verdict {
+            class_key,
+            mean: reward,
+            samples: 1,
+        });
+    }
+
+    /// How well this class has worked for this bot, from -1 to 1, once it
+    /// has enough experience with it to have an opinion.
+    pub fn verdict(&self, class: &ClassDef) -> Option<f32> {
+        let key = class_key(class);
+        self.verdicts
+            .iter()
+            .find(|v| v.class_key == key && v.samples >= 3)
+            .map(|v| v.mean.clamp(-1., 1.))
+    }
+
     fn train(&mut self, experience: Experience) {
         self.classes.train(experience.class, [experience.reward]);
         self.builds.train(experience.build, [experience.reward]);
@@ -234,7 +278,11 @@ impl BuildLearning {
         if noise(life ^ 0xe771) < 0.12 {
             return preference;
         }
+        // A personal verdict outweighs the general model: a bot that keeps
+        // losing with a branch takes another path next life.
+        let personal = self.verdict(candidate).map_or(0., |verdict| verdict * 0.6);
         preference
+            + personal
             + self.classes.predict(class_features(candidate))[0]
                 * (self.class_outcomes as f32 / 24.).min(1.)
                 * 0.45
@@ -259,6 +307,42 @@ mod tests {
     use super::*;
     use tankyard_content::Content;
     use tankyard_core::{World, WorldConfig};
+
+    #[test]
+    fn a_bot_takes_another_path_after_its_own_bad_experiences() {
+        let content = Content::builtin();
+        let mut world = World::new(WorldConfig::default(), Content::builtin());
+        world.add_player("Learner", true);
+        let tank = &mut world.tanks[0];
+        let (good, bad) = (
+            content.class("anchor").unwrap(),
+            content.class("hive").unwrap(),
+        );
+        let mut learning = BuildLearning::default();
+        learning.judge(class_key(bad), -0.8);
+        assert_eq!(learning.verdict(bad), None, "one life is not an opinion");
+        for _ in 0..4 {
+            learning.judge(class_key(bad), -0.8);
+            learning.judge(class_key(good), 0.6);
+        }
+        assert!(learning.verdict(bad).unwrap() < -0.6);
+        assert!(learning.verdict(good).unwrap() > 0.5);
+        // Most lives follow the verdict; a few still explore other branches.
+        let followed = (0..40)
+            .filter(|&deaths| {
+                tank.deaths = deaths;
+                learning.class_score(tank, good) > learning.class_score(tank, bad)
+            })
+            .count();
+        assert!(
+            followed >= 30,
+            "followed its verdict in {followed} of 40 lives"
+        );
+        for key in 0..VERDICT_LIMIT as u64 * 2 {
+            learning.judge(key, 0.);
+        }
+        assert!(learning.verdicts.len() <= VERDICT_LIMIT);
+    }
 
     #[test]
     fn own_outcomes_train_models_idle_time_does_not_and_memory_stays_bounded() {
