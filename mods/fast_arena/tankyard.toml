@@ -1,0 +1,17 @@
+# Storefront details shown on the Mods page. Gameplay lives in mod.json.
+[mod]
+name = "Fast Arena"
+version = "1.0"
+description = "Quicker tanks, faster levelling and two-second respawns for short, frantic rounds."
+license = "MIT"
+icon = "icon.svg"
+tags = ["rules", "fast"]
+
+[creator]
+name = "Tank Yard"
+url = "https://github.com/RobertFlexx/tankyard"
+
+[links]
+source = "https://github.com/RobertFlexx/tankyard/tree/main/mods/fast_arena"
+download = "https://github.com/RobertFlexx/tankyard/releases/latest"
+issues = "https://github.com/RobertFlexx/tankyard/issues"

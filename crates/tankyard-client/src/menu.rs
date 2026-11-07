@@ -6,7 +6,7 @@ use crate::ui::{
 use crate::ui_layout::height as screen_height;
 use crate::{
     render,
-    settings::{CENTRAL_SERVER, Settings, bindable_pressed},
+    settings::{Settings, bindable_pressed},
     ui::*,
 };
 use macroquad::prelude::*;
@@ -21,12 +21,14 @@ const DISPLAY_RESOLUTION_ROW: f32 = 30.0;
 const DISPLAY_RESOLUTION_STEP: f32 = 33.0;
 const DISPLAY_FRAME_LABEL: f32 = 215.0;
 const DISPLAY_FRAME_ROW: f32 = 226.0;
-const DISPLAY_AA_LABEL: f32 = 287.0;
-const DISPLAY_AA_ROW: f32 = 298.0;
-const DISPLAY_SHAPE_LABEL: f32 = 356.0;
-const DISPLAY_SHAPE_ROW: f32 = 367.0;
-const DISPLAY_TEXTURE_LABEL: f32 = 425.0;
-const DISPLAY_TEXTURE_ROW: f32 = 436.0;
+// The Graphics tab's right column.
+const GRAPHICS_AA_LABEL: f32 = 19.0;
+const GRAPHICS_AA_ROW: f32 = 30.0;
+const GRAPHICS_SHAPE_LABEL: f32 = 86.0;
+const GRAPHICS_SHAPE_ROW: f32 = 99.0;
+const GRAPHICS_TEXTURE_LABEL: f32 = 152.0;
+const GRAPHICS_TEXTURE_ROW: f32 = 163.0;
+const GRAPHICS_TEXTURE_NOTE: f32 = 213.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -63,6 +65,11 @@ pub enum Action {
     ResetSettings,
     PreviewAlarm,
     Practice(usize),
+    /// Join the main server, in this lobby.
+    JoinLobby(u8),
+    StartCommunity,
+    StopCommunity,
+    JoinCommunity,
 }
 pub struct Menu {
     pub page: Page,
@@ -87,6 +94,13 @@ pub struct Menu {
     pub name_active: bool,
     pub address_active: bool,
     pub password_active: bool,
+    /// The Host page shows the dedicated community server.
+    host_community: bool,
+    community_fields: [bool; 3],
+    community_port: String,
+    pub dedicated: crate::hosting::Dedicated,
+    /// Why world post-processing fell back to bilinear, if it did.
+    pub post_error: Option<String>,
     pub class_index: usize,
     pub tree: bool,
     tree_view: crate::tank_tree::Tree,
@@ -108,6 +122,9 @@ pub struct Menu {
     mod_review: Option<usize>,
     mod_trust: bool,
     mod_scroll: usize,
+    /// The pack shown in the Mods page's detail pane.
+    mod_selected: usize,
+    mod_icons: std::collections::HashMap<String, Texture2D>,
     /// Open the first flagged pack's review (screenshot checks only).
     pub preview_review: bool,
     map_page: usize,
@@ -117,6 +134,11 @@ pub struct Menu {
     pub offline_level: u8,
     dynamic_arena: bool,
     server_browser: crate::server_browser::ServerBrowser,
+    /// Live status of servers shown in menus.
+    pub servers: crate::server_status::Monitor,
+    lobbies_open: bool,
+    lobbies_open_amount: f32,
+    lobby_scroll: f32,
 }
 impl Menu {
     pub fn new() -> Self {
@@ -143,6 +165,11 @@ impl Menu {
             name_active: false,
             address_active: false,
             password_active: false,
+            host_community: false,
+            community_fields: [false; 3],
+            community_port: String::new(),
+            dedicated: Default::default(),
+            post_error: None,
             class_index: 0,
             tree: true,
             tree_view: crate::tank_tree::Tree::default(),
@@ -164,6 +191,8 @@ impl Menu {
             mod_review: None,
             mod_trust: false,
             mod_scroll: 0,
+            mod_selected: 0,
+            mod_icons: Default::default(),
             preview_review: false,
             map_page: 0,
             history: Vec::new(),
@@ -172,6 +201,10 @@ impl Menu {
             offline_level: 1,
             dynamic_arena: true,
             server_browser: crate::server_browser::ServerBrowser::default(),
+            servers: Default::default(),
+            lobbies_open: false,
+            lobbies_open_amount: 0.0,
+            lobby_scroll: 0.0,
         }
     }
     pub fn clear_focus(&mut self) {
@@ -352,6 +385,7 @@ impl Menu {
         if is_key_pressed(KeyCode::Tab) && self.binding.is_none() {
             self.focus_next(is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift));
         }
+        self.servers.poll(get_time());
         self.motion_time = if settings.reduced_motion {
             0.0
         } else {
@@ -535,7 +569,11 @@ impl Menu {
         let center = w * 0.5;
         let pane_w = (510.0 * s).min(w - 48.0 * s);
         let x = center - pane_w * 0.5;
-        let y = (h * 0.23).max(139.0 * s);
+        // The lobby list opens inline, so the page shifts up by part of its
+        // height instead of the list covering the buttons below it.
+        let lobbies = self.lobby_rows();
+        let drop = self.lobbies_open_amount * lobby_list_height(lobbies, s);
+        let y = ((h * 0.23).max(139.0 * s) - drop * 0.45).max(160.0 * s);
         let row_h = 44.0 * s;
         // A small preview gives the menu life without overlaying its controls.
         if let Some(basic) = content.class("vector") {
@@ -560,16 +598,12 @@ impl Menu {
             false,
         );
         label("MAIN SERVER", x, y + 102.0 * s, 13.0 * s, muted_color());
-        panel(Rect::new(x, y + 113.0 * s, pane_w, 48.0 * s));
-        draw_rectangle(x, y + 113.0 * s, 4.0 * s, 48.0 * s, CYAN);
-        label(
-            CENTRAL_SERVER,
-            x + 17.0 * s,
-            y + 144.0 * s,
-            20.0 * s,
-            text_color(),
-        );
-        let play_y = y + 190.0 * s;
+        let card = Rect::new(x, y + 113.0 * s, pane_w, 48.0 * s);
+        if let Some(action) = self.central_card(card, drop, s) {
+            let _ = settings.save();
+            return action;
+        }
+        let play_y = y + 190.0 * s + drop;
         if button(
             Rect::new(x, play_y, pane_w - 162.0 * s, 55.0 * s),
             if self.party_active {
@@ -716,6 +750,503 @@ impl Menu {
         bastion_badge(pane, self.motion_time, s);
         Action::None
     }
+    /// The community server: its settings while stopped, then its live
+    /// status, address and console while it runs.
+    fn community_panel(&mut self, settings: &mut Settings, rect: Rect, s: f32) -> Option<Action> {
+        use crate::server_status::{State, quality};
+        panel(rect);
+        let px = rect.x + 22.0 * s;
+        let pw = rect.w - 44.0 * s;
+        let mut y = rect.y + 36.0 * s;
+        self.dedicated.poll();
+        let server = &mut settings.community_server;
+        if !self.dedicated.running() {
+            label("COMMUNITY SERVER", px, y, 15.0 * s, CYAN);
+            if let Some(reason) = &self.dedicated.stopped {
+                right_label(
+                    &fitted_label(reason, 12.0 * s, pw * 0.55),
+                    px + pw,
+                    y,
+                    12.0 * s,
+                    muted_color(),
+                );
+            }
+            y += 30.0 * s;
+            label("SERVER NAME", px, y, 12.0 * s, muted_color());
+            text_field(
+                Rect::new(px, y + 8.0 * s, pw, 38.0 * s),
+                &mut server.name,
+                &mut self.community_fields[0],
+                48,
+                s * 0.9,
+                false,
+            );
+            y += 64.0 * s;
+            label("UDP PORT", px, y, 12.0 * s, muted_color());
+            if !self.community_fields[1] {
+                self.community_port = server.port.to_string();
+            }
+            text_field(
+                Rect::new(px, y + 8.0 * s, 120.0 * s, 38.0 * s),
+                &mut self.community_port,
+                &mut self.community_fields[1],
+                5,
+                s * 0.9,
+                false,
+            );
+            self.community_port.retain(|c| c.is_ascii_digit());
+            if let Ok(port) = self.community_port.parse::<u16>() {
+                server.port = port.max(1024);
+            }
+            wrap(
+                "Forward this UDP port on your router for internet players.",
+                px + 136.0 * s,
+                y + 22.0 * s,
+                pw - 136.0 * s,
+                14.0 * s,
+                muted_color(),
+            );
+            y += 52.0 * s;
+            let mut value = f32::from(server.max_players);
+            slider_value(
+                Rect::new(px, y, pw, 50.0 * s),
+                "Max players",
+                &mut value,
+                [2., 128.],
+                1.,
+                s,
+                |v| format!("{v:.0}"),
+            );
+            server.max_players = value as u16;
+            y += 50.0 * s;
+            let mut value = f32::from(server.lobby_size);
+            slider_value(
+                Rect::new(px, y, pw, 50.0 * s),
+                "Lobby size",
+                &mut value,
+                [0., 64.],
+                1.,
+                s,
+                |v| {
+                    if v < 1. {
+                        "One lobby".into()
+                    } else {
+                        format!("{v:.0} per lobby")
+                    }
+                },
+            );
+            server.lobby_size = value as u16;
+            y += 50.0 * s;
+            let mut value = f32::from(server.bots);
+            slider_value(
+                Rect::new(px, y, pw, 50.0 * s),
+                "Bots per lobby",
+                &mut value,
+                [0., 48.],
+                1.,
+                s,
+                |v| format!("{v:.0}"),
+            );
+            server.bots = value as u16;
+            y += 58.0 * s;
+            server.clean();
+            let mods = settings.enabled_mods.len();
+            wrap(
+                &format!(
+                    "{} enabled mod{} will load on the server. Players download nothing; mods run on the server.",
+                    mods,
+                    if mods == 1 { "" } else { "s" }
+                ),
+                px,
+                y,
+                pw,
+                14.0 * s,
+                muted_color(),
+            );
+            if small_button(
+                Rect::new(px, rect.bottom() - 44.0 * s, pw, 28.0 * s),
+                "Copy command for an always-on machine",
+                s * 0.7,
+            ) {
+                let saved =
+                    crate::hosting::settings(server, self.config(), vec![], self.difficulty_name())
+                        .and_then(|config| {
+                            std::fs::create_dir_all(crate::hosting::server_dir())
+                                .map_err(|e| e.to_string())?;
+                            config
+                                .save(crate::hosting::config_path())
+                                .map_err(|e| e.to_string())
+                        });
+                match saved {
+                    Ok(()) => {
+                        drop(crate::clipboard::copy(&crate::hosting::start_command()));
+                        self.info = "Saved the server config and copied its start command.".into();
+                    }
+                    Err(error) => self.error = error,
+                }
+            }
+            return None;
+        }
+        let local = format!("127.0.0.1:{}", self.dedicated.port);
+        self.servers.watch_every(&local, get_time(), 2.0);
+        let state = self.servers.state(&local).cloned();
+        label("COMMUNITY SERVER", px, y, 15.0 * s, CYAN);
+        let pulse = if matches!(state, Some(State::Online(_))) {
+            SIGNAL_GOOD
+        } else {
+            SIGNAL_FAIR
+        };
+        draw_circle(px + pw - 60.0 * s, y - 5.0 * s, 4.0 * s, pulse);
+        label(
+            if matches!(state, Some(State::Online(_))) {
+                "Online"
+            } else {
+                "Starting"
+            },
+            px + pw - 50.0 * s,
+            y,
+            13.0 * s,
+            text_color(),
+        );
+        y += 30.0 * s;
+        if let Some(State::Online(probe)) = &state {
+            label(
+                &fitted_label(&probe.status.name, 20.0 * s, pw),
+                px,
+                y,
+                20.0 * s,
+                text_color(),
+            );
+            y += 24.0 * s;
+            let connection = self.servers.connection(&local);
+            let summary = format!(
+                "{}/{} players  ·  {} lobb{}  ·  {}",
+                probe.status.players,
+                probe.status.max_players,
+                probe.status.lobbies.len(),
+                if probe.status.lobbies.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                },
+                if probe.status.mods.is_empty() {
+                    "no mods".to_owned()
+                } else {
+                    probe.status.mods.join(", ")
+                }
+            );
+            label(
+                &fitted_label(&summary, 13.0 * s, pw - 90.0 * s),
+                px,
+                y,
+                13.0 * s,
+                muted_color(),
+            );
+            signal(
+                px + pw - 80.0 * s,
+                y,
+                connection.map(|(r, l)| quality(r, l)),
+                connection.map(|c| c.0),
+                s,
+            );
+        } else {
+            label(
+                "Waiting for the server to answer…",
+                px,
+                y,
+                15.0 * s,
+                muted_color(),
+            );
+            y += 24.0 * s;
+        }
+        y += 28.0 * s;
+        label("PLAYERS JOIN WITH", px, y, 12.0 * s, muted_color());
+        y += 24.0 * s;
+        let address = crate::hosting::lan_address(self.dedicated.port)
+            .unwrap_or_else(|| format!("your-ip:{}", self.dedicated.port));
+        label(&address, px, y, 19.0 * s, text_color());
+        if small_button(
+            Rect::new(px + pw - 150.0 * s, y - 20.0 * s, 70.0 * s, 28.0 * s),
+            "Copy",
+            s * 0.7,
+        ) {
+            drop(crate::clipboard::copy(&address));
+            self.info = "Server address copied.".into();
+        }
+        if small_button(
+            Rect::new(px + pw - 74.0 * s, y - 20.0 * s, 74.0 * s, 28.0 * s),
+            "Join",
+            s * 0.7,
+        ) {
+            return Some(Action::JoinCommunity);
+        }
+        y += 18.0 * s;
+        label(
+            "Local network address. Internet players use your public IP with the same port.",
+            px,
+            y,
+            11.0 * s,
+            muted_color(),
+        );
+        y += 14.0 * s;
+        let console = Rect::new(px, y, pw, rect.bottom() - y - 16.0 * s);
+        draw_rectangle(
+            console.x,
+            console.y,
+            console.w,
+            console.h,
+            alpha(bg_color(), 0.6),
+        );
+        let _clip = crate::ui_layout::Scissor::new(console);
+        let line_h = 15.0 * s;
+        let lines = self.dedicated.log();
+        let visible = ((console.h - 8.0 * s) / line_h).floor().max(0.0) as usize;
+        for (i, line) in lines
+            .iter()
+            .skip(lines.len().saturating_sub(visible))
+            .enumerate()
+        {
+            label(
+                &fitted_label(line, 11.0 * s, console.w - 16.0 * s),
+                console.x + 8.0 * s,
+                console.y + 15.0 * s + i as f32 * line_h,
+                11.0 * s,
+                text_color(),
+            );
+        }
+        None
+    }
+
+    /// Open the main server's lobby list, as if its card were clicked.
+    pub fn open_community(&mut self) {
+        self.host_community = true;
+    }
+
+    pub fn open_lobbies(&mut self) {
+        self.lobbies_open = true;
+        self.lobbies_open_amount = 1.0;
+    }
+
+    /// Rows the lobby list needs: one per lobby, or one status message.
+    fn lobby_rows(&self) -> usize {
+        match self.servers.state(crate::settings::main_server()) {
+            Some(crate::server_status::State::Online(probe)) => probe.status.lobbies.len().max(1),
+            _ => 1,
+        }
+    }
+
+    /// The main server card: population and connection at a glance; a click
+    /// opens the lobby list below it.
+    fn central_card(&mut self, card: Rect, drop: f32, s: f32) -> Option<Action> {
+        use crate::server_status::{State, quality};
+        let now = get_time();
+        // Keep the card current; refresh faster while the list is open.
+        self.servers.watch_every(
+            crate::settings::main_server(),
+            now,
+            if self.lobbies_open { 4. } else { 15. },
+        );
+        let hovered = contains(card);
+        panel(card);
+        if hovered {
+            draw_rectangle(card.x, card.y, card.w, card.h, alpha(hover_color(), 0.55));
+        }
+        draw_rectangle(card.x, card.y, 4.0 * s, card.h, CYAN);
+        let state = self.servers.state(crate::settings::main_server()).cloned();
+        let connection = self.servers.connection(crate::settings::main_server());
+        // Chevron, then the signal, right-aligned.
+        let chevron_x = card.right() - 22.0 * s;
+        let chevron_y = card.y + card.h * 0.5;
+        let turn = self.lobbies_open_amount * std::f32::consts::PI;
+        let (sin, cos) = turn.sin_cos();
+        let point = |dx: f32, dy: f32| {
+            vec2(
+                chevron_x + dx * cos - dy * sin,
+                chevron_y + dx * sin + dy * cos,
+            )
+        };
+        draw_line(
+            point(-5.0 * s, -2.5 * s).x,
+            point(-5.0 * s, -2.5 * s).y,
+            point(0., 2.5 * s).x,
+            point(0., 2.5 * s).y,
+            2.0 * s,
+            muted_color(),
+        );
+        draw_line(
+            point(0., 2.5 * s).x,
+            point(0., 2.5 * s).y,
+            point(5.0 * s, -2.5 * s).x,
+            point(5.0 * s, -2.5 * s).y,
+            2.0 * s,
+            muted_color(),
+        );
+        let (bars, rtt, population) = match &state {
+            Some(State::Online(probe)) => (
+                Some(connection.map_or(0, |(rtt, loss)| quality(rtt, loss))),
+                connection.map(|c| c.0),
+                Some(format!("{} online", probe.status.players)),
+            ),
+            Some(State::Offline(_)) => (Some(0), None, None),
+            _ => (None, None, None),
+        };
+        let signal_x = chevron_x - 88.0 * s;
+        signal(signal_x, card.y + 31.0 * s, bars, rtt, s);
+        let mut name_right = signal_x - 12.0 * s;
+        if let Some(population) = &population {
+            right_label(
+                population,
+                name_right,
+                card.y + 30.0 * s,
+                13.0 * s,
+                muted_color(),
+            );
+            name_right -= label_width(population, 13.0 * s) + 12.0 * s;
+        }
+        label(
+            &fitted_label(
+                crate::settings::main_server(),
+                20.0 * s,
+                name_right - card.x - 17.0 * s,
+            ),
+            card.x + 17.0 * s,
+            card.y + 31.0 * s,
+            20.0 * s,
+            text_color(),
+        );
+        if hovered && is_mouse_button_pressed(MouseButton::Left) {
+            self.lobbies_open = !self.lobbies_open;
+            if self.lobbies_open {
+                self.lobby_scroll = 0.0;
+                self.servers.refresh(crate::settings::main_server());
+            }
+        }
+        ease_toward(
+            &mut self.lobbies_open_amount,
+            if self.lobbies_open { 1.0 } else { 0.0 },
+            14.0,
+        );
+        if drop < 1.0 {
+            return None;
+        }
+        let area = Rect::new(card.x, card.bottom() + 4.0 * s, card.w, drop - 4.0 * s);
+        let _clip = crate::ui_layout::Scissor::new(area);
+        panel(Rect::new(
+            area.x,
+            area.y,
+            area.w,
+            lobby_list_height(self.lobby_rows(), s) - 4.0 * s,
+        ));
+        let row_h = LOBBY_ROW * s;
+        let inner = Rect::new(area.x, area.y + 4.0 * s, area.w, area.h - 8.0 * s);
+        let lobbies = match &state {
+            Some(State::Online(probe)) if !probe.status.lobbies.is_empty() => &probe.status.lobbies,
+            Some(State::Online(_)) => {
+                label(
+                    "No lobbies are open yet. Play starts one.",
+                    inner.x + 17.0 * s,
+                    inner.y + 20.0 * s,
+                    14.0 * s,
+                    muted_color(),
+                );
+                return None;
+            }
+            Some(State::Offline(error)) => {
+                label(
+                    &fitted_label(error, 13.0 * s, inner.w - 34.0 * s),
+                    inner.x + 17.0 * s,
+                    inner.y + 20.0 * s,
+                    13.0 * s,
+                    RED,
+                );
+                return None;
+            }
+            _ => {
+                label(
+                    "Checking lobbies…",
+                    inner.x + 17.0 * s,
+                    inner.y + 20.0 * s,
+                    14.0 * s,
+                    muted_color(),
+                );
+                return None;
+            }
+        };
+        let content = lobbies.len() as f32 * row_h;
+        let max_scroll = (content - inner.h).max(0.0);
+        if contains(area) {
+            self.lobby_scroll -= mouse_wheel().1.clamp(-1.0, 1.0) * row_h;
+        }
+        self.lobby_scroll = self.lobby_scroll.clamp(0.0, max_scroll);
+        let mut chosen = None;
+        for (index, lobby) in lobbies.iter().enumerate() {
+            let ry = inner.y + index as f32 * row_h - self.lobby_scroll;
+            if ry + row_h < inner.y || ry > inner.bottom() {
+                continue;
+            }
+            let row = Rect::new(
+                inner.x + 6.0 * s,
+                ry,
+                inner.w - 12.0 * s - if max_scroll > 0.0 { 8.0 * s } else { 0.0 },
+                row_h - 3.0 * s,
+            );
+            let full = lobby.capacity > 0 && lobby.humans >= lobby.capacity;
+            let over = contains(row) && contains(inner) && !full;
+            if over {
+                draw_rectangle(row.x, row.y, row.w, row.h, alpha(hover_color(), 0.8));
+            }
+            label(
+                &format!("Lobby {}", index + 1),
+                row.x + 11.0 * s,
+                row.y + 19.0 * s,
+                15.0 * s,
+                text_color(),
+            );
+            let meter_w = 64.0 * s;
+            let meter_x = row.right() - meter_w - 54.0 * s;
+            let detail = format!("{} · {}", lobby.mode, lobby.map);
+            label(
+                &fitted_label(&detail, 12.0 * s, meter_x - row.x - 94.0 * s),
+                row.x + 84.0 * s,
+                row.y + 18.0 * s,
+                12.0 * s,
+                muted_color(),
+            );
+            let ratio = if lobby.capacity == 0 {
+                0.0
+            } else {
+                f32::from(lobby.humans) / f32::from(lobby.capacity)
+            };
+            progress(
+                Rect::new(meter_x, row.y + 10.0 * s, meter_w, 6.0 * s),
+                ratio,
+                if full { RED } else { CYAN },
+            );
+            right_label(
+                &if full {
+                    "Full".to_owned()
+                } else {
+                    format!("{}/{}", lobby.humans, lobby.capacity)
+                },
+                row.right() - 10.0 * s,
+                row.y + 18.0 * s,
+                13.0 * s,
+                if full { RED } else { text_color() },
+            );
+            if over && is_mouse_button_pressed(MouseButton::Left) {
+                chosen = Some(index as u8);
+            }
+        }
+        if max_scroll > 0.0 {
+            let track = Rect::new(inner.right() - 7.0 * s, inner.y, 3.0 * s, inner.h);
+            draw_rectangle(track.x, track.y, track.w, track.h, alpha(line_color(), 0.6));
+            let thumb = (inner.h / content * inner.h).max(16.0 * s);
+            let at = self.lobby_scroll / max_scroll * (inner.h - thumb);
+            draw_rectangle(track.x, track.y + at, track.w, thumb, muted_color());
+        }
+        chosen.map(Action::JoinLobby)
+    }
+
     fn modes(&mut self, _settings: &mut Settings, s: f32) -> Action {
         let x = 40.0 * s;
         let y = 152.0 * s;
@@ -1434,6 +1965,30 @@ impl Menu {
             25.0 * s,
             text_color(),
         );
+        if host {
+            let tab_w = 136.0 * s;
+            for (i, (title, community)) in [("Host & play", false), ("Community server", true)]
+                .into_iter()
+                .enumerate()
+            {
+                if button(
+                    Rect::new(
+                        x + width - (2 - i) as f32 * (tab_w + 6.0 * s) + 6.0 * s,
+                        y - 22.0 * s,
+                        tab_w,
+                        30.0 * s,
+                    ),
+                    title,
+                    self.host_community == community,
+                    true,
+                    s * 0.75,
+                ) {
+                    self.host_community = community;
+                    self.clear_focus();
+                }
+            }
+        }
+        let community = host && self.host_community;
         label("PLAYER NAME", x, y + 42.0 * s, 13.0 * s, muted_color());
         text_field(
             Rect::new(x, y + 53.0 * s, width, 44.0 * s),
@@ -1444,7 +1999,9 @@ impl Menu {
             false,
         );
         label(
-            if host {
+            if community {
+                "SERVER PASSWORD  (optional)"
+            } else if host {
                 "HOST PASSWORD  (optional)"
             } else {
                 "SERVER ADDRESS  /  IP:PORT"
@@ -1457,7 +2014,11 @@ impl Menu {
         if host {
             text_field(
                 Rect::new(x, y + 140.0 * s, width, 44.0 * s),
-                &mut self.password,
+                if community {
+                    &mut settings.community_server.password
+                } else {
+                    &mut self.password
+                },
                 &mut self.password_active,
                 64,
                 s,
@@ -1465,11 +2026,18 @@ impl Menu {
             );
             label(self.mode.name(), x, y + 219.0 * s, 24.0 * s, CYAN);
             label(
-                &format!(
-                    "{} bot limit  ·  {}  ·  UDP port 5000",
-                    self.bots,
-                    self.difficulty_name()
-                ),
+                &if community {
+                    format!(
+                        "{}  ·  rotation and rules from Configure arena",
+                        self.difficulty_name()
+                    )
+                } else {
+                    format!(
+                        "{} bot limit  ·  {}  ·  UDP port 5000",
+                        self.bots,
+                        self.difficulty_name()
+                    )
+                },
                 x,
                 y + 248.0 * s,
                 18.0 * s,
@@ -1483,7 +2051,11 @@ impl Menu {
                 return Action::Page(Page::Modes);
             }
             wrap(
-                "For LAN games, share your local IP. For internet games, share your public IP and forward UDP port 5000.",
+                if community {
+                    "A community server runs on its own, stays up while you play anywhere, and lists its lobbies, players and mods to everyone who saves it."
+                } else {
+                    "For LAN games, share your local IP. For internet games, share your public IP and forward UDP port 5000."
+                },
                 x,
                 y + 341.0 * s,
                 width,
@@ -1538,7 +2110,13 @@ impl Menu {
         }
         let rx = x + width + 48.0 * s;
         let rw = screen_width() - rx - 40.0 * s;
-        if host {
+        if community {
+            if let Some(action) =
+                self.community_panel(settings, Rect::new(rx, y - 16.0 * s, rw, 438.0 * s), s)
+            {
+                return action;
+            }
+        } else if host {
             panel(Rect::new(rx, y - 16.0 * s, rw, 438.0 * s));
             label(
                 "SERVER DETAILS",
@@ -1577,27 +2155,40 @@ impl Menu {
                 18.0 * s,
                 muted_color(),
             );
-        } else if let Err(error) =
-            self.server_browser
-                .draw(settings, Rect::new(rx, y - 16.0 * s, rw, 438.0 * s), s)
-        {
+        } else if let Err(error) = self.server_browser.draw(
+            settings,
+            &mut self.servers,
+            Rect::new(rx, y - 16.0 * s, rw, 438.0 * s),
+            s,
+        ) {
             self.error = error;
         }
+        let running = self.dedicated.running();
+        let primary = if community && running {
+            Action::StopCommunity
+        } else if community {
+            Action::StartCommunity
+        } else if host {
+            Action::Host
+        } else {
+            Action::Join
+        };
         if button(
             Rect::new(x, screen_height() - 140.0 * s, width, 46.0 * s),
-            if host {
-                "Start server & play [Enter]"
-            } else {
-                "Connect  →"
+            match primary {
+                Action::StopCommunity => "Stop community server",
+                Action::StartCommunity => "Start community server [Enter]",
+                Action::Host => "Start server & play [Enter]",
+                _ => "Connect  →",
             },
-            true,
+            !matches!(primary, Action::StopCommunity),
             true,
             s,
         ) {
-            return if host { Action::Host } else { Action::Join };
+            return primary;
         }
-        if is_key_pressed(KeyCode::Enter) {
-            return if host { Action::Host } else { Action::Join };
+        if is_key_pressed(KeyCode::Enter) && !matches!(primary, Action::StopCommunity) {
+            return primary;
         }
         Action::None
     }
@@ -1664,21 +2255,24 @@ impl Menu {
     fn settings_tabs(&mut self, s: f32) {
         let x = 40. * s;
         let y = 158. * s;
-        let tab_w = (screen_width() - 2. * x - 6. * 8. * s) / 7.;
-        for (index, name) in [
-            "Display",
-            "Style",
-            "Controls",
-            "Accessibility",
-            "Profile",
-            "Audio",
-            "Servers",
+        let tab_w = (screen_width() - 2. * x - 7. * 8. * s) / 8.;
+        // Indices are stable for saved state; Graphics was added last but
+        // sits beside Display.
+        for (slot, (index, name)) in [
+            (0, "Display"),
+            (7, "Graphics"),
+            (1, "Style"),
+            (2, "Controls"),
+            (3, "Accessibility"),
+            (4, "Profile"),
+            (5, "Audio"),
+            (6, "Servers"),
         ]
-        .iter()
+        .into_iter()
         .enumerate()
         {
             if button(
-                Rect::new(x + index as f32 * (tab_w + 8.0 * s), y, tab_w, 38.0 * s),
+                Rect::new(x + slot as f32 * (tab_w + 8.0 * s), y, tab_w, 38.0 * s),
                 name,
                 self.settings_tab == index,
                 true,
@@ -1688,6 +2282,134 @@ impl Menu {
                 self.clear_focus();
             }
         }
+    }
+    /// Presets, render scale, upscaling and post-processing.
+    fn graphics(
+        &mut self,
+        settings: &mut Settings,
+        x: f32,
+        by: f32,
+        col: f32,
+        s: f32,
+    ) -> Option<Action> {
+        label("QUALITY PRESET", x, by + 19.0 * s, 13.0 * s, muted_color());
+        // (name, render scale, upscaler, sharpness, FXAA, shape quality)
+        let presets = [
+            ("Performance", 0.65, 1, 0.45, false, 0),
+            ("Balanced", 0.85, 1, 0.3, false, 1),
+            ("Quality", 1.0, 1, 0.0, true, 2),
+            ("Ultra", 1.5, 0, 0.15, false, 2),
+        ];
+        let width = col / presets.len() as f32;
+        for (i, (name, scale, upscaler, sharpness, fxaa, shape)) in presets.into_iter().enumerate()
+        {
+            let current = (settings.render_scale - scale).abs() < 0.01
+                && settings.upscaler == upscaler
+                && (settings.sharpness - sharpness).abs() < 0.01
+                && settings.fxaa == fxaa
+                && settings.shape_quality == shape;
+            if button(
+                Rect::new(
+                    x + i as f32 * width,
+                    by + 30.0 * s,
+                    width - 6.0 * s,
+                    33.0 * s,
+                ),
+                name,
+                current,
+                true,
+                s * 0.72,
+            ) {
+                settings.render_scale = scale;
+                settings.upscaler = upscaler;
+                settings.sharpness = sharpness;
+                settings.fxaa = fxaa;
+                settings.shape_quality = shape;
+                return Some(Action::Save);
+            }
+        }
+        let (w, h) = (screen_width(), screen_height());
+        let physical = miniquad::window::screen_size();
+        let ratio = (physical.0 / w.max(1.0)).max(1.0);
+        slider_value(
+            Rect::new(x, by + 82.0 * s, col, 48.0 * s),
+            "Render scale",
+            &mut settings.render_scale,
+            [0.5, 2.0],
+            0.05,
+            s,
+            |value| {
+                format!(
+                    "{:.0}%  ·  {} × {}",
+                    value * 100.0,
+                    (w * ratio * value).round(),
+                    (h * ratio * value).round()
+                )
+            },
+        );
+        label(
+            if settings.render_scale > 1.0 {
+                "Above 100% supersamples: smoother edges, more GPU work."
+            } else if settings.render_scale < 1.0 {
+                "Below 100% renders fewer pixels, then upscales. Menus stay sharp."
+            } else {
+                "The arena renders at full resolution."
+            },
+            x,
+            by + 143.0 * s,
+            11.0 * s,
+            muted_color(),
+        );
+        label("UPSCALER", x, by + 172.0 * s, 13.0 * s, muted_color());
+        let names = crate::upscale::UPSCALERS;
+        let width = col / names.len() as f32;
+        for (i, name) in names.into_iter().enumerate() {
+            if button(
+                Rect::new(
+                    x + i as f32 * width,
+                    by + 183.0 * s,
+                    width - 6.0 * s,
+                    33.0 * s,
+                ),
+                if i == 1 { "AMD FSR 1" } else { name },
+                usize::from(settings.upscaler) == i,
+                true,
+                s * 0.72,
+            ) {
+                settings.upscaler = i as u8;
+            }
+        }
+        slider(
+            Rect::new(x, by + 228.0 * s, col, 48.0 * s),
+            "Sharpening",
+            &mut settings.sharpness,
+            0.0,
+            1.0,
+            s,
+        );
+        toggle(
+            Rect::new(x, by + 290.0 * s, col, 33.0 * s),
+            "FXAA edge smoothing",
+            &mut settings.fxaa,
+            s,
+        );
+        let note = match &self.post_error {
+            Some(error) => format!("Post-processing is unavailable on this device, so the arena uses bilinear filtering. {error}"),
+            None => "DLSS and XeSS need DirectX 12 or Vulkan with vendor SDKs, and HDR output needs a display path OpenGL windows don't offer, so they aren't available. FSR 1 works on every GPU.".into(),
+        };
+        wrap(
+            &note,
+            x,
+            by + 348.0 * s,
+            col,
+            14.0 * s,
+            if self.post_error.is_some() {
+                RED
+            } else {
+                muted_color()
+            },
+        );
+        None
     }
     fn interface_scale(&mut self, rect: Rect, settings: &mut Settings, s: f32, anchor: f32) {
         let mut preview = self.scale_edit.preview(settings.ui_scale);
@@ -1753,27 +2475,19 @@ impl Menu {
                     &mut settings.show_fps,
                     s,
                 );
-                slider(
-                    Rect::new(x, by + 154.0 * s, col, 48.0 * s),
-                    "Particle intensity",
-                    &mut settings.effects,
-                    0.0,
-                    1.0,
-                    s,
-                );
-                slider(
-                    Rect::new(x, by + 229.0 * s, col, 48.0 * s),
-                    "Screen shake",
-                    &mut settings.shake,
-                    0.0,
-                    1.0,
-                    s,
-                );
                 self.interface_scale(
-                    Rect::new(x, by + 304.0 * s, col, 48.0 * s),
+                    Rect::new(x, by + 154.0 * s, col, 48.0 * s),
                     settings,
                     s,
-                    558.,
+                    408.,
+                );
+                wrap(
+                    "Rendering quality, upscaling and antialiasing are on the Graphics tab.",
+                    x,
+                    by + 252.0 * s,
+                    col,
+                    15.0 * s,
+                    muted_color(),
                 );
                 label(
                     "RESOLUTION · render size in fullscreen",
@@ -1850,10 +2564,15 @@ impl Menu {
                         settings.frame_cap = cap;
                     }
                 }
+            }
+            7 => {
+                if let Some(action) = self.graphics(settings, x, by, col, s) {
+                    return action;
+                }
                 label(
-                    "ANTIALIASING  (restart to apply)",
+                    "MSAA  (restart to apply)",
                     rx,
-                    by + DISPLAY_AA_LABEL * s,
+                    by + GRAPHICS_AA_LABEL * s,
                     13.0 * s,
                     muted_color(),
                 );
@@ -1864,9 +2583,9 @@ impl Menu {
                     if button(
                         Rect::new(
                             rx + index as f32 * (col / 3.0),
-                            by + DISPLAY_AA_ROW * s,
+                            by + GRAPHICS_AA_ROW * s,
                             col / 3.0 - 6.0 * s,
-                            33.0 * s,
+                            31.0 * s,
                         ),
                         title,
                         settings.anti_aliasing == samples,
@@ -1880,7 +2599,7 @@ impl Menu {
                 label(
                     "SHAPE QUALITY",
                     rx,
-                    by + DISPLAY_SHAPE_LABEL * s,
+                    by + GRAPHICS_SHAPE_LABEL * s,
                     13.0 * s,
                     muted_color(),
                 );
@@ -1888,9 +2607,9 @@ impl Menu {
                     if button(
                         Rect::new(
                             rx + i as f32 * col / 3.0,
-                            by + DISPLAY_SHAPE_ROW * s,
+                            by + GRAPHICS_SHAPE_ROW * s,
                             col / 3.0 - 6.0 * s,
-                            28.0 * s,
+                            31.0 * s,
                         ),
                         title,
                         usize::from(settings.shape_quality) == i,
@@ -1903,7 +2622,7 @@ impl Menu {
                 label(
                     "TEXTURE FILTERING",
                     rx,
-                    by + DISPLAY_TEXTURE_LABEL * s,
+                    by + GRAPHICS_TEXTURE_LABEL * s,
                     13.0 * s,
                     muted_color(),
                 );
@@ -1911,9 +2630,9 @@ impl Menu {
                     if button(
                         Rect::new(
                             rx + i as f32 * col / 5.0,
-                            by + DISPLAY_TEXTURE_ROW * s,
+                            by + GRAPHICS_TEXTURE_ROW * s,
                             col / 5.0 - 6.0 * s,
-                            27.0 * s,
+                            31.0 * s,
                         ),
                         &format!("{level}x"),
                         settings.anisotropic_filtering == level,
@@ -1932,7 +2651,7 @@ impl Menu {
                         "Filtering sharpens textured tanks viewed at an angle."
                     },
                     rx,
-                    by + 480. * s,
+                    by + GRAPHICS_TEXTURE_NOTE * s,
                     11. * s,
                     muted_color(),
                 );
@@ -2185,6 +2904,7 @@ impl Menu {
                 );
                 if let Err(error) = self.server_browser.draw(
                     settings,
+                    &mut self.servers,
                     Rect::new(rx, by, col, (card_height - 22. * s).max(300. * s)),
                     s,
                 ) {
@@ -2415,7 +3135,6 @@ impl Menu {
         Action::None
     }
     fn mods(&mut self, settings: &mut Settings, s: f32) -> Action {
-        use tankyard_mods::scan::Verdict;
         let x = 40.0 * s;
         let y = 169.0 * s;
         let w = screen_width() - x * 2.0;
@@ -2443,6 +3162,10 @@ impl Menu {
             self.mods_scanned = true;
             self.mod_review = None;
             self.mod_entries = crate::mod_library::discover();
+            self.mod_icons.clear();
+            self.mod_selected = self
+                .mod_selected
+                .min(self.mod_entries.len().saturating_sub(1));
             // Forget enabled packs that no longer exist.
             let known: Vec<_> = self.mod_entries.iter().map(|e| e.path.clone()).collect();
             settings
@@ -2496,14 +3219,13 @@ impl Menu {
             12.0 * s,
             muted_color(),
         );
-        // Library list with its own scrolling.
-        let list = Rect::new(
-            x,
-            import_y + 92.0 * s,
-            w,
-            (screen_height() - import_y - 92.0 * s - 112.0 * s).max(70.0 * s),
-        );
-        let row_h = 64.0 * s;
+        // Library list on the left, the selected pack's details on the right.
+        let area_y = import_y + 92.0 * s;
+        let area_h = (screen_height() - area_y - 112.0 * s).max(120.0 * s);
+        let list_w = (w * 0.42).clamp(260.0 * s, 470.0 * s);
+        let list = Rect::new(x, area_y, list_w, area_h);
+        let detail = Rect::new(x + list_w + 14.0 * s, area_y, w - list_w - 14.0 * s, area_h);
+        let row_h = 56.0 * s;
         let visible = ((list.h + 6.0 * s) / (row_h + 6.0 * s)).floor().max(1.0) as usize;
         if contains(list) && self.mod_review.is_none() {
             let wheel = mouse_wheel().1;
@@ -2517,11 +3239,29 @@ impl Menu {
             .mod_scroll
             .min(self.mod_entries.len().saturating_sub(visible));
         if self.mod_entries.is_empty() {
+            panel(list);
+            wrap(
+                "No packs yet. Import a .zip, drop one onto this window, or place a pack folder in the library below.",
+                list.x + 16.0 * s,
+                list.y + 30.0 * s,
+                list.w - 32.0 * s,
+                15.0 * s,
+                muted_color(),
+            );
+            panel(detail);
             label(
-                "No packs yet. Import a .zip, or place a pack folder in the library below.",
-                x,
-                list.y + 26.0 * s,
-                16.0 * s,
+                "Make your own",
+                detail.x + 22.0 * s,
+                detail.y + 36.0 * s,
+                20.0 * s,
+                text_color(),
+            );
+            wrap(
+                "A pack is a folder with mod.json, optional Lua scripts and art, and a tankyard.toml with its name, creator, version, icon and links. See docs/modding.md.",
+                detail.x + 22.0 * s,
+                detail.y + 66.0 * s,
+                detail.w - 44.0 * s,
+                15.0 * s,
                 muted_color(),
             );
         }
@@ -2538,98 +3278,46 @@ impl Menu {
                 row_h,
             );
             let enabled = settings.enabled_mods.contains(&entry.path);
-            panel(r);
+            let selected = self.mod_selected == index;
+            if button(r, "", selected, true, s) {
+                self.mod_selected = index;
+            }
             if enabled {
                 draw_rectangle(r.x, r.y, 4.0 * s, r.h, CYAN);
             }
+            let icon = Rect::new(r.x + 12.0 * s, r.y + 8.0 * s, 40.0 * s, 40.0 * s);
+            self.mod_icon(index, icon, s);
+            let entry = &self.mod_entries[index];
+            let text_x = icon.right() + 12.0 * s;
+            let switch = Rect::new(r.right() - 58.0 * s, r.y + 15.0 * s, 46.0 * s, 26.0 * s);
+            let text_w = switch.x - text_x - 10.0 * s;
             let version = entry
-                .manifest
-                .as_ref()
-                .map_or(String::new(), |m| format!("  v{}", m.version));
+                .version()
+                .map(|v| format!("  v{v}"))
+                .unwrap_or_default();
             label(
-                &fitted_label(&format!("{}{version}", entry.name()), 18.0 * s, r.w * 0.5),
-                r.x + 16.0 * s,
+                &fitted_label(&format!("{}{version}", entry.name()), 16.0 * s, text_w),
+                text_x,
                 r.y + 24.0 * s,
-                18.0 * s,
+                16.0 * s,
                 text_color(),
             );
-            let kind = match (entry.scripted(), entry.archive) {
-                (true, true) => "Lua script pack · zip",
-                (true, false) => "Lua script pack · folder",
-                (false, true) => "Data pack · zip",
-                (false, false) => "Data pack · folder",
-            };
-            let detail = match (&entry.manifest, &entry.error) {
-                (_, Some(error)) => format!("Cannot load: {error}"),
-                (Some(m), None) => {
-                    let mut parts = vec![m.id.clone(), kind.to_owned()];
-                    if let Some(author) = &m.author {
-                        parts.push(format!("by {author}"));
-                    }
-                    if let Some(description) = &m.description {
-                        parts.push(description.clone());
-                    }
-                    parts.join("  ·  ")
-                }
-                (None, None) => kind.to_owned(),
+            let (status, color) = mod_status(entry, settings);
+            let byline = match (&entry.error, entry.creator()) {
+                (Some(_), _) => "Cannot load".to_owned(),
+                (None, Some(creator)) => format!("{status} · by {creator}"),
+                (None, None) => status.to_owned(),
             };
             label(
-                &fitted_label(&detail, 12.0 * s, r.w - 420.0 * s),
-                r.x + 16.0 * s,
-                r.y + 46.0 * s,
+                &fitted_label(&byline, 12.0 * s, text_w),
+                text_x,
+                r.y + 43.0 * s,
                 12.0 * s,
-                if entry.error.is_some() {
-                    RED
-                } else {
-                    muted_color()
-                },
+                if entry.error.is_some() { RED } else { color },
             );
-            let (badge, color) = match entry.verdict() {
-                Verdict::Clean => ("Reviewed", Color::new(0.30, 0.64, 0.30, 1.0)),
-                Verdict::Review if entry.approved(settings) => ("Accepted", warm_text_color()),
-                Verdict::Review => ("Needs review", warm_text_color()),
-                Verdict::Dangerous if entry.approved(settings) => ("Accepted risk", RED),
-                Verdict::Dangerous => ("Dangerous", RED),
-            };
-            let badge_w = label_width(badge, 11.0 * s) + 20.0 * s;
-            let badge_rect = Rect::new(r.right() - 392.0 * s, r.y + 20.0 * s, badge_w, 24.0 * s);
-            draw_rectangle(
-                badge_rect.x,
-                badge_rect.y,
-                badge_rect.w,
-                badge_rect.h,
-                alpha(color, 0.16),
-            );
-            draw_rectangle_lines(
-                badge_rect.x,
-                badge_rect.y,
-                badge_rect.w,
-                badge_rect.h,
-                1.5,
-                color,
-            );
-            center_label(
-                badge,
-                badge_rect.center().x,
-                badge_rect.bottom() - 7.0 * s,
-                11.0 * s,
-                color,
-            );
-            if small_button(
-                Rect::new(r.right() - 264.0 * s, r.y + 15.0 * s, 110.0 * s, 33.0 * s),
-                "Details",
-                s * 0.8,
-            ) {
-                self.mod_review = Some(index);
-                self.mod_trust = false;
-            }
-            if button(
-                Rect::new(r.right() - 139.0 * s, r.y + 15.0 * s, 124.0 * s, 33.0 * s),
-                if enabled { "Enabled" } else { "Enable" },
-                enabled,
-                entry.error.is_none(),
-                s * 0.8,
-            ) {
+            let mut on = enabled;
+            if entry.error.is_none() && toggle_switch(switch, &mut on, s) {
+                self.mod_selected = index;
                 if !enabled && !entry.approved(settings) {
                     self.mod_review = Some(index);
                     self.mod_trust = false;
@@ -2640,6 +3328,9 @@ impl Menu {
         }
         if let Some(index) = toggle {
             self.toggle_mod(settings, index);
+        }
+        if !self.mod_entries.is_empty() {
+            self.mod_details(settings, detail, s);
         }
         label(
             &fitted_label(
@@ -2657,6 +3348,299 @@ impl Menu {
         );
         Action::None
     }
+    /// A pack's icon, or a tile with its initial when it has none.
+    fn mod_icon(&mut self, index: usize, rect: Rect, s: f32) {
+        let entry = &self.mod_entries[index];
+        let key = format!("{}#{}", entry.path, entry.digest);
+        if let Some(data) = &entry.icon
+            && !self.mod_icons.contains_key(&key)
+        {
+            let texture = Texture2D::from_rgba8(data.width, data.height, &data.rgba);
+            texture.set_filter(FilterMode::Linear);
+            self.mod_icons.insert(key.clone(), texture);
+        }
+        if let Some(texture) = self.mod_icons.get(&key) {
+            // Fit inside the tile, keeping the icon's shape.
+            let (tw, th) = (texture.width().max(1.0), texture.height().max(1.0));
+            let scale = (rect.w / tw).min(rect.h / th);
+            let size = vec2(tw * scale, th * scale);
+            draw_texture_ex(
+                texture,
+                rect.center().x - size.x * 0.5,
+                rect.center().y - size.y * 0.5,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(size),
+                    ..Default::default()
+                },
+            );
+            return;
+        }
+        let name = entry.name();
+        // A stable color per pack from its name.
+        let hue = name
+            .bytes()
+            .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
+        let palette = [
+            CYAN,
+            RED,
+            crate::ui::VIOLET,
+            AMBER,
+            Color::new(0.33, 0.78, 0.45, 1.0),
+        ];
+        let color = palette[hue as usize % palette.len()];
+        draw_rectangle(rect.x, rect.y, rect.w, rect.h, color);
+        draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0 * s, alpha(BLACK, 0.25));
+        let initial: String = name
+            .chars()
+            .next()
+            .map_or('?', |c| c.to_ascii_uppercase())
+            .to_string();
+        center_label(
+            &initial,
+            rect.center().x,
+            rect.center().y + rect.h * 0.2,
+            rect.h * 0.55,
+            WHITE,
+        );
+    }
+
+    /// The selected pack: who made it, what it contains, where it lives, and
+    /// whether it is safe to run.
+    fn mod_details(&mut self, settings: &mut Settings, r: Rect, s: f32) {
+        let index = self.mod_selected.min(self.mod_entries.len() - 1);
+        panel(r);
+        let px = r.x + 22.0 * s;
+        let pw = r.w - 44.0 * s;
+        let icon = Rect::new(px, r.y + 20.0 * s, 84.0 * s, 84.0 * s);
+        self.mod_icon(index, icon, s);
+        let entry = &self.mod_entries[index];
+        let tx = icon.right() + 18.0 * s;
+        let tw = r.right() - 22.0 * s - tx;
+        label(
+            &fitted_label(entry.name(), 24.0 * s, tw),
+            tx,
+            r.y + 44.0 * s,
+            24.0 * s,
+            text_color(),
+        );
+        let mut facts = Vec::new();
+        if let Some(version) = entry.version() {
+            facts.push(format!("Version {version}"));
+        }
+        if let Some(creator) = entry.creator() {
+            facts.push(format!("by {creator}"));
+        }
+        if let Some(license) = entry
+            .project
+            .as_ref()
+            .and_then(|p| p.details.license.as_deref())
+        {
+            facts.push(format!("{license} license"));
+        }
+        label(
+            &fitted_label(&facts.join("  ·  "), 13.0 * s, tw),
+            tx,
+            r.y + 66.0 * s,
+            13.0 * s,
+            muted_color(),
+        );
+        let (status, color) = mod_status(entry, settings);
+        let badge_w = label_width(status, 11.0 * s) + 20.0 * s;
+        let badge = Rect::new(tx, r.y + 78.0 * s, badge_w, 22.0 * s);
+        draw_rectangle(badge.x, badge.y, badge.w, badge.h, alpha(color, 0.16));
+        draw_rectangle_lines(badge.x, badge.y, badge.w, badge.h, 1.5, color);
+        center_label(
+            status,
+            badge.center().x,
+            badge.bottom() - 6.5 * s,
+            11.0 * s,
+            color,
+        );
+        let mut tag_x = badge.right() + 8.0 * s;
+        let tags = entry
+            .project
+            .as_ref()
+            .map(|p| p.details.tags.clone())
+            .unwrap_or_default();
+        for tag in tags {
+            let tag_w = label_width(&tag, 11.0 * s) + 18.0 * s;
+            if tag_x + tag_w > r.right() - 22.0 * s {
+                break;
+            }
+            capsule(
+                Rect::new(tag_x, badge.y, tag_w, badge.h),
+                alpha(line_color(), 0.5),
+            );
+            center_label(
+                &tag,
+                tag_x + tag_w * 0.5,
+                badge.bottom() - 6.5 * s,
+                11.0 * s,
+                text_color(),
+            );
+            tag_x += tag_w + 6.0 * s;
+        }
+        let mut y = r.y + 136.0 * s;
+        let description = match (&entry.error, entry.description()) {
+            (Some(error), _) => format!("This pack cannot load: {error}"),
+            (None, Some(text)) => text.to_owned(),
+            (None, None) => "No description.".to_owned(),
+        };
+        let lines = wrapped_lines(&description, pw, 14.0 * s).len().min(6);
+        wrap(
+            &description,
+            px,
+            y,
+            pw,
+            14.0 * s,
+            if entry.error.is_some() {
+                RED
+            } else {
+                text_color()
+            },
+        );
+        y += lines as f32 * 19.0 * s + 14.0 * s;
+        if let Some(manifest) = &entry.manifest {
+            let count = |n: usize, one: &str, many: &str| match n {
+                0 => None,
+                1 => Some(format!("1 {one}")),
+                n => Some(format!("{n} {many}")),
+            };
+            let contents: Vec<String> = [
+                count(manifest.classes.len(), "tank", "tanks"),
+                count(manifest.maps.len(), "map", "maps"),
+                count(manifest.scripts.len(), "script", "scripts"),
+                count(manifest.textures.len(), "texture", "textures"),
+                count(manifest.hooks.len(), "hook", "hooks"),
+                manifest.rules.as_ref().map(|_| "custom rules".to_owned()),
+                (!manifest.dependencies.is_empty())
+                    .then(|| format!("needs {}", manifest.dependencies.join(", "))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            label("CONTENTS", px, y, 11.0 * s, muted_color());
+            y += 18.0 * s;
+            let summary = if contents.is_empty() {
+                "Settings only".to_owned()
+            } else {
+                contents.join("  ·  ")
+            };
+            label(
+                &fitted_label(&summary, 13.0 * s, pw),
+                px,
+                y,
+                13.0 * s,
+                text_color(),
+            );
+            y += 18.0 * s;
+            let kb = entry.size as f32 / 1024.0;
+            label(
+                &fitted_label(
+                    &format!(
+                        "{} · {} · {} files · {} · id {}",
+                        if entry.scripted() {
+                            "Lua script pack"
+                        } else {
+                            "Data pack"
+                        },
+                        if entry.archive { "zip" } else { "folder" },
+                        entry.files,
+                        if kb >= 1024.0 {
+                            format!("{:.1} MB", kb / 1024.0)
+                        } else if entry.size < 1024 {
+                            format!("{} bytes", entry.size)
+                        } else {
+                            format!("{kb:.0} KB")
+                        },
+                        manifest.id
+                    ),
+                    12.0 * s,
+                    pw,
+                ),
+                px,
+                y,
+                12.0 * s,
+                muted_color(),
+            );
+            y += 22.0 * s;
+        }
+        if let Some(error) = &entry.project_error {
+            label(&fitted_label(error, 12.0 * s, pw), px, y, 12.0 * s, RED);
+            y += 18.0 * s;
+        }
+        let links: Vec<(&str, String)> = entry
+            .project
+            .as_ref()
+            .map(|p| {
+                p.links
+                    .all()
+                    .into_iter()
+                    .map(|(l, u)| (l, u.to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let creator_url = entry.project.as_ref().and_then(|p| p.creator.url.clone());
+        let mut link_x = px;
+        let mut opened = None;
+        for (title, url) in links
+            .iter()
+            .map(|(t, u)| (*t, u.as_str()))
+            .chain(creator_url.as_deref().map(|u| ("Creator", u)))
+        {
+            let bw = label_width(title, 12.0 * s) + 36.0 * s;
+            if link_x + bw > r.right() - 22.0 * s {
+                break;
+            }
+            if small_button(
+                Rect::new(link_x, y + 4.0 * s, bw, 30.0 * s),
+                &format!("{title} ↗"),
+                s * 0.72,
+            ) {
+                opened = Some(url.to_owned());
+            }
+            link_x += bw + 8.0 * s;
+        }
+        if let Some(url) = opened {
+            match crate::links::open(&url) {
+                Ok(()) => self.info = format!("Opened {url}"),
+                Err(error) => self.error = error,
+            }
+        }
+        let enabled = settings.enabled_mods.contains(&entry.path);
+        let footer = r.bottom() - 52.0 * s;
+        label(
+            &fitted_label(&entry.path, 11.0 * s, pw - 300.0 * s),
+            px,
+            footer + 22.0 * s,
+            11.0 * s,
+            muted_color(),
+        );
+        if small_button(
+            Rect::new(r.right() - 290.0 * s, footer, 120.0 * s, 34.0 * s),
+            "Safety review",
+            s * 0.78,
+        ) {
+            self.mod_review = Some(index);
+            self.mod_trust = false;
+        }
+        if button(
+            Rect::new(r.right() - 162.0 * s, footer, 140.0 * s, 34.0 * s),
+            if enabled { "Disable" } else { "Enable" },
+            !enabled,
+            entry.error.is_none(),
+            s * 0.82,
+        ) {
+            if !enabled && !entry.approved(settings) {
+                self.mod_review = Some(index);
+                self.mod_trust = false;
+            } else {
+                self.toggle_mod(settings, index);
+            }
+        }
+    }
+
     /// The review sheet for one pack, drawn above the page and its canvas.
     fn mod_review_overlay(&mut self, settings: &mut Settings, s: f32) {
         use tankyard_mods::scan::{Severity, Verdict};
@@ -2924,6 +3908,45 @@ pub fn mode_blurb(mode: Mode) -> &'static str {
     }
 }
 
+/// Height of one lobby row, before scaling.
+const LOBBY_ROW: f32 = 31.0;
+/// The open lobby list: up to three rows, scrolling beyond that.
+fn lobby_list_height(rows: usize, s: f32) -> f32 {
+    (rows.clamp(1, 3) as f32 * LOBBY_ROW + 12.0) * s
+}
+
+/// A pack's state for its list row and badge.
+fn mod_status(entry: &crate::mod_library::Entry, settings: &Settings) -> (&'static str, Color) {
+    use tankyard_mods::scan::Verdict;
+    let enabled = settings.enabled_mods.contains(&entry.path);
+    match entry.verdict() {
+        _ if entry.error.is_some() => ("Cannot load", RED),
+        Verdict::Clean if enabled => ("Enabled", CYAN),
+        Verdict::Clean => ("Reviewed", Color::new(0.30, 0.64, 0.30, 1.0)),
+        Verdict::Review if entry.approved(settings) => ("Accepted", warm_text_color()),
+        Verdict::Review => ("Needs review", warm_text_color()),
+        Verdict::Dangerous if entry.approved(settings) => ("Accepted risk", RED),
+        Verdict::Dangerous => ("Dangerous", RED),
+    }
+}
+
+/// A compact on/off switch; returns true when clicked.
+fn toggle_switch(rect: Rect, on: &mut bool, s: f32) -> bool {
+    let clicked = contains(rect) && is_mouse_button_pressed(MouseButton::Left);
+    if clicked {
+        *on = !*on;
+    }
+    capsule(rect, if *on { CYAN } else { alpha(line_color(), 0.9) });
+    let knob = rect.h * 0.5 - 3.0 * s;
+    let cx = if *on {
+        rect.right() - rect.h * 0.5
+    } else {
+        rect.x + rect.h * 0.5
+    };
+    draw_circle(cx, rect.center().y, knob, WHITE);
+    clicked
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2938,11 +3961,15 @@ mod tests {
                 DISPLAY_RESOLUTION_ROW + 4.0 * DISPLAY_RESOLUTION_STEP + 28.0,
             ),
             (DISPLAY_FRAME_LABEL - 13.0, DISPLAY_FRAME_ROW + 34.0),
-            (DISPLAY_AA_LABEL - 13.0, DISPLAY_AA_ROW + 33.0),
-            (DISPLAY_SHAPE_LABEL - 13.0, DISPLAY_SHAPE_ROW + 28.0),
-            (DISPLAY_TEXTURE_LABEL - 13.0, DISPLAY_TEXTURE_ROW + 27.0),
         ];
         assert!(groups.windows(2).all(|pair| pair[0].1 + 6.0 <= pair[1].0));
+        let graphics = [
+            (GRAPHICS_AA_LABEL - 13.0, GRAPHICS_AA_ROW + 31.0),
+            (GRAPHICS_SHAPE_LABEL - 13.0, GRAPHICS_SHAPE_ROW + 31.0),
+            (GRAPHICS_TEXTURE_LABEL - 13.0, GRAPHICS_TEXTURE_ROW + 31.0),
+            (GRAPHICS_TEXTURE_NOTE - 11.0, GRAPHICS_TEXTURE_NOTE),
+        ];
+        assert!(graphics.windows(2).all(|pair| pair[0].1 + 6.0 <= pair[1].0));
         for (width, height) in [
             (800.0, 600.0),
             (1024.0, 768.0),

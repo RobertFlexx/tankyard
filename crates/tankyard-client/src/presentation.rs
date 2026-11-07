@@ -10,10 +10,24 @@ fn bounded_size(size: (u32, u32)) -> (u32, u32) {
         (h as f32 * factor).round().max(1.) as u32,
     )
 }
+/// Draw into the frame's output: the resolution target, or else the window.
+fn select_output(target: Option<&RenderTarget>) {
+    match target {
+        Some(target) => {
+            let mut camera =
+                Camera2D::from_display_rect(Rect::new(0., 0., screen_width(), screen_height()));
+            camera.render_target = Some(target.clone());
+            set_camera(&camera);
+        }
+        None => set_default_camera(),
+    }
+}
 #[derive(Default)]
 pub struct Presentation {
     target: Option<((u32, u32, u8), RenderTarget)>,
     active: bool,
+    output: (u32, u32),
+    world: crate::upscale::Scaler,
 }
 impl Presentation {
     pub fn begin(&mut self, settings: &Settings) {
@@ -24,6 +38,7 @@ impl Presentation {
             bounded_size((settings.width, settings.height))
         };
         self.active = requested != (physical.0 as u32, physical.1 as u32);
+        self.output = requested;
         let key = (
             requested.0,
             requested.1,
@@ -55,12 +70,25 @@ impl Presentation {
                 physical.1
             );
         }
-        if let Some((_, target)) = &self.target {
-            let mut camera =
-                Camera2D::from_display_rect(Rect::new(0., 0., screen_width(), screen_height()));
-            camera.render_target = Some(target.clone());
-            set_camera(&camera);
-        }
+        select_output(self.target.as_ref().map(|(_, t)| t));
+    }
+    /// The arena draws between `begin_world` and `finish_world`, at its own
+    /// render scale and through the chosen upscaler.
+    pub fn begin_world(&mut self, settings: &Settings) {
+        self.world.begin(settings, self.output);
+    }
+    pub fn finish_world(&mut self) {
+        let Self {
+            world,
+            target,
+            active,
+            ..
+        } = self;
+        let target = target.as_ref().filter(|_| *active).map(|(_, t)| t);
+        world.finish(|| select_output(target));
+    }
+    pub fn post_processing_error(&self) -> Option<&str> {
+        self.world.error()
     }
     pub fn finish(&self) {
         if self.active

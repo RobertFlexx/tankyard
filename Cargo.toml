@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.88"
@@ -17,6 +17,7 @@ postcard = { version = "1", default-features = false, features = ["alloc", "use-
 macroquad = { version = "0.4.16", default-features = false }
 renet = "2.0.0"
 renet_netcode = "2.0.0"
+renetcode = "2.0.0"
 clap = { version = "4", features = ["derive"] }
 directories = "6"
 log = "0.4"

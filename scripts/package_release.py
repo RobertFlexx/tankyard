@@ -56,6 +56,11 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
             (app / "MacOS").mkdir(parents=True)
             (app / "Resources").mkdir()
             shutil.copy2(payload / "tankyard", app / "MacOS/tankyard")
+            # The Host page launches community servers from inside the bundle,
+            # and the bundled mods and docs travel with it to /Applications.
+            shutil.copy2(payload / "tankyard-server", app / "MacOS/tankyard-server")
+            for directory_name in ("mods", "docs", "licenses"):
+                shutil.copytree(payload / directory_name, app / "Resources" / directory_name)
             shutil.copy2(payload / "tankyard.icns", app / "Resources/tankyard.icns")
             with (app / "Info.plist").open("wb") as stream:
                 plistlib.dump({

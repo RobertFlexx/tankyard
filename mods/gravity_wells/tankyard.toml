@@ -1,0 +1,17 @@
+# Storefront details shown on the Mods page. Gameplay lives in mod.json.
+[mod]
+name = "Gravity Wells"
+version = "1.0"
+description = "Drifting wells pull tanks in and seed rare hexagons at their core."
+license = "MIT"
+icon = "icon.svg"
+tags = ["map", "physics", "lua"]
+
+[creator]
+name = "Tank Yard"
+url = "https://github.com/RobertFlexx/tankyard"
+
+[links]
+source = "https://github.com/RobertFlexx/tankyard/tree/main/mods/gravity_wells"
+download = "https://github.com/RobertFlexx/tankyard/releases/latest"
+issues = "https://github.com/RobertFlexx/tankyard/issues"

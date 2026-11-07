@@ -147,3 +147,16 @@ Infection starts with an eight-second preparation period once at least two tanks
 King of the Hill has one capture point that relocates every 45 seconds. Capture it, stay inside to score, and contest it to stop the other team. The first team to the score target wins. Bots defend and retarget the hill. Both modes work offline, in parties and on dedicated servers (`--mode infection` or `--mode king-of-the-hill`).
 
 All text boxes support Ctrl/Cmd+A/C/X/V and Shift+Insert for paste. Clipboard work runs separately from rendering. Cutting only removes a selection after copying succeeds; a pending paste is discarded if focus or editing changes. Party copy confirmation appears only after a successful native clipboard write.
+
+## Graphics
+
+**Settings → Graphics** sets how the arena is drawn; menus and the HUD always draw at full resolution, so text stays sharp.
+
+- **Quality presets**: Performance, Balanced, Quality and Ultra set everything below in one click.
+- **Render scale** (50–200%): below 100% draws the arena with fewer pixels and upscales it, for a faster frame on slow GPUs and high-resolution displays. Above 100% supersamples it for the smoothest tank edges.
+- **Upscaler**: **AMD FSR 1** reconstructs edges while upscaling and pairs it with contrast-adaptive sharpening; **Bilinear** is plain filtering.
+- **Sharpening** restores crispness after upscaling or FXAA without halos.
+- **FXAA** smooths remaining stair-steps on edges at almost no cost.
+- **MSAA**, **shape quality** (circle detail) and **texture filtering** refine geometry and textured tanks.
+
+DLSS and XeSS need DirectX 12 or Vulkan with vendor SDKs, and HDR output needs a display path that OpenGL windows don't offer, so Tank Yard doesn't support them. FSR 1 runs on every GPU the game supports. If a driver can't compile the post-processing shaders, the arena falls back to bilinear filtering and the Graphics tab says so.

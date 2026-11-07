@@ -10,7 +10,9 @@ A tank arena by RobertFlexx, inspired by Diep.io and Arras.io. Play online, host
 
 Choose **Play** for the public server or **Play offline** for a local game.
 
-Windows (64-bit): [NSIS installer (.exe)](https://github.com/RobertFlexx/tankyard/releases/download/v0.9.0/tankyard-v0.9.0-windows-x86_64-setup.exe) · [Portable ZIP](https://github.com/RobertFlexx/tankyard/releases/download/v0.9.0/tankyard-v0.9.0-windows-x86_64.zip). For the portable version, extract the ZIP and open `tankyard.exe`.
+Windows (64-bit): [NSIS installer (.exe)](https://github.com/RobertFlexx/tankyard/releases/download/v0.10.0/tankyard-v0.10.0-windows-x86_64-setup.exe) · [Portable ZIP](https://github.com/RobertFlexx/tankyard/releases/download/v0.10.0/tankyard-v0.10.0-windows-x86_64.zip). For the portable version, extract the ZIP and open `tankyard.exe`.
+
+macOS 11+ (Apple silicon and Intel): [Installer package (.pkg)](https://github.com/RobertFlexx/tankyard/releases/download/v0.10.0/tankyard-v0.10.0-macos-universal.pkg). Open it and follow the installer; Tank Yard appears in Applications. The package is not notarized yet, so the first time, Control-click it and choose **Open**.
 
 Install or update on Linux and macOS:
 

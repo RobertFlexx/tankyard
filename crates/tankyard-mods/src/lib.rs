@@ -7,7 +7,9 @@ use std::{
 };
 use tankyard_content::{ClassDef, Content, MapDef, builtin_maps, validate_maps};
 
+pub mod assets;
 pub mod pack;
+pub mod project;
 pub mod scan;
 pub use pack::PackFiles;
 
@@ -509,7 +511,8 @@ pub struct ScriptPack {
     pub entries: Vec<String>,
     /// Every Lua file in the pack, available to `require`.
     pub sources: BTreeMap<String, String>,
-    /// PNG files a script may register as textures.
+    /// Art files (images, editor files, models) a script may register as
+    /// textures.
     pub images: BTreeMap<String, Vec<u8>>,
 }
 impl ScriptPack {
@@ -655,7 +658,11 @@ pub fn load_with(
             let bytes = pack
                 .get(&source.file)
                 .ok_or_else(|| format!("{}: missing texture {}", path.display(), source.file))?;
-            textures.push(decode_texture(&source.id, bytes)?);
+            let files = |name: &str| pack.get(name).map(<[u8]>::to_vec);
+            textures.push(
+                decode_texture(&source.id, &source.file, bytes, &files)
+                    .map_err(|e| format!("{}: {}: {e}", path.display(), source.file))?,
+            );
         }
         let mut scripts = ScriptPack {
             entries: manifest.scripts.clone(),
@@ -667,7 +674,8 @@ pub fn load_with(
                     let text = std::str::from_utf8(data)
                         .map_err(|_| format!("{name}: Lua files must be UTF-8 text"))?;
                     scripts.sources.insert(name.to_owned(), text.to_owned());
-                } else if name.ends_with(".png") {
+                } else if assets::is_asset(name) || name.ends_with(".mtl") || name.ends_with(".bin")
+                {
                     scripts.images.insert(name.to_owned(), data.to_vec());
                 }
             }
@@ -786,22 +794,18 @@ pub fn pack_path(path: &str) -> bool {
             .all(|part| matches!(part, std::path::Component::Normal(_)))
 }
 
-/// Decode a bounded PNG body skin.
-pub fn decode_texture(id: &str, bytes: &[u8]) -> Result<TextureData, String> {
+/// Decode a body skin from any supported art file, `file` inside its pack.
+/// `files` reads other files in the pack that the art refers to.
+pub fn decode_texture(
+    id: &str,
+    file: &str,
+    bytes: &[u8],
+    files: &assets::Files,
+) -> Result<TextureData, String> {
     if !identifier(id) {
         return Err("invalid texture ID".into());
     }
-    let mut reader =
-        image::io::Reader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
-    let mut limits = image::io::Limits::default();
-    limits.max_image_width = Some(256);
-    limits.max_image_height = Some(256);
-    limits.max_alloc = Some(1024 * 1024);
-    reader.limits(limits);
-    let pixels = reader
-        .decode()
-        .map_err(|e| format!("invalid mod PNG: {e}"))?
-        .into_rgba8();
+    let pixels = assets::decode(file, bytes, files)?;
     Ok(TextureData {
         id: id.to_owned(),
         width: pixels.width() as u16,

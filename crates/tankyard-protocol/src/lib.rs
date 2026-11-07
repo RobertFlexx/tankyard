@@ -16,9 +16,11 @@ mod voice;
 pub use voice::*;
 mod party;
 pub use party::*;
+mod status;
+pub use status::*;
 
-pub const PROTOCOL_VERSION: u32 = 21;
-pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0015;
+pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0016;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
 pub const EVENT_CHANNEL: u8 = 2;
@@ -95,6 +97,9 @@ pub enum ClientControl {
         account_token: Option<String>,
         admin_key: [u8; 32],
         party_proof: Option<Vec<u8>>,
+        /// The lobby the player picked from the server's status, if any.
+        /// The server honors it while that lobby has room.
+        arena: Option<u8>,
     },
     UpgradeStat {
         stat: u8,

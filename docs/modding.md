@@ -7,6 +7,30 @@ Tank Yard has two kinds of packs, and both are a folder or a `.zip` archive with
 
 In the game, open **Mods** and either paste the path of a `.zip` and press **Import**, or drop the `.zip` onto the window. Imported packs are copied into your library (`…/Tank Yard/mods` in your application data folder); folders in a `mods` directory next to the game are listed too. Enabled packs apply to offline games and servers you host. Community servers load packs with `--mod path` or the `mods` setting; joining players receive only validated data and never run server scripts.
 
+The Mods page lists every pack with its icon, name, version, creator and safety status. Select one to see its description, license, tags, contents (tanks, maps, scripts, textures, hooks), size and location, with buttons for its source code, download page and issue tracker. Packs describe themselves in an optional `tankyard.toml`:
+
+```toml
+[mod]
+name = "Bounty Hunt"
+version = "1.2.0"
+description = "Hunt the leader for bonus score."
+license = "MIT"
+icon = "icon.svg"            # any supported image, editor file or model
+tags = ["mode", "pvp"]
+
+[creator]
+name = "Your Name"
+url = "https://example.com"
+
+[links]
+source = "https://github.com/you/bounty-hunt"   # if open source
+download = "https://example.com/bounty-hunt.zip"
+issues = "https://github.com/you/bounty-hunt/issues"
+homepage = "https://example.com"
+```
+
+Every field is optional, and `tankyard.toml` never changes gameplay. Links must be `http://` or `https://`; anything else is rejected so a pack can never open a program or local file.
+
 ```sh
 cargo run --locked -p tankyard-tools -- validate-mods --mod mods/bounty_hunt --mod mods/vampire
 cargo run --locked -p tankyard-tools -- scan-mod mods/bounty_hunt path/to/pack.zip
@@ -151,7 +175,16 @@ Tank definitions use the same schema as `assets/content/classes.json`. Stable ID
 
 Barrel offsets use tank-local coordinates. Angles are radians; lengths/speeds are arena units; timers are seconds. `profile` selects `auto`, `rectangle`, `trapezoid`, `trap`, or `rocket`. `target_arc` limits automatic aiming. Co-located emitters with identical dimensions share one visible cannon. `body_style` selects `auto`, `circle`, `smasher`, `landmine`, or `spike`; `body_scale` changes both model and collision size.
 
-Textures are optional PNG body skins. A texture entry has an `id` and relative `file`; a class references it through `body_texture`. Paths cannot leave the pack directory, including through symlinks. At most 16 images of up to 256 by 256 pixels are allowed. The server decodes PNGs and sends bounded RGBA data. Native MSAA smooths geometry; shape quality controls circle detail. Anisotropic filtering applies to mod textures on supported OpenGL drivers, with linear filtering as the fallback. MSAA changes need a restart.
+Textures are optional body skins. A texture entry has an `id` and relative `file`; a class references it through `body_texture`. Paths cannot leave the pack directory, including through symlinks. At most 16 textures are allowed; sources up to 4096 pixels on a side are shrunk to 256 by 256 keeping their shape. The server decodes art and sends bounded RGBA data, so players need nothing installed. A texture's right side faces where the tank aims.
+
+| Kind | Formats |
+| --- | --- |
+| Images | PNG, JPEG, GIF (first frame), BMP, TGA, WebP, ICO, ICNS |
+| Vector art | SVG (rendered crisp at texture size; scripts and external files are ignored) |
+| Icon and paint editors | Aseprite (`.ase`, `.aseprite`, first frame), Photoshop (`.psd`, flattened), Krita (`.kra`, merged image) |
+| 3D models | glTF/GLB, OBJ (with `.mtl` colors), STL, PLY (with vertex colors) |
+
+Models from Blender, Maya, 3ds Max, SketchUp, MagicaVoxel, Tinkercad and other modeling tools load through those exports. They render top-down into a sprite with flat lighting and the game's dark outline, so they match the built-in tanks. glTF and OBJ treat +Y as up and +Z as forward; STL treats +Z as up and +X as forward. Prefer `.glb` or embedded glTF buffers: a separate `.bin` buffer works, but the safety review flags every `.bin` file for a manual look. FBX and `.blend` are proprietary or version-specific; export glTF instead. Native MSAA smooths geometry; shape quality controls circle detail. Anisotropic filtering applies to mod textures on supported OpenGL drivers, with linear filtering as the fallback. MSAA changes need a restart.
 
 Maps use normalized walls, spawn regions, objectives, and bases. World dimensions scale the arena. Custom map IDs appear in the map picker. Seeded procedural maps are generated on the server, and snapshots carry their walls.
 
