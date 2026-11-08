@@ -137,6 +137,11 @@ fn window_conf(cli: &Cli) -> Conf {
         platform: macroquad::miniquad::conf::Platform {
             linux_wm_class: "tankyard",
             swap_interval: Some(if settings.vsync { 1 } else { 0 }),
+            apple_gfx_api: if settings.metal && graphics::metal_device_present() {
+                macroquad::miniquad::conf::AppleGfxApi::Metal
+            } else {
+                macroquad::miniquad::conf::AppleGfxApi::OpenGl
+            },
             ..Default::default()
         },
         ..Default::default()
@@ -2468,6 +2473,9 @@ async fn run(cli: Cli) {
         ui::unload_font();
         return;
     };
+    if cli.screenshot.is_some() {
+        graphics::prepare_screen_capture();
+    }
     let mut app = App::new(cli, dark_theme).await;
     macroquad::texture::set_default_filter_mode(FilterMode::Linear);
     loop {
@@ -2551,8 +2559,10 @@ async fn run(cli: Cli) {
         }
         app.frames += 1;
         if app.smoke.is_some_and(|limit| app.frames >= limit) {
-            if let Some(path) = &app.screenshot {
-                get_screen_data().export_png(path);
+            if let Some(path) = &app.screenshot
+                && let Some(image) = graphics::screen_image()
+            {
+                image.export_png(path);
             }
             let snapshot = app.session.as_ref().and_then(|s| s.display.as_ref());
             println!(

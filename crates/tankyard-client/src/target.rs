@@ -22,22 +22,26 @@ pub struct Target {
     draw: miniquad::RenderPass,
     /// Resolves the multisampled color into `texture`.
     resolve: Option<miniquad::RenderPass>,
+    /// The multisampled color, freed explicitly where passes don't own it.
+    samples: Option<miniquad::TextureId>,
     dirty: bool,
 }
 
 fn multisampling_available() -> bool {
-    // Metal in miniquad has no resolve attachments yet.
     unsafe {
-        let gl = get_internal_gl();
-        let info = gl.quad_context.info();
-        info.backend == miniquad::Backend::OpenGl && info.features.resolve_attachments
+        get_internal_gl()
+            .quad_context
+            .info()
+            .features
+            .resolve_attachments
     }
 }
 
 impl Target {
     pub fn new(size: (u32, u32), samples: u8) -> Self {
         let multisample = samples > 1 && multisampling_available();
-        let (color, draw, resolve) = unsafe {
+        let metal = crate::graphics::metal();
+        let (color, draw, resolve, samples) = unsafe {
             let gl = get_internal_gl();
             let ctx = gl.quad_context;
             let color = ctx.new_render_texture(miniquad::TextureParams {
@@ -52,11 +56,17 @@ impl Target {
                     sample_count: i32::from(samples),
                     ..Default::default()
                 });
-                let draw = ctx.new_render_pass_mrt(&[samples], None, None);
-                let resolve = ctx.new_render_pass_mrt(&[samples], Some(&[color]), None);
-                (color, draw, Some(resolve))
+                let resolving = ctx.new_render_pass_mrt(&[samples], Some(&[color]), None);
+                if metal {
+                    // Metal resolves once, when the pass's encoder closes, and
+                    // consecutive draws share one encoder.
+                    (color, resolving, None, Some(samples))
+                } else {
+                    let draw = ctx.new_render_pass_mrt(&[samples], None, None);
+                    (color, draw, Some(resolving), Some(samples))
+                }
             } else {
-                (color, ctx.new_render_pass(color, None), None)
+                (color, ctx.new_render_pass(color, None), None, None)
             }
         };
         let texture = Texture2D::from_miniquad_texture(color);
@@ -66,6 +76,7 @@ impl Target {
             texture,
             draw,
             resolve,
+            samples,
             dirty: false,
         }
     }
@@ -78,9 +89,13 @@ impl Target {
     pub fn select(&mut self) {
         let mut camera =
             Camera2D::from_display_rect(Rect::new(0., 0., screen_width(), screen_height()));
-        // Render targets are stored bottom-up; macroquad flips cameras that
-        // name one, and this camera names its pass directly instead.
-        camera.zoom.y = -camera.zoom.y;
+        // OpenGL stores render targets bottom-up; macroquad flips cameras that
+        // name one, and this camera names its pass directly instead. Metal
+        // stores them top-down like the screen, so the camera stays as is and
+        // every target is read back the same way on both.
+        if !crate::graphics::metal() {
+            camera.zoom.y = -camera.zoom.y;
+        }
         set_camera(&camera);
         unsafe { get_internal_gl().quad_gl.render_pass(Some(self.draw)) };
         self.dirty = true;
@@ -105,9 +120,9 @@ impl Target {
 
 impl Drop for Target {
     fn drop(&mut self) {
-        // Deleting a pass deletes its attachments. The two passes share the
-        // multisampled texture; GL ignores the second delete of a name, and no
-        // name can be reused between these two calls.
+        // Deleting an OpenGL pass deletes its attachments. The two passes share
+        // the multisampled texture; GL ignores the second delete of a name, and
+        // no name can be reused between these two calls.
         unsafe {
             let gl = get_internal_gl();
             gl.quad_context.delete_render_pass(self.draw);
@@ -118,6 +133,9 @@ impl Drop for Target {
             if gl.quad_context.info().backend != miniquad::Backend::OpenGl {
                 gl.quad_context
                     .delete_texture(self.texture.raw_miniquad_id());
+                if let Some(samples) = self.samples {
+                    gl.quad_context.delete_texture(samples);
+                }
             }
         }
     }

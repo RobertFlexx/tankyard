@@ -9,7 +9,9 @@
 use crate::{settings::Settings, target::Target};
 use macroquad::prelude::*;
 
-pub const UPSCALERS: [&str; 2] = ["Bilinear", "FSR 1"];
+pub const UPSCALERS: [&str; 3] = ["Bilinear", "FSR 1", "MetalFX"];
+/// Index of MetalFX in `UPSCALERS`; offered only where the system has it.
+pub const METALFX: u8 = 2;
 
 const VERTEX: &str = r#"#version 100
 attribute vec3 position;
@@ -156,21 +158,175 @@ void main() {
 }
 "#;
 
+/// Metal versions of the passes above, for the Metal renderer on Macs. The
+/// math matches the GLSL line for line.
+const MSL_COMMON: &str = r#"#include <metal_stdlib>
+using namespace metal;
+struct Uniforms {
+    float4x4 Projection;
+    float4x4 Model;
+    float4 _Time;
+    float2 InputSize;
+    float Sharpness;
+};
+struct Vertex {
+    float3 position [[attribute(0)]];
+    float2 texcoord [[attribute(1)]];
+    float4 color0 [[attribute(2)]];
+};
+struct Varyings {
+    float4 position [[position]];
+    float2 uv;
+};
+vertex Varyings vertexShader(Vertex v [[stage_in]], constant Uniforms& u [[buffer(0)]]) {
+    Varyings out;
+    out.position = u.Projection * u.Model * float4(v.position, 1.0);
+    out.uv = v.texcoord;
+    return out;
+}
+"#;
+
+const EASU_MSL: &str = r#"
+static float luma(float3 c) { return c.g + 0.5 * (c.r + c.b); }
+static void setDir(thread float2& dir, thread float& len, float w, float a, float b, float c, float d, float e) {
+    float dirX = d - b;
+    float lenX = clamp(abs(dirX) / max(max(abs(d - c), abs(c - b)), 1.0 / 65536.0), 0.0, 1.0);
+    float dirY = e - a;
+    float lenY = clamp(abs(dirY) / max(max(abs(e - c), abs(c - a)), 1.0 / 65536.0), 0.0, 1.0);
+    dir += float2(dirX, dirY) * w;
+    len += (lenX * lenX + lenY * lenY) * w;
+}
+static void accumulate(thread float3& color, thread float& weight, float2 off, float2 dir, float2 len2, float lob, float clp, float3 c) {
+    float2 v = float2(dot(off, dir), dot(off, float2(-dir.y, dir.x))) * len2;
+    float d2 = min(dot(v, v), clp);
+    float wB = 0.4 * d2 - 1.0;
+    float wA = lob * d2 - 1.0;
+    wB *= wB;
+    wA *= wA;
+    wB = 1.5625 * wB - 0.5625;
+    float w = wB * wA;
+    color += c * w;
+    weight += w;
+}
+fragment float4 fragmentShader(Varyings in [[stage_in]], constant Uniforms& u [[buffer(0)]],
+                               texture2d<float> Texture [[texture(0)]], sampler smp [[sampler(0)]]) {
+    float2 size = u.InputSize;
+#define tap(texel) Texture.sample(smp, ((texel) + 0.5) / size).rgb
+    float2 pp = in.uv * size - 0.5;
+    float2 fp = floor(pp);
+    pp -= fp;
+    float3 b = tap(fp + float2(0.0, -1.0)); float3 c = tap(fp + float2(1.0, -1.0));
+    float3 e = tap(fp + float2(-1.0, 0.0)); float3 f = tap(fp);
+    float3 g = tap(fp + float2(1.0, 0.0)); float3 h = tap(fp + float2(2.0, 0.0));
+    float3 i = tap(fp + float2(-1.0, 1.0)); float3 j = tap(fp + float2(0.0, 1.0));
+    float3 k = tap(fp + float2(1.0, 1.0)); float3 l = tap(fp + float2(2.0, 1.0));
+    float3 n = tap(fp + float2(0.0, 2.0)); float3 o = tap(fp + float2(1.0, 2.0));
+    float bL = luma(b), cL = luma(c), eL = luma(e), fL = luma(f), gL = luma(g), hL = luma(h);
+    float iL = luma(i), jL = luma(j), kL = luma(k), lL = luma(l), nL = luma(n), oL = luma(o);
+    float2 dir = float2(0.0);
+    float len = 0.0;
+    setDir(dir, len, (1.0 - pp.x) * (1.0 - pp.y), bL, eL, fL, gL, jL);
+    setDir(dir, len, pp.x * (1.0 - pp.y), cL, fL, gL, hL, kL);
+    setDir(dir, len, (1.0 - pp.x) * pp.y, fL, iL, jL, kL, nL);
+    setDir(dir, len, pp.x * pp.y, gL, jL, kL, lL, oL);
+    float dirR = dot(dir, dir);
+    if (dirR < 1.0 / 32768.0) {
+        dir = float2(1.0, 0.0);
+    } else {
+        dir *= rsqrt(dirR);
+    }
+    len = len * 0.5;
+    len *= len;
+    float stretch = dot(dir, dir) / max(abs(dir.x), abs(dir.y));
+    float2 len2 = float2(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
+    float lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;
+    float clp = 1.0 / lob;
+    float3 color = float3(0.0);
+    float weight = 0.0;
+    accumulate(color, weight, float2(0.0, -1.0) - pp, dir, len2, lob, clp, b);
+    accumulate(color, weight, float2(1.0, -1.0) - pp, dir, len2, lob, clp, c);
+    accumulate(color, weight, float2(-1.0, 1.0) - pp, dir, len2, lob, clp, i);
+    accumulate(color, weight, float2(0.0, 1.0) - pp, dir, len2, lob, clp, j);
+    accumulate(color, weight, float2(0.0, 0.0) - pp, dir, len2, lob, clp, f);
+    accumulate(color, weight, float2(-1.0, 0.0) - pp, dir, len2, lob, clp, e);
+    accumulate(color, weight, float2(1.0, 1.0) - pp, dir, len2, lob, clp, k);
+    accumulate(color, weight, float2(2.0, 1.0) - pp, dir, len2, lob, clp, l);
+    accumulate(color, weight, float2(2.0, 0.0) - pp, dir, len2, lob, clp, h);
+    accumulate(color, weight, float2(1.0, 0.0) - pp, dir, len2, lob, clp, g);
+    accumulate(color, weight, float2(1.0, 2.0) - pp, dir, len2, lob, clp, o);
+    accumulate(color, weight, float2(0.0, 2.0) - pp, dir, len2, lob, clp, n);
+    float3 lo = min(min(f, g), min(j, k));
+    float3 hi = max(max(f, g), max(j, k));
+    return float4(clamp(color / weight, lo, hi), 1.0);
+}
+"#;
+
+const RCAS_MSL: &str = r#"
+fragment float4 fragmentShader(Varyings in [[stage_in]], constant Uniforms& u [[buffer(0)]],
+                               texture2d<float> Texture [[texture(0)]], sampler smp [[sampler(0)]]) {
+#define tap(offset) Texture.sample(smp, in.uv + (offset) / u.InputSize).rgb
+    float3 b = tap(float2(0.0, -1.0));
+    float3 d = tap(float2(-1.0, 0.0));
+    float3 e = tap(float2(0.0, 0.0));
+    float3 f = tap(float2(1.0, 0.0));
+    float3 h = tap(float2(0.0, 1.0));
+    float3 mn = min(min(min(b, d), min(f, h)), e);
+    float3 mx = max(max(max(b, d), max(f, h)), e);
+    float3 hitMin = mn / max(4.0 * mx, float3(1.0 / 65536.0));
+    float3 hitMax = (1.0 - mx) / min(4.0 * mn - 4.0, float3(-1.0 / 65536.0));
+    float3 lobeRGB = max(-hitMin, hitMax);
+    float lobe = max(-0.1875, min(max(lobeRGB.r, max(lobeRGB.g, lobeRGB.b)), 0.0)) * u.Sharpness;
+    float3 color = (lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0);
+    return float4(clamp(color, 0.0, 1.0), 1.0);
+}
+"#;
+
+const FXAA_MSL: &str = r#"
+fragment float4 fragmentShader(Varyings in [[stage_in]], constant Uniforms& u [[buffer(0)]],
+                               texture2d<float> Texture [[texture(0)]], sampler smp [[sampler(0)]]) {
+#define tap(offset) Texture.sample(smp, in.uv + (offset) / u.InputSize).rgb
+    const float3 weights = float3(0.299, 0.587, 0.114);
+    float3 nw = tap(float2(-1.0, -1.0));
+    float3 ne = tap(float2(1.0, -1.0));
+    float3 sw = tap(float2(-1.0, 1.0));
+    float3 se = tap(float2(1.0, 1.0));
+    float3 m = tap(float2(0.0));
+    float lNW = dot(nw, weights), lNE = dot(ne, weights), lSW = dot(sw, weights);
+    float lSE = dot(se, weights), lM = dot(m, weights);
+    float lo = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+    float hi = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+    float2 dir = float2(-((lNW + lNE) - (lSW + lSE)), (lNW + lSW) - (lNE + lSE));
+    float reduce = max((lNW + lNE + lSW + lSE) * (0.25 / 8.0), 1.0 / 128.0);
+    float scale = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+    dir = clamp(dir * scale, float2(-8.0), float2(8.0));
+    float3 a = 0.5 * (tap(dir * (1.0 / 3.0 - 0.5)) + tap(dir * (2.0 / 3.0 - 0.5)));
+    float3 b = a * 0.5 + 0.25 * (tap(dir * -0.5) + tap(dir * 0.5));
+    float lB = dot(b, weights);
+    return float4((lB < lo || lB > hi) ? a : b, 1.0);
+}
+"#;
+
 struct Materials {
     easu: Material,
     rcas: Material,
     fxaa: Material,
 }
 
-fn material(body: &str, sharpness: bool) -> Result<Material, String> {
+fn material(glsl: &str, msl: &str, sharpness: bool) -> Result<Material, String> {
     let mut uniforms = vec![UniformDesc::new("InputSize", UniformType::Float2)];
     if sharpness {
         uniforms.push(UniformDesc::new("Sharpness", UniformType::Float1));
     }
+    let fragment = format!("{PRECISION}{glsl}");
+    let program = format!("{MSL_COMMON}{msl}");
     load_material(
-        ShaderSource::Glsl {
-            vertex: VERTEX,
-            fragment: &format!("{PRECISION}{body}"),
+        if crate::graphics::metal() {
+            ShaderSource::Msl { program: &program }
+        } else {
+            ShaderSource::Glsl {
+                vertex: VERTEX,
+                fragment: &fragment,
+            }
         },
         MaterialParams {
             uniforms,
@@ -194,14 +350,21 @@ pub struct Plan {
     pub scene: (u32, u32),
     pub fxaa: bool,
     pub easu: bool,
+    /// Upscale with MetalFX; FSR 1 stands in if MetalFX fails at runtime.
+    pub metalfx: bool,
     pub sharpness: f32,
 }
 
 impl Plan {
-    pub fn new(settings: &Settings, output: (u32, u32)) -> Option<Self> {
+    /// `metalfx` says whether the system can upscale with MetalFX; FSR 1
+    /// replaces it elsewhere.
+    pub fn new(settings: &Settings, output: (u32, u32), metalfx: bool) -> Option<Self> {
         let scale = settings.render_scale.clamp(0.5, 2.0);
         let scene = bounded((output.0 as f32 * scale, output.1 as f32 * scale));
-        let easu = settings.upscaler == 1 && scene.0 < output.0;
+        let upscaling = scene.0 < output.0;
+        let metalfx = metalfx && settings.upscaler == METALFX && upscaling;
+        let easu =
+            upscaling && (settings.upscaler == 1 || (settings.upscaler == METALFX && !metalfx));
         // FSR pairs its upscale with RCAS; elsewhere sharpening is opt-in, so
         // FSR at native scale costs nothing.
         let sharpness = if easu {
@@ -213,6 +376,7 @@ impl Plan {
             scene,
             fxaa: settings.fxaa,
             easu,
+            metalfx,
             sharpness,
         };
         (scene != output || plan.fxaa || plan.sharpness > 0.).then_some(plan)
@@ -275,7 +439,8 @@ impl Scaler {
     /// Redirect world drawing into the scene target. `output` is the size of
     /// whatever the world would otherwise draw into.
     pub fn begin(&mut self, settings: &Settings, output: (u32, u32)) {
-        self.plan = Plan::new(settings, output).map(|plan| (plan, output));
+        let metalfx = crate::graphics::metalfx_available();
+        self.plan = Plan::new(settings, output, metalfx).map(|plan| (plan, output));
         let Some((plan, _)) = self.plan else {
             // Free the targets once post-processing is off.
             self.scene = None;
@@ -283,12 +448,14 @@ impl Scaler {
             self.upscaled = None;
             return;
         };
-        if self.materials.is_none() && (plan.fxaa || plan.easu || plan.sharpness > 0.) {
+        if self.materials.is_none()
+            && (plan.fxaa || plan.easu || plan.metalfx || plan.sharpness > 0.)
+        {
             let loaded = (|| {
                 Ok(Materials {
-                    easu: material(EASU, false)?,
-                    rcas: material(RCAS, true)?,
-                    fxaa: material(FXAA, false)?,
+                    easu: material(EASU, EASU_MSL, false)?,
+                    rcas: material(RCAS, RCAS_MSL, true)?,
+                    fxaa: material(FXAA, FXAA_MSL, false)?,
                 })
             })();
             if let Err(error) = &loaded {
@@ -334,24 +501,39 @@ impl Scaler {
             source = smoothed.texture().clone();
         }
         let sharpen = plan.sharpness > 0. && materials.is_some();
+        let mut easu = plan.easu;
+        if plan.metalfx && size != output {
+            let upscaled = reuse(&mut self.upscaled, output);
+            if crate::graphics::metalfx_upscale(&source, upscaled.texture()) {
+                source = upscaled.texture().clone();
+                size = output;
+            } else {
+                // MetalFX refused this layout; FSR 1 takes over.
+                static WARNED: std::sync::Once = std::sync::Once::new();
+                WARNED.call_once(|| {
+                    log::warn!("MetalFX can't upscale {size:?} to {output:?}; using FSR 1")
+                });
+                easu = true;
+            }
+        }
         if sharpen && size != output {
             let upscaled = reuse(&mut self.upscaled, output);
             upscaled.select();
             blit(
                 &source,
-                materials.filter(|_| plan.easu).map(|m| &m.easu),
+                materials.filter(|_| easu).map(|m| &m.easu),
                 size,
                 0.,
             );
             source = upscaled.texture().clone();
             size = output;
-        } else {
+        } else if !plan.metalfx {
             self.upscaled = None;
         }
         restore();
         let final_pass = match materials {
             Some(m) if sharpen => Some(&m.rcas),
-            Some(m) if plan.easu && size != output => Some(&m.easu),
+            Some(m) if easu && size != output => Some(&m.easu),
             _ => None,
         };
         // The scene was cleared transparent; the world covers it fully, so draw
@@ -373,19 +555,41 @@ mod tests {
             fxaa: false,
             ..Default::default()
         };
-        assert_eq!(Plan::new(&settings, (1920, 1080)), None);
+        assert_eq!(Plan::new(&settings, (1920, 1080), false), None);
         settings.render_scale = 0.5;
         settings.upscaler = 1;
-        let plan = Plan::new(&settings, (1920, 1080)).unwrap();
+        let plan = Plan::new(&settings, (1920, 1080), false).unwrap();
         assert_eq!(plan.scene, (960, 540));
         assert!(plan.easu);
         assert!(plan.sharpness > 0.);
         settings.render_scale = 2.;
-        let plan = Plan::new(&settings, (3000, 2000)).unwrap();
+        let plan = Plan::new(&settings, (3000, 2000), false).unwrap();
         assert_eq!(plan.scene, (4096, 2731));
         assert!(!plan.easu);
         // FSR with nothing to upscale draws the world directly.
         settings.render_scale = 1.;
-        assert_eq!(Plan::new(&settings, (1920, 1080)), None);
+        assert_eq!(Plan::new(&settings, (1920, 1080), false), None);
+    }
+
+    #[test]
+    fn metalfx_is_used_only_where_available_and_falls_back_to_fsr() {
+        let settings = Settings {
+            render_scale: 0.5,
+            upscaler: METALFX,
+            sharpness: 0.,
+            fxaa: false,
+            ..Default::default()
+        };
+        let plan = Plan::new(&settings, (1920, 1080), true).unwrap();
+        assert!(plan.metalfx && !plan.easu);
+        // MetalFX needs no forced sharpening.
+        assert_eq!(plan.sharpness, 0.);
+        let plan = Plan::new(&settings, (1920, 1080), false).unwrap();
+        assert!(!plan.metalfx && plan.easu && plan.sharpness > 0.);
+        let native = Settings {
+            render_scale: 1.,
+            ..settings
+        };
+        assert_eq!(Plan::new(&native, (1920, 1080), true), None);
     }
 }

@@ -58,6 +58,8 @@ pub struct Settings {
     pub native_resolution: bool,
     pub fullscreen: bool,
     pub vsync: bool,
+    /// Render with Metal on Macs (OpenGL otherwise). Other systems ignore it.
+    pub metal: bool,
     pub anti_aliasing: u8,
     /// The arena's render resolution relative to the output, 0.5 to 2.0.
     pub render_scale: f32,
@@ -159,6 +161,7 @@ impl Default for Settings {
             native_resolution: false,
             fullscreen: false,
             vsync: true,
+            metal: true,
             anti_aliasing: 4,
             render_scale: 1.0,
             upscaler: 1,
@@ -225,6 +228,8 @@ impl Settings {
         self.render_scale = 1.0;
         self.sharpness = 0.0;
         self.fxaa = false;
+        // OpenGL is the long-standing renderer to fall back on.
+        self.metal = false;
     }
     pub fn record_session(&mut self, tracker: &tankyard_client::achievements::Tracker) {
         let (rounds, kills) = tracker.session_totals();

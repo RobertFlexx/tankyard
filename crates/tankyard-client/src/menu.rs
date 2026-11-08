@@ -29,6 +29,8 @@ const GRAPHICS_SHAPE_ROW: f32 = 99.0;
 const GRAPHICS_TEXTURE_LABEL: f32 = 152.0;
 const GRAPHICS_TEXTURE_ROW: f32 = 163.0;
 const GRAPHICS_TEXTURE_NOTE: f32 = 213.0;
+const GRAPHICS_RENDERER_ROW: f32 = 240.0;
+const GRAPHICS_RENDERER_NOTE: f32 = 292.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -2299,10 +2301,17 @@ impl Menu {
     ) -> Option<Action> {
         label("QUALITY PRESET", x, by + 19.0 * s, 13.0 * s, muted_color());
         // (name, render scale, upscaler, sharpness, FXAA, shape quality)
+        // Macs with MetalFX upscale with it; it needs less sharpening.
+        let metalfx = crate::graphics::metalfx_available();
+        let (upscaler, performance, balanced) = if metalfx {
+            (crate::upscale::METALFX, 0.3, 0.15)
+        } else {
+            (1, 0.45, 0.3)
+        };
         let presets = [
-            ("Performance", 0.65, 1, 0.45, false, 0),
-            ("Balanced", 0.85, 1, 0.3, false, 1),
-            ("Quality", 1.0, 1, 0.0, true, 2),
+            ("Performance", 0.65, upscaler, performance, false, 0),
+            ("Balanced", 0.85, upscaler, balanced, false, 1),
+            ("Quality", 1.0, upscaler, 0.0, true, 2),
             ("Ultra", 1.5, 0, 0.15, false, 2),
         ];
         let width = col / presets.len() as f32;
@@ -2366,9 +2375,9 @@ impl Menu {
             muted_color(),
         );
         label("UPSCALER", x, by + 172.0 * s, 13.0 * s, muted_color());
-        let names = crate::upscale::UPSCALERS;
+        let names = &crate::upscale::UPSCALERS[..if metalfx { 3 } else { 2 }];
         let width = col / names.len() as f32;
-        for (i, name) in names.into_iter().enumerate() {
+        for (i, &name) in names.iter().enumerate() {
             if button(
                 Rect::new(
                     x + i as f32 * width,
@@ -2377,7 +2386,11 @@ impl Menu {
                     33.0 * s,
                 ),
                 if i == 1 { "AMD FSR 1" } else { name },
-                usize::from(settings.upscaler) == i,
+                // A MetalFX setting from another Mac runs as FSR 1 here.
+                usize::from(match settings.upscaler {
+                    crate::upscale::METALFX if !metalfx => 1,
+                    upscaler => upscaler,
+                }) == i,
                 true,
                 s * 0.72,
             ) {
@@ -2400,6 +2413,7 @@ impl Menu {
         );
         let note = match &self.post_error {
             Some(error) => format!("Post-processing is unavailable on this device, so the arena uses bilinear filtering. {error}"),
+            None if metalfx => "MetalFX is Apple's upscaler for Apple GPUs. DLSS, XeSS and FSR 2/3 need DirectX 12 or Vulkan, which Macs don't have.".into(),
             None => "DLSS and XeSS need DirectX 12 or Vulkan with vendor SDKs, and HDR output needs a display path OpenGL windows don't offer, so they aren't available. FSR 1 works on every GPU.".into(),
         };
         wrap(
@@ -2660,6 +2674,31 @@ impl Menu {
                     11. * s,
                     muted_color(),
                 );
+                if cfg!(target_os = "macos") {
+                    if toggle(
+                        Rect::new(rx, by + GRAPHICS_RENDERER_ROW * s, col, 33.0 * s),
+                        "Metal renderer  (restart to apply)",
+                        &mut settings.metal,
+                        s,
+                    ) {
+                        let _ = settings.save();
+                    }
+                    wrap(
+                        match (crate::graphics::metal(), settings.metal) {
+                            (true, true) => "Rendering with Metal, native to Apple GPUs.",
+                            (false, false) => {
+                                "Rendering with OpenGL, translated to Metal by macOS. Metal is faster."
+                            }
+                            (_, true) => "Metal starts after a restart.",
+                            (_, false) => "OpenGL starts after a restart.",
+                        },
+                        rx,
+                        by + GRAPHICS_RENDERER_NOTE * s,
+                        col,
+                        11.0 * s,
+                        muted_color(),
+                    );
+                }
             }
             1 => {
                 label("Appearance", x, by + 20.0 * s, 25.0 * s, text_color());

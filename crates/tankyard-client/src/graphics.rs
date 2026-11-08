@@ -20,6 +20,78 @@ pub const MSAA_LIMIT: u8 = if cfg!(all(target_os = "macos", target_arch = "aarch
 } else {
     8
 };
+/// The current screen image. Metal reads the presented frame; call
+/// `prepare_screen_capture` a frame earlier so the screen is readable.
+pub fn screen_image() -> Option<Image> {
+    if metal() {
+        unsafe {
+            let mut gl = get_internal_gl();
+            gl.flush();
+            let (width, height, top_down) = gl.quad_context.read_screen()?;
+            // Images here are bottom-up, as OpenGL stores the screen.
+            let row = width as usize * 4;
+            let bytes = top_down
+                .chunks_exact(row)
+                .rev()
+                .flatten()
+                .copied()
+                .collect();
+            Some(Image {
+                bytes,
+                width: width.min(u32::from(u16::MAX)) as u16,
+                height: height.min(u32::from(u16::MAX)) as u16,
+            })
+        }
+    } else {
+        // macroquad reads the framebuffer bottom-up, as OpenGL stores it.
+        Some(get_screen_data())
+    }
+}
+/// Whether this Mac has a Metal GPU, checked before the window opens so a
+/// Mac without one starts with OpenGL.
+#[cfg(target_os = "macos")]
+pub fn metal_device_present() -> bool {
+    #[link(name = "Metal", kind = "framework")]
+    unsafe extern "C" {
+        fn MTLCreateSystemDefaultDevice() -> *mut std::ffi::c_void;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(object: *const std::ffi::c_void);
+    }
+    unsafe {
+        let device = MTLCreateSystemDefaultDevice();
+        if device.is_null() {
+            return false;
+        }
+        CFRelease(device);
+        true
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub fn metal_device_present() -> bool {
+    false
+}
+/// Whether MetalFX upscaling is available (Metal on macOS 13 or later).
+pub fn metalfx_available() -> bool {
+    unsafe { get_internal_gl().quad_context.spatial_upscaler_available() }
+}
+/// Upscale `input` into `output` with MetalFX after the draws queued so far.
+pub fn metalfx_upscale(input: &Texture2D, output: &Texture2D) -> bool {
+    unsafe {
+        let mut gl = get_internal_gl();
+        gl.flush();
+        gl.quad_context
+            .spatial_upscale(input.raw_miniquad_id(), output.raw_miniquad_id())
+    }
+}
+pub fn prepare_screen_capture() {
+    unsafe { get_internal_gl().quad_context.prepare_screen_reads() };
+}
+/// Whether the game renders with Metal (Macs) rather than OpenGL.
+pub fn metal() -> bool {
+    unsafe { get_internal_gl().quad_context.info().backend == miniquad::Backend::Metal }
+}
 pub fn set_quality(quality: u8) {
     QUALITY.with(|q| q.set(quality.min(2)));
 }
@@ -72,7 +144,9 @@ pub fn texture_count() -> usize {
 pub fn refresh_capabilities(filter: u8) {
     let samples = unsafe {
         let gl = get_internal_gl();
-        if gl.quad_context.info().backend == miniquad::Backend::OpenGl
+        if let Some(maximum) = gl.quad_context.max_render_samples() {
+            maximum.clamp(1, MSAA_LIMIT.into()) as u8
+        } else if gl.quad_context.info().backend == miniquad::Backend::OpenGl
             && gl.quad_context.info().features.resolve_attachments
         {
             let mut maximum = 1;
@@ -85,7 +159,9 @@ pub fn refresh_capabilities(filter: u8) {
     MAX_SAMPLES.with(|s| s.set(samples));
     let maximum = unsafe {
         let gl = get_internal_gl();
-        if gl.quad_context.info().backend != miniquad::Backend::OpenGl {
+        if let Some(maximum) = gl.quad_context.max_anisotropy() {
+            maximum.clamp(1, 16)
+        } else if gl.quad_context.info().backend != miniquad::Backend::OpenGl {
             1
         } else {
             use miniquad::graphics::raw_gl::*;
@@ -117,6 +193,15 @@ pub fn refresh_capabilities(filter: u8) {
         }
     };
     MAX_ANISOTROPY.with(|v| v.set(maximum));
+    log::info!(
+        "Renderer: {}; MSAA up to {samples}x, filtering up to {maximum}x, MetalFX {}",
+        if metal() { "Metal" } else { "OpenGL" },
+        if metalfx_available() {
+            "available"
+        } else {
+            "unavailable"
+        },
+    );
     FILTER.with(|v| v.set(0));
     set_filter(filter);
 }
@@ -155,6 +240,19 @@ pub fn set_filter(filter: u8) {
             // Restore the binding so Miniquad's cached GL state stays correct.
             unsafe {
                 let gl = get_internal_gl();
+                let id = texture.raw_miniquad_id();
+                if initialize {
+                    gl.quad_context.texture_generate_mipmaps(id);
+                    gl.quad_context.texture_set_min_filter(
+                        id,
+                        miniquad::FilterMode::Linear,
+                        miniquad::MipmapFilterMode::Linear,
+                    );
+                }
+                // Metal sets filtering itself; OpenGL goes through raw calls.
+                if gl.quad_context.texture_set_anisotropy(id, filter) {
+                    continue;
+                }
                 #[cfg(not(target_vendor = "apple"))]
                 let miniquad::RawId::OpenGl(id) =
                     gl.quad_context.texture_raw_id(texture.raw_miniquad_id());
@@ -165,15 +263,6 @@ pub fn set_filter(filter: u8) {
                 };
                 {
                     use miniquad::graphics::raw_gl::*;
-                    if initialize {
-                        gl.quad_context
-                            .texture_generate_mipmaps(texture.raw_miniquad_id());
-                        gl.quad_context.texture_set_min_filter(
-                            texture.raw_miniquad_id(),
-                            miniquad::FilterMode::Linear,
-                            miniquad::MipmapFilterMode::Linear,
-                        );
-                    }
                     let mut previous = 0;
                     glGetIntegerv(0x8069, &mut previous);
                     glBindTexture(GL_TEXTURE_2D, id);
