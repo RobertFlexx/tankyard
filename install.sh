@@ -62,10 +62,14 @@ fi
 # 30 seconds below 1 KB/s instead of after a fixed total time.
 attempts=$(printenv TANKYARD_DOWNLOAD_ATTEMPTS || true)
 case "$attempts" in ''|*[!0-9]*) attempts=6 ;; esac
+# Optional: a GitHub token raises the API's rate limit for the fallback below.
+token=$(printenv TANKYARD_GITHUB_TOKEN || true)
 fetch() {
     try=1
     pause=2
     tries=${4:-$attempts}
+    auth=
+    case "$1" in https://api.github.com/*) auth=${token:+"Authorization: Bearer $token"} ;; esac
     meter=--silent
     if [ "${3:-}" = progress ] && [ -t 2 ]; then meter=--progress-bar; fi
     while :; do
@@ -74,7 +78,7 @@ fetch() {
         # shellcheck disable=SC2086
         code=$(curl --fail --location --connect-timeout 10 --speed-limit 1024 --speed-time 30 \
             --proto '=https' --proto-redir '=https' --tlsv1.2 $meter --show-error \
-            ${5:+--header} ${5:+"$5"} $resume --write-out '%{http_code}' --output "$2" "$1") && return 0
+            ${5:+--header} ${5:+"$5"} ${auth:+--header} ${auth:+"$auth"} $resume --write-out '%{http_code}' --output "$2" "$1") && return 0
         status=$?
         fetch_code=$code
         case "$code" in

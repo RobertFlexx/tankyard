@@ -51,6 +51,9 @@ function Save-Download([string]$Uri, [string]$OutFile, [int]$Tries = $Attempts, 
 $ViaApi = $false
 $ReleaseInfo = $null
 function Save-ReleaseFile([string]$Name, [string]$OutFile) {
+    # Optional: a GitHub token raises the API's rate limit.
+    $Auth = @{}
+    if ($env:TANKYARD_GITHUB_TOKEN) { $Auth.Authorization = "Bearer $env:TANKYARD_GITHUB_TOKEN" }
     if (-not $script:ViaApi) {
         $Uri = if ($Version -eq "latest") { "$Releases/latest/download/$Name" } else { "$Releases/download/$Version/$Name" }
         try { Save-Download $Uri $OutFile 2; return }
@@ -60,12 +63,12 @@ function Save-ReleaseFile([string]$Name, [string]$OutFile) {
     }
     if ($null -eq $script:ReleaseInfo) {
         $Release = if ($Version -eq "latest") { "latest" } else { "tags/$Version" }
-        Save-Download "https://api.github.com/repos/$Repository/releases/$Release" "$WorkDir\release.json" $Attempts @{ Accept = "application/vnd.github+json" }
+        Save-Download "https://api.github.com/repos/$Repository/releases/$Release" "$WorkDir\release.json" $Attempts (@{ Accept = "application/vnd.github+json" } + $Auth)
         $script:ReleaseInfo = Get-Content -Raw "$WorkDir\release.json" | ConvertFrom-Json
     }
     $Asset = @($script:ReleaseInfo.assets | Where-Object { $_.name -eq $Name })[0]
     if ($null -eq $Asset) { throw "The release has no $Name." }
-    Save-Download $Asset.url $OutFile $Attempts @{ Accept = "application/octet-stream" }
+    Save-Download $Asset.url $OutFile $Attempts (@{ Accept = "application/octet-stream" } + $Auth)
 }
 
 try {

@@ -37,7 +37,7 @@ sh install.sh --version v0.2.9 --no-desktop
 sh install.sh --server
 ~~~
 
-The installers retry busy-server answers from GitHub (502, 503, 504, 429 and dropped connections) with growing pauses, resume interrupted downloads, and stop at once on a missing release. When github.com's download links keep failing, the installers fetch the same files through the GitHub API instead; checksums are verified either way. Set `TANKYARD_DOWNLOAD_ATTEMPTS` to change the number of tries (6 by default). Nothing is replaced until the download is verified, so it is always safe to run the command again.
+The installers retry busy-server answers from GitHub (502, 503, 504, 429 and dropped connections) with growing pauses, resume interrupted downloads, and stop at once on a missing release. When github.com's download links keep failing, the installers fetch the same files through the GitHub API instead; checksums are verified either way. Set `TANKYARD_GITHUB_TOKEN` to a GitHub token to raise the API's rate limit. Set `TANKYARD_DOWNLOAD_ATTEMPTS` to change the number of tries (6 by default). Nothing is replaced until the download is verified, so it is always safe to run the command again.
 
 Use --server to install the dedicated server and WebSocket relay. Copy the sample server configuration out of the release archive, then edit it before hosting. Updates do not replace your server configuration.
 

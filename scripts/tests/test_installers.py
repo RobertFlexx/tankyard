@@ -50,6 +50,8 @@ if failures:
         sys.exit(22)
 fixtures = Path(os.environ["TANKYARD_FIXTURES"])
 if url.startswith("https://api.github.com/"):
+    if os.environ.get("TANKYARD_REQUIRE_TOKEN"):
+        assert "Authorization: Bearer test-token" in args
     names = sorted(path.name for path in fixtures.iterdir())
     output = Path(args[args.index("--output") + 1])
     if "/releases/assets/" in url:
@@ -64,6 +66,7 @@ if url.startswith("https://api.github.com/"):
                           f'"name": "Tank Yard v1.2.3", "assets": [{assets}]}}')
         sys.exit(0)
 elif os.environ.get("TANKYARD_GITHUB_DOWN"):
+    assert not any(arg.startswith("Authorization") for arg in args)
     print("504", end="")
     sys.exit(22)
 else:
@@ -139,6 +142,12 @@ case "$1" in -s) printf '%s\\n' Linux ;; -m) printenv TANKYARD_TEST_ARCH ;; esac
         result = subprocess.run([str(self.destination / "tankyard"), "--version"], text=True, capture_output=True, check=True)
         self.assertEqual(result.stdout.strip(), "tankyard 1.2.3")
         self.run_installer("--version", "v1.2.3", "--no-desktop")
+
+    def test_api_requests_send_an_optional_token(self):
+        self.env["TANKYARD_GITHUB_DOWN"] = "1"
+        self.env["TANKYARD_GITHUB_TOKEN"] = "test-token"
+        self.env["TANKYARD_REQUIRE_TOKEN"] = "1"
+        self.run_installer("--no-desktop")
 
     def test_damaged_api_download_is_rejected(self):
         self.env["TANKYARD_GITHUB_DOWN"] = "1"

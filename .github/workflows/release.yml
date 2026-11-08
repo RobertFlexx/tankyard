@@ -333,6 +333,9 @@ jobs:
     needs: publish
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
+    env:
+      # Runners share addresses, so unauthenticated API fallbacks hit rate limits.
+      TANKYARD_GITHUB_TOKEN: ${{ github.token }}
     strategy:
       fail-fast: false
       matrix:
