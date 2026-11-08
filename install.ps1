@@ -17,25 +17,55 @@ if ($env:TANKYARD_DOWNLOAD_ATTEMPTS -match '^\d+$') { $Attempts = [Math]::Max(1,
 # GitHub's release servers sometimes answer 502/503/504 or drop connections
 # under load. Retry those with growing pauses; fail at once on 404 and other
 # permanent answers.
-function Save-Download([string]$Uri, [string]$OutFile) {
+function Test-Transient($ErrorRecord) {
+    $Code = 0
+    $Response = $ErrorRecord.Exception.Response
+    if ($null -ne $Response) { $Code = [int]$Response.StatusCode }
+    return $Code -eq 0 -or $Code -eq 408 -or $Code -eq 429 -or $Code -ge 500
+}
+
+function Save-Download([string]$Uri, [string]$OutFile, [int]$Tries = $Attempts, [hashtable]$Headers = @{}) {
     $Pause = 2
     for ($Try = 1; ; $Try++) {
         try {
-            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -Headers $Headers -UseBasicParsing
             return
         }
         catch {
             $Code = 0
             $Response = $_.Exception.Response
             if ($null -ne $Response) { $Code = [int]$Response.StatusCode }
-            $Transient = $Code -eq 0 -or $Code -eq 408 -or $Code -eq 429 -or $Code -ge 500
-            if (-not $Transient -or $Try -ge $Attempts) { throw }
+            if (-not (Test-Transient $_) -or $Try -ge $Tries) { throw }
             $Reason = if ($Code -eq 0) { "no response" } else { "HTTP $Code" }
             Write-Host "The download server is busy ($Reason); retrying in $Pause s..." -ForegroundColor Yellow
             Start-Sleep -Seconds $Pause
             $Pause = [Math]::Min($Pause * 2, 30)
         }
     }
+}
+
+# A file from release $Version, or from the latest release. github.com's
+# download links sometimes answer 504 for long stretches while GitHub's API
+# serves the same files, so after two busy answers the file, and every later
+# one, comes through the API instead.
+$ViaApi = $false
+$ReleaseInfo = $null
+function Save-ReleaseFile([string]$Name, [string]$OutFile) {
+    if (-not $script:ViaApi) {
+        $Uri = if ($Version -eq "latest") { "$Releases/latest/download/$Name" } else { "$Releases/download/$Version/$Name" }
+        try { Save-Download $Uri $OutFile 2; return }
+        catch { if (-not (Test-Transient $_)) { throw } }
+        Write-Host "Downloading through the GitHub API instead." -ForegroundColor Yellow
+        $script:ViaApi = $true
+    }
+    if ($null -eq $script:ReleaseInfo) {
+        $Release = if ($Version -eq "latest") { "latest" } else { "tags/$Version" }
+        Save-Download "https://api.github.com/repos/$Repository/releases/$Release" "$WorkDir\release.json" $Attempts @{ Accept = "application/vnd.github+json" }
+        $script:ReleaseInfo = Get-Content -Raw "$WorkDir\release.json" | ConvertFrom-Json
+    }
+    $Asset = @($script:ReleaseInfo.assets | Where-Object { $_.name -eq $Name })[0]
+    if ($null -eq $Asset) { throw "The release has no $Name." }
+    Save-Download $Asset.url $OutFile $Attempts @{ Accept = "application/octet-stream" }
 }
 
 try {
@@ -54,7 +84,7 @@ try {
     if ($Version -eq "latest") {
         # The latest checksum list names its archives, and with them the
         # version: no GitHub API request, which is rate limited.
-        try { Save-Download "$Releases/latest/download/SHA256SUMS" "$WorkDir\SHA256SUMS" }
+        try { Save-ReleaseFile SHA256SUMS "$WorkDir\SHA256SUMS" }
         catch { throw "Could not reach the latest release. Check your connection, or try again in a minute. $($_.Exception.Message)" }
         $Named = Get-Content "$WorkDir\SHA256SUMS" | ForEach-Object {
             if ($_ -match '^[0-9a-f]{64}  tankyard-(v\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?)-windows-x86_64\.zip$') { $Matches[1] }
@@ -62,13 +92,13 @@ try {
         if (-not $Named) { throw "The latest release has no Windows build." }
         $Version = $Named
     } else {
-        try { Save-Download "$Releases/download/$Version/SHA256SUMS" "$WorkDir\SHA256SUMS" }
+        try { Save-ReleaseFile SHA256SUMS "$WorkDir\SHA256SUMS" }
         catch { throw "Release $Version or its checksums are unavailable. $($_.Exception.Message)" }
     }
     $RootName = "tankyard-$Version-windows-x86_64"
     $Archive = "$RootName.zip"
     Write-Host "Downloading $Version for Windows..."
-    try { Save-Download "$Releases/download/$Version/$Archive" "$WorkDir\$Archive" }
+    try { Save-ReleaseFile $Archive "$WorkDir\$Archive" }
     catch { throw "Download failed; the existing installation was kept. Run the installer again to retry. $($_.Exception.Message)" }
     $Line = Get-Content "$WorkDir\SHA256SUMS" | Where-Object { $_ -match ("^[0-9a-f]{64}  " + [regex]::Escape($Archive) + "$") }
     if (@($Line).Count -ne 1) { throw "No checksum for $Archive." }

@@ -6,7 +6,7 @@ $FixtureDir = Join-Path $Work "release"
 $Destination = Join-Path $Work "installed game"
 $Installer = Join-Path $PSScriptRoot "../../install.ps1"
 function Invoke-WebRequest {
-    param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$TimeoutSec)
+    param([string]$Uri, [string]$OutFile, [hashtable]$Headers, [switch]$UseBasicParsing, [int]$TimeoutSec)
     $File = ([Uri]$Uri).Segments[-1]
     Copy-Item (Join-Path $FixtureDir $File) $OutFile -Force
 }

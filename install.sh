@@ -55,7 +55,7 @@ elif command -v shasum >/dev/null 2>&1; then
 else
     die "Install sha256sum or shasum to verify the download."
 fi
-# fetch URL FILE [progress]: download over HTTPS only. GitHub's release
+# fetch URL FILE [progress] [ATTEMPTS] [HEADER]: download over HTTPS only. GitHub's release
 # servers sometimes answer 502/503/504 or drop connections under load, so
 # those are retried with growing pauses and partial downloads resume.
 # Missing files (404) fail at once. Stalled transfers are abandoned after
@@ -65,6 +65,7 @@ case "$attempts" in ''|*[!0-9]*) attempts=6 ;; esac
 fetch() {
     try=1
     pause=2
+    tries=${4:-$attempts}
     meter=--silent
     if [ "${3:-}" = progress ] && [ -t 2 ]; then meter=--progress-bar; fi
     while :; do
@@ -73,8 +74,9 @@ fetch() {
         # shellcheck disable=SC2086
         code=$(curl --fail --location --connect-timeout 10 --speed-limit 1024 --speed-time 30 \
             --proto '=https' --proto-redir '=https' --tlsv1.2 $meter --show-error \
-            $resume --write-out '%{http_code}' --output "$2" "$1") && return 0
+            ${5:+--header} ${5:+"$5"} $resume --write-out '%{http_code}' --output "$2" "$1") && return 0
         status=$?
+        fetch_code=$code
         case "$code" in
             416) rm -f "$2" ;;    # A stale partial file; start again.
             ''|000|408|429|5??) ;;
@@ -82,7 +84,7 @@ fetch() {
         esac
         # curl reports HTTP errors as 22; without a status it never connected.
         if [ -z "$code" ] && [ "$status" = 22 ]; then return "$status"; fi
-        [ "$try" -lt "$attempts" ] || return "$status"
+        [ "$try" -lt "$tries" ] || return "$status"
         printf 'Tank Yard: the download server is busy (%s); retrying in %ss…\n' \
             "${code:-no response}" "$pause" >&2
         sleep "$pause"
@@ -97,6 +99,40 @@ else
     printf 'Tank Yard\n'
 fi
 base="https://github.com/$repository/releases"
+# release_file NAME FILE [progress]: a file from release $version, or from the
+# latest release. github.com's download links sometimes answer 504 for long
+# stretches while GitHub's API serves the same files, so after two busy
+# answers the file, and every later one, comes through the API instead.
+via_api=no
+release_file() {
+    if [ "$via_api" = no ]; then
+        if [ "$version" = latest ]; then
+            fetch "$base/latest/download/$1" "$2" "${3:-}" 2 && return 0
+        else
+            fetch "$base/download/$version/$1" "$2" "${3:-}" 2 && return 0
+        fi
+        case "$fetch_code" in ''|000|408|429|5??) ;; *) return 1 ;; esac
+        printf 'Tank Yard: downloading through the GitHub API instead.\n' >&2
+        via_api=yes
+    fi
+    if [ ! -s "$work_dir/release.json" ]; then
+        release=latest
+        [ "$version" = latest ] || release="tags/$version"
+        fetch "https://api.github.com/repos/$repository/releases/$release" "$work_dir/release.json" \
+            "" "" 'Accept: application/vnd.github+json' || { rm -f "$work_dir/release.json"; return 1; }
+    fi
+    # Each asset lists its API address before its name.
+    asset=$(tr ',' '\n' < "$work_dir/release.json" | awk -v name="$1" '
+        function value(key) {
+            if (!match($0, "\"" key "\": *\"[^\"]*\"")) return ""
+            text = substr($0, RSTART, RLENGTH); sub(/^"[a-z]+": *"/, "", text); return substr(text, 1, length(text) - 1)
+        }
+        value("url") ~ /^https:\/\/api\.github\.com\/repos\/[^"]*\/releases\/assets\/[0-9]+$/ { url = value("url") }
+        value("name") == name && url != "" { print url; exit }')
+    [ -n "$asset" ] || return 1
+    rm -f "$2"
+    fetch "$asset" "$2" "${3:-}" "" 'Accept: application/octet-stream'
+}
 case "$version" in latest|v[0-9]*) ;; *) die "Use a release tag such as v0.2.8." ;; esac
 case "$version" in *[!a-zA-Z0-9.-]*) die "Invalid release tag." ;; esac
 
@@ -115,7 +151,7 @@ trap 'exit 143' TERM
 if [ "$version" = latest ]; then
     # The latest release's checksum list names its archives, and with them
     # the version: one request instead of resolving the release first.
-    fetch "$base/latest/download/SHA256SUMS" "$work_dir/SHA256SUMS" \
+    release_file SHA256SUMS "$work_dir/SHA256SUMS" \
         || die "Could not reach the latest release. Check your connection, or try again in a minute."
     version=$(awk -v suffix="-$platform.tar.gz" '
         length($2) > length(suffix) && substr($2, length($2) - length(suffix) + 1) == suffix \
@@ -125,7 +161,7 @@ if [ "$version" = latest ]; then
     case "$version" in v[0-9]*) ;; *) die "The latest release has no $platform build." ;; esac
     case "$version" in *[!a-zA-Z0-9.-]*) die "Invalid release tag." ;; esac
 else
-    fetch "$base/download/$version/SHA256SUMS" "$work_dir/SHA256SUMS" \
+    release_file SHA256SUMS "$work_dir/SHA256SUMS" \
         || die "Release $version or its checksums are unavailable."
 fi
 root_name="tankyard-$version-$platform"
@@ -134,7 +170,7 @@ printf 'Downloading %s for %s…\n' "$version" "$platform"
 expected=$(awk -v name="$archive" '$2 == name { print $1 }' "$work_dir/SHA256SUMS")
 [ "$(printf '%s' "$expected" | wc -c | tr -d ' ')" = 64 ] || die "No checksum for $archive."
 case "$expected" in *[!0-9a-f]*) die "Invalid checksum." ;; esac
-fetch "$base/download/$version/$archive" "$work_dir/$archive" progress \
+release_file "$archive" "$work_dir/$archive" progress \
     || die "Download failed; the existing installation was kept. Run the installer again to retry."
 actual=$(checksum "$work_dir/$archive")
 [ "$actual" = "$expected" ] || die "Checksum mismatch; the existing installation was kept."

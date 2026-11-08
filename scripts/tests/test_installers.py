@@ -48,10 +48,26 @@ if failures:
         counter.write_text(str(left - 1))
         print("504", end="")
         sys.exit(22)
-if url.endswith("/latest"):
-    print("https://github.com/RobertFlexx/tankyard/releases/tag/v1.2.3", end="")
-    sys.exit(0)
-source = Path(os.environ["TANKYARD_FIXTURES"]) / url.rsplit("/", 1)[-1]
+fixtures = Path(os.environ["TANKYARD_FIXTURES"])
+if url.startswith("https://api.github.com/"):
+    names = sorted(path.name for path in fixtures.iterdir())
+    output = Path(args[args.index("--output") + 1])
+    if "/releases/assets/" in url:
+        assert "Accept: application/octet-stream" in args
+        source = fixtures / names[int(url.rsplit("/", 1)[-1])]
+    else:
+        assets = ",".join(
+            f'{{"url": "https://api.github.com/repos/RobertFlexx/tankyard/releases/assets/{index}", '
+            f'"id": {index}, "name": "{name}", "uploader": {{"url": "https://api.github.com/users/x"}}}}'
+            for index, name in enumerate(names))
+        output.write_text(f'{{"url": "https://api.github.com/repos/RobertFlexx/tankyard/releases/1", '
+                          f'"name": "Tank Yard v1.2.3", "assets": [{assets}]}}')
+        sys.exit(0)
+elif os.environ.get("TANKYARD_GITHUB_DOWN"):
+    print("504", end="")
+    sys.exit(22)
+else:
+    source = fixtures / url.rsplit("/", 1)[-1]
 if not source.is_file():
     sys.exit(22)
 shutil.copyfile(source, args[args.index("--output") + 1])
@@ -112,8 +128,23 @@ case "$1" in -s) printf '%s\\n' Linux ;; -m) printenv TANKYARD_TEST_ARCH ;; esac
         self.env["TANKYARD_DOWNLOAD_ATTEMPTS"] = "2"
         result = self.run_installer("--no-desktop", success=False)
         self.assertIn("Could not reach the latest release", result.stderr)
-        self.assertEqual(counter.read_text(), "97")
+        # Two tries on github.com, then two through the API.
+        self.assertEqual(counter.read_text(), "95")
         self.assertFalse(self.destination.exists())
+
+    def test_downloads_switch_to_the_api_while_github_downloads_fail(self):
+        self.env["TANKYARD_GITHUB_DOWN"] = "1"
+        result = self.run_installer("--no-desktop")
+        self.assertEqual(result.stderr.count("through the GitHub API"), 1, result.stderr)
+        result = subprocess.run([str(self.destination / "tankyard"), "--version"], text=True, capture_output=True, check=True)
+        self.assertEqual(result.stdout.strip(), "tankyard 1.2.3")
+        self.run_installer("--version", "v1.2.3", "--no-desktop")
+
+    def test_damaged_api_download_is_rejected(self):
+        self.env["TANKYARD_GITHUB_DOWN"] = "1"
+        self.archive.write_bytes(b"damaged download")
+        result = self.run_installer("--no-desktop", success=False)
+        self.assertIn("Checksum mismatch", result.stderr)
 
     def test_checksum_failure_keeps_an_existing_install(self):
         self.destination.mkdir()
