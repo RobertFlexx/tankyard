@@ -51,6 +51,8 @@ pub fn probe(address: &str) -> Result<Probe, NetError> {
     socket.set_nonblocking(true)?;
     let base = u64::from_le_bytes(renet_netcode::generate_random_bytes());
     let mut sent = [None::<Instant>; SAMPLES];
+    // Kept apart from `sent`, so an answered sample is never sent again.
+    let mut answered = [false; SAMPLES];
     let mut rtts = Vec::with_capacity(SAMPLES);
     let mut status = None;
     let start = Instant::now();
@@ -71,7 +73,9 @@ pub fn probe(address: &str) -> Result<Probe, NetError> {
                         continue;
                     };
                     let index = nonce.wrapping_sub(base) as usize;
-                    if let Some(at) = sent.get_mut(index).and_then(Option::take) {
+                    if let Some(at) = sent.get(index).copied().flatten()
+                        && !std::mem::replace(&mut answered[index], true)
+                    {
                         rtts.push(at.elapsed().as_secs_f32() * 1000.);
                         status = Some(reply);
                     }

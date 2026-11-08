@@ -503,6 +503,250 @@ fn tag(text: &str, out: &mut Out) -> usize {
     i
 }
 
+/// How a run of rendered Markdown text looks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Style {
+    Text,
+    Strong,
+    Code,
+    Link,
+}
+
+pub type Spans = Vec<(Style, String)>;
+
+/// One block of a Markdown document, for the rendered view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Block {
+    Heading(u8, Spans),
+    Paragraph(Spans),
+    /// A list item: nesting depth, its marker (`•` or `1.`) and text.
+    Item(usize, String, Spans),
+    Quote(Spans),
+    /// Fenced or indented code, shown as written.
+    Code(Vec<String>),
+    /// Rows of cells; the first row is a header when `header` is set.
+    Table {
+        header: bool,
+        rows: Vec<Vec<Spans>>,
+    },
+    Rule,
+}
+
+/// Split Markdown into blocks. Covers what pack READMEs use; anything else
+/// reads as plain paragraphs.
+pub fn markdown_blocks(text: &str) -> Vec<Block> {
+    let text = text.replace("\r\n", "\n").replace('\t', "    ");
+    let mut blocks = Vec::new();
+    let mut paragraph: Vec<&str> = Vec::new();
+    let mut code: Option<Vec<String>> = None;
+    let flush = |paragraph: &mut Vec<&str>, blocks: &mut Vec<Block>| {
+        if !paragraph.is_empty() {
+            blocks.push(Block::Paragraph(inline(&paragraph.join(" "))));
+            paragraph.clear();
+        }
+    };
+    let mut lines = text.split('\n').peekable();
+    while let Some(line) = lines.next() {
+        let body = line.trim_start();
+        if body.starts_with("```") || body.starts_with("~~~") {
+            match code.take() {
+                Some(fenced) => blocks.push(Block::Code(fenced)),
+                None => {
+                    flush(&mut paragraph, &mut blocks);
+                    code = Some(Vec::new());
+                }
+            }
+            continue;
+        }
+        if let Some(fenced) = &mut code {
+            fenced.push(line.to_owned());
+            continue;
+        }
+        let indent = line.len() - body.len();
+        if body.is_empty() {
+            flush(&mut paragraph, &mut blocks);
+            continue;
+        }
+        let rule = body.len() >= 3
+            && b"-*_".iter().any(|&c| {
+                body.bytes().all(|b| b == c || b == b' ')
+                    && body.bytes().filter(|&b| b == c).count() >= 3
+            });
+        if rule {
+            flush(&mut paragraph, &mut blocks);
+            blocks.push(Block::Rule);
+        } else if let Some(level) = heading_level(body) {
+            flush(&mut paragraph, &mut blocks);
+            let title = body[level as usize..]
+                .trim()
+                .trim_end_matches('#')
+                .trim_end();
+            blocks.push(Block::Heading(level, inline(title)));
+        } else if let Some(quote) = body.strip_prefix('>') {
+            flush(&mut paragraph, &mut blocks);
+            let mut quoted = vec![quote.trim_start().to_owned()];
+            while let Some(next) = lines.peek().and_then(|l| l.trim_start().strip_prefix('>')) {
+                quoted.push(next.trim_start().to_owned());
+                lines.next();
+            }
+            blocks.push(Block::Quote(inline(&quoted.join(" "))));
+        } else if let Some((marker, rest)) = list_marker(body) {
+            flush(&mut paragraph, &mut blocks);
+            blocks.push(Block::Item(indent / 2, marker, inline(rest)));
+        } else if body.starts_with('|') {
+            flush(&mut paragraph, &mut blocks);
+            let mut rows = vec![line.to_owned()];
+            while let Some(next) = lines.peek().filter(|l| l.trim_start().starts_with('|')) {
+                rows.push((*next).to_owned());
+                lines.next();
+            }
+            blocks.push(table(&rows));
+        } else if indent >= 4 && paragraph.is_empty() {
+            let mut rows = vec![line[4..].to_owned()];
+            while let Some(next) = lines
+                .peek()
+                .filter(|l| l.starts_with("    ") || l.trim().is_empty())
+            {
+                rows.push(next.get(4..).unwrap_or("").to_owned());
+                lines.next();
+            }
+            while rows.last().is_some_and(|r| r.trim().is_empty()) {
+                rows.pop();
+            }
+            blocks.push(Block::Code(rows));
+        } else {
+            paragraph.push(body);
+        }
+    }
+    if let Some(fenced) = code {
+        blocks.push(Block::Code(fenced));
+    }
+    flush(&mut paragraph, &mut blocks);
+    blocks
+}
+
+/// A pipe table. The `|---|---|` line marks the row above it as the header.
+fn table(lines: &[String]) -> Block {
+    let cells = |line: &str| -> Vec<String> {
+        let line = line.trim();
+        let line = line.strip_prefix('|').unwrap_or(line);
+        let line = line.strip_suffix('|').unwrap_or(line);
+        line.split('|').map(|cell| cell.trim().to_owned()).collect()
+    };
+    let separator = |row: &[String]| {
+        row.iter().all(|cell| {
+            let dashes = cell.trim_matches(':');
+            !dashes.is_empty() && dashes.bytes().all(|b| b == b'-')
+        })
+    };
+    let rows: Vec<Vec<String>> = lines.iter().map(|line| cells(line)).collect();
+    let header = rows.len() > 1 && separator(&rows[1]);
+    Block::Table {
+        header,
+        rows: rows
+            .iter()
+            .filter(|row| !separator(row))
+            .map(|row| row.iter().map(|cell| inline(cell)).collect())
+            .collect(),
+    }
+}
+
+fn heading_level(line: &str) -> Option<u8> {
+    let level = line.bytes().take_while(|&b| b == b'#').count();
+    ((1..=6).contains(&level) && line[level..].starts_with(' ')).then_some(level as u8)
+}
+
+fn list_marker(line: &str) -> Option<(String, &str)> {
+    for bullet in ["- ", "* ", "+ "] {
+        if let Some(rest) = line.strip_prefix(bullet) {
+            // Task lists keep their box.
+            for (box_, mark) in [("[ ] ", "☐"), ("[x] ", "☑"), ("[X] ", "☑")] {
+                if let Some(task) = rest.strip_prefix(box_) {
+                    return Some((mark.to_owned(), task));
+                }
+            }
+            return Some(("•".to_owned(), rest));
+        }
+    }
+    let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+    let rest = line[digits..]
+        .strip_prefix(". ")
+        .or_else(|| line[digits..].strip_prefix(") "))?;
+    (digits > 0 && digits < 10).then(|| (format!("{}.", &line[..digits]), rest))
+}
+
+/// Inline Markdown: `code`, **strong**, *emphasis* (shown plain), links and
+/// images (their text), and `<https://…>` autolinks.
+pub fn inline(text: &str) -> Spans {
+    let mut spans: Spans = Vec::new();
+    let mut push = |style: Style, text: &str| {
+        if text.is_empty() {
+            return;
+        }
+        match spans.last_mut() {
+            Some((last, joined)) if *last == style => joined.push_str(text),
+            _ => spans.push((style, text.to_owned())),
+        }
+    };
+    let mut strong = false;
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        let base = if strong { Style::Strong } else { Style::Text };
+        if let Some(code) = rest.strip_prefix('`')
+            && let Some(end) = code.find('`')
+        {
+            push(Style::Code, &code[..end]);
+            i += end + 2;
+        } else if rest.starts_with("**") || rest.starts_with("__") {
+            strong = !strong;
+            i += 2;
+        } else if let Some((label, len)) = link(rest) {
+            push(Style::Link, label);
+            i += len;
+        } else if let Some(url) = rest.strip_prefix('<')
+            && let Some(end) = url.find('>')
+            && (url.starts_with("http://") || url.starts_with("https://"))
+        {
+            push(Style::Link, &url[..end]);
+            i += end + 2;
+        } else if rest.starts_with('\\') && rest.len() > 1 {
+            let len = char_len(&rest[1..]);
+            push(base, &rest[1..1 + len]);
+            i += 1 + len;
+        } else if (rest.starts_with('*') || rest.starts_with('_')) && emphasis_marker(text, i) {
+            i += 1;
+        } else {
+            let len = char_len(rest);
+            push(base, &rest[..len]);
+            i += len;
+        }
+    }
+    spans
+}
+
+/// `[label](target)` or `![alt](src)`: the label and the length used.
+fn link(text: &str) -> Option<(&str, usize)> {
+    let image = usize::from(text.starts_with('!'));
+    let rest = text[image..].strip_prefix('[')?;
+    let close = rest.find("](")?;
+    let target = rest[close + 2..].find(')')?;
+    Some((&rest[..close], image + 1 + close + 2 + target + 1))
+}
+
+/// A lone `*` or `_` that opens or closes emphasis, rather than one inside a
+/// word like snake_case or a spaced-out `2 * 3`.
+fn emphasis_marker(text: &str, at: usize) -> bool {
+    let before = text[..at].chars().next_back();
+    let after = text[at + 1..].chars().next();
+    let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+    let space = |c: Option<char>| c.is_none_or(char::is_whitespace);
+    if text.as_bytes()[at] == b'_' && word(before) && word(after) {
+        return false;
+    }
+    !(space(before) && space(after))
+}
+
 /// A classic hex dump of `bytes`: offset, sixteen bytes, and their printable
 /// characters.
 pub fn hex_dump(bytes: &[u8]) -> Vec<Line> {
@@ -660,6 +904,120 @@ mod tests {
                 assert_eq!(joined, expected, "{language:?} changed {sample:?}");
             }
         }
+    }
+
+    #[test]
+    fn markdown_splits_into_blocks() {
+        let blocks = markdown_blocks(
+            "# Overclock\n\nA total\nconversion.\n\n- one\n  - nested\n1. first\n- [x] done\n\n> quoted\n> more\n\n```lua\nlocal x = 1\n```\n---\n| a | b |\n|---|---|\n\n    indented\n    code\n",
+        );
+        assert_eq!(
+            blocks,
+            vec![
+                Block::Heading(1, vec![(Style::Text, "Overclock".into())]),
+                Block::Paragraph(vec![(Style::Text, "A total conversion.".into())]),
+                Block::Item(0, "•".into(), vec![(Style::Text, "one".into())]),
+                Block::Item(1, "•".into(), vec![(Style::Text, "nested".into())]),
+                Block::Item(0, "1.".into(), vec![(Style::Text, "first".into())]),
+                Block::Item(0, "☑".into(), vec![(Style::Text, "done".into())]),
+                Block::Quote(vec![(Style::Text, "quoted more".into())]),
+                Block::Code(vec!["local x = 1".into()]),
+                Block::Rule,
+                Block::Table {
+                    header: true,
+                    rows: vec![vec![
+                        vec![(Style::Text, "a".into())],
+                        vec![(Style::Text, "b".into())]
+                    ]],
+                },
+                Block::Code(vec!["indented".into(), "code".into()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn markdown_inline_styles() {
+        assert_eq!(
+            inline(
+                "Run `mod-bench` for **real** numbers, see [the docs](https://x.y) or <https://a.b>."
+            ),
+            vec![
+                (Style::Text, "Run ".into()),
+                (Style::Code, "mod-bench".into()),
+                (Style::Text, " for ".into()),
+                (Style::Strong, "real".into()),
+                (Style::Text, " numbers, see ".into()),
+                (Style::Link, "the docs".into()),
+                (Style::Text, " or ".into()),
+                (Style::Link, "https://a.b".into()),
+                (Style::Text, ".".into()),
+            ]
+        );
+        // Emphasis markers go; underscores inside names and lone stars stay.
+        assert_eq!(
+            inline("*fast* snake_case 2 * 3 \\*literal\\* ![logo](a.png)"),
+            vec![
+                (Style::Text, "fast snake_case 2 * 3 *literal* ".into()),
+                (Style::Link, "logo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn markdown_tables_keep_cells_and_their_styles() {
+        let blocks = markdown_blocks(
+            "| Protocol | Effect |\n| :--- | ---: |\n| **Zero-G** | Half `power` |\n| Bare | |\n",
+        );
+        assert_eq!(
+            blocks,
+            vec![Block::Table {
+                header: true,
+                rows: vec![
+                    vec![
+                        vec![(Style::Text, "Protocol".into())],
+                        vec![(Style::Text, "Effect".into())]
+                    ],
+                    vec![
+                        vec![(Style::Strong, "Zero-G".into())],
+                        vec![(Style::Text, "Half ".into()), (Style::Code, "power".into())],
+                    ],
+                    vec![vec![(Style::Text, "Bare".into())], vec![]],
+                ],
+            }]
+        );
+        // Without a separator line, there is no header.
+        assert!(matches!(
+            &markdown_blocks("| a | b |")[0],
+            Block::Table { header: false, .. }
+        ));
+    }
+
+    #[test]
+    fn markdown_never_loses_unclosed_or_odd_input() {
+        for text in [
+            "```\nnever closed",
+            "`open",
+            "[label](",
+            "**bold",
+            "#nospace",
+            "> ",
+            "1.no",
+            "| lone",
+        ] {
+            let blocks = markdown_blocks(text);
+            assert!(
+                !blocks.is_empty() || text.trim() == ">",
+                "{text:?} vanished"
+            );
+        }
+        assert_eq!(
+            markdown_blocks("```\nnever closed"),
+            vec![Block::Code(vec!["never closed".into()])]
+        );
+        assert_eq!(
+            markdown_blocks("#nospace"),
+            vec![Block::Paragraph(vec![(Style::Text, "#nospace".into())])]
+        );
     }
 
     #[test]

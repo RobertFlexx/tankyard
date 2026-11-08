@@ -931,13 +931,26 @@ mod tests {
             movement: V2::new(0., 1.),
             ..Default::default()
         });
+        // Loopback delivery isn't instant. Receive without advancing time
+        // until the input lands, then run the one tick the test checks.
+        let deliver = |server: &mut UdpServer, arrived: &dyn Fn(&tankyard_core::Tank) -> bool| {
+            for _ in 0..500 {
+                server.update(Duration::ZERO).unwrap();
+                let tanks = &server.arenas[0].session.world.tanks;
+                if tanks.iter().any(|t| t.id == id && arrived(t)) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            server.update(step).unwrap();
+        };
         // Only the third packet reaches the transport. Its history contains
         // the two missing packets, including a press followed by a release.
         client
             .client
             .send_message(REALTIME_CHANNEL, encode(&history, MAX_INPUT_BYTES).unwrap());
         client.flush().unwrap();
-        server.update(step).unwrap();
+        deliver(&mut server, &|t| t.input.movement == V2::new(0., 1.));
         let tank = server.arenas[0]
             .session
             .world
@@ -966,7 +979,7 @@ mod tests {
             .client
             .send_message(REALTIME_CHANNEL, encode(&history, MAX_INPUT_BYTES).unwrap());
         client.flush().unwrap();
-        server.update(step).unwrap();
+        deliver(&mut server, &|t| t.last_input == 1);
         let tank = server.arenas[0]
             .session
             .world

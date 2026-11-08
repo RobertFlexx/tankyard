@@ -3,7 +3,7 @@
 //! numbers and syntax colors, art and models with a preview, and anything
 //! else as a hex dump. Creators can keep files private with `[source]` in
 //! `tankyard.toml`; those are listed but not shown.
-use crate::syntax::{self, Language, Line, Token};
+use crate::syntax::{self, Block, Language, Line, Style, Token};
 use crate::ui::{
     ui_line as draw_line, ui_rectangle as draw_rectangle,
     ui_rectangle_lines as draw_rectangle_lines, *,
@@ -29,6 +29,8 @@ pub struct Viewer {
     view: View,
     /// Show the source of art that is also text, such as SVG.
     source: bool,
+    /// Show Markdown as written instead of rendered.
+    markdown_raw: bool,
     /// A line to mark, from a safety review finding.
     mark: Option<usize>,
     scroll: f32,
@@ -68,8 +70,31 @@ enum View {
         texture: Texture2D,
         note: String,
     },
+    /// Rendered Markdown, laid out again when the width or theme changes.
+    Markdown {
+        blocks: Vec<Block>,
+        layout: Option<(u64, Layout)>,
+    },
     Message(String),
     Private,
+}
+
+/// Rendered Markdown placed for one width: items with offsets from the top.
+struct Layout {
+    items: Vec<Item>,
+    height: f32,
+}
+
+enum Item {
+    Text {
+        x: f32,
+        y: f32,
+        size: f32,
+        text: String,
+        color: Color,
+        mono: bool,
+    },
+    Rect(Rect, Color),
 }
 
 impl Viewer {
@@ -117,6 +142,7 @@ impl Viewer {
             selected,
             view: View::Message(String::new()),
             source: false,
+            markdown_raw: false,
             mark: None,
             scroll: 0.0,
             hscroll: 0.0,
@@ -181,6 +207,15 @@ impl Viewer {
             return View::Private;
         }
         let text = std::str::from_utf8(data).ok().filter(|t| !t.contains('\0'));
+        if let Some(text) = text
+            && Language::for_file(name) == Language::Markdown
+            && !self.markdown_raw
+        {
+            return View::Markdown {
+                blocks: syntax::markdown_blocks(text),
+                layout: None,
+            };
+        }
         if tankyard_mods::assets::is_asset(name) && !(self.source && text.is_some()) {
             let files = |other: &str| {
                 self.files
@@ -482,9 +517,18 @@ impl Viewer {
             return;
         };
         let px = r.x + 18.0 * s;
-        let toggleable = tankyard_mods::assets::is_asset(name)
-            && self.access.readable(name)
+        let readable_text = self.access.readable(name)
             && std::str::from_utf8(data).is_ok_and(|t| !t.contains('\0'));
+        let markdown = readable_text && Language::for_file(name) == Language::Markdown;
+        // Art that is also text (SVG) and Markdown switch between a preview
+        // and what's written.
+        let switch = if markdown {
+            Some(("Rendered", !self.markdown_raw))
+        } else if readable_text && tankyard_mods::assets::is_asset(name) {
+            Some(("Preview", !self.source))
+        } else {
+            None
+        };
         let mut facts = vec![size(data.len())];
         match &self.view {
             View::Text {
@@ -497,14 +541,23 @@ impl Viewer {
                     if lines.len() == 1 { "line" } else { "lines" }
                 ));
             }
+            View::Markdown { .. } => facts.insert(0, "Markdown".into()),
             View::Image { note, .. } => facts.insert(0, note.clone()),
             View::Message(_) => {}
             View::Private => facts.insert(0, "Private".into()),
         }
         let facts = facts.join(" · ");
         let facts_w = label_width(&facts, 12.0 * s);
-        let button_w = if toggleable { 96.0 * s } else { 0.0 };
-        let right = r.right() - 18.0 * s - button_w - if toggleable { 12.0 * s } else { 0.0 };
+        // The same switch as the settings pages, at the viewer's scale.
+        let k = s * 0.72;
+        let switch_w = switch.map_or(0.0, |(text, _)| label_width(text, 18.0 * k) + 76.0 * k);
+        let right = r.right()
+            - 18.0 * s
+            - if switch.is_some() {
+                switch_w + 20.0 * s
+            } else {
+                0.0
+            };
         label(
             &fitted_label(name, 14.0 * s, right - px - facts_w - 16.0 * s),
             px,
@@ -513,22 +566,24 @@ impl Viewer {
             text_color(),
         );
         right_label(&facts, right, r.y + 30.0 * s, 12.0 * s, muted_color());
-        if toggleable
-            && small_button(
-                Rect::new(
-                    r.right() - 18.0 * s - button_w,
-                    r.y + 12.0 * s,
-                    button_w,
-                    28.0 * s,
-                ),
-                if self.source { "Preview" } else { "Source" },
-                s * 0.72,
-            )
-        {
-            self.source = !self.source;
-            let (scroll, mark) = (self.scroll, self.mark);
-            self.view = self.load();
-            (self.scroll, self.mark) = (scroll, mark);
+        if let Some((text, mut on)) = switch {
+            let rect = Rect::new(
+                r.right() - 18.0 * s - switch_w,
+                r.y + 30.0 * s - 22.0 * k,
+                switch_w,
+                33.0 * k,
+            );
+            if toggle(rect, text, &mut on, k) {
+                if markdown {
+                    self.markdown_raw = !on;
+                } else {
+                    self.source = !on;
+                }
+                let mark = self.mark;
+                self.view = self.load();
+                self.scroll = 0.0;
+                self.mark = mark;
+            }
         }
         let area = Rect::new(
             r.x + 10.0 * s,
@@ -575,6 +630,7 @@ impl Viewer {
                 );
             }
             View::Text { .. } => self.draw_code(area, s),
+            View::Markdown { .. } => self.draw_markdown(area, s),
         }
     }
 
@@ -711,6 +767,396 @@ impl Viewer {
             );
         }
     }
+
+    fn draw_markdown(&mut self, area: Rect, s: f32) {
+        let View::Markdown { blocks, layout } = &mut self.view else {
+            return;
+        };
+        let pad = 22.0 * s;
+        let width = area.w - pad * 2.0 - 10.0 * s;
+        let key = ((width.round() as u64) << 32)
+            | ((s * 1000.0).round() as u64 * 2)
+            | u64::from(is_dark());
+        if layout.as_ref().is_none_or(|(k, _)| *k != key) {
+            *layout = Some((key, layout_markdown(blocks, width, s)));
+        }
+        let Some((_, layout)) = layout.as_ref() else {
+            return;
+        };
+        // `scroll` counts steps of 20 px, like lines in the code view.
+        let step = 20.0 * s;
+        if contains(area) {
+            self.scroll -= mouse_wheel().1.clamp(-3.0, 3.0) * 3.0;
+        }
+        let max = ((layout.height + pad * 2.0 - area.h) / step).max(0.0);
+        self.scroll = self.scroll.clamp(0.0, max);
+        let offset = self.scroll * step;
+        let x0 = area.x + pad;
+        let y0 = area.y + pad - offset;
+        let (top, bottom) = (area.y + 1.0, area.bottom() - 1.0);
+        for item in &layout.items {
+            match item {
+                Item::Rect(rect, color) => {
+                    let y = (y0 + rect.y).max(top);
+                    let end = (y0 + rect.bottom()).min(bottom);
+                    if end > y {
+                        draw_rectangle(x0 + rect.x, y, rect.w, end - y, *color);
+                    }
+                }
+                Item::Text {
+                    x,
+                    y,
+                    size,
+                    text,
+                    color,
+                    mono,
+                } => {
+                    let baseline = y0 + y;
+                    if baseline - size < top || baseline + size * 0.3 > bottom {
+                        continue;
+                    }
+                    if *mono {
+                        code_label(text, x0 + x, baseline, *size, *color);
+                    } else {
+                        label(text, x0 + x, baseline, *size, *color);
+                    }
+                }
+            }
+        }
+        if max > 0.0 {
+            let track = Rect::new(
+                area.right() - 9.0 * s,
+                area.y + 8.0 * s,
+                6.0 * s,
+                area.h - 16.0 * s,
+            );
+            scrollbar(track, offset, area.h, layout.height + pad * 2.0);
+        }
+    }
+}
+
+/// Lay out rendered Markdown `width` pixels wide.
+fn layout_markdown(blocks: &[Block], width: f32, s: f32) -> Layout {
+    let mut items = Vec::new();
+    let mut y = 0.0;
+    let body = mix(text_color(), muted_color(), 0.15);
+    for (index, block) in blocks.iter().enumerate() {
+        if index > 0 {
+            y += match block {
+                Block::Heading(..) => 18.0 * s,
+                Block::Item(..) => 3.0 * s,
+                _ => 11.0 * s,
+            };
+        }
+        match block {
+            Block::Heading(level, spans) => {
+                let size =
+                    [24.0, 19.0, 16.0, 14.5, 14.0, 13.0][usize::from(*level).clamp(1, 6) - 1] * s;
+                flow(&mut items, spans, 0.0, width, &mut y, size, text_color(), s);
+                if *level <= 2 {
+                    y += 6.0 * s;
+                    items.push(Item::Rect(Rect::new(0.0, y, width, 1.0), line_color()));
+                    y += 2.0 * s;
+                }
+            }
+            Block::Paragraph(spans) => {
+                flow(&mut items, spans, 0.0, width, &mut y, 14.0 * s, body, s)
+            }
+            Block::Item(depth, marker, spans) => {
+                let indent = 6.0 * s + *depth as f32 * 22.0 * s;
+                let size = 14.0 * s;
+                items.push(Item::Text {
+                    x: indent,
+                    y: y + size * 1.5 * 0.72,
+                    size,
+                    text: marker.clone(),
+                    color: muted_color(),
+                    mono: false,
+                });
+                let text_x = indent + label_width(marker, size).max(10.0 * s) + 8.0 * s;
+                flow(
+                    &mut items,
+                    spans,
+                    text_x,
+                    width - text_x,
+                    &mut y,
+                    size,
+                    body,
+                    s,
+                );
+            }
+            Block::Quote(spans) => {
+                let start = y;
+                flow(
+                    &mut items,
+                    spans,
+                    16.0 * s,
+                    width - 16.0 * s,
+                    &mut y,
+                    14.0 * s,
+                    muted_color(),
+                    s,
+                );
+                items.push(Item::Rect(
+                    Rect::new(0.0, start + 2.0 * s, 3.0 * s, y - start - 4.0 * s),
+                    alpha(accent(), 0.7),
+                ));
+            }
+            Block::Code(lines) => {
+                let size = 12.5 * s;
+                let line_h = (size * 1.45).round();
+                let cell = code_advance(size).max(1.0);
+                let cols = ((width - 24.0 * s) / cell).floor().max(1.0) as usize;
+                let h = lines.len().max(1) as f32 * line_h + 16.0 * s;
+                items.push(Item::Rect(
+                    Rect::new(0.0, y, width, h),
+                    alpha(bg_color(), 0.55),
+                ));
+                items.push(Item::Rect(Rect::new(0.0, y, 3.0 * s, h), line_color()));
+                for (row, line) in lines.iter().enumerate() {
+                    let mut text: String = line.chars().take(cols).collect();
+                    if line.chars().count() > cols {
+                        text.pop();
+                        text.push('…');
+                    }
+                    items.push(Item::Text {
+                        x: 14.0 * s,
+                        y: y + 8.0 * s + row as f32 * line_h + line_h * 0.72,
+                        size,
+                        text,
+                        color: token_color(Token::String),
+                        mono: true,
+                    });
+                }
+                y += h;
+            }
+            Block::Table { header, rows } => {
+                table(&mut items, rows, *header, width, &mut y, body, s)
+            }
+            Block::Rule => {
+                y += 4.0 * s;
+                items.push(Item::Rect(Rect::new(0.0, y, width, 1.0), line_color()));
+                y += 4.0 * s;
+            }
+        }
+    }
+    Layout { items, height: y }
+}
+
+/// A table whose columns share `width` by how much text they hold.
+fn table(
+    items: &mut Vec<Item>,
+    rows: &[Vec<syntax::Spans>],
+    header: bool,
+    width: f32,
+    y: &mut f32,
+    color: Color,
+    s: f32,
+) {
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if columns == 0 {
+        return;
+    }
+    let size = 13.0 * s;
+    let pad = 8.0 * s;
+    let measure = |cell: &syntax::Spans| -> f32 {
+        cell.iter()
+            .map(|(style, text)| match style {
+                Style::Code => text.chars().count() as f32 * code_advance(size * 0.92),
+                _ => label_width(text, size),
+            })
+            .sum()
+    };
+    let mut natural = vec![40.0 * s; columns];
+    for row in rows {
+        for (column, cell) in row.iter().enumerate() {
+            natural[column] = natural[column].max(measure(cell) + pad * 2.0);
+        }
+    }
+    // Shrink wide columns first, so short ones like names stay on one line.
+    let mut widths = natural.clone();
+    let total: f32 = natural.iter().sum();
+    if total > width {
+        let fair = width / columns as f32;
+        let small: f32 = natural.iter().filter(|&&w| w <= fair).sum();
+        let large: f32 = natural.iter().filter(|&&w| w > fair).sum();
+        let room = (width - small).max(0.0);
+        for w in &mut widths {
+            if *w > fair {
+                *w = (*w / large * room).max(60.0 * s);
+            }
+        }
+    }
+    let table_w: f32 = widths.iter().sum();
+    let top = *y;
+    for (index, row) in rows.iter().enumerate() {
+        let start = *y;
+        let mut bottom = start;
+        let mut x = 0.0;
+        let first = items.len();
+        for (column, w) in widths.iter().enumerate() {
+            let mut cell_y = start + 5.0 * s;
+            if let Some(cell) = row.get(column) {
+                let strong: Vec<(Style, String)>;
+                let cell = if header && index == 0 {
+                    strong = cell
+                        .iter()
+                        .map(|(style, text)| {
+                            (
+                                if *style == Style::Text {
+                                    Style::Strong
+                                } else {
+                                    *style
+                                },
+                                text.clone(),
+                            )
+                        })
+                        .collect();
+                    &strong
+                } else {
+                    cell
+                };
+                flow(
+                    items,
+                    cell,
+                    x + pad,
+                    w - pad * 2.0,
+                    &mut cell_y,
+                    size,
+                    color,
+                    s,
+                );
+            } else {
+                cell_y += (size * 1.5).round();
+            }
+            bottom = bottom.max(cell_y + 5.0 * s);
+            x += w;
+        }
+        let shade = if header && index == 0 {
+            Some(alpha(line_color(), 0.55))
+        } else {
+            (index % 2 == 0).then(|| alpha(bg_color(), 0.35))
+        };
+        if let Some(shade) = shade {
+            items.insert(
+                first,
+                Item::Rect(Rect::new(0.0, start, table_w, bottom - start), shade),
+            );
+        }
+        items.push(Item::Rect(
+            Rect::new(0.0, bottom, table_w, 1.0),
+            line_color(),
+        ));
+        *y = bottom;
+    }
+    // Column dividers and the outline.
+    let mut x = 0.0;
+    for w in &widths {
+        items.push(Item::Rect(Rect::new(x, top, 1.0, *y - top), line_color()));
+        x += w;
+    }
+    items.push(Item::Rect(
+        Rect::new(x - 1.0, top, 1.0, *y - top),
+        line_color(),
+    ));
+    items.push(Item::Rect(Rect::new(0.0, top, table_w, 1.0), line_color()));
+}
+
+/// Wrap styled text into lines starting at `x`, moving `y` past them.
+#[allow(clippy::too_many_arguments)]
+fn flow(
+    items: &mut Vec<Item>,
+    spans: &[(Style, String)],
+    x: f32,
+    width: f32,
+    y: &mut f32,
+    size: f32,
+    color: Color,
+    s: f32,
+) {
+    let line_h = (size * 1.5).round();
+    let space = label_width(" ", size).max(size * 0.25);
+    let cell = code_advance(size * 0.92).max(1.0);
+    let measure = |style: Style, text: &str| match style {
+        Style::Code => text.chars().count() as f32 * cell,
+        _ => label_width(text, size),
+    };
+    let mut cursor = 0.0;
+    let mut placed = false;
+    for (style, text) in spans {
+        let ink = match style {
+            Style::Text => color,
+            Style::Strong => text_color(),
+            Style::Code => token_color(Token::String),
+            Style::Link => accent(),
+        };
+        // Words keep the space before them, so styles join up naturally.
+        let words = text.split(' ');
+        let mut first = true;
+        for word in words {
+            let gap = if first { 0.0 } else { space };
+            first = false;
+            if word.is_empty() {
+                cursor += gap;
+                continue;
+            }
+            let mut rest = word.to_owned();
+            while !rest.is_empty() {
+                let mut w = measure(*style, &rest);
+                if placed && cursor + gap + w > width {
+                    *y += line_h;
+                    cursor = 0.0;
+                } else {
+                    cursor += gap;
+                }
+                // A word longer than the line breaks where it must.
+                let mut piece = rest.clone();
+                if w > width - cursor {
+                    let mut fit = String::new();
+                    for c in rest.chars() {
+                        fit.push(c);
+                        if measure(*style, &fit) > width - cursor && fit.chars().count() > 1 {
+                            fit.pop();
+                            break;
+                        }
+                    }
+                    piece = fit;
+                    w = measure(*style, &piece);
+                }
+                if *style == Style::Code {
+                    items.push(Item::Rect(
+                        Rect::new(
+                            x + cursor - 2.0 * s,
+                            *y + line_h * 0.16,
+                            w + 4.0 * s,
+                            line_h * 0.72,
+                        ),
+                        alpha(line_color(), 0.45),
+                    ));
+                }
+                items.push(Item::Text {
+                    x: x + cursor,
+                    y: *y + line_h * 0.72,
+                    size: if *style == Style::Code {
+                        size * 0.92
+                    } else {
+                        size
+                    },
+                    text: piece.clone(),
+                    color: ink,
+                    mono: *style == Style::Code,
+                });
+                cursor += w;
+                placed = true;
+                rest = rest[piece.len()..].to_owned();
+                if !rest.is_empty() {
+                    *y += line_h;
+                    cursor = 0.0;
+                }
+            }
+        }
+    }
+    *y += line_h;
 }
 
 fn text_view(name: &str, text: &str, note: Option<String>) -> View {
@@ -1113,12 +1559,60 @@ mod tests {
                 let name = &viewer.files[index].0;
                 match &viewer.view {
                     View::Text { lines, .. } => assert!(!lines.is_empty(), "{name}"),
+                    View::Markdown { blocks, .. } => assert!(!blocks.is_empty(), "{name}"),
                     View::Private => assert!(!viewer.access.readable(name)),
                     _ => panic!("{name} in {} didn't open", path.display()),
                 }
             }
         }
         assert!(opened >= 4, "only {opened} packs found");
+    }
+
+    #[test]
+    fn markdown_opens_rendered_and_switches_to_raw() {
+        let root = folder(
+            "markdown",
+            &[
+                ("README.md", b"# Title\n\nSome `code`.\n"),
+                ("art/a.svg", b"<svg/>"),
+            ],
+        );
+        let mut viewer = open(&root, None);
+        select(&mut viewer, "README.md");
+        let View::Markdown { blocks, .. } = &viewer.view else {
+            panic!("README.md should open rendered");
+        };
+        assert!(matches!(blocks[0], Block::Heading(1, _)));
+        // The switch shows what's written, with Markdown colors.
+        viewer.markdown_raw = true;
+        select(&mut viewer, "README.md");
+        let View::Text {
+            language, lines, ..
+        } = &viewer.view
+        else {
+            panic!("raw Markdown should be text");
+        };
+        assert_eq!(*language, "Markdown");
+        assert_eq!(lines[0][0], (Token::Heading, "# Title".to_owned()));
+        // Markdown and SVG remember their switches separately.
+        assert!(!viewer.source);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn private_markdown_stays_private_in_both_modes() {
+        let toml: &[u8] = b"[source]\nprivate = [\"*.md\"]\n";
+        let root = folder(
+            "private-md",
+            &[("tankyard.toml", toml), ("NOTES.md", b"# secret\n")],
+        );
+        let mut viewer = open(&root, None);
+        for raw in [false, true] {
+            viewer.markdown_raw = raw;
+            select(&mut viewer, "NOTES.md");
+            assert!(matches!(viewer.view, View::Private));
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
