@@ -1,15 +1,20 @@
 <!doctype html>
 <html><head><meta charset="utf-8">
 <style>
-body { font: 13px -apple-system, "Helvetica Neue", sans-serif; color: #333b45; margin: 0 4px; }
-h1 { font-size: 22px; margin: 4px 0 10px; color: #00b2e1; }
-p { line-height: 1.45; margin: 0 0 10px; }
-code { background: #eef1f4; padding: 1px 4px; border-radius: 3px; }
+/* No colors or backgrounds: the Installer recolors text for its themes. */
+body { font: 13px -apple-system, "Helvetica Neue", sans-serif; margin: 2px 6px; }
+h1 { font-size: 24px; font-weight: 700; margin: 0 0 4px; }
+.lead { font-size: 14px; margin: 0 0 18px; }
+h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; margin: 0 0 6px; opacity: 0.6; }
+p { line-height: 1.45; margin: 0 0 16px; }
+.path { font: 12px Menlo, monospace; }
 </style></head>
 <body>
 <h1>Ready to roll</h1>
-<p>Open <b>Tank Yard</b> from Applications or Launchpad. Choose <b>Play</b> for the public server, or <b>Play offline</b> for a local game.</p>
-<p>To run an always-on community server, open <b>Host server → Community server</b> in the game, or run
-<code>/Applications/Tank&nbsp;Yard.app/Contents/MacOS/tankyard-server</code> from Terminal.</p>
-<p>Uninstall by moving Tank Yard from Applications to the Trash.</p>
+<p class="lead">Open <b>Tank Yard</b> from Applications or Launchpad. Choose <b>Play</b> for the public server, or <b>Play offline</b> for a local game.</p>
+<h2>Host a server</h2>
+<p>In the game, open <b>Host server</b>, then <b>Community server</b>. To run one from Terminal instead:<br>
+<span class="path">"/Applications/Tank Yard.app/Contents/MacOS/tankyard-server"</span></p>
+<h2>Uninstall</h2>
+<p>Move Tank Yard from Applications to the Trash. Your settings stay in your Library folder.</p>
 </body></html>

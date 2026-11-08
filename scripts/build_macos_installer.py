@@ -38,8 +38,8 @@ def distribution(version: str, component: str) -> str:
     <welcome file="welcome.html" mime-type="text/html"/>
     <license file="LICENSE.txt"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
-    <background file="background.png" alignment="bottomleft" scaling="proportional"/>
-    <background-darkAqua file="background.png" alignment="bottomleft" scaling="proportional"/>
+    <background file="background.tiff" alignment="bottomleft" scaling="none"/>
+    <background-darkAqua file="background.tiff" alignment="bottomleft" scaling="none"/>
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
     <volume-check><allowed-os-versions><os-version min="11.0"/></allowed-os-versions></volume-check>
@@ -143,7 +143,9 @@ def build(archive: Path, version: str, output: Path) -> Path:
             + "\n\nTank Yard is also available under the Apache License 2.0; see LICENSE-APACHE inside the app.\n",
             encoding="utf-8",
         )
-        shutil.copyfile(ROOT / "assets/icons/tankyard.png", resources / "background.png")
+        # A small emblem for the sidebar's lower corner, at 1x and 2x
+        # (background.svg rendered, then joined with tiffutil -cathidpicheck).
+        shutil.copyfile(RESOURCES / "background.tiff", resources / "background.tiff")
         definition = work / "distribution.xml"
         definition.write_text(distribution(version, component), encoding="utf-8")
         signing = ["--sign", INSTALLER_IDENTITY, "--timestamp"] if INSTALLER_IDENTITY else []

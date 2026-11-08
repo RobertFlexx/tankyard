@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="190" height="176" viewBox="0 0 190 176">
+  <!-- The Installer sidebar's lower corner: a corner of the arena grid with the
+       Tank Yard tank and a few shapes. Mid-tone grid lines read on both the
+       light and the dark Installer theme. -->
+  <defs>
+    <radialGradient id="fade" cx="0" cy="176" r="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="corner"><rect width="190" height="176" fill="url(#fade)"/></mask>
+    <pattern id="grid" width="22" height="22" patternUnits="userSpaceOnUse" x="0" y="0">
+      <path d="M22 0H0V22" fill="none" stroke="#8795a3" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="190" height="176" fill="url(#grid)" opacity="0.32" mask="url(#corner)"/>
+  <!-- Shapes to farm. -->
+  <rect x="128" y="112" width="15" height="15" rx="2" fill="#ffe869" stroke="#bfa93a" stroke-width="2.5" transform="rotate(18 135.5 119.5)"/>
+  <path d="M150 150 L166 156 L153 167 Z" fill="#fc7677" stroke="#bd5859" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M30 40 L43 49 L38 64 L22 64 L17 49 Z" fill="#768dfc" stroke="#5869bd" stroke-width="2.5" stroke-linejoin="round" opacity="0.9"/>
+  <!-- The tank, aiming up and to the right. -->
+  <g transform="translate(70 112) rotate(-38)">
+    <rect x="18" y="-12" width="52" height="24" rx="2" fill="#a9b4c0" stroke="#28313c" stroke-width="5"/>
+    <circle r="38" fill="#12b4e0" stroke="#28313c" stroke-width="6"/>
+    <circle r="29" fill="none" stroke="#7fe0f5" stroke-width="3.5"/>
+  </g>
+</svg>

@@ -1,19 +1,25 @@
 <!doctype html>
 <html><head><meta charset="utf-8">
 <style>
-body { font: 13px -apple-system, "Helvetica Neue", sans-serif; color: #333b45; margin: 0 4px; }
-h1 { font-size: 22px; margin: 4px 0 10px; color: #00b2e1; }
+/* The Installer recolors text for its light and dark themes, so the pages
+   set no colors or backgrounds of their own: only type and spacing. */
+body { font: 13px -apple-system, "Helvetica Neue", sans-serif; margin: 2px 6px; }
+h1 { font-size: 24px; font-weight: 700; margin: 0 0 4px; }
+.lead { font-size: 14px; margin: 0 0 18px; }
+h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; margin: 0 0 6px; opacity: 0.6; }
+ul { margin: 0 0 18px; padding-left: 18px; line-height: 1.6; }
 p { line-height: 1.45; margin: 0 0 10px; }
-ul { margin: 0 0 10px; padding-left: 18px; line-height: 1.5; }
-.muted { color: #6e7a85; }
+.note { font-size: 12px; opacity: 0.65; }
 </style></head>
 <body>
 <h1>Tank Yard __VERSION__</h1>
-<p>A tank arena by RobertFlexx. Play online, host community servers, or practice offline.</p>
+<p class="lead">A fast tank arena by RobertFlexx. Play online, host your own server, or practice offline against bots.</p>
+<h2>What this installs</h2>
 <ul>
-  <li><b>Tank Yard.app</b> goes into your Applications folder.</li>
-  <li>The dedicated server, bundled mods and documentation are inside the app.</li>
-  <li>Your settings, mods and saved servers stay untouched when you update.</li>
+  <li><b>Tank Yard</b> in your Applications folder</li>
+  <li>The dedicated server, bundled mods and documentation, inside the app</li>
 </ul>
-<p class="muted">Tank Yard needs macOS 11 or newer and runs natively on Apple silicon and Intel Macs.</p>
+<h2>Updating</h2>
+<p>Installing over an older version keeps your settings, progress, mods and saved servers.</p>
+<p class="note">Requires macOS 11 or later. Runs natively on Apple silicon and Intel.</p>
 </body></html>
