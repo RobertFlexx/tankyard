@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/*"]
+exclude = ["vendor/*"]
 resolver = "3"
 
 [workspace.package]
@@ -32,6 +33,10 @@ tankyard-core = { path = "crates/tankyard-core" }
 tankyard-ai = { path = "crates/tankyard-ai" }
 tankyard-protocol = { path = "crates/tankyard-protocol" }
 tankyard-server = { path = "crates/tankyard-server" }
+
+[patch.crates-io]
+# Metal improvements for Macs; see vendor/README.md.
+miniquad = { path = "vendor/miniquad" }
 
 [profile.release]
 lto = "thin"
