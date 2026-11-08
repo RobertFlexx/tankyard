@@ -19,6 +19,7 @@ mod hud;
 mod links;
 mod menu;
 mod mod_library;
+mod mod_viewer;
 mod native_resolution;
 mod notifications;
 mod party_ui;
@@ -30,6 +31,7 @@ mod server_status;
 mod session;
 mod settings;
 mod startup;
+mod syntax;
 mod tank_tree;
 mod target;
 mod ui_layout;
@@ -100,7 +102,7 @@ struct Cli {
     #[arg(long)]
     screenshot: Option<String>,
     /// Open a menu page instead of a game (for screenshots and checks).
-    #[arg(long, hide = true, value_parser = ["main", "mods", "tree", "credits", "settings", "party", "modes", "party-panel", "mods-review", "lobbies", "community", "graphics", "join"])]
+    #[arg(long, hide = true, value_parser = ["main", "mods", "tree", "credits", "settings", "party", "modes", "party-panel", "mods-review", "mods-files", "lobbies", "community", "graphics", "join"])]
     page: Option<String>,
     #[arg(long = "mod")]
     mods: Vec<std::path::PathBuf>,
@@ -354,6 +356,7 @@ impl App {
         } else if let Some(page) = cli.page.as_deref() {
             app.party_preview = page == "party-panel";
             app.menu.preview_review = page == "mods-review";
+            app.menu.preview_files = page == "mods-files";
             if page == "lobbies" {
                 app.menu.open_lobbies();
             }
@@ -364,7 +367,7 @@ impl App {
                 app.menu.open_community();
             }
             app.menu.page = match page {
-                "mods" | "mods-review" => Page::Mods,
+                "mods" | "mods-review" | "mods-files" => Page::Mods,
                 "tree" => Page::Encyclopedia,
                 "credits" => Page::Credits,
                 "settings" | "graphics" => Page::Settings,

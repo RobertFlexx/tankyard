@@ -162,6 +162,7 @@ pub fn achievement_badge(p: Vec2, radius: f32, color: Color, earned: bool) {
 type HoverStates = std::collections::HashMap<(i32, i32, i32, i32), (f32, f64)>;
 thread_local! {
     static UI_FONT: std::cell::RefCell<Option<Font>> = const { std::cell::RefCell::new(None) };
+    static CODE_FONT: std::cell::RefCell<Option<Font>> = const { std::cell::RefCell::new(None) };
     static TEXT_CACHE: std::cell::RefCell<crate::ui_text::TextCache> = std::cell::RefCell::new(Default::default());
     static INTERACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
@@ -170,9 +171,14 @@ pub fn init_font() {
         Ok(font) => UI_FONT.with(|slot| *slot.borrow_mut() = Some(font)),
         Err(error) => log::warn!("Could not load UI font: {error}"),
     }
+    match load_ttf_font_from_bytes(include_bytes!("../../../assets/fonts/DejaVuSansMono.ttf")) {
+        Ok(font) => CODE_FONT.with(|slot| *slot.borrow_mut() = Some(font)),
+        Err(error) => log::warn!("Could not load code font: {error}"),
+    }
 }
 pub fn unload_font() {
     UI_FONT.with(|font| font.borrow_mut().take());
+    CODE_FONT.with(|font| font.borrow_mut().take());
     TEXT_CACHE.with(|cache| *cache.borrow_mut() = Default::default());
 }
 pub fn set_interactive(value: bool) -> bool {
@@ -389,6 +395,33 @@ fn raw_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
         debug_assert!(
             (rendered.width - label_width(value, size)).abs() < 0.05,
             "UI text measurement differs from rendering: {value}"
+        );
+    });
+}
+/// Width of one character of [`code_label`] text.
+pub fn code_advance(size: f32) -> f32 {
+    let pixels = crate::ui_text::raster_size(size);
+    CODE_FONT.with(|font| {
+        let font = font.borrow();
+        measure_text("M", font.as_ref(), pixels, size / f32::from(pixels)).width
+    })
+}
+/// Monospaced text, for source code and hex dumps.
+pub fn code_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
+    let pixels = crate::ui_text::raster_size(size);
+    let p = crate::ui_layout::position(vec2(x, y));
+    CODE_FONT.with(|font| {
+        draw_text_ex(
+            value,
+            p.x.round(),
+            p.y.round(),
+            TextParams {
+                font: font.borrow().as_ref(),
+                font_size: pixels,
+                font_scale: size / f32::from(pixels),
+                color: crate::accessibility::palette(color),
+                ..Default::default()
+            },
         );
     });
 }

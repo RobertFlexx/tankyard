@@ -122,6 +122,7 @@ pub struct Menu {
     mod_path: String,
     mod_path_active: bool,
     mod_review: Option<usize>,
+    mod_viewer: Option<crate::mod_viewer::Viewer>,
     mod_trust: bool,
     mod_scroll: usize,
     /// The pack shown in the Mods page's detail pane.
@@ -140,6 +141,8 @@ pub struct Menu {
     splash: Option<String>,
     /// Open the first flagged pack's review (screenshot checks only).
     pub preview_review: bool,
+    /// Open the file browser on the first script pack (screenshot checks).
+    pub preview_files: bool,
     map_page: usize,
     history: Vec<Page>,
     practice_content: Content,
@@ -202,6 +205,7 @@ impl Menu {
             mod_path: String::new(),
             mod_path_active: false,
             mod_review: None,
+            mod_viewer: None,
             mod_trust: false,
             mod_scroll: 0,
             mod_selected: 0,
@@ -213,6 +217,7 @@ impl Menu {
             style: Default::default(),
             splash: None,
             preview_review: false,
+            preview_files: false,
             map_page: 0,
             history: Vec::new(),
             practice_content: Content::builtin(),
@@ -412,7 +417,8 @@ impl Menu {
     ) -> Action {
         pointer_scope(1 + self.page as u64);
         // While a pack's review sheet is open, nothing beneath it responds.
-        let reviewing = self.page == Page::Mods && self.mod_review.is_some();
+        let reviewing =
+            self.page == Page::Mods && (self.mod_review.is_some() || self.mod_viewer.is_some());
         let interactive = set_interactive(false);
         set_interactive(interactive && !reviewing);
         if is_key_pressed(KeyCode::Tab) && self.binding.is_none() {
@@ -568,8 +574,15 @@ impl Menu {
         };
         drop(canvas);
         if reviewing {
-            set_interactive(interactive);
+            // The file browser can open from the review sheet and returns to it.
+            set_interactive(interactive && self.mod_viewer.is_none());
             self.mod_review_overlay(settings, s);
+            set_interactive(interactive);
+            if let Some(viewer) = &mut self.mod_viewer
+                && !viewer.draw(s)
+            {
+                self.mod_viewer = None;
+            }
             return action;
         }
         set_interactive(interactive);
@@ -3077,7 +3090,7 @@ impl Menu {
             text_color(),
         );
         wrap(
-            "DejaVu Sans Bold font; Lucide microphone icons (ISC). Third-party licenses are in NOTICE.md.",
+            "DejaVu Sans Bold and Mono fonts; Lucide microphone icons (ISC). Third-party licenses are in NOTICE.md.",
             x,
             y + 355.0 * s,
             width.min(900.0 * s),
@@ -3302,6 +3315,7 @@ impl Menu {
         if !self.mods_scanned {
             self.mods_scanned = true;
             self.mod_review = None;
+            self.mod_viewer = None;
             self.mod_entries = crate::mod_library::discover();
             self.mod_icons.clear();
             self.mod_selected = self
@@ -3322,6 +3336,12 @@ impl Menu {
                     .mod_entries
                     .iter()
                     .position(|entry| entry.verdict() != tankyard_mods::scan::Verdict::Clean);
+            }
+            if self.preview_files
+                && let Some(index) = self.mod_entries.iter().position(|entry| entry.scripted())
+            {
+                self.mod_selected = index;
+                self.open_files(index, None);
             }
         }
         // Import row.
@@ -3608,6 +3628,18 @@ impl Menu {
         {
             facts.push(format!("{license} license"));
         }
+        if let Some(source) = entry.project.as_ref().map(|p| &p.source)
+            && source.restricted()
+        {
+            facts.push(
+                if source.viewable {
+                    "some files private"
+                } else {
+                    "private source"
+                }
+                .to_owned(),
+            );
+        }
         label(
             &fitted_label(&facts.join("  ·  "), 13.0 * s, tw),
             tx,
@@ -3781,7 +3813,8 @@ impl Menu {
         let enabled = entry.enabled(settings);
         let footer = r.bottom() - 52.0 * s;
         let removable = entry.in_library();
-        let path_room = pw - if removable { 410.0 } else { 300.0 } * s;
+        let mut view_files = false;
+        let path_room = pw - if removable { 530.0 } else { 420.0 } * s;
         label(
             &fitted_label(&entry.path, 11.0 * s, path_room),
             px,
@@ -3792,7 +3825,7 @@ impl Menu {
         if removable {
             let confirming = self.mod_remove.as_deref() == Some(entry.path.as_str());
             if small_button(
-                Rect::new(r.right() - 400.0 * s, footer, 102.0 * s, 34.0 * s),
+                Rect::new(r.right() - 520.0 * s, footer, 102.0 * s, 34.0 * s),
                 if confirming { "Confirm" } else { "Remove" },
                 s * 0.78,
             ) {
@@ -3820,6 +3853,13 @@ impl Menu {
                     entry.name()
                 );
             }
+        }
+        if small_button(
+            Rect::new(r.right() - 410.0 * s, footer, 110.0 * s, 34.0 * s),
+            "View files",
+            s * 0.78,
+        ) {
+            view_files = true;
         }
         if small_button(
             Rect::new(r.right() - 290.0 * s, footer, 120.0 * s, 34.0 * s),
@@ -3850,6 +3890,9 @@ impl Menu {
             } else {
                 self.toggle_mod(settings, index);
             }
+        }
+        if view_files {
+            self.open_files(index, None);
         }
     }
 
@@ -3911,6 +3954,7 @@ impl Menu {
             ) + 8.0 * s;
             let footer = r.bottom() - 62.0 * s;
             let findings = &entry.report.findings;
+            let mut open_finding = None;
             if findings.is_empty() {
                 label(
                     "No findings.",
@@ -3937,6 +3981,14 @@ impl Menu {
                     Severity::Warning => ("REVIEW", warm_text_color()),
                     Severity::Info => ("NOTE", muted_color()),
                 };
+                // Each finding opens the file browser at its line.
+                let row = Rect::new(r.x + 14.0 * s, ly - 2.0 * s, r.w - 28.0 * s, 20.0 * s);
+                if contains(row) {
+                    draw_rectangle(row.x, row.y, row.w, row.h, alpha(hover_color(), 0.6));
+                    if is_mouse_button_pressed(MouseButton::Left) {
+                        open_finding = Some((finding.file.clone(), finding.line));
+                    }
+                }
                 label(tag, r.x + 20.0 * s, ly + 12.0 * s, 10.0 * s, tint);
                 let place = if finding.line > 0 {
                     format!("{}:{}", finding.file, finding.line)
@@ -3994,9 +4046,22 @@ impl Menu {
                 self.mod_review = None;
                 self.toggle_mod(settings, index);
             }
-            if is_key_pressed(KeyCode::Escape) {
+            if is_key_pressed(KeyCode::Escape) && self.mod_viewer.is_none() {
                 self.mod_review = None;
             }
+            if let Some((file, line)) = open_finding {
+                self.open_files(index, Some((&file, line as usize)));
+            }
+        }
+    }
+    /// Open the file browser on a pack, optionally at a file and line.
+    fn open_files(&mut self, index: usize, focus: Option<(&str, usize)>) {
+        let Some(entry) = self.mod_entries.get(index) else {
+            return;
+        };
+        match crate::mod_viewer::Viewer::open(entry.name(), &entry.path, focus) {
+            Ok(viewer) => self.mod_viewer = Some(viewer),
+            Err(error) => self.error = format!("Could not open {}: {error}", entry.name()),
         }
     }
     fn toggle_mod(&mut self, settings: &mut Settings, index: usize) {

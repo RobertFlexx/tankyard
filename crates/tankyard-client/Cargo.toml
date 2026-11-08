@@ -39,6 +39,9 @@ ureq = { version = "3.1", default-features = false, features = ["rustls"] }
 xmltree = "0.10"
 xml-rs = "0.8"
 
+[dev-dependencies]
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # Load the desktop's XCB ABI at runtime, matching Miniquad's display handling.
 xcb = { version = "1.7", features = ["dl", "randr"] }

@@ -5,7 +5,7 @@ Tank Yard has two kinds of packs, and both are a folder or a `.zip` archive with
 - **Lua script packs** (manifest `api_version` 2) can change almost everything about a match: custom modes, scoring, physics nudges, new tanks and maps, timed events and rule changes. Scripts run on LuaJIT inside a sandbox with no file, network, process or native-code access.
 - **Data packs** (manifest `api_version` 1) add or replace tanks, maps, rules and textures, and can attach bounded JSON behavior hooks.
 
-In the game, open **Mods** and press **Browse for a pack…** to pick a `.zip` (or the `mod.json` inside a pack folder) in your system's file chooser. You can also paste a `.zip` or folder path and press **Import**, or drop a `.zip` onto the window. Imported packs are copied into your library (`…/Tank Yard/mods` in your application data folder; **Open mods folder** shows it), and a pack that passes review is enabled straight away. Pack folders or archives you put in the library yourself appear after **Refresh**. Folders in a `mods` directory next to the game are listed too; a library pack with the same ID replaces a bundled one. **Remove** deletes an imported pack. Enabled packs are remembered by ID, so they stay enabled across restarts, updates and moves, and apply to offline games and servers you host. `--mod` on the command line loads packs for that run only and leaves your saved list alone. Community servers load packs with `--mod path` or the `mods` setting; joining players receive only validated data and never run server scripts.
+In the game, open **Mods** and press **Browse for a pack…** to pick a `.zip` (or the `mod.json` inside a pack folder) in your system's file chooser. You can also paste a `.zip` or folder path and press **Import**, or drop a `.zip` onto the window. Imported packs are copied into your library (`…/Tank Yard/mods` in your application data folder; **Open mods folder** shows it), and a pack that passes review is enabled straight away. Pack folders or archives you put in the library yourself appear after **Refresh**. Folders in a `mods` directory next to the game are listed too; a library pack with the same ID replaces a bundled one. **Remove** deletes an imported pack. **View files** browses everything in a pack, straight from its folder or `.zip` without extracting it: scripts, JSON and TOML with line numbers and syntax colors, art and models as previews (**Source** shows an SVG's code), and anything else as a hex dump. Clicking a finding in **Safety review** opens its file at that line. Enabled packs are remembered by ID, so they stay enabled across restarts, updates and moves, and apply to offline games and servers you host. `--mod` on the command line loads packs for that run only and leaves your saved list alone. Community servers load packs with `--mod path` or the `mods` setting; joining players receive only validated data and never run server scripts.
 
 The Mods page lists every pack with its icon, name, version, creator and safety status. Select one to see its description, license, tags, contents (tanks, maps, scripts, textures, hooks), size and location, with buttons for its source code, download page and issue tracker. Packs describe themselves in an optional `tankyard.toml`:
 
@@ -30,6 +30,16 @@ homepage = "https://example.com"
 ```
 
 Every field is optional, and `tankyard.toml` never changes gameplay. Links must be `http://` or `https://`; anything else is rejected so a pack can never open a program or local file.
+
+**View files** shows a pack's contents to anyone who installs it. To keep some or all of them private, add a `[source]` section:
+
+```toml
+[source]
+viewable = false              # hide every file's contents
+private = ["lib/", "*.secret"] # or hide only these
+```
+
+Private files are still listed, with a lock, but their contents aren't shown, and the Mods page says the pack has private files. `private` takes exact paths, `folder/` for everything in a folder, `*` for any part of a name and `**` for any number of folders (`**/keys.json`). If `tankyard.toml` can't be read, every file is treated as private. This only affects the file browser: the files are still inside the pack for anyone who unzips it, and the safety review still reads every file before the pack can run.
 
 ```sh
 cargo run --locked -p tankyard-tools -- validate-mods --mod mods/bounty_hunt --mod mods/vampire
