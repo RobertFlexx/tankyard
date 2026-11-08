@@ -157,8 +157,7 @@ All text boxes support Ctrl/Cmd+A/C/X/V and Shift+Insert for paste. Clipboard wo
 - **Upscaler**: **AMD FSR 1** reconstructs edges while upscaling and pairs it with contrast-adaptive sharpening; **Bilinear** is plain filtering. On Macs running macOS 13 or later whose GPU supports it, **MetalFX** (Apple's spatial upscaler, built into macOS) is offered too, and the presets use it.
 - **Sharpening** restores crispness after upscaling or FXAA without halos.
 - **FXAA** smooths remaining stair-steps on edges at almost no cost.
-- **MSAA**, **shape quality** (circle detail) and **texture filtering** refine geometry and textured tanks. Apple silicon Macs offer up to 4x MSAA: their GPUs resolve 4 samples in fast tile memory, while 8x is emulated at several times the cost with no visible difference.
+- **MSAA**, **shape quality** (circle detail) and **texture filtering** refine geometry and textured tanks. Apple silicon Macs go up to 4x MSAA.
+- **Metal renderer** (Macs only, on by default): draws with Metal, Apple's native graphics API, instead of OpenGL, which macOS only emulates on top of Metal. It's several times faster. Turning it off (or starting with `--safe-graphics`) uses OpenGL after a restart. Other systems always use OpenGL.
 
-- **Metal renderer** (Macs only, on by default): draws with Metal, Apple's native graphics API, instead of OpenGL, which macOS only emulates on top of Metal. It's several times faster: on an Apple M5 at the default settings, about 1.6 ms of work per frame instead of 10 ms. Turning it off (or starting with `--safe-graphics`) uses OpenGL after a restart. Other systems always use OpenGL.
-
-DLSS and XeSS need DirectX 12 or Vulkan with vendor SDKs, and FSR 2/3 need compute shaders and per-pixel motion vectors on DirectX 12 or Vulkan. Tank Yard draws with OpenGL (and Metal on Macs), which none of them support, and DLSS also needs an NVIDIA GPU. So they aren't available; FSR 1 runs on every GPU the game supports, and MetalFX on Macs that have it. HDR output needs a display path OpenGL windows don't offer. If a driver can't compile the post-processing shaders, the arena falls back to bilinear filtering and the Graphics tab says so.
+If a driver can't compile the post-processing shaders, the arena falls back to bilinear filtering and the Graphics tab says so.

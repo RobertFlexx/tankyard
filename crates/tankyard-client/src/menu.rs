@@ -2482,23 +2482,18 @@ impl Menu {
             &mut settings.fxaa,
             s,
         );
-        let note = match &self.post_error {
-            Some(error) => format!("Post-processing is unavailable on this device, so the arena uses bilinear filtering. {error}"),
-            None if metalfx => "MetalFX is Apple's upscaler for Apple GPUs. DLSS, XeSS and FSR 2/3 need DirectX 12 or Vulkan, which Macs don't have.".into(),
-            None => "DLSS and XeSS need DirectX 12 or Vulkan with vendor SDKs, and HDR output needs a display path OpenGL windows don't offer, so they aren't available. FSR 1 works on every GPU.".into(),
-        };
-        wrap(
-            &note,
-            x,
-            by + 348.0 * s,
-            col,
-            14.0 * s,
-            if self.post_error.is_some() {
-                RED
-            } else {
-                muted_color()
-            },
-        );
+        if let Some(error) = &self.post_error {
+            wrap(
+                &format!(
+                    "Post-processing is unavailable on this device, so the arena uses bilinear filtering. {error}"
+                ),
+                x,
+                by + 348.0 * s,
+                col,
+                14.0 * s,
+                RED,
+            );
+        }
         None
     }
     fn interface_scale(&mut self, rect: Rect, settings: &mut Settings, s: f32, anchor: f32) {
@@ -2734,7 +2729,7 @@ impl Menu {
                 }
                 label(
                     if crate::graphics::texture_count() == 0 {
-                        "Saved for textured tanks; built-in tanks use geometry."
+                        "Sharpens textured tanks from mods."
                     } else if crate::graphics::max_anisotropy() <= 1 {
                         "This graphics device supports standard filtering."
                     } else {

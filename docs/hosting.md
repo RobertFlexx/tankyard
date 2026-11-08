@@ -109,7 +109,7 @@ Repeat these local workloads after server changes:
 ./target/release/tankyard-load --local --clients 8 --seconds 30 --latency-ms 100 --jitter-ms 20 --loss-percent 5
 ```
 
-The load process also simulates every client, so its CPU use and loopback packet loss differ from a deployed fleet. Check [measured results](status.md), then test the intended map, classes, and projectile population on the actual host. The central lobby and provisioning service remain separate integrations.
+The load process also simulates every client, so its CPU use and loopback packet loss differ from a deployed fleet. Test the intended map, classes, and projectile population on the actual host. The central lobby and provisioning service remain separate integrations.
 
 Creator badges use a per-connection challenge and Ed25519 proof checked against the public creator key. Display names and community roles do not confer creator identity. Standard builds have no owner-extension handler. Trusted hosts can register their own extension before accepting players; every extension packet carries a fresh signature bound to the connection nonce, current round, monotonic sequence, and exact payload. Bounded payloads, replay checks, rate limits, and audit logging apply before host code runs. Modified matches disable regular arena achievements.
 

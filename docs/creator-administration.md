@@ -51,7 +51,7 @@ Console commands `creator-admin off` and `central-owner off` revoke their corres
 
 Creator and central-owner proof domains are separate. Fresh random 256-bit nonces bind identity to the server and connection; central-owner proofs also bind the ephemeral administration public key. Every staff request is signed over its domain, server ID, nonce, connection, round, monotonic sequence, payload length and exact payload. The server rechecks signatures, policy, permissions, hierarchy, budgets and bounds. Ordinary Owner grants cannot invoke creator gameplay powers.
 
-Creator and central-owner access require writable request auditing before privileged execution. Official servers without an explicit audit path use `creator-audit.jsonl`; Docker should mount it persistently. Logs rotate after 8 MiB with private Unix permissions. Host moderation uses the configured audit path. Requests are rate-limited and contain bounded data, never executable code. See the [security review](security-review-v040.md) for remaining transport, dependency and anonymous-ban limits.
+Creator and central-owner access require writable request auditing before privileged execution. Official servers without an explicit audit path use `creator-audit.jsonl`; Docker should mount it persistently. Logs rotate after 8 MiB with private Unix permissions. Host moderation uses the configured audit path. Requests are rate-limited and contain bounded data, never executable code.
 
 ## Central Pi deployment
 

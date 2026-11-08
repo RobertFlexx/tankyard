@@ -42,4 +42,3 @@ For a graphics startup problem:
 
 Safe graphics uses a 1280 by 800 window with MSAA and anisotropic filtering disabled. Normal graphics settings remain available. Each graphical launch writes a bounded startup report to the cache directory, normally `~/.cache/tankyard/last-startup.log`; a Rust panic adds its message and backtrace and prints the path in the terminal. Native driver faults still need the system crash dump. The report contains version and window settings, without recording account credentials or the process environment.
 
-`artifacts/checks/driver-runtime-comparison.json` records the driver-loading comparison. `linux-compatible-build.log` and `linux-compatible-build.json` record the build and ELF requirements. Automated full window tests remain blocked by this workspace's display restrictions; the Solus startup result came from the user's desktop.
