@@ -632,6 +632,8 @@ impl MTLClearColor {
 #[allow(non_camel_case_types)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum MTLPixelFormat {
+    // Tank Yard: clears an unused pipeline attachment.
+    Invalid = 0,
     BGRA8Unorm = 80,
     Depth32Float = 252,
     Stencil8 = 253,
@@ -928,6 +930,18 @@ unsafe impl Encode for NSDragOperation {
         let encoding = "Q".to_string();
         unsafe { Encoding::from_str(&encoding) }
     }
+}
+
+// Tank Yard: viewports.
+#[repr(C)]
+#[derive(Copy, Debug, Clone)]
+pub struct MTLViewport {
+    pub originX: f64,
+    pub originY: f64,
+    pub width: f64,
+    pub height: f64,
+    pub znear: f64,
+    pub zfar: f64,
 }
 
 #[repr(C)]

@@ -1356,6 +1356,45 @@ pub trait RenderingBackend {
 
     fn commit_frame(&mut self);
 
+    /// Tank Yard: the most samples a multisampled render target may use, if
+    /// the backend knows better than the OpenGL query.
+    fn max_render_samples(&self) -> Option<i32> {
+        None
+    }
+
+    /// Tank Yard: the strongest anisotropic filtering, for backends that
+    /// know it without an OpenGL query.
+    fn max_anisotropy(&self) -> Option<u8> {
+        None
+    }
+
+    /// Tank Yard: set a texture's anisotropic filtering. Returns false when
+    /// the backend leaves this to raw OpenGL calls.
+    fn texture_set_anisotropy(&mut self, _texture: TextureId, _level: u8) -> bool {
+        false
+    }
+
+    /// Tank Yard: whether `spatial_upscale` is available (MetalFX).
+    fn spatial_upscaler_available(&self) -> bool {
+        false
+    }
+
+    /// Tank Yard: upscale `input` into the larger `output` with the system's
+    /// spatial upscaler. Returns false, drawing nothing, when unavailable.
+    fn spatial_upscale(&mut self, _input: TextureId, _output: TextureId) -> bool {
+        false
+    }
+
+    /// Tank Yard: let `read_screen` read the presented image. Some backends
+    /// keep the screen write-only for speed until asked.
+    fn prepare_screen_reads(&mut self) {}
+
+    /// Tank Yard: the current frame's screen image as RGBA8, top row first,
+    /// for backends where macroquad's screen grab is unavailable.
+    fn read_screen(&mut self) -> Option<(u32, u32, Vec<u8>)> {
+        None
+    }
+
     /// Draw elements using currently applied bindings and pipeline.
     ///
     /// + `base_element` specifies starting offset in `index_buffer`.

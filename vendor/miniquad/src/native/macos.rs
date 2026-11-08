@@ -994,6 +994,18 @@ unsafe fn create_metal_view(_: &mut MacosDisplay, sample_count: i32, _: bool) ->
         view,
         setDepthStencilPixelFormat: MTLPixelFormat::Depth32Float_Stencil8
     ];
+    // Tank Yard: fall back to a sample count this GPU supports.
+    let sample_count = [sample_count, 4, 2, 1]
+        .iter()
+        .copied()
+        .filter(|&count| count <= sample_count.max(1))
+        .find(|&count| {
+            let supported: BOOL =
+                msg_send![mtl_device_obj, supportsTextureSampleCount: count.max(1) as u64];
+            count <= 1 || supported == YES
+        })
+        .unwrap_or(1)
+        .max(1);
     let () = msg_send![view, setSampleCount: sample_count];
     let () = msg_send![view, setPaused: true];
 

@@ -223,11 +223,36 @@ struct RenderPassInternal {
     render_pass_desc: ObjcId,
     texture: Vec<TextureId>,
     _depth_texture: Option<TextureId>,
+    /// Tank Yard: the attachment layout pipelines must match in this pass.
+    target: PassTarget,
+    /// Tank Yard: resolve multisampled color into the resolve texture.
+    resolve: bool,
+}
+
+/// Tank Yard: a Metal pipeline state is only valid for one attachment layout
+/// (pixel format, sample count, depth). Upstream built every pipeline for the
+/// window's layout, which is undefined behaviour in render targets and with
+/// multisampling. Pipelines now keep their descriptor and build a state per
+/// layout on first use.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PassTarget {
+    format: MTLPixelFormat,
+    samples: u64,
+    depth: bool,
+}
+
+/// Tank Yard: which pass the open encoder renders into.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum EncoderPass {
+    Default,
+    Offscreen(RenderPass),
 }
 
 #[derive(Clone, Debug)]
 struct PipelineInternal {
-    pipeline_state: ObjcId,
+    /// Tank Yard: retained descriptor, and a state per attachment layout.
+    descriptor: ObjcId,
+    states: Vec<(PassTarget, ObjcId)>,
     depth_stencil_state: ObjcId,
     //layout: Vec<BufferLayout>,
     //attributes: Vec<VertexAttributeInternal>,
@@ -270,6 +295,15 @@ pub struct MetalContext {
     command_queue: ObjcId,
     command_buffer: Option<ObjcId>,
     render_encoder: Option<ObjcId>,
+    /// Tank Yard: macroquad begins and ends a pass for every draw call, and a
+    /// new encoder stores and reloads every attachment (a multisampled one
+    /// included). An ended pass leaves its encoder open; the next pass into
+    /// the same target without a clear continues it.
+    encoder_pass: Option<EncoderPass>,
+    in_pass: bool,
+    pass_target: PassTarget,
+    /// Tank Yard: the open pass's size in pixels, for viewports and scissors.
+    pass_size: (u32, u32),
     view: ObjcId,
     device: ObjcId,
     current_frame_index: usize,
@@ -279,6 +313,37 @@ pub struct MetalContext {
     // cached pipeline from apply_pipeline
     current_pipeline: Option<Pipeline>,
     current_ub_offset: u64,
+    /// Tank Yard: MetalFX spatial upscaling, where the system has it.
+    metalfx: Option<&'static objc::runtime::Class>,
+    spatial: Option<SpatialScaler>,
+}
+
+/// Tank Yard: a MetalFX spatial scaler and the layout it was made for.
+struct SpatialScaler {
+    scaler: ObjcId,
+    key: (u64, u64, u64, u64, MTLPixelFormat, MTLPixelFormat),
+}
+
+impl Drop for SpatialScaler {
+    fn drop(&mut self) {
+        unsafe { msg_send_![self.scaler, release] };
+    }
+}
+
+/// Tank Yard: load MetalFX (macOS 13 and later) and return its spatial scaler
+/// descriptor class if this GPU supports it. Older systems simply lack it.
+fn load_metalfx(device: ObjcId) -> Option<&'static objc::runtime::Class> {
+    extern "C" {
+        fn dlopen(path: *const std::os::raw::c_char, mode: i32) -> *mut std::ffi::c_void;
+    }
+    const RTLD_LAZY: i32 = 1;
+    let path = b"/System/Library/Frameworks/MetalFX.framework/MetalFX\0";
+    if unsafe { dlopen(path.as_ptr() as _, RTLD_LAZY) }.is_null() {
+        return None;
+    }
+    let class = objc::runtime::Class::get("MTLFXSpatialScalerDescriptor")?;
+    let supported: BOOL = unsafe { msg_send![class, supportsDevice: device] };
+    (supported == YES).then_some(class)
 }
 
 impl Default for MetalContext {
@@ -361,6 +426,14 @@ impl MetalContext {
                 command_queue,
                 command_buffer: None,
                 render_encoder: None,
+                encoder_pass: None,
+                in_pass: false,
+                pass_target: PassTarget {
+                    format: MTLPixelFormat::BGRA8Unorm,
+                    samples: 1,
+                    depth: true,
+                },
+                pass_size: (1, 1),
                 view,
                 device,
                 buffers: vec![],
@@ -373,8 +446,112 @@ impl MetalContext {
                 uniform_buffers,
                 current_frame_index: 1,
                 current_ub_offset: 0,
+                metalfx: load_metalfx(device),
+                spatial: None,
             }
         }
+    }
+}
+
+impl MetalContext {
+    /// Tank Yard: the pipeline's state for the current pass layout.
+    fn pipeline_state(&mut self, pipeline: usize) -> ObjcId {
+        let target = self.pass_target;
+        let pipeline = &mut self.pipelines[pipeline];
+        if let Some((_, state)) = pipeline.states.iter().find(|(t, _)| *t == target) {
+            return *state;
+        }
+        unsafe {
+            let descriptor = pipeline.descriptor;
+            let attachments = msg_send_![descriptor, colorAttachments];
+            let color = msg_send_![attachments, objectAtIndexedSubscript: 0u64];
+            msg_send_![color, setPixelFormat: target.format];
+            let unused = msg_send_![attachments, objectAtIndexedSubscript: 1u64];
+            msg_send_![unused, setPixelFormat: MTLPixelFormat::Invalid];
+            msg_send_![descriptor, setRasterSampleCount: target.samples];
+            let depth = if target.depth {
+                MTLPixelFormat::Depth32Float_Stencil8
+            } else {
+                MTLPixelFormat::Invalid
+            };
+            msg_send_![descriptor, setDepthAttachmentPixelFormat: depth];
+            msg_send_![descriptor, setStencilAttachmentPixelFormat: depth];
+            let mut error: ObjcId = nil;
+            let state: ObjcId = msg_send![
+                self.device,
+                newRenderPipelineStateWithDescriptor: descriptor
+                error: &mut error
+            ];
+            if state.is_null() {
+                let description: ObjcId = msg_send![error, localizedDescription];
+                let string = apple_util::nsstring_to_string(description);
+                panic!("newRenderPipelineStateWithDescriptor error: {}", string);
+            }
+            pipeline.states.push((target, state));
+            state
+        }
+    }
+
+    /// Tank Yard: finish the open encoder, if any.
+    fn close_encoder(&mut self) {
+        if let Some(encoder) = self.render_encoder.take() {
+            unsafe { msg_send_!(encoder, endEncoding) };
+        }
+        self.encoder_pass = None;
+        self.index_buffer = None;
+    }
+
+    /// Tank Yard: replace a texture's sampler after its descriptor changed.
+    fn rebuild_sampler(device: ObjcId, texture: &mut Texture) {
+        unsafe {
+            let previous = texture.sampler;
+            texture.sampler = msg_send_![
+                device,
+                newSamplerStateWithDescriptor: texture.sampler_descriptor
+            ];
+            if !previous.is_null() {
+                msg_send_![previous, release];
+            }
+        }
+    }
+
+    /// Tank Yard: copy a texture's pixels (4 bytes each, top row first).
+    fn read_texture(&mut self, texture: ObjcId, width: u32, height: u32) -> Vec<u8> {
+        self.close_encoder();
+        let row = u64::from(width) * 4;
+        let length = row * u64::from(height);
+        let mut pixels = vec![0u8; length as usize];
+        unsafe {
+            let buffer: ObjcId = msg_send![self.device,
+                newBufferWithLength: length
+                options: MTLResourceOptions::StorageModeShared];
+            let command_buffer = self.command_buffer();
+            let blit = msg_send_![command_buffer, blitCommandEncoder];
+            msg_send_![blit, copyFromTexture: texture
+                sourceSlice: 0u64
+                sourceLevel: 0u64
+                sourceOrigin: MTLOrigin { x: 0, y: 0, z: 0 }
+                sourceSize: MTLSize { width: u64::from(width), height: u64::from(height), depth: 1 }
+                toBuffer: buffer
+                destinationOffset: 0u64
+                destinationBytesPerRow: row
+                destinationBytesPerImage: length];
+            msg_send_![blit, endEncoding];
+            msg_send_![command_buffer, commit];
+            msg_send_![command_buffer, waitUntilCompleted];
+            self.command_buffer = None;
+            let contents: *const u8 = msg_send![buffer, contents];
+            std::ptr::copy_nonoverlapping(contents, pixels.as_mut_ptr(), pixels.len());
+            msg_send_![buffer, release];
+        }
+        pixels
+    }
+
+    fn command_buffer(&mut self) -> ObjcId {
+        if self.command_buffer.is_none() {
+            self.command_buffer = Some(unsafe { msg_send![self.command_queue, commandBuffer] });
+        }
+        self.command_buffer.unwrap()
     }
 }
 
@@ -386,7 +563,8 @@ impl RenderingBackend for MetalContext {
             glsl_support: Default::default(),
             features: Features {
                 instancing: true,
-                resolve_attachments: false,
+                // Tank Yard: resolve attachments are implemented.
+                resolve_attachments: true,
             },
         }
     }
@@ -408,18 +586,39 @@ impl RenderingBackend for MetalContext {
             msg_send_![texture.texture, release];
         }
     }
-    fn apply_viewport(&mut self, _x: i32, _y: i32, _w: i32, _h: i32) {}
-    fn apply_scissor_rect(&mut self, x: i32, y: i32, w: i32, h: i32) {
-        assert!(self.render_encoder.is_some());
-
-        let (_, screen_height) = crate::window::screen_size();
-        let r = MTLScissorRect {
-            x: x as _,
-            y: (screen_height as i32 - (y + h)) as u64,
-            width: w as _,
-            height: h as _,
+    // Tank Yard: both take OpenGL's bottom-up coordinates and flip them with
+    // the open pass's height; upstream used the window's, which put scissors
+    // in the wrong place in offscreen targets. Encoders now outlive a single
+    // draw, so every draw sets both.
+    fn apply_viewport(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        let encoder = self.render_encoder.expect("viewport outside a pass");
+        let height = self.pass_size.1 as f64;
+        let viewport = MTLViewport {
+            originX: x as f64,
+            originY: height - (y + h) as f64,
+            width: w.max(0) as f64,
+            height: h.max(0) as f64,
+            znear: 0.,
+            zfar: 1.,
         };
-        unsafe { msg_send_![self.render_encoder.unwrap(), setScissorRect: r] };
+        unsafe { msg_send_![encoder, setViewport: viewport] };
+    }
+    fn apply_scissor_rect(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        let encoder = self.render_encoder.expect("scissor outside a pass");
+        // Metal requires the rectangle to lie inside the target.
+        let (width, height) = (self.pass_size.0 as i64, self.pass_size.1 as i64);
+        let top = height - (y as i64 + h as i64);
+        let left = (x as i64).clamp(0, width);
+        let top_clamped = top.clamp(0, height);
+        let right = (x as i64 + w.max(0) as i64).clamp(left, width);
+        let bottom = (top + h.max(0) as i64).clamp(top_clamped, height);
+        let r = MTLScissorRect {
+            x: left as u64,
+            y: top_clamped as u64,
+            width: (right - left) as u64,
+            height: (bottom - top_clamped) as u64,
+        };
+        unsafe { msg_send_![encoder, setScissorRect: r] };
     }
     fn texture_set_min_filter(
         &mut self,
@@ -440,15 +639,13 @@ impl RenderingBackend for MetalContext {
             MipmapFilterMode::Linear => MTLSamplerMipFilter::Linear,
         };
 
-        texture.sampler = unsafe {
-            let sampler_descriptor = msg_send_![class!(MTLSamplerDescriptor), new];
-            msg_send_![sampler_descriptor, setMinFilter: filter];
-            msg_send_![sampler_descriptor, setMipFilter: mipmap_filter];
-            msg_send_![
-                self.device,
-                newSamplerStateWithDescriptor: sampler_descriptor
-            ]
-        };
+        // Tank Yard: keep the texture's other sampler settings (upstream
+        // started from a fresh descriptor, resetting magnification and wrap).
+        unsafe {
+            msg_send_![texture.sampler_descriptor, setMinFilter: filter];
+            msg_send_![texture.sampler_descriptor, setMipFilter: mipmap_filter];
+        }
+        Self::rebuild_sampler(self.device, texture);
     }
     fn texture_set_mag_filter(&mut self, texture: TextureId, filter: FilterMode) {
         let texture = self.textures.get_mut(texture);
@@ -458,10 +655,8 @@ impl RenderingBackend for MetalContext {
             FilterMode::Linear => MTLSamplerMinMagFilter::Linear,
         };
 
-        texture.sampler = unsafe {
-            msg_send_![texture.sampler_descriptor, setMagFilter: filter];
-            msg_send_![self.device, newSamplerStateWithDescriptor: texture.sampler_descriptor]
-        };
+        unsafe { msg_send_![texture.sampler_descriptor, setMagFilter: filter] };
+        Self::rebuild_sampler(self.device, texture);
     }
     fn texture_set_wrap(&mut self, texture: TextureId, wrap_x: TextureWrap, wrap_y: TextureWrap) {
         let texture = self.textures.get_mut(texture);
@@ -478,12 +673,22 @@ impl RenderingBackend for MetalContext {
             TextureWrap::Clamp => MTLSamplerAddressMode::ClampToEdge,
         };
 
-        texture.sampler = unsafe {
-            //msg_send_![texture.sampler_descriptor, setRAddressMode: wrap];
+        unsafe {
             msg_send_![texture.sampler_descriptor, setSAddressMode: wrap_s];
             msg_send_![texture.sampler_descriptor, setTAddressMode: wrap_t];
-            msg_send_![self.device, newSamplerStateWithDescriptor: texture.sampler_descriptor]
-        };
+        }
+        Self::rebuild_sampler(self.device, texture);
+    }
+    fn max_anisotropy(&self) -> Option<u8> {
+        // Tank Yard: every Metal GPU filters up to 16x.
+        Some(16)
+    }
+    fn texture_set_anisotropy(&mut self, texture: TextureId, level: u8) -> bool {
+        let texture = self.textures.get_mut(texture);
+        let level = u64::from(level.clamp(1, 16));
+        unsafe { msg_send_![texture.sampler_descriptor, setMaxAnisotropy: level] };
+        Self::rebuild_sampler(self.device, texture);
+        true
     }
     fn texture_resize(
         &mut self,
@@ -494,16 +699,60 @@ impl RenderingBackend for MetalContext {
     ) {
         unimplemented!()
     }
-    fn texture_read_pixels(&mut self, _texture: TextureId, _bytes: &mut [u8]) {
-        unimplemented!()
+    fn texture_read_pixels(&mut self, texture: TextureId, bytes: &mut [u8]) {
+        // Tank Yard: implemented with a blit into shared memory.
+        let texture = self.textures.get(texture);
+        let (width, height) = (texture.params.width, texture.params.height);
+        assert!(bytes.len() >= (width * height * 4) as usize);
+        let pixels = self.read_texture(texture.texture, width, height);
+        bytes[..pixels.len()].copy_from_slice(&pixels);
     }
     fn texture_generate_mipmaps(&mut self, texture: TextureId) {
+        // Tank Yard: a blit encoder needs the render encoder closed.
+        self.close_encoder();
         unsafe {
-            if self.command_buffer.is_none() {
-                self.command_buffer = Some(msg_send![self.command_queue, commandBuffer]);
-            }
-            let command_buffer = self.command_buffer.unwrap();
+            let command_buffer = self.command_buffer();
             let encoder = msg_send_![command_buffer, blitCommandEncoder];
+            // Tank Yard: OpenGL can add mip levels to any texture; Metal
+            // allocates them up front. Move a texture made without them into
+            // one with them, under the same id.
+            let internal = self.textures.get(texture);
+            let levels: u64 = msg_send![internal.texture, mipmapLevelCount];
+            let (width, height) = (
+                u64::from(internal.params.width),
+                u64::from(internal.params.height),
+            );
+            if levels <= 1 && internal.params.sample_count <= 1 && width.max(height) > 1 {
+                let format: MTLPixelFormat = msg_send![internal.texture, pixelFormat];
+                let descriptor = msg_send_![class!(MTLTextureDescriptor),
+                    texture2DDescriptorWithPixelFormat: format
+                    width: width
+                    height: height
+                    mipmapped: YES];
+                let storage: u64 = msg_send![internal.texture, storageMode];
+                let usage: u64 = msg_send![internal.texture, usage];
+                msg_send_![descriptor, setStorageMode: storage];
+                msg_send_![descriptor, setUsage: usage];
+                let mipmapped: ObjcId = msg_send![self.device, newTextureWithDescriptor: descriptor];
+                if !mipmapped.is_null() {
+                    let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+                    msg_send_![encoder, copyFromTexture: internal.texture
+                        sourceSlice: 0u64
+                        sourceLevel: 0u64
+                        sourceOrigin: origin
+                        sourceSize: MTLSize { width, height, depth: 1 }
+                        toTexture: mipmapped
+                        destinationSlice: 0u64
+                        destinationLevel: 0u64
+                        destinationOrigin: origin];
+                    // The command buffer keeps the old texture alive until
+                    // the copy runs.
+                    msg_send_![internal.texture, release];
+                    let slot = self.textures.get_mut(texture);
+                    slot.texture = mipmapped;
+                    slot.params.allocate_mipmaps = true;
+                }
+            }
             let texture = self.textures.get(texture);
             msg_send_![encoder, generateMipmapsForTexture: texture.texture];
             msg_send_![encoder, endEncoding];
@@ -539,9 +788,6 @@ impl RenderingBackend for MetalContext {
         resolve_img: Option<&[TextureId]>,
         depth_img: Option<TextureId>,
     ) -> RenderPass {
-        if resolve_img.is_some() {
-            unimplemented!("resolve textures are not yet implemented on metal");
-        }
         unsafe {
             let render_pass_desc =
                 msg_send_![class!(MTLRenderPassDescriptor), renderPassDescriptor];
@@ -553,6 +799,11 @@ impl RenderingBackend for MetalContext {
                 msg_send_![color_attachment, setTexture: color_texture];
                 msg_send_![color_attachment, setLoadAction: MTLLoadAction::Clear];
                 msg_send_![color_attachment, setStoreAction: MTLStoreAction::Store];
+                // Tank Yard: resolve attachments.
+                if let Some(resolve) = resolve_img.and_then(|resolve| resolve.get(i)) {
+                    let resolve_texture = self.textures.get(*resolve).texture;
+                    msg_send_![color_attachment, setResolveTexture: resolve_texture];
+                }
             }
             if let Some(depth_img) = depth_img {
                 let depth_texture = self.textures.get(depth_img).texture;
@@ -566,10 +817,20 @@ impl RenderingBackend for MetalContext {
                 let stencil_attachment = msg_send_![render_pass_desc, stencilAttachment];
                 msg_send_![stencil_attachment, setTexture: depth_texture];
             }
+            let params = color_img
+                .first()
+                .map(|color| self.textures.get(*color).params)
+                .unwrap_or_default();
             let pass = RenderPassInternal {
                 render_pass_desc,
                 texture: color_img.to_vec(),
                 _depth_texture: depth_img,
+                target: PassTarget {
+                    format: params.format.into(),
+                    samples: params.sample_count.max(1) as u64,
+                    depth: depth_img.is_some(),
+                },
+                resolve: resolve_img.is_some(),
             };
 
             self.passes.push(pass);
@@ -579,6 +840,10 @@ impl RenderingBackend for MetalContext {
     }
 
     fn delete_render_pass(&mut self, render_pass: RenderPass) {
+        // Tank Yard: never release a pass an open encoder still renders into.
+        if self.encoder_pass == Some(EncoderPass::Offscreen(render_pass)) {
+            self.close_encoder();
+        }
         let render_pass = &self.passes[render_pass.0];
         unsafe {
             msg_send_![render_pass.render_pass_desc, release];
@@ -670,16 +935,24 @@ impl RenderingBackend for MetalContext {
                 options:nil
                 error: &mut error
             ];
+            // Tank Yard: report compile errors instead of panicking, so callers
+            // can fall back as they do on OpenGL.
             if library.is_null() {
                 let description: ObjcId = msg_send![error, localizedDescription];
                 let string = apple_util::nsstring_to_string(description);
-                panic!("Shader {}", string);
+                return Err(ShaderError::CompilationError {
+                    shader_type: ShaderType::Fragment,
+                    error_message: string,
+                });
             }
 
             let vertex_function: ObjcId = msg_send![library, newFunctionWithName: apple_util::str_to_nsstring("vertexShader")];
-            assert!(!vertex_function.is_null());
             let fragment_function: ObjcId = msg_send![library, newFunctionWithName: apple_util::str_to_nsstring("fragmentShader")];
-            assert!(!fragment_function.is_null());
+            if vertex_function.is_null() || fragment_function.is_null() {
+                return Err(ShaderError::LinkError(
+                    "vertexShader and fragmentShader are required".into(),
+                ));
+            }
             let shader = ShaderInternal {
                 vertex_function,
                 fragment_function,
@@ -721,6 +994,15 @@ impl RenderingBackend for MetalContext {
                         | MTLTextureUsage::ShaderRead as u64
                         | MTLTextureUsage::ShaderWrite as u64
                 ];
+                // Tank Yard: multisampled render targets.
+                if params.sample_count > 1 {
+                    msg_send_![descriptor, setTextureType: MTLTextureType::D2Multisample];
+                    msg_send_![descriptor, setSampleCount: params.sample_count as u64];
+                    msg_send_![
+                        descriptor,
+                        setUsage: MTLTextureUsage::RenderTarget as u64
+                    ];
+                }
             } else {
                 #[cfg(target_os = "macos")]
                 {
@@ -977,26 +1259,8 @@ impl RenderingBackend for MetalContext {
                     ];
                 }
             }
-            msg_send_![
-                descriptor,
-                setDepthAttachmentPixelFormat: MTLPixelFormat::Depth32Float_Stencil8
-            ];
-            msg_send_![
-                descriptor,
-                setStencilAttachmentPixelFormat: MTLPixelFormat::Depth32Float_Stencil8
-            ];
-
-            let mut error: ObjcId = nil;
-            let pipeline_state: ObjcId = msg_send![
-                self.device,
-                newRenderPipelineStateWithDescriptor: descriptor
-                error: &mut error
-            ];
-            if pipeline_state.is_null() {
-                let description: ObjcId = msg_send![error, localizedDescription];
-                let string = apple_util::nsstring_to_string(description);
-                panic!("newRenderPipelineStateWithDescriptor error: {}", string);
-            }
+            // Tank Yard: attachment formats and sample count are set per pass
+            // layout in `pipeline_state`.
 
             let depth_stencil_desc = msg_send_![class!(MTLDepthStencilDescriptor), new];
             msg_send_![depth_stencil_desc, setDepthWriteEnabled: BOOL::from(params.depth_write)];
@@ -1032,7 +1296,8 @@ impl RenderingBackend for MetalContext {
             ];
 
             let pipeline = PipelineInternal {
-                pipeline_state,
+                descriptor,
+                states: Vec::new(),
                 depth_stencil_state,
                 //layout: buffer_layout.to_vec(),
                 //attributes: vertex_layout,
@@ -1055,9 +1320,10 @@ impl RenderingBackend for MetalContext {
 
         unsafe {
             self.current_pipeline = Some(*pipeline);
+            let state = self.pipeline_state(pipeline.0);
             let pipeline = &self.pipelines[pipeline.0];
 
-            msg_send_![render_encoder, setRenderPipelineState: pipeline.pipeline_state];
+            msg_send_![render_encoder, setRenderPipelineState: state];
             msg_send_![render_encoder, setDepthStencilState:pipeline.depth_stencil_state];
             // render_encoder.set_front_facing_winding(pipeline.params.front_face_order.into());
             // render_encoder.set_cull_mode(pipeline.params.cull_face.into());
@@ -1153,44 +1419,54 @@ impl RenderingBackend for MetalContext {
     }
 
     fn begin_pass(&mut self, pass: Option<RenderPass>, action: PassAction) {
+        let wanted = match pass {
+            None => EncoderPass::Default,
+            Some(pass) => EncoderPass::Offscreen(pass),
+        };
+        // Tank Yard: continue the open encoder when nothing needs clearing.
+        if self.encoder_pass == Some(wanted) && matches!(action, PassAction::Nothing) {
+            self.in_pass = true;
+            return;
+        }
+        self.close_encoder();
+        let command_buffer = self.command_buffer();
         unsafe {
-            if self.command_buffer.is_none() {
-                self.command_buffer = Some(msg_send![self.command_queue, commandBuffer]);
-            }
-
-            let (descriptor, _, _) = match pass {
+            let (descriptor, target, resolve) = match pass {
                 None => {
-                    let (screen_width, screen_height) = crate::window::screen_size();
+                    let samples: u64 = msg_send![self.view, sampleCount];
                     (
                         msg_send_![self.view, currentRenderPassDescriptor],
-                        screen_width as f64,
-                        screen_height as f64,
+                        PassTarget {
+                            format: msg_send![self.view, colorPixelFormat],
+                            samples: samples.max(1),
+                            depth: true,
+                        },
+                        samples > 1,
                     )
                 }
                 Some(pass) => {
                     let pass = &self.passes[pass.0];
-                    // new_render_pass will panic with both color and depth components none
-                    // so unwrap is safe here
-                    let texture = pass
-                        .texture
-                        .first()
-                        .copied()
-                        //.or(pass.depth_texture)
-                        .unwrap();
-
-                    (
-                        pass.render_pass_desc,
-                        self.textures.get(texture).params.width as f64,
-                        self.textures.get(texture).params.height as f64,
-                    )
+                    (pass.render_pass_desc, pass.target, pass.resolve)
                 }
             };
             assert!(!descriptor.is_null());
 
             let color_attachments = msg_send_![descriptor, colorAttachments];
             let color_attachment = msg_send_![color_attachments, objectAtIndexedSubscript: 0];
+            let color_texture = msg_send_![color_attachment, texture];
+            let width: u64 = msg_send![color_texture, width];
+            let height: u64 = msg_send![color_texture, height];
+            self.pass_size = (width.max(1) as u32, height.max(1) as u32);
 
-            msg_send_![color_attachment, setStoreAction: MTLStoreAction::Store];
+            // Tank Yard: upstream always stored, so a multisampled window was
+            // never resolved into the drawable. Keep the samples too: later
+            // encoders this frame load them.
+            let store = if resolve {
+                MTLStoreAction::StoreAndMultisampleResolve
+            } else {
+                MTLStoreAction::Store
+            };
+            msg_send_![color_attachment, setStoreAction: store];
 
             match action {
                 PassAction::Clear { color, .. } => {
@@ -1206,39 +1482,24 @@ impl RenderingBackend for MetalContext {
             }
 
             let render_encoder = msg_send_![
-                self.command_buffer.unwrap(),
+                command_buffer,
                 renderCommandEncoderWithDescriptor: descriptor
             ];
-
-            // render_encoder.set_viewport(MTLViewport {
-            //     originX: 0.0,
-            //     originY: 0.0,
-            //     width: w,
-            //     height: h,
-            //     znear: 0.0,
-            //     zfar: 1.0,
-            // });
-            // render_encoder.set_scissor_rect(MTLScissorRect {
-            //     x: 0,
-            //     y: 0,
-            //     width: w as u64,
-            //     height: h as u64,
-            // });
-
             self.render_encoder = Some(render_encoder);
+            self.encoder_pass = Some(wanted);
+            self.pass_target = target;
+            self.in_pass = true;
         }
     }
 
     fn end_render_pass(&mut self) {
         assert!(
-            self.render_encoder.is_some(),
+            self.in_pass,
             "end_render_pass unpaired with begin_render_pass!"
         );
-
-        let render_encoder = self.render_encoder.unwrap();
-        unsafe { msg_send_!(render_encoder, endEncoding) };
-
-        self.render_encoder = None;
+        // Tank Yard: the encoder stays open for the next pass into the same
+        // target; `close_encoder` ends it when anything else needs the GPU.
+        self.in_pass = false;
         self.index_buffer = None;
     }
 
@@ -1269,14 +1530,110 @@ impl RenderingBackend for MetalContext {
         // TODO: place holder
     }
 
+    fn max_render_samples(&self) -> Option<i32> {
+        // Tank Yard: the largest count this GPU supports for render targets.
+        [8, 4, 2]
+            .iter()
+            .copied()
+            .find(|&count| unsafe {
+                let supported: BOOL =
+                    msg_send![self.device, supportsTextureSampleCount: count as u64];
+                supported == YES
+            })
+            .or(Some(1))
+    }
+
+    fn spatial_upscaler_available(&self) -> bool {
+        self.metalfx.is_some()
+    }
+
+    fn spatial_upscale(&mut self, input: TextureId, output: TextureId) -> bool {
+        let Some(class) = self.metalfx else {
+            return false;
+        };
+        let (input, output) = (self.textures.get(input), self.textures.get(output));
+        let key = (
+            u64::from(input.params.width),
+            u64::from(input.params.height),
+            u64::from(output.params.width),
+            u64::from(output.params.height),
+            MTLPixelFormat::from(input.params.format),
+            MTLPixelFormat::from(output.params.format),
+        );
+        if input.params.sample_count > 1 || output.params.sample_count > 1 {
+            return false;
+        }
+        unsafe {
+            if self.spatial.as_ref().map(|spatial| spatial.key) != Some(key) {
+                self.spatial = None;
+                let descriptor: ObjcId = msg_send![class, new];
+                msg_send_![descriptor, setInputWidth: key.0];
+                msg_send_![descriptor, setInputHeight: key.1];
+                msg_send_![descriptor, setOutputWidth: key.2];
+                msg_send_![descriptor, setOutputHeight: key.3];
+                msg_send_![descriptor, setColorTextureFormat: key.4];
+                msg_send_![descriptor, setOutputTextureFormat: key.5];
+                // Perceptual: the input is display-ready sRGB-encoded color.
+                msg_send_![descriptor, setColorProcessingMode: 0u64];
+                let scaler: ObjcId =
+                    msg_send![descriptor, newSpatialScalerWithDevice: self.device];
+                msg_send_![descriptor, release];
+                if scaler.is_null() {
+                    // Unsupported layout: report it so callers fall back.
+                    return false;
+                }
+                self.spatial = Some(SpatialScaler { scaler, key });
+            }
+            let scaler = self.spatial.as_ref().unwrap().scaler;
+            self.close_encoder();
+            let command_buffer = self.command_buffer();
+            msg_send_![scaler, setColorTexture: input.texture];
+            msg_send_![scaler, setOutputTexture: output.texture];
+            msg_send_![scaler, setInputContentWidth: key.0];
+            msg_send_![scaler, setInputContentHeight: key.1];
+            msg_send_![scaler, encodeToCommandBuffer: command_buffer];
+        }
+        true
+    }
+
+    fn prepare_screen_reads(&mut self) {
+        // Tank Yard: drawables become readable from the next frame on.
+        unsafe { msg_send_![self.view, setFramebufferOnly: NO] };
+    }
+
+    fn read_screen(&mut self) -> Option<(u32, u32, Vec<u8>)> {
+        self.close_encoder();
+        unsafe {
+            let drawable: ObjcId = msg_send![self.view, currentDrawable];
+            if drawable.is_null() {
+                return None;
+            }
+            let texture: ObjcId = msg_send![drawable, texture];
+            let width: u64 = msg_send![texture, width];
+            let height: u64 = msg_send![texture, height];
+            let mut pixels = self.read_texture(texture, width as u32, height as u32);
+            // Drawables are BGRA.
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+            Some((width as u32, height as u32, pixels))
+        }
+    }
+
     fn commit_frame(&mut self) {
+        self.close_encoder();
         unsafe {
             assert!(!self.command_queue.is_null());
+            let command_buffer = self.command_buffer();
             let drawable: ObjcId = msg_send!(self.view, currentDrawable);
-            //msg_send_![drawable, retain];
-            msg_send_![self.command_buffer.unwrap(), presentDrawable: drawable];
-            msg_send_![self.command_buffer.unwrap(), commit];
-            msg_send_![self.command_buffer.unwrap(), waitUntilCompleted];
+            // Tank Yard: no drawable (a zero-sized window) skips presenting.
+            if !drawable.is_null() {
+                msg_send_![command_buffer, presentDrawable: drawable];
+            }
+            msg_send_![command_buffer, commit];
+            // Buffers rotate per frame, so the frame must finish before the
+            // next one rewrites them.
+            msg_send_![command_buffer, waitUntilCompleted];
         }
         for buffer in &mut self.buffers {
             buffer.next_value = 0;
