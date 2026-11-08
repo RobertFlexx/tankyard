@@ -11,32 +11,74 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $Repository = "RobertFlexx/tankyard"
 $WorkDir = Join-Path ([IO.Path]::GetTempPath()) ("tankyard-" + [guid]::NewGuid())
+$Attempts = 6
+if ($env:TANKYARD_DOWNLOAD_ATTEMPTS -match '^\d+$') { $Attempts = [Math]::Max(1, [int]$env:TANKYARD_DOWNLOAD_ATTEMPTS) }
+
+# GitHub's release servers sometimes answer 502/503/504 or drop connections
+# under load. Retry those with growing pauses; fail at once on 404 and other
+# permanent answers.
+function Save-Download([string]$Uri, [string]$OutFile) {
+    $Pause = 2
+    for ($Try = 1; ; $Try++) {
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+            return
+        }
+        catch {
+            $Code = 0
+            $Response = $_.Exception.Response
+            if ($null -ne $Response) { $Code = [int]$Response.StatusCode }
+            $Transient = $Code -eq 0 -or $Code -eq 408 -or $Code -eq 429 -or $Code -ge 500
+            if (-not $Transient -or $Try -ge $Attempts) { throw }
+            $Reason = if ($Code -eq 0) { "no response" } else { "HTTP $Code" }
+            Write-Host "The download server is busy ($Reason); retrying in $Pause s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $Pause
+            $Pause = [Math]::Min($Pause * 2, 30)
+        }
+    }
+}
+
 try {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
         throw "Use install.sh on Linux or macOS."
     }
     if (-not [Environment]::Is64BitOperatingSystem) { throw "Tank Yard needs 64-bit Windows." }
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    # TLS 1.3 where .NET offers it, always TLS 1.2.
+    $Protocols = [Net.SecurityProtocolType]::Tls12
+    if ([Enum]::GetNames([Net.SecurityProtocolType]) -contains "Tls13") { $Protocols = $Protocols -bor [Net.SecurityProtocolType]::Tls13 }
+    [Net.ServicePointManager]::SecurityProtocol = $Protocols
     Write-Host "Tank Yard" -ForegroundColor Cyan
+    if ($Version -ne "latest" -and $Version -notmatch '^v\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$') { throw "Use a release tag such as v0.2.9." }
+    New-Item -ItemType Directory -Force $WorkDir | Out-Null
+    $Releases = "https://github.com/$Repository/releases"
     if ($Version -eq "latest") {
-        $Release = Invoke-RestMethod "https://api.github.com/repos/$Repository/releases/latest" -Headers @{ "User-Agent" = "TankYard-Installer" }
-        $Version = $Release.tag_name
+        # The latest checksum list names its archives, and with them the
+        # version: no GitHub API request, which is rate limited.
+        try { Save-Download "$Releases/latest/download/SHA256SUMS" "$WorkDir\SHA256SUMS" }
+        catch { throw "Could not reach the latest release. Check your connection, or try again in a minute. $($_.Exception.Message)" }
+        $Named = Get-Content "$WorkDir\SHA256SUMS" | ForEach-Object {
+            if ($_ -match '^[0-9a-f]{64}  tankyard-(v\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?)-windows-x86_64\.zip$') { $Matches[1] }
+        } | Select-Object -First 1
+        if (-not $Named) { throw "The latest release has no Windows build." }
+        $Version = $Named
+    } else {
+        try { Save-Download "$Releases/download/$Version/SHA256SUMS" "$WorkDir\SHA256SUMS" }
+        catch { throw "Release $Version or its checksums are unavailable. $($_.Exception.Message)" }
     }
-    if ($Version -notmatch '^v\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$') { throw "Use a release tag such as v0.2.9." }
     $RootName = "tankyard-$Version-windows-x86_64"
     $Archive = "$RootName.zip"
-    $Base = "https://github.com/$Repository/releases/download/$Version"
-    New-Item -ItemType Directory -Force $WorkDir | Out-Null
     Write-Host "Downloading $Version for Windows..."
-    Invoke-WebRequest "$Base/SHA256SUMS" -OutFile "$WorkDir\SHA256SUMS" -UseBasicParsing
-    Invoke-WebRequest "$Base/$Archive" -OutFile "$WorkDir\$Archive" -UseBasicParsing
+    try { Save-Download "$Releases/download/$Version/$Archive" "$WorkDir\$Archive" }
+    catch { throw "Download failed; the existing installation was kept. Run the installer again to retry. $($_.Exception.Message)" }
     $Line = Get-Content "$WorkDir\SHA256SUMS" | Where-Object { $_ -match ("^[0-9a-f]{64}  " + [regex]::Escape($Archive) + "$") }
     if (@($Line).Count -ne 1) { throw "No checksum for $Archive." }
     $Expected = ($Line -split '\s+')[0]
     $Actual = (Get-FileHash "$WorkDir\$Archive" -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($Actual -ne $Expected) { throw "Checksum mismatch. The existing installation was kept." }
     Write-Host "Download verified."
-    Expand-Archive "$WorkDir\$Archive" "$WorkDir\unpacked"
+    # Far faster than Expand-Archive; entries outside the folder are refused.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory("$WorkDir\$Archive", "$WorkDir\unpacked")
     $Payload = Join-Path "$WorkDir\unpacked" $RootName
     [string[]]$Binaries = if ($Server) { @("tankyard-server", "tankyard-relay") } else { @("tankyard") }
     foreach ($Binary in $Binaries) {
@@ -51,8 +93,17 @@ try {
     foreach ($Binary in $Binaries) {
         $Destination = Join-Path $InstallDir "$Binary.exe"
         Copy-Item "$Payload\$Binary.exe" "$Destination.new" -Force
-        try { Move-Item "$Destination.new" $Destination -Force }
-        catch { Remove-Item "$Destination.new" -Force; throw "Close Tank Yard and run the installer again. $($_.Exception.Message)" }
+        # A running game holds its file briefly after closing; wait a moment.
+        for ($Try = 1; ; $Try++) {
+            try { Move-Item "$Destination.new" $Destination -Force; break }
+            catch {
+                if ($Try -ge 5) {
+                    Remove-Item "$Destination.new" -Force
+                    throw "Close Tank Yard and run the installer again. $($_.Exception.Message)"
+                }
+                Start-Sleep -Milliseconds (400 * $Try)
+            }
+        }
     }
     if (-not $NoPath) {
         $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")

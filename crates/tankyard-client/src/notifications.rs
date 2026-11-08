@@ -69,7 +69,7 @@ pub fn server_notice(notice: &tankyard_protocol::ServerNotice, rect: Rect, s: f3
         rect.y,
         rect.w,
         3. * s,
-        if warning { crate::ui::RED } else { CYAN },
+        if warning { crate::ui::RED } else { accent() },
     );
     center_label(
         if warning {

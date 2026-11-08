@@ -9,9 +9,11 @@ use tankyard_content::{ClassDef, Content, MapDef, builtin_maps, validate_maps};
 
 pub mod assets;
 pub mod pack;
+pub mod presentation;
 pub mod project;
 pub mod scan;
 pub use pack::PackFiles;
+pub use presentation::Presentation;
 
 /// Wire version of validated game data and of JSON-only manifests.
 pub const API_VERSION: u32 = 1;
@@ -219,6 +221,13 @@ pub struct Manifest {
     pub mode_name: Option<String>,
     #[serde(default)]
     pub textures: Vec<TextureSource>,
+    /// The main menu, interface colors and wording on the player's machine.
+    #[serde(default)]
+    pub menu: Option<presentation::MenuStyle>,
+    #[serde(default)]
+    pub theme: Option<presentation::Theme>,
+    #[serde(default)]
+    pub text: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -536,6 +545,7 @@ pub struct ScriptDefinitions {
     pub rules: Option<GameRules>,
     pub mode_name: Option<String>,
     pub textures: Vec<TextureData>,
+    pub presentation: Presentation,
 }
 /// Runs a script pack's definition phase. Supplied by the script runtime.
 pub type DefineScripts<'a> =
@@ -545,6 +555,10 @@ pub struct LoadedMods {
     pub bundle: GameBundle,
     pub behaviors: Vec<LoadedMod>,
     pub rules_override: bool,
+    /// Local interface styling; not part of the bundle sent to players.
+    pub presentation: Presentation,
+    /// The decoded `menu.background` image, also kept local.
+    pub menu_background: Option<TextureData>,
 }
 impl Default for LoadedMods {
     fn default() -> Self {
@@ -552,6 +566,8 @@ impl Default for LoadedMods {
             bundle: GameBundle::builtin(),
             behaviors: vec![],
             rules_override: false,
+            presentation: Presentation::default(),
+            menu_background: None,
         }
     }
 }
@@ -664,6 +680,13 @@ pub fn load_with(
                     .map_err(|e| format!("{}: {}: {e}", path.display(), source.file))?,
             );
         }
+        let menu_background = match manifest.menu.as_ref().and_then(|m| m.background.as_deref()) {
+            Some(file) => Some(
+                menu_background(file, |name| pack.get(name).map(<[u8]>::to_vec))
+                    .map_err(|e| format!("{}: {e}", path.display()))?,
+            ),
+            None => None,
+        };
         let mut scripts = ScriptPack {
             entries: manifest.scripts.clone(),
             ..Default::default()
@@ -680,18 +703,18 @@ pub fn load_with(
                 }
             }
         }
-        manifests.push((manifest, textures, scripts));
+        manifests.push((manifest, textures, scripts, menu_background));
     }
     let mut result = LoadedMods::default();
     let mut installed = HashSet::new();
     while !manifests.is_empty() {
         let Some(index) = manifests
             .iter()
-            .position(|(m, _, _)| m.dependencies.iter().all(|d| installed.contains(d)))
+            .position(|(m, ..)| m.dependencies.iter().all(|d| installed.contains(d)))
         else {
             return Err("mod dependency is missing or cyclic".into());
         };
-        let (manifest, textures, scripts) = manifests.remove(index);
+        let (manifest, textures, scripts, mut background) = manifests.remove(index);
         let mut info = ModInfo {
             id: manifest.id.clone(),
             name: manifest.name.clone(),
@@ -706,6 +729,11 @@ pub fn load_with(
             rules: manifest.rules,
             mode_name: manifest.mode_name,
             textures,
+            presentation: Presentation {
+                menu: manifest.menu.unwrap_or_default(),
+                theme: manifest.theme.unwrap_or_default(),
+                text: manifest.text,
+            },
         };
         if !scripts.is_empty() {
             let Some(define) = define.as_mut() else {
@@ -724,6 +752,13 @@ pub fn load_with(
             if scripted.mode_name.is_some() {
                 definitions.mode_name = scripted.mode_name;
             }
+            if let Some(file) = scripted.presentation.menu.background.as_deref() {
+                background = Some(
+                    menu_background(file, |name| scripts.images.get(name).cloned())
+                        .map_err(|e| format!("{}: {e}", info.id))?,
+                );
+            }
+            definitions.presentation.merge(scripted.presentation);
             let mut fingerprint = info.behavior_digest;
             for (name, source) in &scripts.sources {
                 fingerprint ^= digest(name.as_bytes()).rotate_left(7) ^ digest(source.as_bytes());
@@ -770,6 +805,10 @@ pub fn load_with(
         if definitions.mode_name.is_some() {
             result.bundle.mode_name = definitions.mode_name;
         }
+        result.presentation.merge(definitions.presentation);
+        if background.is_some() {
+            result.menu_background = background;
+        }
         installed.insert(manifest.id);
         result.bundle.mods.push(info.clone());
         result.behaviors.push(LoadedMod {
@@ -779,10 +818,26 @@ pub fn load_with(
         });
     }
     result.bundle.validate()?;
+    result
+        .presentation
+        .validate(|id| result.bundle.content.class(id).is_some())?;
     for m in &result.behaviors {
         validate_hooks(&m.hooks, &result.bundle.content)?;
     }
     Ok(result)
+}
+
+/// Decode a pack's menu background image, `file` inside the pack.
+fn menu_background(
+    file: &str,
+    read: impl Fn(&str) -> Option<Vec<u8>>,
+) -> Result<TextureData, String> {
+    if !pack_path(file) {
+        return Err(format!("menu background {file} is not a file in this pack"));
+    }
+    let bytes = read(file).ok_or_else(|| format!("menu background {file} is missing"))?;
+    decode_texture("menu_background", file, &bytes, &read)
+        .map_err(|e| format!("menu background {file}: {e}"))
 }
 
 /// A relative path that stays inside its pack.

@@ -182,7 +182,7 @@ impl Tree {
                     path.extend([vec2(pb.x, bus), vec2(pb.x, pb.y - half_h)]);
                 }
                 let (color, edge) = if highlighted {
-                    (CYAN, 2.2 * s)
+                    (accent(), 2.2 * s)
                 } else {
                     (alpha(line_color(), 0.55), s.max(0.65))
                 };
@@ -226,7 +226,7 @@ impl Tree {
                 } else {
                     zoom.max(0.7)
                 },
-                if related { CYAN } else { line_color() },
+                if related { accent() } else { line_color() },
             );
             let size = 13. * zoom;
             render::class_preview(
@@ -343,7 +343,7 @@ impl Tree {
             if links.is_empty() || y + 52. * s > footer {
                 continue;
             }
-            label(title, x, y, 11. * s, CYAN);
+            label(title, x, y, 11. * s, accent());
             let mut cx = x;
             let mut cy = y + 8. * s;
             for target in links {
@@ -364,7 +364,7 @@ impl Tree {
             y = cy + 42. * s;
         }
         for (title, text, color) in [
-            ("STRENGTHS", class.strengths.as_str(), CYAN),
+            ("STRENGTHS", class.strengths.as_str(), accent()),
             ("TRADEOFFS", class.weaknesses.as_str(), warm_text_color()),
         ] {
             if y + 70. * s > footer {
@@ -387,7 +387,7 @@ impl Tree {
                 x,
                 detail.bottom() - 18. * s,
                 12. * s,
-                CYAN,
+                accent(),
             );
         }
     }

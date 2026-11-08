@@ -190,6 +190,17 @@ impl ModRuntime {
         if self.modules.is_empty() {
             return;
         }
+        // Only build events some enabled pack listens for.
+        let mut wanted = [false; Trigger::ALL.len()];
+        for (slot, trigger) in wanted.iter_mut().zip(Trigger::ALL) {
+            *slot = self.modules.iter().any(|m| !m.disabled && m.wants(trigger));
+        }
+        let wants = |trigger: Trigger| {
+            Trigger::ALL
+                .iter()
+                .position(|t| *t == trigger)
+                .is_some_and(|index| wanted[index])
+        };
         // Process gameplay outcomes before cosmetic shot floods.
         let ordered = world
             .events
@@ -214,7 +225,10 @@ impl ModRuntime {
                     EventKind::Evolve => (Trigger::Evolve, 0),
                     EventKind::Capture => (Trigger::Capture, 0),
                     EventKind::Victory => (Trigger::RoundEnd, 0),
-                    EventKind::Destroy if world.tanks.iter().any(|t| t.id == e.subject) => {
+                    EventKind::Destroy
+                        if wants(Trigger::Death)
+                            && world.tanks.iter().any(|t| t.id == e.subject) =>
+                    {
                         let killer = world
                             .events
                             .iter()
@@ -230,6 +244,9 @@ impl ModRuntime {
                     }
                     _ => return None,
                 };
+                if !wants(trigger) {
+                    return None;
+                }
                 Some(HookEvent {
                     trigger,
                     actor: e.subject,
@@ -240,7 +257,7 @@ impl ModRuntime {
                 })
             })
             .collect();
-        if self.modules.iter().any(|m| m.wants(Trigger::Damage)) {
+        if wants(Trigger::Damage) {
             events.extend(world.damage_log.iter().take(1024).map(|record| HookEvent {
                 trigger: Trigger::Damage,
                 actor: record.victim,

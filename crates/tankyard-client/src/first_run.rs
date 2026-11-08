@@ -1,5 +1,5 @@
 use crate::render::polygon;
-use crate::ui::{CYAN, RED, VIOLET};
+use crate::ui::{RED, VIOLET};
 use crate::{render, settings::Settings, ui::*};
 use macroquad::prelude::*;
 use tankyard_content::Content;
@@ -88,7 +88,7 @@ pub async fn choose_theme(automated: bool) -> Option<bool> {
                     -0.35,
                     0.,
                     0.,
-                    CYAN,
+                    accent(),
                     0.,
                 );
             }
@@ -123,7 +123,7 @@ pub async fn choose_theme(automated: bool) -> Option<bool> {
             w * 0.5,
             h - 140. * s,
             2. * s,
-            alpha(CYAN, 0.45),
+            alpha(accent(), 0.45),
         );
         if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) {
             choice = Some(focus_dark);

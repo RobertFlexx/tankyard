@@ -64,6 +64,8 @@ struct Script {
     sandbox: Sandbox,
     native: Table,
     host: Table,
+    /// `host.tank`, which builds one tank's query table.
+    tank: Function,
 }
 
 impl Script {
@@ -103,10 +105,12 @@ impl Script {
                 .ok_or_else(|| format!("{}: missing script {entry}", info.id))?;
             sandbox.run(entry, source).map_err(context)?;
         }
+        let tank = host.get("tank").map_err(context)?;
         Ok(Self {
             sandbox,
             native,
             host,
+            tank,
         })
     }
 }
@@ -174,6 +178,30 @@ fn define(
         result.rules = Some(rules);
     }
     result.mode_name = table.get("mode_name").map_err(|e| fail("mode_name", e))?;
+    let section = |name: &str| -> Result<Value, String> {
+        let value: Table = table.get(name).map_err(|e| fail(name, e))?;
+        // An empty table reads as a map, whichever shape the field expects.
+        Ok(if value.is_empty() {
+            Value::Nil
+        } else {
+            Value::Table(value)
+        })
+    };
+    if let Value::Table(menu) = section("menu")? {
+        result.presentation.menu = lua
+            .from_value(Value::Table(menu))
+            .map_err(|e| fail("menu", e))?;
+    }
+    if let Value::Table(theme) = section("theme")? {
+        result.presentation.theme = lua
+            .from_value(Value::Table(theme))
+            .map_err(|e| fail("theme", e))?;
+    }
+    if let Value::Table(text) = section("text")? {
+        result.presentation.text = lua
+            .from_value(Value::Table(text))
+            .map_err(|e| fail("text", e))?;
+    }
     let textures: Table = table.get("textures").map_err(|e| fail("textures", e))?;
     for value in textures.sequence_values::<Table>() {
         let texture = value.map_err(|e| fail("textures", e))?;
@@ -278,10 +306,11 @@ impl ServerPlugin for LuaPlugin {
         let lua = &self.script.sandbox.lua;
         let native = &self.script.native;
         let dispatch = &self.dispatch;
+        let tank = &self.script.tank;
         let result = lua.scope(|scope| {
             let read = scope.create_function(
                 move |lua, (op, a, b, c): (String, Value, Value, Value)| {
-                    read(lua, world, &op, &a, &b, &c)
+                    read(lua, world, tank, &op, &a, &b, &c)
                 },
             )?;
             let emit =
@@ -604,45 +633,54 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
     })
 }
 
-fn tank_table(lua: &Lua, world: &World, tank: &Tank) -> mlua::Result<Table> {
-    let t = lua.create_table_with_capacity(0, 28)?;
-    t.raw_set("id", lua_id(tank.id))?;
-    t.raw_set("name", tank.name.as_str())?;
-    t.raw_set("class", tank.class.as_str())?;
-    t.raw_set("team", tank.team)?;
-    t.raw_set("x", tank.pos.x)?;
-    t.raw_set("y", tank.pos.y)?;
-    t.raw_set("vx", tank.vel.x)?;
-    t.raw_set("vy", tank.vel.y)?;
-    t.raw_set("aim", tank.aim)?;
-    t.raw_set("radius", tank.radius)?;
-    t.raw_set("health", tank.health)?;
-    t.raw_set("max_health", tank.max_health)?;
-    t.raw_set("level", tank.level)?;
-    t.raw_set("xp", tank.xp)?;
-    t.raw_set("score", tank.score)?;
-    t.raw_set("kills", tank.kills)?;
-    t.raw_set("deaths", tank.deaths)?;
-    t.raw_set("alive", tank.alive)?;
-    t.raw_set("bot", tank.bot)?;
-    t.raw_set("points", tank.points)?;
-    t.raw_set("shield", tank.shield)?;
-    t.raw_set("protection", tank.protection)?;
-    t.raw_set("speed_scale", tank.speed_scale)?;
-    t.raw_set("reload_scale", tank.reload_scale)?;
-    t.raw_set("damage_scale", tank.damage_scale)?;
-    t.raw_set(
-        "in_base",
-        world
-            .config
-            .base_protected(tank.team, tank.pos, tank.radius),
-    )?;
-    let stats = lua.create_table_with_capacity(8, 0)?;
-    for (index, value) in tank.stats.iter().enumerate() {
-        stats.raw_set(index + 1, *value)?;
-    }
-    t.raw_set("stats", stats)?;
-    Ok(t)
+fn tank_table(lua: &Lua, world: &World, make: &Function, tank: &Tank) -> mlua::Result<Table> {
+    let mut args = Vec::with_capacity(34);
+    args.extend([
+        Value::Number(lua_id(tank.id)),
+        Value::String(lua.create_string(&tank.name)?),
+        Value::String(lua.create_string(&tank.class)?),
+        Value::Integer(tank.team.into()),
+    ]);
+    args.extend(
+        [
+            tank.pos.x,
+            tank.pos.y,
+            tank.vel.x,
+            tank.vel.y,
+            tank.aim,
+            tank.radius,
+            tank.health,
+            tank.max_health,
+        ]
+        .map(|v| Value::Number(v.into())),
+    );
+    args.extend([
+        Value::Integer(tank.level.into()),
+        Value::Number(tank.xp as f64),
+        Value::Number(tank.score as f64),
+        Value::Number(tank.kills as f64),
+        Value::Number(tank.deaths as f64),
+        Value::Boolean(tank.alive),
+        Value::Boolean(tank.bot),
+        Value::Number(tank.points as f64),
+    ]);
+    args.extend(
+        [
+            tank.shield,
+            tank.protection,
+            tank.speed_scale,
+            tank.reload_scale,
+            tank.damage_scale,
+        ]
+        .map(|v| Value::Number(v.into())),
+    );
+    args.push(Value::Boolean(world.config.base_protected(
+        tank.team,
+        tank.pos,
+        tank.radius,
+    )));
+    args.extend(tank.stats.iter().map(|v| Value::Number(f64::from(*v))));
+    make.call(mlua::MultiValue::from_vec(args))
 }
 
 fn rect_table(lua: &Lua, rect: tankyard_core::Rect) -> mlua::Result<Table> {
@@ -657,6 +695,7 @@ fn rect_table(lua: &Lua, rect: tankyard_core::Rect) -> mlua::Result<Table> {
 fn read(
     lua: &Lua,
     world: &World,
+    make_tank: &Function,
     op: &str,
     a: &Value,
     b: &Value,
@@ -692,14 +731,14 @@ fn read(
             let mut index = 0;
             for tank in world.tanks.iter().filter(|tank| !humans || !tank.bot) {
                 index += 1;
-                t.raw_set(index, tank_table(lua, world, tank)?)?;
+                t.raw_set(index, tank_table(lua, world, make_tank, tank)?)?;
             }
             Value::Table(t)
         }
         "tank" => {
             let id = entity(Some(a))?;
             match find_tank(world, id) {
-                Some(tank) => Value::Table(tank_table(lua, world, tank)?),
+                Some(tank) => Value::Table(tank_table(lua, world, make_tank, tank)?),
                 None => Value::Nil,
             }
         }

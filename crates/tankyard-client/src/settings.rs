@@ -93,7 +93,16 @@ pub struct Settings {
     pub unlocked_achievements: Vec<String>,
     pub achievement_mode: tankyard_client::achievements::AchievementMode,
     pub practice_records: Vec<tankyard_client::practice::Record>,
+    /// IDs of enabled packs, in load order. Older versions saved paths;
+    /// `mod_library::migrate` converts them.
     pub enabled_mods: Vec<String>,
+    /// Packs named with `--mod` replace the enabled list for one run and are
+    /// never saved.
+    #[serde(skip)]
+    pub session_mods: Option<Vec<PathBuf>>,
+    /// `--accept-mod-risk`: load `session_mods` without review, this run only.
+    #[serde(skip)]
+    pub session_mods_trusted: bool,
     /// Content digests of flagged packs the player reviewed and accepted.
     pub approved_mods: Vec<String>,
     pub community_server: CommunityServer,
@@ -193,6 +202,8 @@ impl Default for Settings {
             achievement_mode: Default::default(),
             practice_records: vec![],
             enabled_mods: vec![],
+            session_mods: None,
+            session_mods_trusted: false,
             approved_mods: vec![],
             community_server: CommunityServer::default(),
         }
@@ -213,6 +224,8 @@ impl Settings {
             unlocked_achievements: std::mem::take(&mut self.unlocked_achievements),
             practice_records: std::mem::take(&mut self.practice_records),
             enabled_mods: std::mem::take(&mut self.enabled_mods),
+            session_mods: self.session_mods.take(),
+            session_mods_trusted: self.session_mods_trusted,
             approved_mods: std::mem::take(&mut self.approved_mods),
             community_server: std::mem::take(&mut self.community_server),
             ..Self::default()
@@ -351,9 +364,11 @@ impl Settings {
         });
         self.unlocked_achievements.sort_unstable();
         self.unlocked_achievements.dedup();
-        self.enabled_mods.truncate(tankyard_mods::MAX_MODS);
         self.enabled_mods
             .retain(|p| !p.is_empty() && p.len() <= 512 && !p.chars().any(char::is_control));
+        let mut seen = std::collections::HashSet::new();
+        self.enabled_mods.retain(|p| seen.insert(p.clone()));
+        self.enabled_mods.truncate(tankyard_mods::MAX_MODS);
         self.approved_mods
             .retain(|digest| digest.len() == 32 && digest.bytes().all(|b| b.is_ascii_hexdigit()));
         let excess = self.approved_mods.len().saturating_sub(128);

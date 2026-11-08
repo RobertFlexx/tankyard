@@ -104,7 +104,7 @@ impl PartyUi {
             rect.center().x,
             rect.y + 19. * s,
             11. * s,
-            CYAN,
+            accent(),
         );
         for (index, member) in client.party_members.iter().enumerate() {
             let center = vec2(
@@ -147,7 +147,7 @@ impl PartyUi {
                 pill_w,
                 15. * s,
             );
-            ui_rectangle(pill.x, pill.y, pill.w, pill.h, CYAN);
+            ui_rectangle(pill.x, pill.y, pill.w, pill.h, accent());
             center_label(
                 &text,
                 pill.center().x,
@@ -247,9 +247,9 @@ impl PartyUi {
             self.close();
         }
         let link = if network.starts_with("Internet relay ready") {
-            ("Relay", CYAN)
+            ("Relay", accent())
         } else if network.starts_with("Direct") {
-            ("Direct", CYAN)
+            ("Direct", accent())
         } else if network.is_empty() {
             ("Local", muted_color())
         } else {
@@ -328,7 +328,7 @@ impl PartyUi {
                 row.w,
                 row.h,
                 alpha(
-                    if me { CYAN } else { line_color() },
+                    if me { accent() } else { line_color() },
                     if me { 0.10 } else { 0.16 },
                 ),
             );

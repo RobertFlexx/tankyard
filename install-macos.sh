@@ -51,9 +51,41 @@ done
 for tool in curl shasum awk installer mktemp; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required."
 done
-download() {
-    curl --fail --location --retry 3 --connect-timeout 15 --max-time 600 \
-        --proto '=https' --tlsv1.2 --silent --show-error --output "$2" "$1"
+# fetch URL FILE [progress]: download over HTTPS only. GitHub's release
+# servers sometimes answer 502/503/504 or drop connections under load, so
+# those are retried with growing pauses and partial downloads resume.
+# Missing files (404) fail at once. Stalled transfers are abandoned after
+# 30 seconds below 1 KB/s instead of after a fixed total time.
+attempts=$(printenv TANKYARD_DOWNLOAD_ATTEMPTS || true)
+case "$attempts" in ''|*[!0-9]*) attempts=6 ;; esac
+fetch() {
+    try=1
+    pause=2
+    meter=--silent
+    if [ "${3:-}" = progress ] && [ -t 2 ]; then meter=--progress-bar; fi
+    while :; do
+        resume=
+        if [ -s "$2" ]; then resume='--continue-at -'; fi
+        # shellcheck disable=SC2086
+        code=$(curl --fail --location --connect-timeout 10 --speed-limit 1024 --speed-time 30 \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 $meter --show-error \
+            $resume --write-out '%{http_code}' --output "$2" "$1") && return 0
+        status=$?
+        case "$code" in
+            416) rm -f "$2" ;;    # A stale partial file; start again.
+            ''|000|408|429|5??) ;;
+            *) return "$status" ;; # 404 and other permanent answers.
+        esac
+        # curl reports HTTP errors as 22; without a status it never connected.
+        if [ -z "$code" ] && [ "$status" = 22 ]; then return "$status"; fi
+        [ "$try" -lt "$attempts" ] || return "$status"
+        printf 'Tank Yard: the download server is busy (%s); retrying in %ss…\n' \
+            "${code:-no response}" "$pause" >&2
+        sleep "$pause"
+        try=$((try + 1))
+        pause=$((pause * 2))
+        [ "$pause" -le 30 ] || pause=30
+    done
 }
 base="https://github.com/$repository/releases"
 if [ -n "$file" ]; then
@@ -63,13 +95,8 @@ if [ -n "$file" ]; then
         version=$(basename "$file" | awk -F- '/^tankyard-v[0-9][0-9.]*-macos-universal\.pkg$/ { print $2 }')
         [ -n "$version" ] || die "Use --version, or keep the original file name (tankyard-vX.Y.Z-macos-universal.pkg)."
     fi
-elif [ "$version" = latest ]; then
-    resolved=$(curl --fail --location --retry 3 --connect-timeout 15 --max-time 60 \
-        --proto '=https' --tlsv1.2 --silent --show-error --output /dev/null \
-        --write-out '%{url_effective}' "$base/latest") || die "Could not find the latest release."
-    version=$(printf '%s' "$resolved" | awk -F '/tag/' 'NF==2 {print $2}')
 fi
-case "$version" in v[0-9]*) ;; *) die "Use a release tag such as v0.10.0." ;; esac
+case "$version" in latest|v[0-9]*) ;; *) die "Use a release tag such as v0.10.0." ;; esac
 case "$version" in *[!a-zA-Z0-9.-]*) die "Invalid release tag." ;; esac
 
 work_dir=$(mktemp -d)
@@ -77,14 +104,23 @@ trap 'rm -rf "$work_dir"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+if [ "$version" = latest ]; then
+    # The latest checksum list names the package, and with it the version.
+    fetch "$base/latest/download/SHA256SUMS" "$work_dir/SHA256SUMS" \
+        || die "Could not reach the latest release. Check your connection, or try again in a minute."
+    version=$(awk '$2 ~ /^tankyard-v[0-9][0-9.]*-macos-universal\.pkg$/ {
+        split($2, part, "-"); print part[2]; exit }' "$work_dir/SHA256SUMS")
+    case "$version" in v[0-9]*) ;; *) die "The latest release has no macOS installer package." ;; esac
+else
+    fetch "$base/download/$version/SHA256SUMS" "$work_dir/SHA256SUMS" \
+        || die "Release $version or its checksums are unavailable."
+fi
 package="tankyard-$version-macos-universal.pkg"
 printf 'Tank Yard %s for macOS\n' "$version"
-download "$base/download/$version/SHA256SUMS" "$work_dir/SHA256SUMS" || die "Release checksums are unavailable."
 expected=$(awk -v name="$package" '$2 == name { print $1 }' "$work_dir/SHA256SUMS")
 [ "$(printf '%s' "$expected" | wc -c | tr -d ' ')" = 64 ] || die "Release $version has no macOS installer package."
 case "$expected" in *[!0-9a-f]*) die "Invalid checksum." ;; esac
 if [ -z "$file" ]; then
-    printf 'Downloading %s…\n' "$package"
     if [ "$cli" = yes ]; then
         file="$work_dir/$package"
     else
@@ -92,7 +128,15 @@ if [ -z "$file" ]; then
         mkdir -p "$HOME/Downloads"
         file="$HOME/Downloads/$package"
     fi
-    download "$base/download/$version/$package" "$file" || die "Download failed; nothing was changed."
+    if [ -s "$file" ] && [ "$(shasum -a 256 "$file" | awk '{print $1}')" = "$expected" ]; then
+        printf 'Using the verified package already in %s.\n' "$file"
+    else
+        printf 'Downloading %s…\n' "$package"
+        # An old or damaged copy is replaced; retries within this run resume.
+        rm -f "$file"
+        fetch "$base/download/$version/$package" "$file" progress \
+            || die "Download failed; nothing was changed. Run the installer again to retry."
+    fi
 fi
 actual=$(shasum -a 256 "$file" | awk '{print $1}')
 [ "$actual" = "$expected" ] || die "$file does not match the official $version package. It was not unblocked or installed."

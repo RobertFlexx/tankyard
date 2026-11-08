@@ -5,7 +5,7 @@ Tank Yard has two kinds of packs, and both are a folder or a `.zip` archive with
 - **Lua script packs** (manifest `api_version` 2) can change almost everything about a match: custom modes, scoring, physics nudges, new tanks and maps, timed events and rule changes. Scripts run on LuaJIT inside a sandbox with no file, network, process or native-code access.
 - **Data packs** (manifest `api_version` 1) add or replace tanks, maps, rules and textures, and can attach bounded JSON behavior hooks.
 
-In the game, open **Mods** and either paste the path of a `.zip` and press **Import**, or drop the `.zip` onto the window. Imported packs are copied into your library (`…/Tank Yard/mods` in your application data folder); folders in a `mods` directory next to the game are listed too. Enabled packs apply to offline games and servers you host. Community servers load packs with `--mod path` or the `mods` setting; joining players receive only validated data and never run server scripts.
+In the game, open **Mods** and press **Browse for a pack…** to pick a `.zip` (or the `mod.json` inside a pack folder) in your system's file chooser. You can also paste a `.zip` or folder path and press **Import**, or drop a `.zip` onto the window. Imported packs are copied into your library (`…/Tank Yard/mods` in your application data folder; **Open mods folder** shows it), and a pack that passes review is enabled straight away. Pack folders or archives you put in the library yourself appear after **Refresh**. Folders in a `mods` directory next to the game are listed too; a library pack with the same ID replaces a bundled one. **Remove** deletes an imported pack. Enabled packs are remembered by ID, so they stay enabled across restarts, updates and moves, and apply to offline games and servers you host. `--mod` on the command line loads packs for that run only and leaves your saved list alone. Community servers load packs with `--mod path` or the `mods` setting; joining players receive only validated data and never run server scripts.
 
 The Mods page lists every pack with its icon, name, version, creator and safety status. Select one to see its description, license, tags, contents (tanks, maps, scripts, textures, hooks), size and location, with buttons for its source code, download page and issue tracker. Packs describe themselves in an optional `tankyard.toml`:
 
@@ -34,6 +34,7 @@ Every field is optional, and `tankyard.toml` never changes gameplay. Links must 
 ```sh
 cargo run --locked -p tankyard-tools -- validate-mods --mod mods/bounty_hunt --mod mods/vampire
 cargo run --locked -p tankyard-tools -- scan-mod mods/bounty_hunt path/to/pack.zip
+cargo run --release --locked -p tankyard-tools -- mod-bench --mod mods/gravity_wells --bots 40
 ./target/release/tankyard --offline --mod mods/gravity_wells
 ./target/release/tankyard-server --mod mods/bounty_hunt
 ```
@@ -140,6 +141,28 @@ tankyard.define_class(tank)
 
 Definitions are validated like data packs and ignored while a round runs, so the same file serves both phases.
 
+### Menu, theme and wording
+
+Packs can restyle the game itself, like a resource pack. These apply only on the player's machine, to the menus and HUD; they are never sent to servers or other players.
+
+```lua
+tankyard.menu({
+  title = "OVERCLOCK",                    -- replaces "Tank Yard"
+  subtitle = "The rules change every 40 seconds",
+  splashes = { "Pass the bomb!", "First to 5,000!" },  -- one is shown per launch
+  showcase = "vector",                    -- the tank spinning above the menu
+  background = "art/menu_tile.svg",       -- an image in the pack, tiled
+  ambient = false,                        -- hide the drifting arena backdrop
+})
+tankyard.theme({                          -- "#rgb", "#rrggbb" or { r, g, b }
+  accent = "#b14cff", background = "#140b24", surface = "#21143a",
+  line = "#4a2f7a", text = "#f3ebff", muted = "#b4a3d4", highlight = "#ffd34d",
+})
+tankyard.text({ ["Play offline"] = "Solo run" })  -- exact interface text
+```
+
+Data packs use the same fields as `"menu"`, `"theme"` and `"text"` objects in `mod.json`. Later packs win field by field; splashes add up (64 at most) and text replacements merge (256 at most). Unset theme colors keep the player's light or dark theme.
+
 ### Sandbox and limits
 
 Scripts run on LuaJIT's interpreter, one isolated state per pack, recreated every round. They get the base functions, `string`, `table`, `math`, `bit` and `coroutine`. Removed: `os`, `io`, `debug`, `ffi`, `jit`, `package`, `load`, `loadstring`, `loadfile`, `dofile`, `getfenv`, `setfenv`, `collectgarbage`, `newproxy` and `string.dump`; only text source is accepted. `math.random` is seeded per round, and `print` writes to the pack's log (shown in the server console).
@@ -148,7 +171,7 @@ The JIT trace compiler is off inside the sandbox because compiled traces skip Lu
 
 ## Data packs
 
-API version 1 manifests require `api_version`, `id`, `name`, and `version`. Optional fields are `dependencies`, `classes`, `maps`, `rules`, `mode_name`, `textures`, and `hooks`. Dependencies load first; missing dependencies and cycles are rejected. Definitions replace an existing ID or add a new one. Among packs whose dependencies are ready, command-line order decides loading order. Later definitions win. A supplied `rules` object replaces the complete rule profile; omitted fields take standard defaults. Packs without a rules object keep the configured server physics. A custom `mode_name` labels the underlying mode, and hooks provide its extra behavior.
+API version 1 manifests require `api_version`, `id`, `name`, and `version`. Optional fields are `dependencies`, `classes`, `maps`, `rules`, `mode_name`, `textures`, `hooks`, `menu`, `theme` and `text`. Dependencies load first; missing dependencies and cycles are rejected. Definitions replace an existing ID or add a new one. Among packs whose dependencies are ready, command-line order decides loading order. Later definitions win. A supplied `rules` object replaces the complete rule profile; omitted fields take standard defaults. Packs without a rules object keep the configured server physics. A custom `mode_name` labels the underlying mode, and hooks provide its extra behavior.
 
 Rules control movement speed, acceleration, coasting, damage, health, regeneration, XP, score, and respawn time. Values are bounded and validated. Clients receive the same rules used by server physics and prediction. Modded sessions do not earn standard achievements or update standard profile records.
 

@@ -44,11 +44,85 @@ pub const VIOLET: Color = Color::new(0.749, 0.498, 0.961, 1.0);
 pub const STAT_ORDER: [usize; 8] = [1, 0, 2, 3, 4, 5, 6, 7];
 pub fn card_color(index: usize) -> Color {
     crate::accessibility::palette(
-        [CYAN, Color::new(0.66, 0.94, 0.46, 1.0), RED, VIOLET, AMBER][index % 5],
+        [
+            accent(),
+            Color::new(0.66, 0.94, 0.46, 1.0),
+            RED,
+            VIOLET,
+            AMBER,
+        ][index % 5],
     )
 }
 pub fn accent_color() -> Color {
-    crate::accessibility::palette(CYAN)
+    crate::accessibility::palette(accent())
+}
+/// Colors and wording from the player's enabled packs.
+#[derive(Clone, Copy, Default)]
+struct ModTheme {
+    accent: Option<Color>,
+    background: Option<Color>,
+    surface: Option<Color>,
+    line: Option<Color>,
+    text: Option<Color>,
+    muted: Option<Color>,
+    highlight: Option<Color>,
+}
+thread_local! {
+    static MOD_THEME: Cell<ModTheme> = Cell::new(ModTheme::default());
+    /// Replacement text, and the set of replacements so text that was
+    /// already replaced is never replaced twice.
+    static MOD_TEXT: std::cell::RefCell<(
+        std::collections::HashMap<String, String>,
+        std::collections::HashSet<String>,
+    )> = std::cell::RefCell::default();
+    static MOD_TEXT_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+/// Apply the theme and wording of the player's enabled packs.
+pub fn set_presentation(presentation: &tankyard_mods::Presentation) {
+    let color = |rgb: Option<tankyard_mods::presentation::Rgb>| {
+        rgb.map(|rgb| {
+            let [r, g, b] = rgb.to_f32();
+            Color::new(r, g, b, 1.0)
+        })
+    };
+    let theme = &presentation.theme;
+    MOD_THEME.with(|slot| {
+        slot.set(ModTheme {
+            accent: color(theme.accent),
+            background: color(theme.background),
+            surface: color(theme.surface),
+            line: color(theme.line),
+            text: color(theme.text),
+            muted: color(theme.muted),
+            highlight: color(theme.highlight),
+        })
+    });
+    MOD_TEXT.with(|text| {
+        let mut text = text.borrow_mut();
+        text.0 = presentation.text.clone().into_iter().collect();
+        text.1 = presentation.text.values().cloned().collect();
+    });
+    MOD_TEXT_ACTIVE.with(|active| active.set(!presentation.text.is_empty()));
+}
+fn themed(pick: impl Fn(&ModTheme) -> Option<Color>) -> Option<Color> {
+    MOD_THEME.with(|theme| pick(&theme.get()))
+}
+/// The interface accent: cyan unless a pack recolors it.
+pub fn accent() -> Color {
+    themed(|t| t.accent).unwrap_or(CYAN)
+}
+/// Interface text as a pack words it.
+pub fn tr(value: &str) -> Cow<'_, str> {
+    if !MOD_TEXT_ACTIVE.with(Cell::get) {
+        return Cow::Borrowed(value);
+    }
+    MOD_TEXT.with(|text| {
+        let text = text.borrow();
+        match text.0.get(value) {
+            Some(replacement) if !text.1.contains(value) => Cow::Owned(replacement.clone()),
+            _ => Cow::Borrowed(value),
+        }
+    })
 }
 pub fn player_color() -> Color {
     crate::render::team_color(0, true, crate::accessibility::colorblind())
@@ -113,6 +187,9 @@ pub fn is_dark() -> bool {
     DARK_THEME.with(|theme| theme.get())
 }
 pub fn bg_color() -> Color {
+    if let Some(color) = themed(|t| t.background) {
+        return color;
+    }
     if is_dark() {
         Color::new(0.12, 0.15, 0.18, 1.0)
     } else {
@@ -120,6 +197,9 @@ pub fn bg_color() -> Color {
     }
 }
 pub fn surface_color() -> Color {
+    if let Some(color) = themed(|t| t.surface) {
+        return color;
+    }
     if is_dark() {
         Color::new(0.18, 0.21, 0.25, 1.0)
     } else {
@@ -127,6 +207,9 @@ pub fn surface_color() -> Color {
     }
 }
 pub fn line_color() -> Color {
+    if let Some(color) = themed(|t| t.line) {
+        return color;
+    }
     if is_dark() {
         Color::new(0.30, 0.34, 0.38, 1.0)
     } else {
@@ -134,6 +217,9 @@ pub fn line_color() -> Color {
     }
 }
 pub fn text_color() -> Color {
+    if let Some(color) = themed(|t| t.text) {
+        return color;
+    }
     if is_dark() {
         Color::new(0.95, 0.96, 0.97, 1.0)
     } else {
@@ -141,6 +227,9 @@ pub fn text_color() -> Color {
     }
 }
 pub fn muted_color() -> Color {
+    if let Some(color) = themed(|t| t.muted) {
+        return color;
+    }
     if is_dark() {
         Color::new(0.70, 0.74, 0.78, 1.0)
     } else {
@@ -149,6 +238,9 @@ pub fn muted_color() -> Color {
 }
 /// Amber for headings and tags; darker on light surfaces so it stays legible.
 pub fn warm_text_color() -> Color {
+    if let Some(color) = themed(|t| t.highlight) {
+        return color;
+    }
     if is_dark() {
         AMBER
     } else {
@@ -156,6 +248,9 @@ pub fn warm_text_color() -> Color {
     }
 }
 pub fn hover_color() -> Color {
+    if let Some(accent) = themed(|t| t.accent) {
+        return mix(surface_color(), accent, 0.22);
+    }
     if is_dark() {
         Color::new(0.23, 0.34, 0.39, 1.0)
     } else {
@@ -210,12 +305,16 @@ pub fn mix(a: Color, b: Color, t: f32) -> Color {
     )
 }
 pub(crate) fn label_width(value: &str, size: f32) -> f32 {
+    let value = &*tr(value);
     TEXT_CACHE.with(|cache| cache.borrow_mut().width(value, size, screen_dpi_scale()))
 }
 // Keep long names, paths and server addresses out of their neighbors.
 pub(crate) fn fitted_label(value: &str, size: f32, width: f32) -> Cow<'_, str> {
     if width <= 0.0 {
         return Cow::Borrowed("");
+    }
+    if let Cow::Owned(replaced) = tr(value) {
+        return Cow::Owned(fitted_label(&replaced, size, width).into_owned());
     }
     if label_width(value, size) <= width {
         return Cow::Borrowed(value);
@@ -238,6 +337,7 @@ pub(crate) fn fitted_label(value: &str, size: f32, width: f32) -> Cow<'_, str> {
 }
 
 pub fn label(value: &str, x: f32, y: f32, size: f32, color: Color) {
+    let value = &*tr(value);
     let position = crate::ui_layout::position(vec2(x, y));
     if !crate::ui_layout::visible_y(position.y - size * 1.2, position.y + size * 0.4) {
         return;
@@ -292,6 +392,33 @@ fn raw_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
         );
     });
 }
+/// Text turned by `rotation` radians about its start.
+pub fn rotated_label(value: &str, x: f32, y: f32, size: f32, rotation: f32, color: Color) {
+    let value = &*tr(value);
+    let pixels = crate::ui_text::raster_size(size);
+    let p = crate::ui_layout::position(vec2(x, y));
+    UI_FONT.with(|font| {
+        if let Some(font) = font.borrow_mut().as_mut() {
+            font.populate_font_cache(
+                &value.chars().collect::<Vec<_>>(),
+                (f32::from(pixels) * screen_dpi_scale()).ceil() as u16,
+            );
+        }
+        draw_text_ex(
+            value,
+            p.x,
+            p.y,
+            TextParams {
+                font: font.borrow().as_ref(),
+                font_size: pixels,
+                font_scale: size / f32::from(pixels),
+                color: crate::accessibility::palette(color),
+                rotation,
+                ..Default::default()
+            },
+        );
+    });
+}
 pub fn right_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
     let width = label_width(value, size);
     label(value, x - width, y, size, color);
@@ -316,7 +443,9 @@ pub fn button(rect: Rect, text: &str, selected: bool, enabled: bool, s: f32) -> 
     let base = if !enabled {
         mix(surface_color(), bg_color(), 0.55)
     } else if selected {
-        if is_dark() {
+        if let Some(accent) = themed(|t| t.accent) {
+            mix(surface_color(), accent, 0.45)
+        } else if is_dark() {
             Color::new(0.11, 0.40, 0.50, 1.0)
         } else {
             Color::new(0.43, 0.85, 0.85, 1.0)
@@ -337,9 +466,9 @@ pub fn button(rect: Rect, text: &str, selected: bool, enabled: bool, s: f32) -> 
         rect.h,
         2.0,
         if selected {
-            CYAN
+            accent()
         } else {
-            mix(line_color(), CYAN, t)
+            mix(line_color(), accent(), t)
         },
     );
     let text_color = if enabled { text_color() } else { muted_color() };
@@ -374,7 +503,7 @@ pub fn small_button(rect: Rect, text: &str, s: f32) -> bool {
         rect.w,
         rect.h,
         1.5,
-        mix(line_color(), CYAN, t),
+        mix(line_color(), accent(), t),
     );
     center_label(
         &fitted_label(text, 16.0 * s, (rect.w - 12.0 * s).max(0.0)),
@@ -404,7 +533,7 @@ pub fn toggle(rect: Rect, text: &str, value: &mut bool, s: f32) -> bool {
         38.0 * s,
         20.0 * s,
         if *value {
-            alpha(CYAN, 0.3)
+            alpha(accent(), 0.3)
         } else {
             line_color()
         },
@@ -413,7 +542,7 @@ pub fn toggle(rect: Rect, text: &str, value: &mut bool, s: f32) -> bool {
         bx + if *value { 28.0 * s } else { 10.0 * s },
         rect.y + 16.0 * s,
         6.0 * s,
-        if *value { CYAN } else { muted_color() },
+        if *value { accent() } else { muted_color() },
     );
     click
 }
@@ -515,12 +644,12 @@ pub fn slider_value(
     );
     let fraction = ((*value - lo) / (hi - lo)).clamp(0., 1.);
     draw_rectangle(track.x, track.y, track.w, track.h, line_color());
-    draw_rectangle(track.x, track.y, track.w * fraction, track.h, CYAN);
+    draw_rectangle(track.x, track.y, track.w * fraction, track.h, accent());
     draw_circle(
         track.x + track.w * fraction,
         track.y + 2.5 * s,
         5. * s,
-        CYAN,
+        accent(),
     );
     dragged
 }
@@ -783,7 +912,7 @@ pub fn text_field(
             rect.w,
             rect.h,
             1.0,
-            if editing { CYAN } else { line_color() },
+            if editing { accent() } else { line_color() },
         );
         let shown = field_text(value, secret);
         let caret = field_offset(value, field.editor.cursor, secret);
@@ -806,7 +935,7 @@ pub fn text_field(
                     rect.y + 6.0 * s,
                     selected_width,
                     rect.h - 12.0 * s,
-                    alpha(CYAN, 0.28),
+                    alpha(accent(), 0.28),
                 );
             }
         }
@@ -824,7 +953,7 @@ pub fn text_field(
                 rect.y + 9.0 * s,
                 1.5 * s,
                 rect.h - 18.0 * s,
-                CYAN,
+                accent(),
             );
         }
     });
@@ -869,6 +998,7 @@ pub fn wrap(value: &str, x: f32, mut y: f32, width: f32, size: f32, color: Color
     y
 }
 pub fn wrapped_lines(value: &str, width: f32, size: f32) -> Vec<String> {
+    let value = &*tr(value);
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in value.split_whitespace() {

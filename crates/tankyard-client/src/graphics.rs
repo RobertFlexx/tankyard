@@ -119,6 +119,7 @@ pub fn load(textures: &[TextureData], filter: u8) {
 }
 pub fn unload() {
     TEXTURES.with(|cache| cache.borrow_mut().clear());
+    MENU_BACKGROUND.with(|slot| slot.borrow_mut().take());
     MIPMAPS_READY.with(|ready| ready.set(false));
 }
 
@@ -272,6 +273,51 @@ pub fn set_filter(filter: u8) {
             }
         }
     });
+}
+thread_local! {
+    /// A pack's main menu background; kept apart from game textures, which
+    /// a server's packs replace.
+    static MENU_BACKGROUND: std::cell::RefCell<Option<Texture2D>> = const { std::cell::RefCell::new(None) };
+}
+pub fn set_menu_background(data: Option<&TextureData>) {
+    let texture = data.map(|data| {
+        let texture = Texture2D::from_rgba8(data.width, data.height, &data.rgba);
+        texture.set_filter(FilterMode::Linear);
+        texture
+    });
+    MENU_BACKGROUND.with(|slot| *slot.borrow_mut() = texture);
+}
+/// Tile the menu background across the screen in `cell`-sized squares,
+/// drifting slowly with `time`. Returns false when no pack provides one.
+pub fn menu_background(cell: f32, time: f32) -> bool {
+    MENU_BACKGROUND.with(|slot| {
+        let slot = slot.borrow();
+        let Some(texture) = slot.as_ref() else {
+            return false;
+        };
+        let cell = cell.max(16.0);
+        let offset = (time * 12.0).rem_euclid(cell);
+        let (w, h) = (screen_width(), screen_height());
+        let mut y = -cell + offset;
+        while y < h {
+            let mut x = -cell + offset;
+            while x < w {
+                draw_texture_ex(
+                    texture,
+                    x,
+                    y,
+                    WHITE,
+                    DrawTextureParams {
+                        dest_size: Some(Vec2::splat(cell)),
+                        ..Default::default()
+                    },
+                );
+                x += cell;
+            }
+            y += cell;
+        }
+        true
+    })
 }
 pub fn body(id: &str, center: Vec2, radius: f32, angle: f32, opacity: f32) {
     let center = crate::ui_layout::position(center);

@@ -11,6 +11,7 @@ mod community_ui;
 mod creator;
 mod credentials;
 mod effects;
+mod file_dialog;
 mod first_run;
 mod graphics;
 mod hosting;
@@ -213,12 +214,11 @@ impl App {
         if cli.safe_graphics {
             settings.use_safe_graphics();
         }
+        mod_library::migrate(&mut settings);
         if !cli.mods.is_empty() {
-            settings.enabled_mods = cli
-                .mods
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
+            // For this run only: the saved list of enabled packs is untouched.
+            settings.session_mods = Some(cli.mods.clone());
+            settings.session_mods_trusted = cli.accept_mod_risk;
             for path in &cli.mods {
                 let entry = mod_library::inspect(path);
                 for finding in &entry.report.findings {
@@ -230,9 +230,6 @@ impl App {
                         finding.line,
                         finding.message
                     );
-                }
-                if cli.accept_mod_risk && !entry.approved(&settings) {
-                    settings.approved_mods.push(entry.digest.clone());
                 }
             }
         }
@@ -248,9 +245,12 @@ impl App {
         menu.difficulty = settings.bot_difficulty;
         let (paths, held) = mod_library::ready_paths(&settings);
         menu.error = held.join(" ");
-        match tankyard_lua::load(&paths) {
+        match mod_library::load(&paths) {
             Ok(loaded) => {
                 graphics::load(&loaded.bundle.textures, settings.anisotropic_filtering);
+                ui::set_presentation(&loaded.presentation);
+                graphics::set_menu_background(loaded.menu_background.as_ref());
+                menu.set_presentation(&loaded.presentation);
                 content = loaded.bundle.content;
                 menu.maps = loaded.bundle.maps;
             }
@@ -778,19 +778,13 @@ impl App {
         }
     }
     fn restore_menu(&mut self) {
-        let paths = self.ready_mods();
-        match tankyard_lua::load(&paths) {
-            Ok(loaded) => {
-                self.content = loaded.bundle.content;
-                self.menu.maps = loaded.bundle.maps;
-                self.menu.map = self.menu.map.min(self.menu.maps.len().saturating_sub(1));
-                graphics::load(&loaded.bundle.textures, self.settings.anisotropic_filtering);
-            }
-            Err(error) => {
-                self.content = Content::builtin();
-                self.menu.maps = tankyard_content::builtin_maps();
-                log::warn!("Cannot restore local mods: {error}");
-            }
+        if let Err(error) = self.reload_catalog() {
+            self.content = Content::builtin();
+            self.menu.maps = tankyard_content::builtin_maps();
+            ui::set_presentation(&Default::default());
+            graphics::set_menu_background(None);
+            self.menu.set_presentation(&Default::default());
+            log::warn!("Cannot restore local mods: {error}");
         }
         self.paused = false;
         self.menu_over_game = false;
@@ -830,6 +824,21 @@ impl App {
             self.menu.difficulty_name(),
         )
     }
+    /// Load the enabled packs' tanks, maps, textures and interface styling
+    /// for the menus and offline play.
+    fn reload_catalog(&mut self) -> Result<(), String> {
+        self.catalog_paths.clone_from(&self.settings.enabled_mods);
+        let paths = self.ready_mods();
+        let loaded = mod_library::load(&paths)?;
+        self.content = loaded.bundle.content;
+        self.menu.maps = loaded.bundle.maps;
+        self.menu.map = self.menu.map.min(self.menu.maps.len().saturating_sub(1));
+        graphics::load(&loaded.bundle.textures, self.settings.anisotropic_filtering);
+        ui::set_presentation(&loaded.presentation);
+        graphics::set_menu_background(loaded.menu_background.as_ref());
+        self.menu.set_presentation(&loaded.presentation);
+        Ok(())
+    }
     /// Enabled packs that passed review or were confirmed by the player.
     /// Anything held back is reported on the menu instead of loading.
     fn ready_mods(&mut self) -> Vec<std::path::PathBuf> {
@@ -847,7 +856,7 @@ impl App {
                 (None, Some(bytes)) => mod_library::import_bytes(bytes),
                 _ => continue,
             };
-            self.menu.import_result(result);
+            self.menu.import_result(&mut self.settings, result);
             if self.session.is_none() {
                 self.menu.go(Page::Mods);
             }
@@ -1264,17 +1273,13 @@ impl App {
             self.creator.authenticate(session);
             self.central_owner.authenticate(session);
         }
-        if self.session.is_none() && self.catalog_paths != self.settings.enabled_mods {
-            self.catalog_paths.clone_from(&self.settings.enabled_mods);
-            let paths = self.ready_mods();
-            match tankyard_lua::load(&paths) {
-                Ok(loaded) => {
-                    self.content = loaded.bundle.content;
-                    self.menu.maps = loaded.bundle.maps;
-                    graphics::load(&loaded.bundle.textures, self.settings.anisotropic_filtering);
-                }
-                Err(error) => self.menu.error = error,
-            }
+        // Packs never change the content of a game in progress.
+        if self.session.is_none()
+            && (self.catalog_paths != self.settings.enabled_mods
+                || std::mem::take(&mut self.menu.catalog_stale))
+            && let Err(error) = self.reload_catalog()
+        {
+            self.menu.error = error;
         }
         self.effects.update(dt, self.settings.reduced_motion);
         self.voice

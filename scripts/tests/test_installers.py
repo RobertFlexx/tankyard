@@ -40,6 +40,14 @@ from pathlib import Path
 args = sys.argv[1:]
 assert "--proto" in args and "=https" in args
 url = args[-1]
+failures = os.environ.get("TANKYARD_FAILURES")
+if failures:
+    counter = Path(failures)
+    left = int(counter.read_text())
+    if left > 0:
+        counter.write_text(str(left - 1))
+        print("504", end="")
+        sys.exit(22)
 if url.endswith("/latest"):
     print("https://github.com/RobertFlexx/tankyard/releases/tag/v1.2.3", end="")
     sys.exit(0)
@@ -87,6 +95,25 @@ case "$1" in -s) printf '%s\\n' Linux ;; -m) printenv TANKYARD_TEST_ARCH ;; esac
         self.assertFalse((self.destination / "tankyard-server").exists())
         result = subprocess.run([str(self.destination / "tankyard"), "--version"], text=True, capture_output=True, check=True)
         self.assertEqual(result.stdout.strip(), "tankyard 1.2.3")
+
+    def test_busy_server_responses_are_retried(self):
+        counter = self.root / "failures"
+        counter.write_text("2")
+        self.env["TANKYARD_FAILURES"] = str(counter)
+        result = self.run_installer("--no-desktop")
+        self.assertIn("retrying", result.stderr)
+        self.assertEqual(counter.read_text(), "0")
+        self.assertTrue((self.destination / "tankyard").is_file())
+
+    def test_retries_give_up_after_the_configured_attempts(self):
+        counter = self.root / "failures"
+        counter.write_text("99")
+        self.env["TANKYARD_FAILURES"] = str(counter)
+        self.env["TANKYARD_DOWNLOAD_ATTEMPTS"] = "2"
+        result = self.run_installer("--no-desktop", success=False)
+        self.assertIn("Could not reach the latest release", result.stderr)
+        self.assertEqual(counter.read_text(), "97")
+        self.assertFalse(self.destination.exists())
 
     def test_checksum_failure_keeps_an_existing_install(self):
         self.destination.mkdir()

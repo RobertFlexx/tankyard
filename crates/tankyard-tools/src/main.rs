@@ -68,6 +68,19 @@ enum Command {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Measure what enabled packs cost per tick in a real bot match.
+    ModBench {
+        #[arg(long = "mod", required = true)]
+        mods: Vec<PathBuf>,
+        #[arg(long, default_value_t = 40)]
+        bots: usize,
+        #[arg(long, default_value_t = 3600)]
+        ticks: usize,
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+        #[arg(long, default_value = "ffa")]
+        mode: String,
+    },
     /// Nominal weapon throughput; combat outcomes still require playtesting.
     Balance,
     /// Run a bot arena and report real class usage, kills and scores.
@@ -430,6 +443,84 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!(
                 "Direct DPS excludes accuracy, armor, penetration, explosions and deployed units. Max DPS is the damage/reload build ceiling; charged weapons also have a one-second charge time."
             );
+        }
+        Command::ModBench {
+            mods,
+            bots,
+            ticks,
+            seed,
+            mode,
+        } => {
+            if !(1..=128).contains(&bots) || ticks == 0 || ticks > 1_000_000 {
+                return Err("mod-bench requires 1..128 bots and 1..1000000 ticks".into());
+            }
+            let mode = match mode.as_str() {
+                "ffa" => Mode::Ffa,
+                "teams" | "two-teams" => Mode::TwoTeams,
+                "four-teams" => Mode::FourTeams,
+                other => {
+                    return Err(
+                        format!("unknown mode {other}; use ffa, teams or four-teams").into(),
+                    );
+                }
+            };
+            let start = Instant::now();
+            let loaded = tankyard_lua::load(&mods)?;
+            let load_ms = start.elapsed().as_secs_f64() * 1000.;
+            let mut session = tankyard_server::LocalSession::with_mods(
+                WorldConfig {
+                    mode,
+                    seed,
+                    ..Default::default()
+                },
+                bots,
+                loaded,
+            )?;
+            let mut mod_times = Vec::with_capacity(ticks);
+            let mut tick_times = Vec::with_capacity(ticks);
+            let mut mod_allocations = 0u64;
+            for _ in 0..ticks {
+                let tick_start = Instant::now();
+                session.bots.update(&mut session.world);
+                let mut spent = 0.;
+                let mut allocations_spent = 0;
+                let mods = &mut session.mods;
+                session.world.step_with(|world| {
+                    let before = allocations::count();
+                    let start = Instant::now();
+                    mods.before_step(world);
+                    spent += start.elapsed().as_secs_f64() * 1000.;
+                    allocations_spent += allocations::count() - before;
+                });
+                let before = allocations::count();
+                let start = Instant::now();
+                session.mods.after_step(&mut session.world);
+                spent += start.elapsed().as_secs_f64() * 1000.;
+                allocations_spent += allocations::count() - before;
+                mod_allocations += allocations_spent;
+                mod_times.push(spent);
+                tick_times.push(tick_start.elapsed().as_secs_f64() * 1000.);
+            }
+            let mods_distribution = distribution(&mut mod_times);
+            let tick_distribution = distribution(&mut tick_times);
+            println!(
+                "{} packs, {bots} bots, {ticks} ticks, load {load_ms:.1} ms",
+                session.bundle.mods.len()
+            );
+            for (name, d) in [("mods", &mods_distribution), ("tick", &tick_distribution)] {
+                println!(
+                    "  {name:<5} avg {:.4} ms  p95 {:.4} ms  p99 {:.4} ms  max {:.4} ms",
+                    d.average_ms, d.p95_ms, d.p99_ms, d.max_ms
+                );
+            }
+            println!(
+                "  mods use {:.1}% of the tick, {:.0} allocations per tick",
+                100. * mods_distribution.average_ms / tick_distribution.average_ms.max(1e-9),
+                mod_allocations as f64 / ticks as f64
+            );
+            if !session.mods.errors.is_empty() {
+                return Err(session.mods.errors.join("; ").into());
+            }
         }
         Command::Tournament { bots, ticks, seed } => {
             if !(2..=128).contains(&bots) || ticks > 1_000_000 {

@@ -37,6 +37,8 @@ sh install.sh --version v0.2.9 --no-desktop
 sh install.sh --server
 ~~~
 
+The installers retry busy-server answers from GitHub (502, 503, 504, 429 and dropped connections) with growing pauses, resume interrupted downloads, and stop at once on a missing release. Set `TANKYARD_DOWNLOAD_ATTEMPTS` to change the number of tries (6 by default). Nothing is replaced until the download is verified, so it is always safe to run the command again.
+
 Use --server to install the dedicated server and WebSocket relay. Copy the sample server configuration out of the release archive, then edit it before hosting. Updates do not replace your server configuration.
 
 PowerShell accepts -Version, -InstallDir, -NoShortcut, -NoPath, and -Server.

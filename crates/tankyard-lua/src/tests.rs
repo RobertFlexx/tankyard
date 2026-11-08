@@ -356,3 +356,61 @@ fn every_builtin_class_and_map_round_trips_through_lua_tables() {
         );
     }
 }
+
+#[test]
+fn scripts_style_the_menu_theme_and_wording() {
+    let definitions = define(
+        &info("styled"),
+        &pack(
+            r##"
+            tankyard.menu({ title = "OVERCLOCK", splashes = { "Hot!", "Fresh!" } })
+            tankyard.menu({ subtitle = "Rules change", showcase = "vector", ambient = false })
+            tankyard.theme({ accent = "#b14cff", text = { 240, 230, 255 } })
+            tankyard.text({ ["Play offline"] = "Solo run" })
+            "##,
+        ),
+        &Content::builtin(),
+    )
+    .unwrap();
+    let p = definitions.presentation;
+    assert_eq!(p.menu.title.as_deref(), Some("OVERCLOCK"));
+    assert_eq!(p.menu.subtitle.as_deref(), Some("Rules change"));
+    assert_eq!(p.menu.splashes, ["Hot!", "Fresh!"]);
+    assert_eq!(p.menu.ambient, Some(false));
+    assert_eq!(
+        p.theme.accent,
+        Some(tankyard_mods::presentation::Rgb([0xb1, 0x4c, 0xff]))
+    );
+    assert_eq!(
+        p.theme.text,
+        Some(tankyard_mods::presentation::Rgb([240, 230, 255]))
+    );
+    assert_eq!(p.text["Play offline"], "Solo run");
+
+    let error = define(
+        &info("bad"),
+        &pack(r#"tankyard.theme({ accent = "purple" })"#),
+        &Content::builtin(),
+    )
+    .unwrap_err();
+    assert!(error.contains("theme"), "{error}");
+}
+
+#[test]
+fn tank_queries_match_the_world() {
+    let (world, runtime) = run(
+        r#"
+        tankyard.on("tick", function()
+          for _, tank in ipairs(tankyard.tanks()) do
+            local again = tankyard.tank(tank.id)
+            assert(again.name == tank.name and again.x == tank.x and #again.stats == 8)
+            assert(type(tank.alive) == "boolean" and type(tank.in_base) == "boolean")
+            tankyard.set_score(tank.id, 4321)
+          end
+        end)
+        "#,
+        3,
+    );
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    assert_eq!(world.tanks[0].score, 4321);
+}

@@ -127,6 +127,17 @@ pub struct Menu {
     /// The pack shown in the Mods page's detail pane.
     mod_selected: usize,
     mod_icons: std::collections::HashMap<String, Texture2D>,
+    /// The system file chooser, while it is open.
+    mod_chooser: Option<crate::file_dialog::Pending>,
+    /// The pack whose Remove button was pressed once and awaits a second press.
+    mod_remove: Option<String>,
+    /// Set when packs changed on disk, so the game reloads their content.
+    pub catalog_stale: bool,
+    /// Select this pack ID after the next rescan.
+    mod_focus: Option<String>,
+    /// The main menu as the enabled packs style it.
+    style: tankyard_mods::presentation::MenuStyle,
+    splash: Option<String>,
     /// Open the first flagged pack's review (screenshot checks only).
     pub preview_review: bool,
     map_page: usize,
@@ -195,6 +206,12 @@ impl Menu {
             mod_scroll: 0,
             mod_selected: 0,
             mod_icons: Default::default(),
+            mod_chooser: None,
+            mod_remove: None,
+            catalog_stale: false,
+            mod_focus: None,
+            style: Default::default(),
+            splash: None,
             preview_review: false,
             map_page: 0,
             history: Vec::new(),
@@ -372,6 +389,20 @@ impl Menu {
             ..Default::default()
         }
     }
+    /// Restyle the main menu for the enabled packs. A new splash is picked
+    /// only when the list of splashes changes.
+    pub fn set_presentation(&mut self, presentation: &tankyard_mods::Presentation) {
+        let menu = &presentation.menu;
+        if menu.splashes != self.style.splashes {
+            self.splash = (!menu.splashes.is_empty()).then(|| {
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.subsec_nanos() as usize);
+                menu.splashes[seed % menu.splashes.len()].clone()
+            });
+        }
+        self.style = menu.clone();
+    }
     pub fn draw(
         &mut self,
         content: &Content,
@@ -394,17 +425,56 @@ impl Menu {
             get_time() as f32
         };
         if self.page == Page::Main {
-            self.ambient.draw(settings);
+            let backdrop = crate::graphics::menu_background(128.0 * s, self.motion_time);
+            if self.style.ambient != Some(false) {
+                self.ambient.draw(settings);
+            } else if !backdrop {
+                render::menu_grid();
+            }
         } else {
             render::menu_grid();
         }
         let w = screen_width();
         let h = screen_height();
         let margin = 40.0 * s;
+        let title = self.style.title.as_deref().unwrap_or("Tank Yard");
         if self.page == Page::Main {
-            center_label("Tank Yard", w * 0.5, 78.0 * s, 53.0 * s, text_color());
+            let mut size = 53.0 * s;
+            while size > 24.0 * s && label_width(title, size) > w - 260.0 * s {
+                size -= 2.0 * s;
+            }
+            center_label(title, w * 0.5, 78.0 * s, size, text_color());
+            if let Some(subtitle) = &self.style.subtitle {
+                center_label(
+                    &fitted_label(subtitle, 15.0 * s, w - 120.0 * s),
+                    w * 0.5,
+                    102.0 * s,
+                    15.0 * s,
+                    muted_color(),
+                );
+            }
+            if let Some(splash) = &self.splash {
+                splash_text(
+                    splash,
+                    w * 0.5 + label_width(title, size) * 0.5 + 10.0 * s,
+                    80.0 * s,
+                    s,
+                    self.motion_time,
+                );
+            }
         } else {
-            label("TANK YARD", margin, 80.0 * s, 48.0 * s, text_color());
+            let header = self
+                .style
+                .title
+                .as_deref()
+                .map_or_else(|| "TANK YARD".to_owned(), str::to_uppercase);
+            label(
+                &fitted_label(&header, 48.0 * s, w - margin * 2.0 - 180.0 * s),
+                margin,
+                80.0 * s,
+                48.0 * s,
+                text_color(),
+            );
             draw_line(margin, 126.0 * s, w - margin, 126.0 * s, 1.0, line_color());
         }
         if self.page != Page::Main
@@ -544,7 +614,7 @@ impl Menu {
         }
         if !self.error.is_empty() || !self.info.is_empty() {
             let (message, color) = if self.error.is_empty() {
-                (&self.info, CYAN)
+                (&self.info, accent())
             } else {
                 (&self.error, RED)
             };
@@ -578,7 +648,8 @@ impl Menu {
         let y = ((h * 0.23).max(139.0 * s) - drop * 0.45).max(160.0 * s);
         let row_h = 44.0 * s;
         // A small preview gives the menu life without overlaying its controls.
-        if let Some(basic) = content.class("vector") {
+        let showcase = self.style.showcase.as_deref().unwrap_or("vector");
+        if let Some(basic) = content.class(showcase).or_else(|| content.class("vector")) {
             render::class_model(
                 basic,
                 vec2(center, y - 25.0 * s),
@@ -768,7 +839,7 @@ impl Menu {
         self.dedicated.poll();
         let server = &mut settings.community_server;
         if !self.dedicated.running() {
-            label("COMMUNITY SERVER", px, y, 15.0 * s, CYAN);
+            label("COMMUNITY SERVER", px, y, 15.0 * s, accent());
             if let Some(reason) = &self.dedicated.stopped {
                 right_label(
                     &fitted_label(reason, 12.0 * s, pw * 0.55),
@@ -897,7 +968,7 @@ impl Menu {
         let local = format!("127.0.0.1:{}", self.dedicated.port);
         self.servers.watch_every(&local, get_time(), 2.0);
         let state = self.servers.state(&local).cloned();
-        label("COMMUNITY SERVER", px, y, 15.0 * s, CYAN);
+        label("COMMUNITY SERVER", px, y, 15.0 * s, accent());
         let pulse = if matches!(state, Some(State::Online(_))) {
             SIGNAL_GOOD
         } else {
@@ -1058,7 +1129,7 @@ impl Menu {
         if hovered {
             draw_rectangle(card.x, card.y, card.w, card.h, alpha(hover_color(), 0.55));
         }
-        draw_rectangle(card.x, card.y, 4.0 * s, card.h, CYAN);
+        draw_rectangle(card.x, card.y, 4.0 * s, card.h, accent());
         let state = self.servers.state(crate::settings::main_server()).cloned();
         let connection = self.servers.connection(crate::settings::main_server());
         // Chevron, then the signal, right-aligned.
@@ -1227,7 +1298,7 @@ impl Menu {
             progress(
                 Rect::new(meter_x, row.y + 10.0 * s, meter_w, 6.0 * s),
                 ratio,
-                if full { RED } else { CYAN },
+                if full { RED } else { accent() },
             );
             right_label(
                 &if full {
@@ -1495,7 +1566,7 @@ impl Menu {
         let pad = 18. * s;
         let inner = width - pad * 2.;
         if self.party_invite.is_some() {
-            label("YOUR PARTY", x + pad, 276. * s, 17. * s, CYAN);
+            label("YOUR PARTY", x + pad, 276. * s, 17. * s, accent());
             label(
                 "Public IP:PORT · editable for manual forwarding",
                 x + pad,
@@ -1557,7 +1628,7 @@ impl Menu {
                 );
             }
         } else {
-            label("HOST A PARTY", x + pad, 276. * s, 17. * s, CYAN);
+            label("HOST A PARTY", x + pad, 276. * s, 17. * s, accent());
             label(
                 &fitted_label(self.mode.name(), 18. * s, inner),
                 x + pad,
@@ -1616,7 +1687,7 @@ impl Menu {
             );
         }
         if self.party_active {
-            label("STAY CONNECTED", right + pad, 276. * s, 17. * s, CYAN);
+            label("STAY CONNECTED", right + pad, 276. * s, 17. * s, accent());
             wrap(
                 "Your party stays connected when you return to the main menu. Use the tank icons at the side to open members, local voice mutes and party text chat.",
                 right + pad,
@@ -1927,9 +1998,9 @@ impl Menu {
                     y + 17.0 * s,
                     13.0 * s,
                     if is_dark() {
-                        CYAN
+                        accent()
                     } else {
-                        mix(CYAN, text_color(), 0.45)
+                        mix(accent(), text_color(), 0.45)
                     },
                 );
             }
@@ -2031,7 +2102,7 @@ impl Menu {
                 s,
                 true,
             );
-            label(self.mode.name(), x, y + 219.0 * s, 24.0 * s, CYAN);
+            label(self.mode.name(), x, y + 219.0 * s, 24.0 * s, accent());
             label(
                 &if community {
                     format!(
@@ -2130,7 +2201,7 @@ impl Menu {
                 rx + 22.0 * s,
                 y + 20.0 * s,
                 15.0 * s,
-                CYAN,
+                accent(),
             );
             wrap(
                 "Your friends can join using your IP address and port 5000.",
@@ -2772,7 +2843,7 @@ impl Menu {
                         x + col - 16.0 * s,
                         r.y + 28.0 * s,
                         16.0 * s,
-                        CYAN,
+                        accent(),
                     );
                 }
                 if let Some(index) = self.binding
@@ -2849,7 +2920,7 @@ impl Menu {
                     settings,
                     s,
                 );
-                label("LOCAL PROFILE", rx, by + 310.0 * s, 13.0 * s, CYAN);
+                label("LOCAL PROFILE", rx, by + 310.0 * s, 13.0 * s, accent());
                 label(
                     &format!(
                         "{} matches  ·  {} kills  ·  Best {}",
@@ -2994,7 +3065,7 @@ impl Menu {
             20.0 * s,
             muted_color(),
         );
-        label("BUILT WITH", x, y + 168.0 * s, 13.0 * s, CYAN);
+        label("BUILT WITH", x, y + 168.0 * s, 13.0 * s, accent());
         label(
             "Rust  /  Macroquad  /  Renet + Netcode  /  CPAL audio",
             x,
@@ -3002,7 +3073,7 @@ impl Menu {
             23.0 * s,
             text_color(),
         );
-        label("LICENSE", x, y + 264.0 * s, 13.0 * s, CYAN);
+        label("LICENSE", x, y + 264.0 * s, 13.0 * s, accent());
         label(
             "MIT or Apache-2.0",
             x,
@@ -3202,6 +3273,36 @@ impl Menu {
             s,
         ) {
             self.mods_scanned = false;
+            self.catalog_stale = true;
+        }
+        if small_button(
+            Rect::new(
+                screen_width() - 375.0 * s,
+                y - 20.0 * s,
+                200.0 * s,
+                30.0 * s,
+            ),
+            "Open mods folder",
+            s,
+        ) {
+            let folder = crate::mod_library::library_dir();
+            match crate::file_dialog::reveal(&folder) {
+                Ok(()) => {
+                    self.info = format!(
+                        "Opened {}. Drop pack folders or .zip files there, then press Refresh.",
+                        folder.display()
+                    )
+                }
+                Err(error) => self.error = error,
+            }
+        }
+        if let Some(result) = self.mod_chooser.as_ref().and_then(|chooser| chooser.poll()) {
+            self.mod_chooser = None;
+            match result {
+                Ok(Some(path)) => self.import_result(settings, crate::mod_library::import(&path)),
+                Ok(None) => {}
+                Err(error) => self.error = error,
+            }
         }
         if !self.mods_scanned {
             self.mods_scanned = true;
@@ -3211,11 +3312,16 @@ impl Menu {
             self.mod_selected = self
                 .mod_selected
                 .min(self.mod_entries.len().saturating_sub(1));
-            // Forget enabled packs that no longer exist.
-            let known: Vec<_> = self.mod_entries.iter().map(|e| e.path.clone()).collect();
-            settings
-                .enabled_mods
-                .retain(|path| known.contains(path) || std::path::Path::new(path).exists());
+            if let Some(focus) = self.mod_focus.take()
+                && let Some(index) = self
+                    .mod_entries
+                    .iter()
+                    .position(|entry| entry.id() == Some(focus.as_str()))
+            {
+                self.mod_selected = index;
+                let visible_from = index.saturating_sub(3);
+                self.mod_scroll = self.mod_scroll.min(index).max(visible_from);
+            }
             if self.preview_review {
                 self.mod_review = self
                     .mod_entries
@@ -3226,15 +3332,32 @@ impl Menu {
         // Import row.
         let import_y = y + 52.0 * s;
         label(
-            "IMPORT A .ZIP PACK",
+            "ADD A MOD PACK",
             x,
             import_y + 12.0 * s,
             11.0 * s,
             muted_color(),
         );
-        let field_w = (w - 136.0 * s).min(620.0 * s);
+        let choosing = self.mod_chooser.is_some();
+        if button(
+            Rect::new(x, import_y + 20.0 * s, 190.0 * s, 38.0 * s),
+            if choosing {
+                "Choosing…"
+            } else {
+                "Browse for a pack…"
+            },
+            true,
+            !choosing,
+            s * 0.82,
+        ) {
+            self.mod_chooser = Some(crate::file_dialog::choose_mod_pack());
+            self.error.clear();
+            self.info = "Pick a .zip pack, or the mod.json inside a pack folder.".into();
+        }
+        let field_x = x + 200.0 * s;
+        let field_w = (w - 336.0 * s).min(560.0 * s);
         text_field(
-            Rect::new(x, import_y + 20.0 * s, field_w, 38.0 * s),
+            Rect::new(field_x, import_y + 20.0 * s, field_w, 38.0 * s),
             &mut self.mod_path,
             &mut self.mod_path_active,
             512,
@@ -3243,7 +3366,7 @@ impl Menu {
         );
         if button(
             Rect::new(
-                x + field_w + 10.0 * s,
+                field_x + field_w + 10.0 * s,
                 import_y + 20.0 * s,
                 120.0 * s,
                 38.0 * s,
@@ -3254,11 +3377,14 @@ impl Menu {
             s * 0.85,
         ) {
             let path = self.mod_path.trim().trim_matches('"').to_owned();
-            self.import_result(crate::mod_library::import(std::path::Path::new(&path)));
+            self.import_result(
+                settings,
+                crate::mod_library::import(std::path::Path::new(&path)),
+            );
             self.mod_path.clear();
         }
         label(
-            "Paste the archive's path, or drop a .zip onto this window. Every pack is reviewed before it can run.",
+            "Or paste a .zip or pack folder path, or drop a .zip onto this window. Every pack is reviewed before it can run.",
             x,
             import_y + 76.0 * s,
             12.0 * s,
@@ -3286,7 +3412,7 @@ impl Menu {
         if self.mod_entries.is_empty() {
             panel(list);
             wrap(
-                "No packs yet. Import a .zip, drop one onto this window, or place a pack folder in the library below.",
+                "No packs yet. Browse for a pack, drop a .zip onto this window, or put pack folders in the mods folder.",
                 list.x + 16.0 * s,
                 list.y + 30.0 * s,
                 list.w - 32.0 * s,
@@ -3322,17 +3448,17 @@ impl Menu {
                 list.w,
                 row_h,
             );
-            let enabled = settings.enabled_mods.contains(&entry.path);
+            let enabled = entry.enabled(settings);
             let selected = self.mod_selected == index;
             // An outline marks the selection, keeping status colors readable.
             if button(r, "", false, true, s) {
                 self.mod_selected = index;
             }
             if selected {
-                draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.5 * s, CYAN);
+                draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.5 * s, accent());
             }
             if enabled {
-                draw_rectangle(r.x, r.y, 4.0 * s, r.h, CYAN);
+                draw_rectangle(r.x, r.y, 4.0 * s, r.h, accent());
             }
             let icon = Rect::new(r.x + 12.0 * s, r.y + 8.0 * s, 40.0 * s, 40.0 * s);
             self.mod_icon(index, icon, s);
@@ -3657,15 +3783,49 @@ impl Menu {
                 Err(error) => self.error = error,
             }
         }
-        let enabled = settings.enabled_mods.contains(&entry.path);
+        let enabled = entry.enabled(settings);
         let footer = r.bottom() - 52.0 * s;
+        let removable = entry.in_library();
+        let path_room = pw - if removable { 410.0 } else { 300.0 } * s;
         label(
-            &fitted_label(&entry.path, 11.0 * s, pw - 300.0 * s),
+            &fitted_label(&entry.path, 11.0 * s, path_room),
             px,
             footer + 22.0 * s,
             11.0 * s,
             muted_color(),
         );
+        if removable {
+            let confirming = self.mod_remove.as_deref() == Some(entry.path.as_str());
+            if small_button(
+                Rect::new(r.right() - 400.0 * s, footer, 102.0 * s, 34.0 * s),
+                if confirming { "Confirm" } else { "Remove" },
+                s * 0.78,
+            ) {
+                if confirming {
+                    self.mod_remove = None;
+                    let entry = entry.clone();
+                    match crate::mod_library::remove(&entry) {
+                        Ok(()) => {
+                            if let Some(id) = entry.id() {
+                                settings.enabled_mods.retain(|e| e != id);
+                                let _ = settings.save();
+                            }
+                            self.info = format!("Removed {}.", entry.name());
+                            self.error.clear();
+                            self.mods_scanned = false;
+                            self.catalog_stale = true;
+                        }
+                        Err(error) => self.error = error,
+                    }
+                    return;
+                }
+                self.mod_remove = Some(entry.path.clone());
+                self.info = format!(
+                    "Press Confirm to delete {} from the mods folder.",
+                    entry.name()
+                );
+            }
+        }
         if small_button(
             Rect::new(r.right() - 290.0 * s, footer, 120.0 * s, 34.0 * s),
             "Safety review",
@@ -3801,7 +3961,7 @@ impl Menu {
                 );
                 ly += 20.0 * s;
             }
-            let enabled = settings.enabled_mods.contains(&entry.path);
+            let enabled = entry.enabled(settings);
             let needs_trust = verdict == Verdict::Dangerous && !entry.approved(settings);
             if needs_trust {
                 crate::ui::toggle(
@@ -3848,18 +4008,20 @@ impl Menu {
         let Some(entry) = self.mod_entries.get(index) else {
             return;
         };
-        let path = entry.path.clone();
+        let Some(id) = entry.id().map(str::to_owned) else {
+            return;
+        };
         let previous = settings.enabled_mods.clone();
-        if settings.enabled_mods.contains(&path) {
-            settings.enabled_mods.retain(|p| p != &path);
+        if settings.enabled_mods.contains(&id) {
+            settings.enabled_mods.retain(|e| e != &id);
         } else if settings.enabled_mods.len() >= tankyard_mods::MAX_MODS {
             self.error = "At most 16 packs can be enabled at once.".into();
             return;
         } else {
-            settings.enabled_mods.push(path);
+            settings.enabled_mods.push(id);
         }
         let (ready, held) = crate::mod_library::ready_paths(settings);
-        match tankyard_lua::load(&ready) {
+        match crate::mod_library::load(&ready) {
             Ok(loaded) => {
                 self.maps = loaded.bundle.maps;
                 self.map = self.map.min(self.maps.len() - 1);
@@ -3873,23 +4035,39 @@ impl Menu {
             }
         }
     }
-    pub fn import_result(&mut self, result: Result<crate::mod_library::Entry, String>) {
+    /// Report an import. A pack that passed review is enabled right away;
+    /// a flagged one waits for the player's review.
+    pub fn import_result(
+        &mut self,
+        settings: &mut Settings,
+        result: Result<crate::mod_library::Entry, String>,
+    ) {
         match result {
             Ok(entry) => {
                 self.error.clear();
-                self.info = match entry.verdict() {
-                    tankyard_mods::scan::Verdict::Clean => {
-                        format!(
-                            "Imported {}. It passed review; enable it below.",
-                            entry.name()
-                        )
+                let clean = entry.verdict() == tankyard_mods::scan::Verdict::Clean;
+                let id = entry.id().unwrap_or_default().to_owned();
+                let room = settings.enabled_mods.len() < tankyard_mods::MAX_MODS;
+                self.info = if clean && (entry.enabled(settings) || room) {
+                    if !entry.enabled(settings) {
+                        settings.enabled_mods.push(id.clone());
+                        let _ = settings.save();
                     }
-                    _ => format!(
-                        "Imported {}. Open Details to review its findings before enabling it.",
+                    format!("Added and enabled {}. It passed review.", entry.name())
+                } else if clean {
+                    format!(
+                        "Added {}. Disable another pack to enable it (16 at most).",
                         entry.name()
-                    ),
+                    )
+                } else {
+                    format!(
+                        "Added {}. Review its findings before enabling it.",
+                        entry.name()
+                    )
                 };
+                self.mod_focus = Some(id);
                 self.mods_scanned = false;
+                self.catalog_stale = true;
             }
             Err(error) => {
                 self.info.clear();
@@ -3975,10 +4153,10 @@ fn lobby_list_height(rows: usize, s: f32) -> f32 {
 /// A pack's state for its list row and badge.
 fn mod_status(entry: &crate::mod_library::Entry, settings: &Settings) -> (&'static str, Color) {
     use tankyard_mods::scan::Verdict;
-    let enabled = settings.enabled_mods.contains(&entry.path);
+    let enabled = entry.enabled(settings);
     match entry.verdict() {
         _ if entry.error.is_some() => ("Cannot load", RED),
-        Verdict::Clean if enabled => ("Enabled", CYAN),
+        Verdict::Clean if enabled => ("Enabled", accent()),
         Verdict::Clean => ("Reviewed", Color::new(0.30, 0.64, 0.30, 1.0)),
         Verdict::Review if entry.approved(settings) => ("Accepted", warm_text_color()),
         Verdict::Review => ("Needs review", warm_text_color()),
@@ -3987,13 +4165,20 @@ fn mod_status(entry: &crate::mod_library::Entry, settings: &Settings) -> (&'stat
     }
 }
 
+/// A pack's splash beside the main menu title: tilted and gently pulsing.
+fn splash_text(text: &str, x: f32, y: f32, s: f32, time: f32) {
+    let size = 17.0 * s * (1.0 + (time * 5.0).sin().abs() * 0.07);
+    let text = fitted_label(text, size, 320.0 * s);
+    rotated_label(&text, x, y, size, -0.28, warm_text_color());
+}
+
 /// A compact on/off switch; returns true when clicked.
 fn toggle_switch(rect: Rect, on: &mut bool, s: f32) -> bool {
     let clicked = contains(rect) && is_mouse_button_pressed(MouseButton::Left);
     if clicked {
         *on = !*on;
     }
-    capsule(rect, if *on { CYAN } else { line_color() });
+    capsule(rect, if *on { accent() } else { line_color() });
     let knob = rect.h * 0.5 - 3.0 * s;
     let cx = if *on {
         rect.right() - rect.h * 0.5

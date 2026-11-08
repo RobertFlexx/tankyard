@@ -5,10 +5,8 @@ $Work = Join-Path ([IO.Path]::GetTempPath()) ("tankyard installer " + [guid]::Ne
 $FixtureDir = Join-Path $Work "release"
 $Destination = Join-Path $Work "installed game"
 $Installer = Join-Path $PSScriptRoot "../../install.ps1"
-$FixtureTag = $Version
-function Invoke-RestMethod { return @{ tag_name = $FixtureTag } }
 function Invoke-WebRequest {
-    param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing)
+    param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$TimeoutSec)
     $File = ([Uri]$Uri).Segments[-1]
     Copy-Item (Join-Path $FixtureDir $File) $OutFile -Force
 }

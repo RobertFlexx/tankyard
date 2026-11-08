@@ -128,7 +128,7 @@ pub async fn require_password() -> bool {
             r.center().x,
             r.y + 263. * s,
             13. * s,
-            if unlocked { CYAN } else { RED },
+            if unlocked { accent() } else { RED },
         );
         center_label(
             "Keep the password separate from the app.",

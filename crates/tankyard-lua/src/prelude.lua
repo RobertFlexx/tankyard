@@ -5,7 +5,10 @@ local type, error, pairs, ipairs, tostring, floor = type, error, pairs, ipairs, 
 
 local tankyard = { api = 2, state = {} }
 local handlers, timers = {}, {}
-local definitions = { classes = {}, maps = {}, textures = {}, rules = nil, mode_name = nil }
+local definitions = {
+  classes = {}, maps = {}, textures = {}, rules = nil, mode_name = nil,
+  menu = {}, theme = {}, text = {},
+}
 
 local function check(kind, value, call, what)
   if type(value) ~= kind then
@@ -198,6 +201,18 @@ function tankyard.mode_name(name)
   if defining then definitions.mode_name = name end
 end
 
+-- The main menu, interface colors and wording on the player's machine. Later
+-- calls add to earlier ones.
+local function merge(call, target, value)
+  check("table", value, call, "settings")
+  if defining then
+    for key, setting in pairs(value) do target[key] = setting end
+  end
+end
+function tankyard.menu(menu) merge("menu", definitions.menu, menu) end
+function tankyard.theme(theme) merge("theme", definitions.theme, theme) end
+function tankyard.text(text) merge("text", definitions.text, text) end
+
 -- Editable copies of the catalog the pack loads into (built-in plus earlier packs).
 local base_class, base_map = __tankyard_base_class, __tankyard_base_map
 __tankyard_base_class, __tankyard_base_map = nil, nil
@@ -233,6 +248,20 @@ function host.events()
   return names
 end
 function host.definitions() return definitions end
+-- One tank's query table. A constructor with constant keys builds it far
+-- faster than the host setting each field.
+function host.tank(id, name, class, team, x, y, vx, vy, aim, radius, health, max_health,
+    level, xp, score, kills, deaths, alive, bot, points, shield, protection, speed_scale,
+    reload_scale, damage_scale, in_base, s1, s2, s3, s4, s5, s6, s7, s8)
+  return {
+    id = id, name = name, class = class, team = team, x = x, y = y, vx = vx, vy = vy,
+    aim = aim, radius = radius, health = health, max_health = max_health, level = level,
+    xp = xp, score = score, kills = kills, deaths = deaths, alive = alive, bot = bot,
+    points = points, shield = shield, protection = protection, speed_scale = speed_scale,
+    reload_scale = reload_scale, damage_scale = damage_scale, in_base = in_base,
+    stats = { s1, s2, s3, s4, s5, s6, s7, s8 },
+  }
+end
 
 _G.tankyard = tankyard
 return host

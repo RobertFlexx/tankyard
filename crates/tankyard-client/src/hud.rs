@@ -529,7 +529,7 @@ impl Hud {
         let h = screen_height();
         let m = 22.0 * s;
         let Some(tank) = snapshot.tanks.iter().find(|t| t.id == local) else {
-            center_label("Connecting…", w * 0.5, h * 0.5, 26.0 * s, CYAN);
+            center_label("Connecting…", w * 0.5, h * 0.5, 26.0 * s, accent());
             return actions;
         };
         let sandbox_controls = snapshot.config.mode == Mode::Sandbox && !self.practice;
@@ -559,9 +559,9 @@ impl Hud {
                 rect,
                 progress,
                 if progress >= 0.999 {
-                    alpha(CYAN, 0.75)
+                    alpha(accent(), 0.75)
                 } else {
-                    CYAN
+                    accent()
                 },
             );
         }
@@ -916,7 +916,7 @@ impl Hud {
                     if parrying {
                         AMBER
                     } else if ready {
-                        CYAN
+                        accent()
                     } else {
                         muted_color()
                     },
@@ -939,7 +939,7 @@ impl Hud {
                     status_y,
                     12.0 * s,
                     if tank.deployed_drones == class.drone_limit {
-                        CYAN
+                        accent()
                     } else {
                         muted_color()
                     },
@@ -960,7 +960,13 @@ impl Hud {
                 .config
                 .base_protected(tank.team, tank.pos, tank.radius)
             {
-                center_label("Home base protection", w * 0.5, status_y, 12.0 * s, CYAN);
+                center_label(
+                    "Home base protection",
+                    w * 0.5,
+                    status_y,
+                    12.0 * s,
+                    accent(),
+                );
             } else if tank.spawn_immunity && tank.protection > 0.0 {
                 center_label(
                     &format!(
@@ -970,7 +976,7 @@ impl Hud {
                     w * 0.5,
                     status_y,
                     12.0 * s,
-                    CYAN,
+                    accent(),
                 );
             }
         }
@@ -1003,7 +1009,7 @@ impl Hud {
                     m,
                     h - 319.0 * s,
                     12.0 * s,
-                    CYAN,
+                    accent(),
                 );
             }
         } else if let Some((ping, _, _, _)) = diagnostics {
@@ -1156,7 +1162,7 @@ impl Hud {
             bounds.w * sx,
             bounds.h * sy,
             1.5 * s,
-            alpha(CYAN, 0.8),
+            alpha(accent(), 0.8),
         );
         for team in 1..=snapshot.config.mode.teams() {
             if let Some(base) = snapshot.config.team_base(team) {
@@ -1298,7 +1304,7 @@ impl Hud {
                 Rect::new(r.x + 7.0 * s, r.y + 6.0 * s, r.w - 14.0 * s, r.h - 30.0 * s),
                 16.0 * s,
                 -0.45,
-                if unlocked { CYAN } else { muted_color() },
+                if unlocked { accent() } else { muted_color() },
             );
             let size =
                 (13.0 * s).min((r.w - 8.0 * s) / (class.name.chars().count().max(1) as f32 * 0.55));
@@ -1335,7 +1341,7 @@ impl Hud {
         let (panel_rect, s) = sandbox_layout(screen_width(), screen_height(), s);
         let Rect { x, y, w: width, .. } = panel_rect;
         panel(panel_rect);
-        label("Sandbox", x + 20. * s, y + 32. * s, 24. * s, CYAN);
+        label("Sandbox", x + 20. * s, y + 32. * s, 24. * s, accent());
         right_label(
             "PgUp / PgDn · Shift: 15",
             x + width - 20. * s,
@@ -1571,7 +1577,7 @@ impl Hud {
         } else {
             "Press Enter or click to respawn".to_owned()
         };
-        center_label(&status, x, y + 82.0 * s, 18.0 * s, CYAN);
+        center_label(&status, x, y + 82.0 * s, 18.0 * s, accent());
         if !eliminated && !waiting_wave {
             center_label(
                 &format!(
@@ -1634,7 +1640,7 @@ impl Hud {
             x + width * 0.5,
             y + 27. * s,
             18. * s,
-            CYAN,
+            accent(),
         );
         let status = if mode == Mode::CoopPve {
             "Reviving after this wave".to_owned()

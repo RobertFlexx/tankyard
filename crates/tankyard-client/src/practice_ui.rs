@@ -41,7 +41,7 @@ pub fn draw(run: &Run, records: &[Record], s: f32, top: f32) -> Action {
         progress(
             Rect::new(r.x + 14.0 * s, r.y + 37.0 * s, r.w - 28.0 * s, 8.0 * s),
             run.progress as f32 / challenge.target() as f32,
-            CYAN,
+            accent(),
         );
         return Action::None;
     }
@@ -61,7 +61,7 @@ pub fn draw(run: &Run, records: &[Record], s: f32, top: f32) -> Action {
     );
     panel(r);
     let color = if run.status == Status::Completed {
-        CYAN
+        accent()
     } else {
         RED
     };
