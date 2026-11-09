@@ -472,3 +472,70 @@ fn modded_charge_weapon_releases_even_after_a_one_tick_tap() {
     world.step();
     assert_eq!(world.tanks[0].shot_count, 1);
 }
+
+#[test]
+fn a_boss_kill_names_the_player_who_did_the_most_damage() {
+    let mut world = World::new(
+        WorldConfig {
+            mode: Mode::Ffa,
+            target_count: 0,
+            spawn_protection: 0.,
+            ..WorldConfig::default()
+        },
+        Content::builtin(),
+    );
+    let helper = world.add_player("Helper", false);
+    let hunter = world.add_player("Hunter", false);
+    let boss = world.spawn_boss(BossKind::Sentinel);
+    world.events.clear();
+    world.contributions.insert(
+        boss,
+        vec![(helper, 300., world.tick), (hunter, 900., world.tick)],
+    );
+    world
+        .bosses
+        .iter_mut()
+        .find(|b| b.id == boss)
+        .unwrap()
+        .health = 0.;
+    world.step();
+    let kill = world
+        .events
+        .iter()
+        .find(|e| matches!(e.kind, EventKind::Kill))
+        .expect("a boss kill is announced");
+    assert_eq!(kill.subject, hunter);
+    let elimination = kill.elimination.as_ref().unwrap();
+    assert_eq!(elimination.victim, boss);
+    assert_eq!(elimination.name, BossKind::Sentinel.name());
+    // A boss is not a tank, so nobody's kill count changes.
+    assert!(world.tanks.iter().all(|t| t.kills == 0));
+}
+
+#[test]
+fn a_boss_nobody_damaged_is_not_announced_as_a_kill() {
+    let mut world = World::new(
+        WorldConfig {
+            mode: Mode::Ffa,
+            target_count: 0,
+            ..WorldConfig::default()
+        },
+        Content::builtin(),
+    );
+    world.add_player("Bystander", false);
+    let boss = world.spawn_boss(BossKind::Prism);
+    world.events.clear();
+    world
+        .bosses
+        .iter_mut()
+        .find(|b| b.id == boss)
+        .unwrap()
+        .health = 0.;
+    world.step();
+    assert!(
+        world
+            .events
+            .iter()
+            .all(|e| !matches!(e.kind, EventKind::Kill))
+    );
+}

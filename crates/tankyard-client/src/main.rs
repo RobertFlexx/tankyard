@@ -166,6 +166,8 @@ struct PendingJoin {
 }
 struct App {
     party_copy: Option<clipboard::Request<()>>,
+    /// The last death whose killer the camera was pointed at.
+    spectate_death: u32,
     party_restart: Option<(u32, std::time::Instant)>,
     party_ui: party_ui::PartyUi,
     /// Draw the party overlay with sample data (screenshot checks only).
@@ -274,6 +276,7 @@ impl App {
         let catalog_paths = settings.enabled_mods.clone();
         let mut app = Self {
             party_copy: None,
+            spectate_death: 0,
             party_restart: None,
             settings,
             display_revision: 0,
@@ -1140,8 +1143,7 @@ impl App {
             return true;
         }
         self.voice.captures_pointer(s)
-            || (self.effects.boss_arrival.is_some()
-                && contains(hud::boss_banner_layout(screen_width(), s)))
+            || (self.effects.boss_banner() && contains(hud::boss_banner_layout(screen_width(), s)))
             || self.session.as_ref().is_some_and(|session| {
                 let community = match &session.engine {
                     session::Engine::Online { client, .. } => {
@@ -1154,7 +1156,7 @@ impl App {
                             contains(notifications::server_notice_rect(
                                 notice,
                                 s,
-                                if self.effects.boss_arrival.is_some() {
+                                if self.effects.boss_banner() {
                                     188.
                                 } else {
                                     110.
@@ -1607,6 +1609,21 @@ impl App {
         }
         if let Some(session) = &mut self.session {
             session.present_prediction(self.accumulator / DT);
+            // After a death, watch whoever did it unless the player picks
+            // someone else.
+            if self.spectate_death != self.effects.deaths {
+                let dead = session
+                    .display
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.tanks.iter().find(|t| t.id == session.player))
+                    .is_some_and(|tank| !tank.alive);
+                if dead {
+                    if let Some(killer) = self.effects.killed_by {
+                        session.watch(killer);
+                    }
+                    self.spectate_death = self.effects.deaths;
+                }
+            }
             session.sync_spectating();
             self.hud.spectating = session.spectating;
         }
@@ -1619,10 +1636,11 @@ impl App {
             } else {
                 self.effects.shake * self.settings.shake
             };
+            // The camera stays on the wreck while the killer card shows.
             let followed = snapshot
                 .tanks
                 .iter()
-                .find(|t| Some(t.id) == session.spectating && t.alive)
+                .find(|t| Some(t.id) == session.spectating && t.alive && !self.hud.holding_camera())
                 .unwrap_or(tank);
             let position = session.position(followed.id, followed.pos, self.accumulator / DT);
             self.view.follow(
@@ -1683,6 +1701,7 @@ impl App {
                 dt,
                 self.settings.reduced_motion,
             );
+            self.effects.note_bosses(&snapshot.bosses);
             let sounds = self.effects.ingest(
                 &session.events,
                 session.player,
@@ -1901,7 +1920,7 @@ impl App {
         let mut overlays = notifications::top_overlays(
             screen_height(),
             s,
-            self.effects.boss_arrival.is_some(),
+            self.effects.boss_banner(),
             server_height,
             practice,
             if unobscured {
@@ -1976,6 +1995,7 @@ impl App {
                     self.hud.evolution = false;
                 }
                 self.hud.killed_by = self.effects.killed_by;
+                self.hud.deaths = self.effects.deaths;
                 self.hud.palette = tankyard_client::map_model::palette(
                     session
                         .bundle
@@ -2018,7 +2038,36 @@ impl App {
                         text_color(),
                     );
                 }
-                if let Some((kind, life)) = self.effects.boss_arrival {
+                if let Some((boss, killer, life)) = &self.effects.boss_defeat {
+                    let opacity = (life / 0.4).min(1.);
+                    let mut rect = hud::boss_banner_layout(screen_width(), s);
+                    rect.y += axiom_height;
+                    panel(rect);
+                    draw_rectangle(rect.x, rect.y, 4. * s, rect.h, alpha(AMBER, opacity));
+                    center_label(
+                        "BOSS DEFEATED",
+                        rect.center().x,
+                        rect.y + 20. * s,
+                        12. * s,
+                        alpha(AMBER, opacity),
+                    );
+                    let hunter = snapshot
+                        .tanks
+                        .iter()
+                        .find(|t| t.id == *killer)
+                        .map_or_else(|| "a player".to_owned(), |t| t.display_name());
+                    center_label(
+                        &fitted_label(
+                            &format!("{boss} was killed by {hunter}"),
+                            20. * s,
+                            rect.w - 24. * s,
+                        ),
+                        rect.center().x,
+                        rect.y + 46. * s,
+                        20. * s,
+                        alpha(text_color(), opacity),
+                    );
+                } else if let Some((kind, life)) = self.effects.boss_arrival {
                     let opacity = (life / 0.4).min(1.);
                     let mut rect = hud::boss_banner_layout(screen_width(), s);
                     rect.y += axiom_height;

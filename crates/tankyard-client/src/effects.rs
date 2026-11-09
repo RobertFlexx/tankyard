@@ -84,6 +84,13 @@ pub struct Effects {
     pub arena_scale: Option<f32>,
     /// Who destroyed the local tank most recently; zero for the arena itself.
     pub killed_by: Option<EntityId>,
+    /// Counts the local tank's deaths, so each one can start its own card.
+    pub deaths: u32,
+    /// "Sentinel was killed by Pilot": the boss, its killer and time left.
+    pub boss_defeat: Option<(String, EntityId, f32)>,
+    /// Bosses seen in recent snapshots, by ID, so a kill can be recognized
+    /// after the boss itself is gone.
+    bosses: HashMap<EntityId, &'static str>,
     last_tick: u64,
     random: u64,
 }
@@ -110,6 +117,9 @@ impl Effects {
             boss_arrival: None,
             arena_scale: None,
             killed_by: None,
+            deaths: 0,
+            boss_defeat: None,
+            bosses: HashMap::new(),
             last_tick: 0,
             random: 7919,
         }
@@ -129,6 +139,20 @@ impl Effects {
         self.random ^= self.random >> 7;
         self.random ^= self.random << 17;
         ((self.random >> 32) as u32) as f32 / u32::MAX as f32
+    }
+    /// Remember the bosses in this snapshot.
+    pub fn note_bosses(&mut self, bosses: &[tankyard_core::Boss]) {
+        if self.bosses.len() > 64 {
+            self.bosses
+                .retain(|id, _| bosses.iter().any(|b| b.id == *id));
+        }
+        for boss in bosses {
+            self.bosses.insert(boss.id, boss.kind.name());
+        }
+    }
+    /// Whether the boss banner at the top is showing.
+    pub fn boss_banner(&self) -> bool {
+        self.boss_arrival.is_some() || self.boss_defeat.is_some()
     }
     pub fn ingest(
         &mut self,
@@ -225,6 +249,16 @@ impl Effects {
                     .is_some_and(|elimination| elimination.victim == local)
             {
                 self.killed_by = Some(event.subject);
+                self.deaths = self.deaths.wrapping_add(1);
+            }
+            if matches!(event.kind, EventKind::Kill)
+                && let Some(boss) = event
+                    .elimination
+                    .as_ref()
+                    .and_then(|kill| self.bosses.get(&kill.victim))
+            {
+                self.boss_defeat = Some(((*boss).to_owned(), event.subject, 5.));
+                self.boss_arrival = None;
             }
             if matches!(event.kind, EventKind::Kill) && event.subject == local {
                 self.shake = (self.shake + 1.0).min(4.0);
@@ -475,6 +509,12 @@ impl Effects {
                 self.boss_arrival = None;
             }
         }
+        if let Some((_, _, life)) = &mut self.boss_defeat {
+            *life -= dt;
+            if *life <= 0. {
+                self.boss_defeat = None;
+            }
+        }
         for p in &mut self.projectile_fades {
             p.life -= dt;
         }
@@ -592,6 +632,48 @@ mod tests {
         tank.alive = false;
         effects.sync_barrels(&[tank], 1. / 60., false);
         assert!(effects.hulls.is_empty());
+    }
+
+    #[test]
+    fn boss_kills_are_announced_and_each_local_death_counts_once() {
+        let mut world = tankyard_core::World::new(
+            tankyard_core::WorldConfig::default(),
+            tankyard_content::Content::builtin(),
+        );
+        let boss = world.spawn_boss(tankyard_core::BossKind::Sentinel);
+        let mut effects = Effects::new();
+        effects.note_bosses(&world.bosses);
+        let kill = |tick: u64, subject: EntityId, victim: EntityId, name: &str| GameEvent {
+            tick,
+            kind: EventKind::Kill,
+            pos: V2::ZERO,
+            subject,
+            value: 0,
+            team: 0,
+            elimination: Some(tankyard_core::Elimination {
+                victim,
+                name: name.into(),
+                game_creator: false,
+                server_badge: Default::default(),
+            }),
+        };
+        // The boss is already gone from the snapshot when its kill arrives.
+        effects.note_bosses(&[]);
+        effects.ingest(&[kill(10, 7, boss, "Sentinel")], 1, 1.);
+        let (name, killer, _) = effects.boss_defeat.clone().unwrap();
+        assert_eq!((name.as_str(), killer), ("Sentinel", 7));
+        assert_eq!(effects.deaths, 0);
+        // A player named like a boss is still just a player.
+        effects.boss_defeat = None;
+        effects.ingest(&[kill(11, 7, 3, "Sentinel")], 1, 1.);
+        assert!(effects.boss_defeat.is_none());
+        // Reliable replays of the same death don't start a second card.
+        let death = kill(12, 7, 1, "Me");
+        effects.ingest(std::slice::from_ref(&death), 1, 1.);
+        effects.ingest(&[death], 1, 1.);
+        assert_eq!((effects.deaths, effects.killed_by), (1, Some(7)));
+        effects.update(5.1, false);
+        assert!(!effects.boss_banner());
     }
 
     #[test]

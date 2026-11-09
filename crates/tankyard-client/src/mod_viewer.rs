@@ -37,6 +37,91 @@ pub struct Viewer {
     hscroll: f32,
     tree_scroll: f32,
     dragging: bool,
+    /// Highlighted text in the code view or a rendered code block.
+    selection: Option<Selection>,
+    selecting: bool,
+    /// Which box was last copied from, and when, for the "Copied" note.
+    copied: Option<(usize, f64)>,
+}
+
+/// The code view counts as box `CODE_VIEW`; code blocks in rendered
+/// Markdown are numbered from 0.
+const CODE_VIEW: usize = usize::MAX;
+
+/// A highlighted range as (line, column) in characters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Selection {
+    block: usize,
+    anchor: (usize, usize),
+    head: (usize, usize),
+}
+
+impl Selection {
+    fn range(self) -> ((usize, usize), (usize, usize)) {
+        if self.anchor <= self.head {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        }
+    }
+
+    fn is_empty(self) -> bool {
+        self.anchor == self.head
+    }
+
+    /// Columns highlighted on `line` (of `len` characters), with one extra
+    /// for the line break when the selection carries on past it.
+    fn columns(self, line: usize, len: usize) -> Option<(usize, usize)> {
+        let (start, end) = self.range();
+        if self.is_empty() || line < start.0 || line > end.0 {
+            return None;
+        }
+        let from = if line == start.0 { start.1.min(len) } else { 0 };
+        let to = if line == end.0 {
+            end.1.min(len)
+        } else {
+            len + 1
+        };
+        (to > from).then_some((from, to))
+    }
+
+    /// The highlighted text from `lines`.
+    fn text<S: AsRef<str>>(self, lines: &[S]) -> String {
+        let (start, end) = self.range();
+        let mut out = String::new();
+        for (index, line) in lines.iter().enumerate().take(end.0 + 1).skip(start.0) {
+            let line = line.as_ref();
+            let len = line.chars().count();
+            let from = if index == start.0 {
+                start.1.min(len)
+            } else {
+                0
+            };
+            let to = if index == end.0 { end.1.min(len) } else { len };
+            out.extend(line.chars().skip(from).take(to.saturating_sub(from)));
+            if index < end.0 {
+                out.push('\n');
+            }
+        }
+        out
+    }
+}
+
+/// Ctrl, or Cmd on a Mac, without Alt.
+fn command_held() -> bool {
+    let alt = is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt);
+    !alt && [
+        KeyCode::LeftControl,
+        KeyCode::RightControl,
+        KeyCode::LeftSuper,
+        KeyCode::RightSuper,
+    ]
+    .into_iter()
+    .any(is_key_down)
+}
+
+fn line_text(line: &Line) -> String {
+    line.iter().map(|(_, text)| text.as_str()).collect()
 }
 
 #[derive(Default)]
@@ -82,7 +167,33 @@ enum View {
 /// Rendered Markdown placed for one width: items with offsets from the top.
 struct Layout {
     items: Vec<Item>,
+    /// Code blocks, which can be highlighted and copied.
+    codes: Vec<CodeBox>,
     height: f32,
+}
+
+struct CodeBox {
+    rect: Rect,
+    lines: Vec<String>,
+    line_h: f32,
+    cell: f32,
+    cols: usize,
+}
+
+impl CodeBox {
+    /// Where text starts inside the box.
+    fn origin(&self, s: f32) -> Vec2 {
+        vec2(self.rect.x + 14.0 * s, self.rect.y + 8.0 * s)
+    }
+
+    fn copy_button(&self, s: f32) -> Rect {
+        Rect::new(
+            self.rect.right() - 32.0 * s,
+            self.rect.y + 5.0 * s,
+            26.0 * s,
+            26.0 * s,
+        )
+    }
 }
 
 enum Item {
@@ -143,6 +254,9 @@ impl Viewer {
             view: View::Message(String::new()),
             source: false,
             markdown_raw: false,
+            selection: None,
+            selecting: false,
+            copied: None,
             mark: None,
             scroll: 0.0,
             hscroll: 0.0,
@@ -196,7 +310,21 @@ impl Viewer {
         self.scroll = 0.0;
         self.hscroll = 0.0;
         self.mark = None;
+        self.selection = None;
         self.view = self.load();
+    }
+
+    fn copy(&mut self, block: usize, text: &str) {
+        if !text.is_empty() {
+            drop(crate::clipboard::copy(text));
+            self.copied = Some((block, get_time()));
+        }
+    }
+
+    /// True for a moment after copying from `block`.
+    fn just_copied(&self, block: usize) -> bool {
+        self.copied
+            .is_some_and(|(b, at)| b == block && get_time() - at < 1.4)
     }
 
     fn load(&self) -> View {
@@ -583,6 +711,7 @@ impl Viewer {
                 self.view = self.load();
                 self.scroll = 0.0;
                 self.mark = mark;
+                self.selection = None;
             }
         }
         let area = Rect::new(
@@ -690,13 +819,89 @@ impl Viewer {
                 self.scroll = ((y - track.y) / track.h) * lines.len() as f32 - rows as f32 * 0.5;
             }
         }
+        // Highlighting: press on the text and drag. Past the edges, the view
+        // scrolls along.
+        let text_area = Rect::new(
+            area.x + 1.0,
+            top,
+            track.x - 6.0 * s - area.x - 1.0,
+            rows as f32 * line_h,
+        );
+        let pointer = crate::ui_layout::pointer();
+        let line_len = |index: usize| lines.get(index).map_or(0, |l| line_text(l).chars().count());
+        let position = |first: usize, skip: usize| -> (usize, usize) {
+            let row = ((pointer.y - top) / line_h).floor() as i64;
+            let line = (first as i64 + row).clamp(0, lines.len().saturating_sub(1) as i64) as usize;
+            let col = skip + ((pointer.x - text_x) / cell).round().max(0.0) as usize;
+            (line, col.min(line_len(line)))
+        };
+        if !self.dragging
+            && !lines.is_empty()
+            && contains(text_area)
+            && is_mouse_button_pressed(MouseButton::Left)
+        {
+            let at = position(self.scroll.round() as usize, self.hscroll.round() as usize);
+            let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+            let anchor = match self.selection {
+                Some(sel) if shift && sel.block == CODE_VIEW => sel.anchor,
+                _ => at,
+            };
+            self.selection = Some(Selection {
+                block: CODE_VIEW,
+                anchor,
+                head: at,
+            });
+            self.selecting = true;
+        }
+        if self.selecting && is_mouse_button_down(MouseButton::Left) {
+            if pointer.y < text_area.y {
+                self.scroll -= 0.5;
+            } else if pointer.y > text_area.bottom() {
+                self.scroll += 0.5;
+            }
+            if pointer.x < text_x {
+                self.hscroll -= 1.0;
+            } else if pointer.x > text_area.right() {
+                self.hscroll += 1.0;
+            }
+        }
         if !is_mouse_button_down(MouseButton::Left) {
             self.dragging = false;
+            self.selecting = false;
         }
         self.scroll = self.scroll.clamp(0.0, max_scroll);
         self.hscroll = self.hscroll.clamp(0.0, widest.saturating_sub(cols) as f32);
         let first = self.scroll.round() as usize;
         let skip = self.hscroll.round() as usize;
+        if self.selecting
+            && let Some(sel) = &mut self.selection
+        {
+            sel.head = position(first, skip);
+        }
+        if command_held() && is_key_pressed(KeyCode::A) && !lines.is_empty() {
+            let last = lines.len() - 1;
+            self.selection = Some(Selection {
+                block: CODE_VIEW,
+                anchor: (0, 0),
+                head: (last, line_len(last)),
+            });
+        }
+        let mut copy = None;
+        if command_held()
+            && is_key_pressed(KeyCode::C)
+            && let Some(sel) = self
+                .selection
+                .filter(|s| s.block == CODE_VIEW && !s.is_empty())
+        {
+            let (start, end) = sel.range();
+            let text: Vec<String> = lines[start.0..=end.0].iter().map(line_text).collect();
+            let shifted = Selection {
+                block: CODE_VIEW,
+                anchor: (0, start.1),
+                head: (end.0 - start.0, end.1),
+            };
+            copy = Some(shifted.text(&text));
+        }
 
         draw_rectangle(
             area.x + 1.0,
@@ -717,6 +922,21 @@ impl Viewer {
                     alpha(warm_text_color(), 0.18),
                 );
                 draw_rectangle(area.x + 1.0, y, 3.0 * s, line_h, warm_text_color());
+            }
+            if let Some((from, to)) = self
+                .selection
+                .filter(|s| s.block == CODE_VIEW)
+                .and_then(|sel| sel.columns(slot, line_len(slot)))
+                .map(|(from, to)| (from.max(skip), to.min(skip + cols)))
+                .filter(|(from, to)| to > from)
+            {
+                draw_rectangle(
+                    text_x + (from - skip) as f32 * cell,
+                    y,
+                    (to - from) as f32 * cell,
+                    line_h,
+                    alpha(accent(), 0.28),
+                );
             }
             let number = (slot + 1).to_string();
             code_label(
@@ -765,6 +985,12 @@ impl Viewer {
                 11.0 * s,
                 muted_color(),
             );
+        }
+        if let Some(text) = copy {
+            self.copy(CODE_VIEW, &text);
+        }
+        if self.just_copied(CODE_VIEW) {
+            copied_note(area.right() - 20.0 * s, area.bottom() - 22.0 * s, s);
         }
     }
 
@@ -823,6 +1049,98 @@ impl Viewer {
                 }
             }
         }
+        let origin = vec2(x0, y0);
+        let visible = |rect: Rect| rect.y >= top && rect.bottom() <= bottom;
+        let pointer = crate::ui_layout::pointer();
+        let pressed = contains(area) && is_mouse_button_pressed(MouseButton::Left);
+        let mut copy = None;
+        let mut hit = None;
+        for (index, code) in layout.codes.iter().enumerate() {
+            let rect = Rect::new(
+                origin.x + code.rect.x,
+                origin.y + code.rect.y,
+                code.rect.w,
+                code.rect.h,
+            );
+            let button = code.copy_button(s).offset(origin);
+            if pressed && visible(button) && contains(button) {
+                copy = Some((index, code.lines.join("\n")));
+            } else if pressed && contains(rect) {
+                hit = Some(index);
+            }
+        }
+        // Where the pointer falls in a code box, clamped to its text.
+        let position = |code: &CodeBox| -> (usize, usize) {
+            let start = code.origin(s) + origin;
+            let row = ((pointer.y - start.y) / code.line_h).floor() as i64;
+            let line = row.clamp(0, code.lines.len().saturating_sub(1) as i64) as usize;
+            let len = code.lines.get(line).map_or(0, |l| l.chars().count());
+            let col = ((pointer.x - start.x) / code.cell).round().max(0.0) as usize;
+            // Past the cut-off edge means the whole line.
+            (line, if col >= code.cols { len } else { col.min(len) })
+        };
+        if pressed && copy.is_none() {
+            self.selection = hit.map(|index| {
+                let at = position(&layout.codes[index]);
+                Selection {
+                    block: index,
+                    anchor: at,
+                    head: at,
+                }
+            });
+            self.selecting = hit.is_some();
+        }
+        if !is_mouse_button_down(MouseButton::Left) {
+            self.selecting = false;
+        }
+        if self.selecting
+            && let Some(sel) = &mut self.selection
+            && let Some(code) = layout.codes.get(sel.block)
+        {
+            sel.head = position(code);
+            if pointer.y < area.y {
+                self.scroll -= 0.5;
+            } else if pointer.y > area.bottom() {
+                self.scroll += 0.5;
+            }
+        }
+        if command_held()
+            && is_key_pressed(KeyCode::C)
+            && let Some(sel) = self.selection.filter(|s| !s.is_empty())
+            && let Some(code) = layout.codes.get(sel.block)
+        {
+            copy = Some((sel.block, sel.text(&code.lines)));
+        }
+        for (index, code) in layout.codes.iter().enumerate() {
+            let start = code.origin(s) + origin;
+            if let Some(sel) = self.selection.filter(|s| s.block == index) {
+                for (line, text) in code.lines.iter().enumerate() {
+                    let len = text.chars().count();
+                    let Some((from, to)) = sel.columns(line, len) else {
+                        continue;
+                    };
+                    let to = to.min(code.cols);
+                    let y = start.y + line as f32 * code.line_h;
+                    if to <= from || y < top || y + code.line_h > bottom {
+                        continue;
+                    }
+                    draw_rectangle(
+                        start.x + from as f32 * code.cell,
+                        y,
+                        (to - from) as f32 * code.cell,
+                        code.line_h,
+                        alpha(accent(), 0.28),
+                    );
+                }
+            }
+            let button = code.copy_button(s).offset(origin);
+            if visible(button) {
+                let done = self
+                    .copied
+                    .is_some_and(|(b, at)| b == index && get_time() - at < 1.4);
+                copy_icon(button, done, s);
+            }
+        }
         if max > 0.0 {
             let track = Rect::new(
                 area.right() - 9.0 * s,
@@ -832,12 +1150,91 @@ impl Viewer {
             );
             scrollbar(track, offset, area.h, layout.height + pad * 2.0);
         }
+        if let Some((index, text)) = copy {
+            self.copy(index, &text);
+        }
     }
+}
+
+/// Two overlapping pages, or a tick once copied.
+fn copy_icon(r: Rect, done: bool, s: f32) {
+    let hover = contains(r);
+    if hover || done {
+        draw_rectangle(
+            r.x,
+            r.y,
+            r.w,
+            r.h,
+            alpha(line_color(), if hover { 0.8 } else { 0.5 }),
+        );
+    }
+    let ink = if done {
+        accent()
+    } else if hover {
+        text_color()
+    } else {
+        muted_color()
+    };
+    let c = r.center();
+    if done {
+        draw_line(
+            c.x - 6.0 * s,
+            c.y,
+            c.x - 2.0 * s,
+            c.y + 4.0 * s,
+            2.0 * s,
+            ink,
+        );
+        draw_line(
+            c.x - 2.0 * s,
+            c.y + 4.0 * s,
+            c.x + 6.0 * s,
+            c.y - 5.0 * s,
+            2.0 * s,
+            ink,
+        );
+        right_label("Copied", r.x - 8.0 * s, c.y + 4.0 * s, 11.0 * s, accent());
+    } else {
+        let w = 9.0 * s;
+        let h = 11.0 * s;
+        draw_rectangle_lines(
+            c.x - w * 0.5 - 2.0 * s,
+            c.y - h * 0.5 - 2.0 * s,
+            w,
+            h,
+            1.5 * s,
+            ink,
+        );
+        draw_rectangle(
+            c.x - w * 0.5 + 2.0 * s,
+            c.y - h * 0.5 + 2.0 * s,
+            w,
+            h,
+            mix(surface_color(), bg_color(), 0.55),
+        );
+        draw_rectangle_lines(
+            c.x - w * 0.5 + 2.0 * s,
+            c.y - h * 0.5 + 2.0 * s,
+            w,
+            h,
+            1.5 * s,
+            ink,
+        );
+    }
+}
+
+/// "Copied" on a small tag, right-aligned at `x`.
+fn copied_note(x: f32, y: f32, s: f32) {
+    let w = label_width("Copied", 11.0 * s) + 16.0 * s;
+    draw_rectangle(x - w, y - 14.0 * s, w, 20.0 * s, surface_color());
+    draw_rectangle_lines(x - w, y - 14.0 * s, w, 20.0 * s, 1.0, line_color());
+    right_label("Copied", x - 8.0 * s, y, 11.0 * s, accent());
 }
 
 /// Lay out rendered Markdown `width` pixels wide.
 fn layout_markdown(blocks: &[Block], width: f32, s: f32) -> Layout {
     let mut items = Vec::new();
+    let mut codes = Vec::new();
     let mut y = 0.0;
     let body = mix(text_color(), muted_color(), 0.15);
     for (index, block) in blocks.iter().enumerate() {
@@ -867,7 +1264,7 @@ fn layout_markdown(blocks: &[Block], width: f32, s: f32) -> Layout {
                 let size = 14.0 * s;
                 items.push(Item::Text {
                     x: indent,
-                    y: y + size * 1.5 * 0.72,
+                    y: y + (size * 1.5).round() * 0.72,
                     size,
                     text: marker.clone(),
                     color: muted_color(),
@@ -906,7 +1303,8 @@ fn layout_markdown(blocks: &[Block], width: f32, s: f32) -> Layout {
                 let size = 12.5 * s;
                 let line_h = (size * 1.45).round();
                 let cell = code_advance(size).max(1.0);
-                let cols = ((width - 24.0 * s) / cell).floor().max(1.0) as usize;
+                // Leave room for the copy button on the first line.
+                let cols = ((width - 50.0 * s) / cell).floor().max(1.0) as usize;
                 let h = lines.len().max(1) as f32 * line_h + 16.0 * s;
                 items.push(Item::Rect(
                     Rect::new(0.0, y, width, h),
@@ -928,6 +1326,13 @@ fn layout_markdown(blocks: &[Block], width: f32, s: f32) -> Layout {
                         mono: true,
                     });
                 }
+                codes.push(CodeBox {
+                    rect: Rect::new(0.0, y, width, h),
+                    lines: lines.clone(),
+                    line_h,
+                    cell,
+                    cols,
+                });
                 y += h;
             }
             Block::Table { header, rows } => {
@@ -940,7 +1345,11 @@ fn layout_markdown(blocks: &[Block], width: f32, s: f32) -> Layout {
             }
         }
     }
-    Layout { items, height: y }
+    Layout {
+        items,
+        codes,
+        height: y,
+    }
 }
 
 /// A table whose columns share `width` by how much text they hold.
@@ -1566,6 +1975,45 @@ mod tests {
             }
         }
         assert!(opened >= 4, "only {opened} packs found");
+    }
+
+    #[test]
+    fn selections_copy_exactly_what_is_highlighted() {
+        let lines = ["local x = 1", "", "return x"];
+        let sel = |anchor, head| Selection {
+            block: CODE_VIEW,
+            anchor,
+            head,
+        };
+        assert_eq!(sel((0, 6), (0, 11)).text(&lines), "x = 1");
+        // Dragging backwards selects the same text.
+        assert_eq!(sel((2, 6), (0, 6)).text(&lines), "x = 1\n\nreturn");
+        assert_eq!(sel((0, 0), (2, 8)).text(&lines), "local x = 1\n\nreturn x");
+        // Columns past the end of a line stop at the line.
+        assert_eq!(sel((0, 9), (0, 99)).text(&lines), " 1");
+        assert!(sel((1, 0), (1, 0)).is_empty());
+        assert_eq!(sel((1, 0), (1, 0)).text(&lines), "");
+        // Wide characters count once each.
+        assert_eq!(sel((0, 1), (0, 3)).text(&["añb"]), "ñb");
+    }
+
+    #[test]
+    fn selection_highlights_line_breaks_inside_the_range_only() {
+        let sel = Selection {
+            block: 0,
+            anchor: (0, 6),
+            head: (2, 3),
+        };
+        assert_eq!(sel.columns(0, 11), Some((6, 12)));
+        assert_eq!(sel.columns(1, 0), Some((0, 1)));
+        assert_eq!(sel.columns(2, 8), Some((0, 3)));
+        assert_eq!(sel.columns(3, 8), None);
+        let empty = Selection {
+            block: 0,
+            anchor: (1, 2),
+            head: (1, 2),
+        };
+        assert_eq!(empty.columns(1, 5), None);
     }
 
     #[test]

@@ -390,6 +390,12 @@ pub struct Hud {
     pub spectating: Option<EntityId>,
     /// The local tank's most recent killer, from reliable kill events.
     pub killed_by: Option<EntityId>,
+    /// The local tank's death count, from the same events.
+    pub deaths: u32,
+    /// The death the killer card last played for.
+    cards_shown: u32,
+    /// The killer card on screen: who, and when it started.
+    card: Option<(EntityId, f64)>,
     /// The current map's palette accent, which tints minimap cover.
     pub palette: Color,
     pub practice: bool,
@@ -413,6 +419,9 @@ impl Hud {
         Self {
             spectating: None,
             killed_by: None,
+            deaths: 0,
+            cards_shown: 0,
+            card: None,
             palette: tankyard_client::map_model::palette("slate"),
             practice: false,
             evolution: false,
@@ -1027,8 +1036,32 @@ impl Hud {
         if sandbox_controls && self.sandbox {
             self.sandbox_overlay(tank, content, &mut actions, s);
         }
+        if tank.alive {
+            self.card = None;
+        } else if self.deaths != self.cards_shown {
+            self.cards_shown = self.deaths;
+            self.card = self
+                .killed_by
+                .filter(|&killer| killer != local && snapshot.tanks.iter().any(|t| t.id == killer))
+                .map(|killer| (killer, get_time()));
+        }
+        let card = self.card.and_then(|(killer, started)| {
+            let age = (get_time() - started) as f32;
+            let killer = snapshot.tanks.iter().find(|t| t.id == killer)?;
+            (age < CARD_END).then_some((killer, age))
+        });
         if !tank.alive && !snapshot.match_state.finished {
-            if let Some(watched) = snapshot
+            if let Some((killer, age)) = card {
+                killer_card(
+                    tank,
+                    killer,
+                    snapshot.config.mode,
+                    content,
+                    settings,
+                    age,
+                    s,
+                );
+            } else if let Some(watched) = snapshot
                 .tanks
                 .iter()
                 .find(|t| Some(t.id) == self.spectating && t.alive)
@@ -1522,6 +1555,11 @@ impl Hud {
             self.sandbox_level_pending = None;
         }
     }
+    /// True while the killer card holds the camera on the wreck.
+    pub fn holding_camera(&self) -> bool {
+        self.card
+            .is_some_and(|(_, started)| ((get_time() - started) as f32) < CARD_HOLD)
+    }
     fn death(
         &self,
         tank: &Tank,
@@ -1686,6 +1724,156 @@ impl Hud {
         }
     }
 }
+/// The killer card shows for `CARD_HOLD` seconds, then fades as the camera
+/// moves over to the killer, gone by `CARD_END`.
+const CARD_HOLD: f32 = 2.3;
+const CARD_END: f32 = 3.0;
+
+/// Who destroyed the local tank: their tank pops in, then their name, then
+/// their score counts up.
+#[allow(clippy::too_many_arguments)]
+fn killer_card(
+    tank: &Tank,
+    killer: &Tank,
+    mode: Mode,
+    content: &Content,
+    settings: &Settings,
+    age: f32,
+    s: f32,
+) {
+    let calm = settings.reduced_motion;
+    let fade_in = (age / 0.2).min(1.);
+    let leaving = ((age - CARD_HOLD) / (CARD_END - CARD_HOLD)).clamp(0., 1.);
+    let shown = fade_in * (1. - leaving);
+    let w = screen_width();
+    let h = screen_height();
+    draw_rectangle(0., 0., w, h, alpha(bg_color(), 0.6 * shown));
+    let x = w * 0.5;
+    let y = h * 0.44;
+    let color = render::team_color(killer.team, false, settings.colorblind);
+    let step = |from: f32, length: f32| ((age - from) / length).clamp(0., 1.);
+
+    center_label("DESTROYED BY", x, y - 104. * s, 14. * s, alpha(RED, shown));
+    // A ring bursts out as the tank arrives.
+    let burst = step(0.05, 0.7);
+    if !calm && burst < 1. {
+        draw_circle_lines(
+            x,
+            y,
+            (44. + 110. * ease_out(burst)) * s,
+            3. * s,
+            alpha(color, (1. - burst) * 0.8 * shown),
+        );
+    }
+    draw_circle(x, y, 66. * s, alpha(color, 0.12 * shown));
+    let pop = if calm {
+        1.
+    } else {
+        ease_out_back(step(0., 0.45))
+    };
+    let size = 44. * s * pop * (1. - ease_in(leaving));
+    if size > 0.5
+        && let Some(class) = content.class(&killer.class)
+    {
+        let time = get_time() as f32;
+        let aim = -0.6 + if calm { 0. } else { (time * 0.8).sin() * 0.25 };
+        render::class_model(class, vec2(x, y), size, aim, 0., 0., color, time);
+    }
+
+    // The name slides up, then the score counts.
+    let name_in = if calm { 1. } else { ease_out(step(0.25, 0.35)) };
+    let name_alpha = name_in * shown;
+    let rise = (1. - name_in) * 18. * s;
+    center_label(
+        &fitted_player_name(killer, 30. * s, w - 80. * s),
+        x,
+        y + 92. * s + rise,
+        30. * s,
+        alpha(text_color(), name_alpha),
+    );
+    let class = content
+        .class(&killer.class)
+        .map_or(killer.class.as_str(), |class| class.name.as_str());
+    center_label(
+        &format!("Level {}  ·  {class}", killer.level),
+        x,
+        y + 118. * s + rise,
+        14. * s,
+        alpha(muted_color(), name_alpha),
+    );
+    let counting = if calm { 1. } else { ease_out(step(0.6, 0.8)) };
+    if age >= 0.6 || calm {
+        // A small bump when the count lands.
+        let landed = if calm {
+            0.
+        } else {
+            (1. - (age - 1.4) / 0.25).clamp(0., 1.)
+        };
+        let bump = if age >= 1.4 { landed } else { 0. };
+        center_label(
+            "SCORE",
+            x,
+            y + 152. * s,
+            11. * s,
+            alpha(muted_color(), shown),
+        );
+        let score = (killer.score as f64 * counting as f64).round() as u64;
+        let size = 34. * s * (1. + 0.22 * bump);
+        center_label(
+            &grouped(score),
+            x,
+            y + 190. * s,
+            size,
+            alpha(accent(), shown),
+        );
+    }
+    let hint_alpha = step(1.3, 0.3) * shown;
+    if hint_alpha > 0. {
+        let next = if tankyard_core::can_spectate(tank, killer, mode) {
+            "Spectating them next  ·  Left / Right to switch"
+        } else if tank.respawn_timer > 0. {
+            "Respawning soon"
+        } else {
+            "Press Enter to respawn"
+        };
+        center_label(
+            next,
+            x,
+            y + 226. * s,
+            13. * s,
+            alpha(muted_color(), hint_alpha),
+        );
+    }
+}
+
+fn ease_out(t: f32) -> f32 {
+    1. - (1. - t).powi(3)
+}
+
+fn ease_in(t: f32) -> f32 {
+    t * t * t
+}
+
+/// Overshoots a little, then settles: a pop.
+fn ease_out_back(t: f32) -> f32 {
+    let c1 = 1.70158;
+    let c3 = c1 + 1.;
+    1. + c3 * (t - 1.).powi(3) + c1 * (t - 1.).powi(2)
+}
+
+/// 12345 as "12,345".
+fn grouped(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
 /// A readable name for whatever destroyed the local tank.
 fn killer_name(snapshot: &Snapshot, content: &Content, id: EntityId) -> Option<String> {
     if id == 0 {
@@ -1764,6 +1952,20 @@ fn evolution_cards(count: usize, width: f32, height: f32, requested: f32) -> Vec
 mod tests {
     use super::*;
     use tankyard_core::{World, WorldConfig};
+
+    #[test]
+    fn killer_card_easing_and_score_grouping() {
+        assert_eq!(grouped(0), "0");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1_000), "1,000");
+        assert_eq!(grouped(12_345_678), "12,345,678");
+        for f in [ease_out, ease_in, ease_out_back] {
+            assert!(f(0.).abs() < 1e-5 && (f(1.) - 1.).abs() < 1e-5);
+        }
+        // The pop overshoots before it settles.
+        assert!((0..100).any(|i| ease_out_back(i as f32 / 100.) > 1.0));
+        const { assert!(CARD_HOLD < CARD_END) };
+    }
 
     #[test]
     fn sandbox_and_boss_panels_fit_between_other_hud_regions_at_all_supported_scales() {

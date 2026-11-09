@@ -217,10 +217,18 @@ impl ModRuntime {
             .filter_map(|e| {
                 let (trigger, target) = match e.kind {
                     EventKind::Shot => (Trigger::Shot, 0),
-                    EventKind::Kill => (
-                        Trigger::Kill,
-                        e.elimination.as_ref().map_or(0, |victim| victim.victim),
-                    ),
+                    // Tanks only: boss kills are announced but were never
+                    // a script's "kill".
+                    EventKind::Kill
+                        if e.elimination.as_ref().is_some_and(|victim| {
+                            world.tanks.iter().any(|t| t.id == victim.victim)
+                        }) =>
+                    {
+                        (
+                            Trigger::Kill,
+                            e.elimination.as_ref().map_or(0, |victim| victim.victim),
+                        )
+                    }
                     EventKind::LevelUp => (Trigger::LevelUp, 0),
                     EventKind::Evolve => (Trigger::Evolve, 0),
                     EventKind::Capture => (Trigger::Capture, 0),
@@ -797,6 +805,54 @@ mod tests {
         assert_eq!(w.tanks[0].health, 40.0);
         assert_eq!(w.tanks[0].score, 10);
         assert_eq!(w.tanks[0].xp, 40);
+    }
+    #[test]
+    fn kill_hooks_fire_for_tanks_but_not_for_boss_announcements() {
+        let mut w = world();
+        let hunter = w.add_player("Hunter", false);
+        let rival = w.add_player("Rival", false);
+        let hook = tankyard_mods::Hook {
+            id: "score_on_kill".into(),
+            event: Trigger::Kill,
+            target: Selection::Actor,
+            every_ticks: 1,
+            cooldown_ticks: 0,
+            conditions: vec![],
+            actions: vec![Effect::Award { xp: 0, score: 5 }],
+        };
+        let mut mods = LoadedMods::default();
+        mods.behaviors.push(tankyard_mods::LoadedMod {
+            info: tankyard_mods::ModInfo {
+                id: "bounty".into(),
+                name: "Bounty".into(),
+                version: "1".into(),
+                behavior_digest: 1,
+            },
+            hooks: vec![hook],
+            scripts: Default::default(),
+        });
+        let mut runtime = ModRuntime::new(&mods);
+        let kill = |victim: EntityId, name: &str| crate::GameEvent {
+            tick: 1,
+            kind: EventKind::Kill,
+            pos: V2::ZERO,
+            subject: hunter,
+            value: 0,
+            team: 0,
+            elimination: Some(crate::Elimination {
+                victim,
+                name: name.into(),
+                game_creator: false,
+                server_badge: Default::default(),
+            }),
+        };
+        w.events.push(kill(9_999, "Sentinel"));
+        runtime.after_step(&mut w);
+        assert_eq!(w.tanks[0].score, 0, "a boss is not a scripted kill");
+        w.events.clear();
+        w.events.push(kill(rival, "Rival"));
+        runtime.after_step(&mut w);
+        assert_eq!(w.tanks[0].score, 5);
     }
     #[test]
     fn downloaded_rules_keep_prediction_equal_to_server_movement() {

@@ -404,6 +404,23 @@ impl Session {
             self.spectating = target;
         }
     }
+    /// Watch `target` if the local player is dead and may watch them.
+    pub fn watch(&mut self, target: EntityId) {
+        let Some(snapshot) = &self.display else {
+            return;
+        };
+        let allowed = snapshot
+            .tanks
+            .iter()
+            .find(|t| t.id == self.player)
+            .zip(snapshot.tanks.iter().find(|t| t.id == target))
+            .is_some_and(|(viewer, target)| {
+                tankyard_core::can_spectate(viewer, target, snapshot.config.mode)
+            });
+        if allowed {
+            self.set_spectating(Some(target));
+        }
+    }
     pub fn cycle_spectating(&mut self, direction: i8) {
         let Some(snapshot) = &self.display else {
             return;

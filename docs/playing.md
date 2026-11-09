@@ -75,6 +75,10 @@ Levels 15, 30, and 45 need 1,020, 8,644, and 35,304 XP. The final upgrade tier u
 
 Trapper reloads in one second and its traps deal 27.6 damage with 5.49 penetration. Every trap launcher has 20% shorter reloads, 20% more damage, 22% more penetration and 30% faster launch speed compared with v0.2.15. Traps launch farther and settle more gradually. The Trap Range skill increases launch distance, up to about 2.15 times the base range at seven points. Mixed weapons show Speed / Trap Range in the same skill slot. Trap lifetimes and the 24-trap limit stay the same. Automatic mounts only fire at targets their shots can reach. Auto Smasher bullets last 2.2 seconds.
 
+## Deaths and bosses
+
+When another tank destroys you, a card shows who it was and their score, then the camera moves over to watch them until you respawn. Left / Right switches who you watch. In team modes you watch a teammate instead. When a boss falls, the banner at the top names the player who did the most damage to it.
+
 ## Modes
 
 Random Events plays like Free For All, with a 20-second event followed by an eight-second break. Overdrive speeds up movement and reloads; Double points doubles XP and score; Regeneration restores health; Shape rush adds bonus shapes.

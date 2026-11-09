@@ -1158,9 +1158,9 @@ impl World {
             .bosses
             .iter()
             .filter(|b| b.health <= 0.)
-            .map(|b| (b.id, b.pos, b.team, b.mothership))
+            .map(|b| (b.id, b.pos, b.team, b.mothership, b.kind))
             .collect();
-        for (id, pos, team, mother) in dead_bosses {
+        for (id, pos, team, mother, kind) in dead_bosses {
             let killer = self
                 .contributions
                 .get(&id)
@@ -1178,6 +1178,25 @@ impl World {
                 self.finish(Some(if team == 1 { 2 } else { 1 }), "Mothership destroyed");
             }
             self.event(EventKind::Destroy, pos, id, 12000, team);
+            // Credit the player who did the most damage, so everyone can see
+            // who brought the boss down. Older clients show it as a normal kill.
+            if let Some(hunter) = self.tanks.iter().find(|t| t.id == killer) {
+                let elimination = Elimination {
+                    victim: id,
+                    name: kind.name().into(),
+                    game_creator: false,
+                    server_badge: Default::default(),
+                };
+                let hunter_team = hunter.team;
+                self.event_detail(
+                    EventKind::Kill,
+                    pos,
+                    killer,
+                    12000,
+                    hunter_team,
+                    Some(elimination),
+                );
+            }
         }
     }
     pub(crate) fn reward_contributors(

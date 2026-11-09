@@ -592,7 +592,22 @@ pub fn markdown_blocks(text: &str) -> Vec<Block> {
             blocks.push(Block::Quote(inline(&quoted.join(" "))));
         } else if let Some((marker, rest)) = list_marker(body) {
             flush(&mut paragraph, &mut blocks);
-            blocks.push(Block::Item(indent / 2, marker, inline(rest)));
+            // Indented lines that follow carry the item's text on.
+            let mut text = rest.to_owned();
+            while let Some(next) = lines.peek().filter(|next| {
+                let body = next.trim_start();
+                let deeper = next.len() - body.len() > indent;
+                deeper
+                    && !body.is_empty()
+                    && list_marker(body).is_none()
+                    && !body.starts_with("```")
+                    && !body.starts_with("~~~")
+            }) {
+                text.push(' ');
+                text.push_str(next.trim());
+                lines.next();
+            }
+            blocks.push(Block::Item(indent / 2, marker, inline(&text)));
         } else if body.starts_with('|') {
             flush(&mut paragraph, &mut blocks);
             let mut rows = vec![line.to_owned()];
@@ -931,6 +946,28 @@ mod tests {
                     ]],
                 },
                 Block::Code(vec!["indented".into(), "code".into()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn markdown_list_items_carry_on_over_indented_lines() {
+        assert_eq!(
+            markdown_blocks(
+                "- The mode title\n  reads OVERCLOCK.\n  - nested\n    wraps too\nAfter."
+            ),
+            vec![
+                Block::Item(
+                    0,
+                    "•".into(),
+                    vec![(Style::Text, "The mode title reads OVERCLOCK.".into())]
+                ),
+                Block::Item(
+                    1,
+                    "•".into(),
+                    vec![(Style::Text, "nested wraps too".into())]
+                ),
+                Block::Paragraph(vec![(Style::Text, "After.".into())]),
             ]
         );
     }
