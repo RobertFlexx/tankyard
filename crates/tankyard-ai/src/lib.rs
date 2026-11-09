@@ -98,7 +98,126 @@ impl Difficulty {
             Self::Expert => 0.38,
         }
     }
+
+    fn dodge_period(self) -> f32 {
+        match self {
+            Self::Beginner => 12.,
+            Self::Normal => 6.,
+            Self::Advanced => 5.,
+            Self::Expert => 4.,
+        }
+    }
+
+    fn miss_chance(self) -> f32 {
+        match self {
+            Self::Beginner => 0.48,
+            Self::Normal => 0.28,
+            Self::Advanced => 0.18,
+            Self::Expert => 0.10,
+        }
+    }
+
+    fn awareness(self) -> f32 {
+        match self {
+            Self::Beginner => 0.15,
+            Self::Normal => 0.6,
+            Self::Advanced => 0.9,
+            Self::Expert => 1.,
+        }
+    }
+
+    /// How much enemy pressure a bot takes before backing off; beginners
+    /// never count.
+    fn pressure_limit(self) -> f32 {
+        match self {
+            Self::Beginner => f32::INFINITY,
+            Self::Normal => 2.2,
+            Self::Advanced => 1.9,
+            Self::Expert => 1.7,
+        }
+    }
+
+    /// Where this difficulty sits on the continuous skill scale.
+    pub fn level(self) -> f32 {
+        match self {
+            Self::Beginner => 0.,
+            Self::Normal => 1.,
+            Self::Advanced => 2.,
+            Self::Expert => 3.,
+        }
+    }
 }
+
+/// A point between the difficulty levels: 1.0 plays exactly like Normal,
+/// 1.5 halfway to Advanced. Lets bots get better gradually.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Skill(f32);
+
+impl Skill {
+    fn blend(self, value: impl Fn(Difficulty) -> f32) -> f32 {
+        let level = self.0.clamp(0., 3.);
+        let low = (level.floor() as usize).min(2);
+        let t = level - low as f32;
+        let (a, b) = (value(Difficulty::ALL[low]), value(Difficulty::ALL[low + 1]));
+        if t == 0. {
+            a
+        } else if t == 1. {
+            b
+        } else {
+            a + (b - a) * t
+        }
+    }
+
+    fn reaction_ticks(self) -> u64 {
+        self.blend(|d| d.reaction_ticks() as f32).round() as u64
+    }
+
+    fn perception_radius(self) -> f32 {
+        self.blend(Difficulty::perception_radius)
+    }
+
+    fn prediction(self) -> f32 {
+        self.blend(Difficulty::prediction)
+    }
+
+    fn aim_error(self) -> f32 {
+        self.blend(Difficulty::aim_error)
+    }
+
+    fn dodge_strength(self) -> f32 {
+        self.blend(Difficulty::dodge_strength)
+    }
+
+    fn retreat_health(self) -> f32 {
+        self.blend(Difficulty::retreat_health)
+    }
+
+    fn dodge_period(self) -> u64 {
+        self.blend(Difficulty::dodge_period).round() as u64
+    }
+
+    fn miss_chance(self) -> f32 {
+        self.blend(Difficulty::miss_chance)
+    }
+
+    fn awareness(self) -> f32 {
+        self.blend(Difficulty::awareness)
+    }
+
+    fn pressure_limit(self) -> f32 {
+        // Blend the inverse, so "never" eases into a real limit.
+        1. / self.blend(|d| 1. / d.pressure_limit())
+    }
+}
+
+impl From<Difficulty> for Skill {
+    fn from(difficulty: Difficulty) -> Self {
+        Self(difficulty.level())
+    }
+}
+
+/// Seconds the hidden boost takes to climb one whole difficulty level.
+const BOOST_SECONDS_PER_LEVEL: f32 = 45.;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BotState {
@@ -164,6 +283,10 @@ enum Command {
 
 pub struct BotController {
     pub difficulty: Difficulty,
+    /// Let bots play up when a human's tank far outclasses them.
+    pub adaptive: bool,
+    /// How far above `difficulty` they currently play, eased every tick.
+    boost: f32,
     brains: HashMap<EntityId, Brain>,
     perception: Perception,
     navigation: Navigation,
@@ -176,6 +299,8 @@ impl BotController {
     pub fn new(difficulty: Difficulty) -> Self {
         Self {
             difficulty,
+            adaptive: true,
+            boost: 0.,
             brains: HashMap::new(),
             perception: Perception::default(),
             navigation: Navigation::default(),
@@ -197,6 +322,47 @@ impl BotController {
                     .inherit_models(&old.learning);
             }
         }
+    }
+
+    /// The skill level bots play at right now, on the `Difficulty::level`
+    /// scale.
+    pub fn skill(&self) -> f32 {
+        (self.difficulty.level() + self.boost).min(Difficulty::Expert.level())
+    }
+
+    /// Ease the boost toward what the match calls for. Once a human sits
+    /// well above the bots' average level, bots climb toward Expert; as the
+    /// gap closes they settle back. Each tick moves only a tiny step, so
+    /// there's no moment where they suddenly get better.
+    fn adapt(&mut self, world: &World) {
+        let room = Difficulty::Expert.level() - self.difficulty.level();
+        let target = if !self.adaptive || world.config.mode == Mode::Sandbox || room <= 0. {
+            0.
+        } else {
+            let (sum, count) = world
+                .tanks
+                .iter()
+                .filter(|t| t.bot)
+                .fold((0., 0.), |(sum, n), t| (sum + f32::from(t.level), n + 1.));
+            let strongest = world
+                .tanks
+                .iter()
+                .filter(|t| !t.bot && t.alive)
+                .map(|t| f32::from(t.level))
+                .fold(None, |best: Option<f32>, level| {
+                    Some(best.map_or(level, |b| b.max(level)))
+                });
+            match strongest {
+                Some(top) if count > 0. => {
+                    // 12 levels ahead starts it; 36 ahead is the full boost.
+                    let gap = top - sum / count;
+                    ((gap - 12.) / 24.).clamp(0., 1.) * room
+                }
+                _ => 0.,
+            }
+        };
+        let step = 1. / (BOOST_SECONDS_PER_LEVEL * tankyard_core::TICK_RATE as f32);
+        self.boost += (target - self.boost).clamp(-step, step);
     }
 
     pub fn state(&self, id: EntityId) -> Option<BotState> {
@@ -248,7 +414,8 @@ impl BotController {
         self.perception.rebuild(world);
         self.commands.clear();
         self.inputs.clear();
-        let difficulty = self.difficulty;
+        self.adapt(world);
+        let difficulty = Skill(self.skill());
         for tank in world.tanks.iter().filter(|tank| tank.bot && tank.alive) {
             let Some(class) = world.content.class(&tank.class) else {
                 continue;
@@ -284,12 +451,7 @@ impl BotController {
                 );
                 brain.initialized = true;
             }
-            let dodge_period = match difficulty {
-                Difficulty::Beginner => 12,
-                Difficulty::Normal => 6,
-                Difficulty::Advanced => 5,
-                Difficulty::Expert => 4,
-            };
+            let dodge_period = difficulty.dodge_period();
             if world
                 .tick
                 .wrapping_add(tank.id)
@@ -317,12 +479,7 @@ impl BotController {
                                 ^ shot.wrapping_mul(193)
                                 ^ u64::from(tank.deaths),
                         );
-                        let miss = match difficulty {
-                            Difficulty::Beginner => 0.48,
-                            Difficulty::Normal => 0.28,
-                            Difficulty::Advanced => 0.18,
-                            Difficulty::Expert => 0.10,
-                        };
+                        let miss = difficulty.miss_chance();
                         brain.parry_miss = roll < miss;
                         brain.parry_timing = 0.52 + noise(shot ^ tank.id.wrapping_mul(31)) * 0.34;
                     }
@@ -652,7 +809,7 @@ fn decide(
     world: &World,
     tank: &Tank,
     class: &ClassDef,
-    difficulty: Difficulty,
+    difficulty: Skill,
     seen: &[Seen],
     brain: &mut Brain,
 ) {
@@ -771,12 +928,7 @@ fn decide(
                     enemy_pressure += pressure;
                     threat_center += other.pos * pressure;
                 }
-                let awareness = match difficulty {
-                    Difficulty::Beginner => 0.15,
-                    Difficulty::Normal => 0.6,
-                    Difficulty::Advanced => 0.9,
-                    Difficulty::Expert => 1.,
-                };
+                let awareness = difficulty.awareness();
                 let caution = 1. / (1. + (strength - 1.).max(0.) * awareness)
                     * if strength > 1.6 && health < 0.7 {
                         0.35
@@ -995,12 +1147,7 @@ fn decide(
         || brain.last_threat.is_some_and(|(_, seen)| {
             world.tick.saturating_sub(seen) < 150 + (personality.patience * 90.) as u64
         });
-    let pressure_limit = match difficulty {
-        Difficulty::Beginner => f32::INFINITY,
-        Difficulty::Normal => 2.2,
-        Difficulty::Advanced => 1.9,
-        Difficulty::Expert => 1.7,
-    };
+    let pressure_limit = difficulty.pressure_limit();
     let outnumbered =
         nearby_enemies >= 2 && health < 0.85 && enemy_pressure > (1. + support) * pressure_limit;
     if (recovering && threatened) || outnumbered {
@@ -1920,7 +2067,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &seen,
             &mut brain,
         );
@@ -1940,7 +2087,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &seen,
             &mut brain,
         );
@@ -1982,7 +2129,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &[Seen::Tank(1), Seen::Target(0)],
             &mut brain,
         );
@@ -2165,6 +2312,88 @@ mod tests {
                 BotState::BossEngagement | BotState::Exploring
             ));
         }
+    }
+
+    #[test]
+    fn skill_matches_each_difficulty_and_blends_between_them() {
+        for difficulty in Difficulty::ALL {
+            let skill = Skill(difficulty.level());
+            assert_eq!(skill.reaction_ticks(), difficulty.reaction_ticks());
+            assert_eq!(skill.perception_radius(), difficulty.perception_radius());
+            assert_eq!(skill.aim_error(), difficulty.aim_error());
+            assert_eq!(skill.miss_chance(), difficulty.miss_chance());
+            assert_eq!(skill.pressure_limit(), difficulty.pressure_limit());
+        }
+        let between = Skill(1.5);
+        assert!(between.aim_error() < Difficulty::Normal.aim_error());
+        assert!(between.aim_error() > Difficulty::Advanced.aim_error());
+        // "Never retreat from pressure" eases into a finite limit.
+        let limit = Skill(0.5).pressure_limit();
+        assert!(limit.is_finite() && limit > Difficulty::Normal.pressure_limit());
+    }
+
+    #[test]
+    fn bots_ease_up_against_an_overpowered_human_and_settle_back() {
+        let mut world = World::new(
+            tankyard_core::WorldConfig {
+                target_count: 0,
+                ..Default::default()
+            },
+            tankyard_content::Content::builtin(),
+        );
+        let human = world.add_player("Human", false);
+        world.add_player("Bot", true);
+        let mut bots = BotController::new(Difficulty::Normal);
+        let second = tankyard_core::TICK_RATE as usize;
+        // Even levels: no boost.
+        for _ in 0..second * 5 {
+            bots.adapt(&world);
+        }
+        assert_eq!(bots.skill(), 1.);
+        world
+            .tanks
+            .iter_mut()
+            .find(|t| t.id == human)
+            .unwrap()
+            .level = 45;
+        let mut last = bots.skill();
+        for _ in 0..second {
+            bots.adapt(&world);
+            // Never a visible jump from one tick to the next.
+            assert!(bots.skill() - last < 0.001);
+            last = bots.skill();
+        }
+        assert!(last > 1. && last < 1.05);
+        for _ in 0..second * 200 {
+            bots.adapt(&world);
+        }
+        assert_eq!(bots.skill(), 3., "a far stronger human meets Expert play");
+        world
+            .tanks
+            .iter_mut()
+            .find(|t| t.id == human)
+            .unwrap()
+            .level = 1;
+        for _ in 0..second * 30 {
+            bots.adapt(&world);
+        }
+        assert!(bots.skill() < 3. && bots.skill() > 1.);
+        for _ in 0..second * 200 {
+            bots.adapt(&world);
+        }
+        assert_eq!(bots.skill(), 1.);
+        // Practice trials and benchmarks keep a fixed difficulty.
+        bots.adaptive = false;
+        world
+            .tanks
+            .iter_mut()
+            .find(|t| t.id == human)
+            .unwrap()
+            .level = 45;
+        for _ in 0..second * 200 {
+            bots.adapt(&world);
+        }
+        assert_eq!(bots.skill(), 1.);
     }
 
     #[test]
@@ -2441,7 +2670,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &[Seen::Tank(1), Seen::Tank(2)],
             &mut brain,
         );
@@ -2459,7 +2688,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &[Seen::Tank(1), Seen::Tank(2)],
             &mut brain,
         );
@@ -2470,7 +2699,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &[Seen::Tank(1), Seen::Tank(2)],
             &mut brain,
         );
@@ -2484,7 +2713,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut neutral,
         );
@@ -2494,7 +2723,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut neutral,
         );
@@ -2553,7 +2782,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut brain,
         );
@@ -2579,7 +2808,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut brain,
         );
@@ -2591,7 +2820,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut brain,
         );
@@ -2601,7 +2830,7 @@ mod tests {
             &world,
             &world.tanks[0],
             class,
-            Difficulty::Expert,
+            Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut brain,
         );

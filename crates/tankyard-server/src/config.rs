@@ -4,6 +4,9 @@ use std::{fs, io::Read, net::ToSocketAddrs, path::Path};
 use tankyard_ai::Difficulty;
 use tankyard_core::{Mode, WorldConfig};
 
+/// Players per lobby unless a server sets `arena_capacity`.
+pub const DEFAULT_LOBBY_SIZE: usize = 20;
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerSettings {
@@ -67,7 +70,7 @@ impl Default for ServerSettings {
             bind: "0.0.0.0:5000".into(),
             public_addresses: vec![],
             max_players: 64,
-            arena_capacity: 0,
+            arena_capacity: DEFAULT_LOBBY_SIZE,
             bot_count: 12,
             adaptive_bots: true,
             difficulty: Difficulty::Normal,
@@ -253,11 +256,15 @@ impl ServerSettings {
         {
             return invalid("player/bot limits exceed 128 each or 256 total");
         }
+        // A lobby larger than the server is simply one lobby of max_players.
         if self.arena_capacity != 0
-            && (!(2..=self.max_players).contains(&self.arena_capacity)
-                || self.max_players.div_ceil(self.arena_capacity) > 16)
+            && (self.arena_capacity < 2
+                || self
+                    .max_players
+                    .div_ceil(self.arena_capacity.min(self.max_players))
+                    > 16)
         {
-            return invalid("arena_capacity must be 0, or 2 to max_players with at most 16 arenas");
+            return invalid("arena_capacity must be 0, or at least 2 with at most 16 arenas");
         }
         if self.password.len() > 128 {
             return invalid("password exceeds 128 bytes");

@@ -58,7 +58,7 @@ impl UdpServer {
         if self.settings.party.is_some() {
             0
         } else {
-            self.settings.arena_capacity
+            self.settings.arena_capacity.min(self.settings.max_players)
         }
     }
     pub(crate) fn max_arenas(&self) -> usize {
@@ -287,6 +287,7 @@ mod tests {
             super::super::UdpServer::bind(ServerSettings {
                 bind: "127.0.0.1:0".into(),
                 ban_file: String::new(),
+                arena_capacity: 0,
                 ..Default::default()
             })
             .unwrap()

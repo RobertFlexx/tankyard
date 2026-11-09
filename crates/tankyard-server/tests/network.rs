@@ -1384,3 +1384,44 @@ fn status_probes_work_through_the_websocket_relay() {
     assert_eq!(probe.status.lobbies.len(), 1);
     assert!(probe.loss <= 0.2, "{}", probe.loss);
 }
+
+#[test]
+fn picking_a_full_lobby_opens_a_new_one_and_single_lobbies_report_the_server_limit() {
+    let mut server = UdpServer::bind(ServerSettings {
+        max_players: 8,
+        arena_capacity: 2,
+        world: WorldConfig {
+            target_count: 0,
+            ..Default::default()
+        },
+        ..settings()
+    })
+    .unwrap();
+    let address = server.address.to_string();
+    let mut clients: Vec<NetworkClient> = (0..2)
+        .map(|n| NetworkClient::connect(&address, &format!("Pilot {n}"), "").unwrap())
+        .collect();
+    let mut refs: Vec<&mut NetworkClient> = clients.iter_mut().collect();
+    ready(&mut server, &mut refs);
+    assert_eq!(server.arena_count(), 1);
+    // Lobby 1 is full; asking for it starts Lobby 2 instead of overfilling.
+    let mut late = NetworkClient::connect(&address, "Late", "").unwrap();
+    late.prefer_arena(0);
+    let mut refs: Vec<&mut NetworkClient> = clients.iter_mut().collect();
+    refs.push(&mut late);
+    ready(&mut server, &mut refs);
+    assert!(
+        late.server_name.ends_with("· Arena 2"),
+        "{}",
+        late.server_name
+    );
+    assert_eq!(server.arena_count(), 2);
+
+    let single = UdpServer::bind(ServerSettings {
+        max_players: 12,
+        arena_capacity: 0,
+        ..settings()
+    })
+    .unwrap();
+    assert!(single.status().lobbies.iter().all(|l| l.capacity == 12));
+}

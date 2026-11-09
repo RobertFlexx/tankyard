@@ -13,6 +13,7 @@ name = "Tank Yard Community Arena"
 bind = "0.0.0.0:5000"
 public_addresses = []
 max_players = 64
+arena_capacity = 20 # Players per lobby; more players open more lobbies. 0 keeps one lobby.
 bot_count = 12
 adaptive_bots = true # Fill to six tanks; no bots with six or more players.
 difficulty = "Normal"

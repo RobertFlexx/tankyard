@@ -262,6 +262,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mut snapshot_buffer = world.snapshot();
             let mut snapshot_encoder = tankyard_protocol::SnapshotEncoder::default();
             let mut ai = BotController::new(Difficulty::Advanced);
+            ai.adaptive = false;
             let mut rng = seed;
             let mut tick_times = Vec::with_capacity(ticks);
             let mut ai_times = Vec::with_capacity(ticks);
@@ -537,6 +538,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 world.add_player(&format!("Bot{i}"), true);
             }
             let mut ai = BotController::new(Difficulty::Expert);
+            ai.adaptive = false;
             for _ in 0..ticks {
                 ai.update(&mut world);
                 world.step();

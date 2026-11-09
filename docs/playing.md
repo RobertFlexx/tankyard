@@ -102,7 +102,7 @@ Shoot shapes to earn points before fighting other tanks. Tank upgrades unlock at
 
 ## Bots and multiplayer
 
-Bots farm, evolve, use abilities, and play objectives. Their neural models learn visible movement and human class results, as well as their own fights and skill choices. They remember opponents who hurt or killed them: cautious bots keep more distance, while bolder bots may try to settle a grudge when healthy. Winning eases that tension, and grudges cool down over time. Memory survives respawns and resets each match. Reaction delays, aim error, and normal combat stats still apply.
+Bots farm, evolve, use abilities, and play objectives. Their neural models learn visible movement and human class results, as well as their own fights and skill choices. They remember opponents who hurt or killed them: cautious bots keep more distance, while bolder bots may try to settle a grudge when healthy. Winning eases that tension, and grudges cool down over time. Memory survives respawns and resets each match. Reaction delays, aim error, and normal combat stats still apply. When one player's tank far outclasses the bots, they gradually play sharper, up to Expert, and ease back as the gap closes. Practice challenges keep their bots fixed.
 
 Sight ranges are 420 / 500 / 560 / 620 units from Beginner through Expert, including automatic mounts. Walls block targeting and threat detection. Bots sidestep incoming shots and pull back from nearby drones or approaching homing rounds. Shots already fired keep their normal flight range. Smasher bots close in, approach heavy cannons from the side, and retreat when hurt. Parry bots wait until a visible shot is about to hit.
 

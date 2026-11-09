@@ -1134,8 +1134,12 @@ impl UdpServer {
     }
 
     /// What a status query reports: the server and each open lobby.
-    pub(crate) fn status(&self) -> tankyard_protocol::ServerStatus {
-        let capacity = self.arena_capacity().max(1).min(self.settings.max_players);
+    pub fn status(&self) -> tankyard_protocol::ServerStatus {
+        // One arena of any size holds up to max_players.
+        let capacity = match self.arena_capacity() {
+            0 => self.settings.max_players,
+            capacity => capacity,
+        };
         let lobbies = self
             .arenas
             .iter()

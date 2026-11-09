@@ -154,7 +154,8 @@ pub struct Menu {
     pub servers: crate::server_status::Monitor,
     lobbies_open: bool,
     lobbies_open_amount: f32,
-    lobby_scroll: f32,
+    /// The page of the lobby list on show.
+    lobby_page: usize,
 }
 impl Menu {
     pub fn new() -> Self {
@@ -228,7 +229,7 @@ impl Menu {
             servers: Default::default(),
             lobbies_open: false,
             lobbies_open_amount: 0.0,
-            lobby_scroll: 0.0,
+            lobby_page: 0,
         }
     }
     pub fn clear_focus(&mut self) {
@@ -656,8 +657,7 @@ impl Menu {
         let x = center - pane_w * 0.5;
         // The lobby list opens inline, so the page shifts up by part of its
         // height instead of the list covering the buttons below it.
-        let lobbies = self.lobby_rows();
-        let drop = self.lobbies_open_amount * lobby_list_height(lobbies, s);
+        let drop = self.lobbies_open_amount * self.lobby_list_height(s);
         let y = ((h * 0.23).max(139.0 * s) - drop * 0.45).max(160.0 * s);
         let row_h = 44.0 * s;
         // A small preview gives the menu life without overlaying its controls.
@@ -1118,12 +1118,18 @@ impl Menu {
         self.lobbies_open_amount = 1.0;
     }
 
-    /// Rows the lobby list needs: one per lobby, or one status message.
-    fn lobby_rows(&self) -> usize {
+    /// Lobbies on the main server, as last probed.
+    fn lobby_count(&self) -> usize {
         match self.servers.state(crate::settings::main_server()) {
-            Some(crate::server_status::State::Online(probe)) => probe.status.lobbies.len().max(1),
-            _ => 1,
+            Some(crate::server_status::State::Online(probe)) => probe.status.lobbies.len(),
+            _ => 0,
         }
+    }
+
+    /// Height of the open lobby list, which grows with the lobbies up to a
+    /// page and gains a page switcher past that.
+    fn lobby_list_height(&self, s: f32) -> f32 {
+        lobby_list_height(self.lobby_count(), s)
     }
 
     /// The main server card: population and connection at a glance; a click
@@ -1208,7 +1214,7 @@ impl Menu {
         if hovered && is_mouse_button_pressed(MouseButton::Left) {
             self.lobbies_open = !self.lobbies_open;
             if self.lobbies_open {
-                self.lobby_scroll = 0.0;
+                self.lobby_page = 0;
                 self.servers.refresh(crate::settings::main_server());
             }
         }
@@ -1226,7 +1232,7 @@ impl Menu {
             area.x,
             area.y,
             area.w,
-            lobby_list_height(self.lobby_rows(), s) - 4.0 * s,
+            self.lobby_list_height(s) - 4.0 * s,
         ));
         let row_h = LOBBY_ROW * s;
         let inner = Rect::new(area.x, area.y + 4.0 * s, area.w, area.h - 8.0 * s);
@@ -1263,25 +1269,31 @@ impl Menu {
                 return None;
             }
         };
-        let content = lobbies.len() as f32 * row_h;
-        let max_scroll = (content - inner.h).max(0.0);
-        if contains(area) {
-            self.lobby_scroll -= mouse_wheel().1.clamp(-1.0, 1.0) * row_h;
-        }
-        self.lobby_scroll = self.lobby_scroll.clamp(0.0, max_scroll);
-        let mut chosen = None;
-        for (index, lobby) in lobbies.iter().enumerate() {
-            let ry = inner.y + index as f32 * row_h - self.lobby_scroll;
-            if ry + row_h < inner.y || ry > inner.bottom() {
-                continue;
+        let pages = lobby_pages(lobbies.len());
+        self.lobby_page = self.lobby_page.min(pages - 1);
+        if pages > 1 && contains(area) {
+            let wheel = mouse_wheel().1;
+            if wheel < 0.0 {
+                self.lobby_page = (self.lobby_page + 1).min(pages - 1);
+            } else if wheel > 0.0 {
+                self.lobby_page = self.lobby_page.saturating_sub(1);
             }
-            let row = Rect::new(
-                inner.x + 6.0 * s,
-                ry,
-                inner.w - 12.0 * s - if max_scroll > 0.0 { 8.0 * s } else { 0.0 },
-                row_h - 3.0 * s,
-            );
-            let full = lobby.capacity > 0 && lobby.humans >= lobby.capacity;
+        }
+        let first = self.lobby_page * LOBBIES_PER_PAGE;
+        let mut chosen = None;
+        for (slot, (index, lobby)) in lobbies
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(LOBBIES_PER_PAGE)
+            .enumerate()
+        {
+            let ry = inner.y + slot as f32 * row_h;
+            let row = Rect::new(inner.x + 6.0 * s, ry, inner.w - 12.0 * s, row_h - 3.0 * s);
+            // Servers without lobby sizes report a capacity of one or less;
+            // their single lobby takes anyone up to the server's limit.
+            let limited = lobby.capacity > 1;
+            let full = limited && lobby.humans >= lobby.capacity;
             let over = contains(row) && contains(inner) && !full;
             if over {
                 draw_rectangle(row.x, row.y, row.w, row.h, alpha(hover_color(), 0.8));
@@ -1303,21 +1315,20 @@ impl Menu {
                 12.0 * s,
                 muted_color(),
             );
-            let ratio = if lobby.capacity == 0 {
-                0.0
-            } else {
-                f32::from(lobby.humans) / f32::from(lobby.capacity)
-            };
-            progress(
-                Rect::new(meter_x, row.y + 10.0 * s, meter_w, 6.0 * s),
-                ratio,
-                if full { RED } else { accent() },
-            );
+            if limited {
+                progress(
+                    Rect::new(meter_x, row.y + 10.0 * s, meter_w, 6.0 * s),
+                    f32::from(lobby.humans) / f32::from(lobby.capacity),
+                    if full { RED } else { accent() },
+                );
+            }
             right_label(
                 &if full {
                     "Full".to_owned()
-                } else {
+                } else if limited {
                     format!("{}/{}", lobby.humans, lobby.capacity)
+                } else {
+                    format!("{} playing", lobby.humans)
                 },
                 row.right() - 10.0 * s,
                 row.y + 18.0 * s,
@@ -1328,12 +1339,32 @@ impl Menu {
                 chosen = Some(index as u8);
             }
         }
-        if max_scroll > 0.0 {
-            let track = Rect::new(inner.right() - 7.0 * s, inner.y, 3.0 * s, inner.h);
-            draw_rectangle(track.x, track.y, track.w, track.h, alpha(line_color(), 0.6));
-            let thumb = (inner.h / content * inner.h).max(16.0 * s);
-            let at = self.lobby_scroll / max_scroll * (inner.h - thumb);
-            draw_rectangle(track.x, track.y + at, track.w, thumb, muted_color());
+        if pages > 1 {
+            let bar_y = inner.y + LOBBIES_PER_PAGE as f32 * row_h + 2.0 * s;
+            draw_rectangle(
+                inner.x + 6.0 * s,
+                bar_y - 1.0 * s,
+                inner.w - 12.0 * s,
+                1.0,
+                line_color(),
+            );
+            let center = inner.center().x;
+            center_label(
+                &format!("Page {} of {}", self.lobby_page + 1, pages),
+                center,
+                bar_y + 18.0 * s,
+                12.0 * s,
+                muted_color(),
+            );
+            let size = 26.0 * s;
+            let previous = Rect::new(center - 70.0 * s - size, bar_y + 3.0 * s, size, size);
+            let next = Rect::new(center + 70.0 * s, bar_y + 3.0 * s, size, size);
+            if small_button(previous, "‹", s * 0.8) {
+                self.lobby_page = self.lobby_page.saturating_sub(1);
+            }
+            if small_button(next, "›", s * 0.8) {
+                self.lobby_page = (self.lobby_page + 1).min(pages - 1);
+            }
         }
         chosen.map(Action::JoinLobby)
     }
@@ -4205,9 +4236,25 @@ pub fn mode_blurb(mode: Mode) -> &'static str {
 
 /// Height of one lobby row, before scaling.
 const LOBBY_ROW: f32 = 31.0;
-/// The open lobby list: up to three rows, scrolling beyond that.
-fn lobby_list_height(rows: usize, s: f32) -> f32 {
-    (rows.clamp(1, 3) as f32 * LOBBY_ROW + 12.0) * s
+const LOBBIES_PER_PAGE: usize = 3;
+/// Height of the page switcher under a long lobby list.
+const LOBBY_PAGER: f32 = 32.0;
+
+fn lobby_pages(lobbies: usize) -> usize {
+    lobbies.div_ceil(LOBBIES_PER_PAGE).max(1)
+}
+
+/// The open lobby list: a row per lobby up to a page (or one row for a
+/// message), plus the page switcher when there's more than one page. Every
+/// page is as tall as a full one, so the buttons below stay put.
+fn lobby_list_height(lobbies: usize, s: f32) -> f32 {
+    let rows = lobbies.clamp(1, LOBBIES_PER_PAGE) as f32;
+    let pager = if lobby_pages(lobbies) > 1 {
+        LOBBY_PAGER
+    } else {
+        0.0
+    };
+    (rows * LOBBY_ROW + pager + 12.0) * s
 }
 
 /// A pack's state for its list row and badge.

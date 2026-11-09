@@ -126,7 +126,7 @@ impl Default for CommunityServer {
             name: "My Tank Yard server".into(),
             port: 5000,
             max_players: 24,
-            lobby_size: 0,
+            lobby_size: 20,
             bots: 8,
             password: String::new(),
         }

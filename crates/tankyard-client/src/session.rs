@@ -85,6 +85,8 @@ impl Session {
             .get(index)
             .ok_or("Choose a practice challenge.")?;
         let mut local = LocalSession::new(challenge.config(seed), challenge.bots);
+        // Records compare runs, so trial bots keep one fixed difficulty.
+        local.bots.adaptive = false;
         let player = local.world.add_player(name, false);
         if local.world.config.mode == tankyard_core::Mode::Sandbox {
             let ids = local
