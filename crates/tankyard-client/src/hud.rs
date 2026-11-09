@@ -415,6 +415,16 @@ pub struct Hud {
     ranking: Vec<usize>,
 }
 impl Hud {
+    /// A fresh HUD for new content mid-game, which still remembers the
+    /// deaths it already showed a killer card for.
+    pub fn rebuilt(&self) -> Self {
+        Self {
+            deaths: self.deaths,
+            cards_shown: self.cards_shown,
+            card: self.card,
+            ..Self::new()
+        }
+    }
     pub fn new() -> Self {
         Self {
             spectating: None,

@@ -447,6 +447,9 @@ impl PartyUi {
         }
         self.last_seen = view.messages.back().map_or(0, |message| message.id);
         let count = 14;
+        if self.lines.len() > count {
+            crate::ui_layout::claim_wheel(transcript);
+        }
         if contains(transcript) {
             let wheel = mouse_wheel().1;
             let amount = (wheel.abs().ceil() as usize).min(16) * 3;

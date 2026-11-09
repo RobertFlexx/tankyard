@@ -8,7 +8,10 @@ struct Canvas {
     offset: f32,
     clip: Rect,
 }
-thread_local! { static CANVAS: Cell<Option<Canvas>> = const { Cell::new(None) }; }
+thread_local! {
+    static CANVAS: Cell<Option<Canvas>> = const { Cell::new(None) };
+    static WHEEL_CLAIM: Cell<Option<Rect>> = const { Cell::new(None) };
+}
 pub fn height() -> f32 {
     CANVAS.with(|c| c.get().map_or_else(screen_height, |c| c.height))
 }
@@ -18,6 +21,12 @@ pub fn pointer() -> Vec2 {
 }
 pub fn position(p: Vec2) -> Vec2 {
     vec2(p.x, p.y - CANVAS.with(|c| c.get().map_or(0., |c| c.offset)))
+}
+/// A list that scrolls itself keeps the wheel from also scrolling the page
+/// while the pointer is over it. The claim holds for the next frame.
+pub fn claim_wheel(rect: Rect) {
+    let top = position(rect.point());
+    WHEEL_CLAIM.with(|c| c.set(Some(Rect::new(top.x, top.y, rect.w, rect.h))));
 }
 pub fn pointer_visible() -> bool {
     let (x, y) = mouse_position();
@@ -91,7 +100,13 @@ impl ScrollPanel {
         self.previous_scale = s;
         let clip = Rect::new(0., top, screen_width(), (bottom - top).max(1.));
         let (mx, my) = mouse_position();
-        if clip.contains(vec2(mx, my)) && !crate::ui::pointer_captured() {
+        // Overlays above the page, and lists that scroll themselves, keep the wheel.
+        let interactive = crate::ui::interactive();
+        let claimed = WHEEL_CLAIM
+            .with(Cell::take)
+            .is_some_and(|rect| rect.contains(vec2(mx, my)));
+        if interactive && !claimed && clip.contains(vec2(mx, my)) && !crate::ui::pointer_captured()
+        {
             self.offset -= mouse_wheel().1 * 56. * s;
         }
         self.offset = self.offset.clamp(0., maximum);
@@ -104,15 +119,16 @@ impl ScrollPanel {
             );
             let thumb_h =
                 (track.h * clip.h / (clip.h + maximum)).clamp((28. * s).min(track.h), track.h);
-            if is_mouse_button_pressed(MouseButton::Left) && track.contains(vec2(mx, my)) {
+            if interactive
+                && is_mouse_button_pressed(MouseButton::Left)
+                && track.contains(vec2(mx, my))
+            {
                 self.dragging = true;
             }
             if !is_mouse_button_down(MouseButton::Left) {
                 self.dragging = false;
             }
-            if self.dragging
-                || (track.contains(vec2(mx, my)) && is_mouse_button_pressed(MouseButton::Left))
-            {
+            if self.dragging {
                 self.offset = ((my - track.y - thumb_h / 2.) / (track.h - thumb_h).max(1.))
                     .clamp(0., 1.)
                     * maximum;
@@ -134,71 +150,67 @@ impl ScrollPanel {
                 clip,
             }));
         });
-        unsafe {
-            let gl = get_internal_gl();
-            let physical = gl.quad_gl.get_active_render_pass().map_or_else(
-                miniquad::window::screen_size,
-                |pass| {
-                    let (w, h) = gl
-                        .quad_context
-                        .texture_size(gl.quad_context.render_pass_texture(pass));
-                    (w as f32, h as f32)
-                },
-            );
-            let sy = physical.1 / screen_height().max(1.);
-            gl.quad_gl.scissor(Some((
-                0,
-                (top * sy).floor() as i32,
-                physical.0 as i32,
-                ((bottom - top) * sy).ceil().max(1.) as i32,
-            )));
-        }
+        scissor(Some(clip));
         CanvasGuard
     }
 }
 pub struct CanvasGuard;
 impl Drop for CanvasGuard {
     fn drop(&mut self) {
-        unsafe {
-            let gl = get_internal_gl();
-            gl.quad_gl.scissor(None);
-        }
+        scissor(None);
         CANVAS.with(|c| c.set(None));
     }
 }
 
-/// Clip a self-contained canvas using the active render target's real dimensions.
+/// Clip following draws to `rect`, in window coordinates, on whichever
+/// target they draw into.
+fn scissor(rect: Option<Rect>) {
+    let gl = unsafe { get_internal_gl() };
+    let Some(rect) = rect else {
+        gl.quad_gl.scissor(None);
+        return;
+    };
+    let pass = gl.quad_gl.get_active_render_pass();
+    let physical = pass.map_or_else(miniquad::window::screen_size, |pass| {
+        let (w, h) = gl
+            .quad_context
+            .texture_size(gl.quad_context.render_pass_texture(pass));
+        (w as f32, h as f32)
+    });
+    let sx = physical.0 / screen_width().max(1.);
+    let sy = physical.1 / screen_height().max(1.);
+    let (x, y) = ((rect.x * sx).floor() as i32, (rect.y * sy).floor() as i32);
+    let (w, h) = (
+        (rect.w * sx).ceil().max(1.) as i32,
+        (rect.h * sy).ceil().max(1.) as i32,
+    );
+    // On Metal a resolution target keeps the window's top at its last row
+    // (see `Target::select`), but macroquad places clips as on the screen.
+    let y = if pass.is_some() && crate::graphics::metal() {
+        physical.1 as i32 - (y + h)
+    } else {
+        y
+    };
+    gl.quad_gl.scissor(Some((x, y, w, h)));
+}
+
+/// Clip a self-contained area of the page, inside the page's own clip.
 pub struct Scissor;
 impl Scissor {
     pub fn new(rect: Rect) -> Self {
-        unsafe {
-            let gl = get_internal_gl();
-            let physical = gl.quad_gl.get_active_render_pass().map_or_else(
-                miniquad::window::screen_size,
-                |pass| {
-                    let (w, h) = gl
-                        .quad_context
-                        .texture_size(gl.quad_context.render_pass_texture(pass));
-                    (w as f32, h as f32)
-                },
-            );
-            let sx = physical.0 / screen_width().max(1.);
-            let sy = physical.1 / screen_height().max(1.);
-            gl.quad_gl.scissor(Some((
-                (rect.x * sx).floor() as i32,
-                (rect.y * sy).floor() as i32,
-                (rect.w * sx).ceil() as i32,
-                (rect.h * sy).ceil() as i32,
-            )));
-        }
+        let top = position(rect.point());
+        let rect = Rect::new(rect.x, top.y, rect.w, rect.h);
+        let page = CANVAS.with(|c| c.get().map(|c| c.clip));
+        scissor(Some(page.map_or(rect, |page| {
+            page.intersect(rect)
+                .unwrap_or(Rect::new(rect.x, page.y, rect.w, 0.))
+        })));
         Self
     }
 }
 impl Drop for Scissor {
     fn drop(&mut self) {
-        unsafe {
-            get_internal_gl().quad_gl.scissor(None);
-        }
+        scissor(CANVAS.with(|c| c.get().map(|c| c.clip)));
     }
 }
 

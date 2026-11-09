@@ -1,6 +1,6 @@
 use crate::ui::RED;
 use crate::ui::{
-    ui_line as draw_line, ui_rectangle as draw_rectangle,
+    ui_circle as draw_circle, ui_line as draw_line, ui_rectangle as draw_rectangle,
     ui_rectangle_lines as draw_rectangle_lines,
 };
 use crate::ui_layout::height as screen_height;
@@ -132,6 +132,11 @@ pub struct Menu {
     mod_chooser: Option<crate::file_dialog::Pending>,
     /// The pack whose Remove button was pressed once and awaits a second press.
     mod_remove: Option<String>,
+    /// Enabled pack IDs with no installed copy that loads, and the message
+    /// that reported them; it offers to disable them while it is shown.
+    mod_missing: Option<(String, Vec<String>)>,
+    /// How far the message panel at the bottom raises the page's bottom edge.
+    message_lift: f32,
     /// Set when packs changed on disk, so the game reloads their content.
     pub catalog_stale: bool,
     /// Select this pack ID after the next rescan.
@@ -213,6 +218,8 @@ impl Menu {
             mod_icons: Default::default(),
             mod_chooser: None,
             mod_remove: None,
+            mod_missing: None,
+            message_lift: 0.0,
             catalog_stale: false,
             mod_focus: None,
             style: Default::default(),
@@ -542,21 +549,18 @@ impl Menu {
         } else {
             &self.error
         };
+        let message_room = self.message_room(w, margin, s);
         let message_height = if message.is_empty() {
             0.
         } else {
-            16. + wrapped_lines(message, w - margin * 2. - 24. * s, 13. * s)
-                .len()
-                .min(4) as f32
-                * 16.
+            16. + wrapped_lines(message, message_room, 13. * s).len().min(4) as f32 * 16.
         };
-        let bottom = h
-            - footer_space * s
-            - if message_height == 0. {
-                0.
-            } else {
-                message_height * s + 6. * s
-            };
+        self.message_lift = if message_height == 0. {
+            0.
+        } else {
+            message_height * s + 6. * s
+        };
+        let bottom = h - footer_space * s - self.message_lift;
         let anchor = self.scale_anchor.take();
         let canvas = self.scroll_panel.begin(s, top, bottom, anchor);
         let mut action = match self.page {
@@ -632,7 +636,7 @@ impl Menu {
             } else {
                 (&self.error, RED)
             };
-            let lines = wrapped_lines(message, (w - margin * 2. - 24. * s).max(1.), 13. * s);
+            let lines = wrapped_lines(message, self.message_room(w, margin, s), 13. * s);
             let height = (16. + lines.len().min(4) as f32 * 16.) * s;
             let y = h - (footer_space + 4.) * s - height;
             panel(Rect::new(margin, y, w - margin * 2., height));
@@ -644,6 +648,29 @@ impl Menu {
                     13. * s,
                     color,
                 );
+            }
+            if let Some(missing) = self.missing_offer().map(<[String]>::to_vec) {
+                let switch = Rect::new(
+                    w - margin - 56. * s,
+                    y + (height - 24. * s) * 0.5,
+                    44. * s,
+                    24. * s,
+                );
+                right_label(
+                    "Disable?",
+                    switch.x - 10. * s,
+                    switch.y + 17. * s,
+                    13. * s,
+                    text_color(),
+                );
+                let mut on = false;
+                if toggle_switch(switch, &mut on, s) {
+                    settings.enabled_mods.retain(|id| !missing.contains(id));
+                    let _ = settings.save();
+                    let ready = crate::mod_library::ready_paths(settings);
+                    self.held_mods(&ready.held, ready.missing);
+                    self.info = format!("Disabled {}.", missing.join(", "));
+                }
             }
         }
         action
@@ -665,7 +692,7 @@ impl Menu {
         if let Some(basic) = content.class(showcase).or_else(|| content.class("vector")) {
             render::class_model(
                 basic,
-                vec2(center, y - 25.0 * s),
+                crate::ui_layout::position(vec2(center, y - 25.0 * s)),
                 25.0 * s,
                 -0.4 + (self.motion_time * 0.26).sin() * 0.16,
                 0.0,
@@ -838,7 +865,7 @@ impl Menu {
             muted_color(),
         );
         let pane = Rect::new(x, y - 60.0 * s, pane_w, t_y + 65.0 * s - (y - 60.0 * s));
-        bastion_badge(pane, self.motion_time, s);
+        bastion_badge(pane, self.message_lift, self.motion_time, s);
         Action::None
     }
     /// The community server: its settings while stopped, then its live
@@ -1271,6 +1298,9 @@ impl Menu {
         };
         let pages = lobby_pages(lobbies.len());
         self.lobby_page = self.lobby_page.min(pages - 1);
+        if pages > 1 {
+            crate::ui_layout::claim_wheel(area);
+        }
         if pages > 1 && contains(area) {
             let wheel = mouse_wheel().1;
             if wheel < 0.0 {
@@ -1904,7 +1934,7 @@ impl Menu {
             {
                 render::class_model(
                     class,
-                    vec2(r.x + r.w - 66.0 * s, r.y + 68.0 * s),
+                    crate::ui_layout::position(vec2(r.x + r.w - 66.0 * s, r.y + 68.0 * s)),
                     26.0 * s,
                     -0.4,
                     0.0,
@@ -2334,7 +2364,7 @@ impl Menu {
             if let Some(class) = self.practice_content.class("vector") {
                 render::class_model(
                     class,
-                    vec2(x, r.y + 65. * s),
+                    crate::ui_layout::position(vec2(x, r.y + 65. * s)),
                     15. * s,
                     -0.4 + (time * 0.7).sin() * 0.2,
                     0.,
@@ -2344,7 +2374,12 @@ impl Menu {
                 );
             }
             if settings.colorblind {
-                render::team_marker(team, false, vec2(x, r.y + 70. * s), 3. * s);
+                render::team_marker(
+                    team,
+                    false,
+                    crate::ui_layout::position(vec2(x, r.y + 70. * s)),
+                    3. * s,
+                );
             }
             center_label(&format!("Team {team}"), x, r.y + 104. * s, 11. * s, color);
         }
@@ -3138,7 +3173,7 @@ impl Menu {
         );
         tankyard_client::boss_model::boss_model_geometry(
             tankyard_core::BossKind::Bastion,
-            vec2(x + 28. * s, y + 488. * s),
+            crate::ui_layout::position(vec2(x + 28. * s, y + 488. * s)),
             22. * s,
             -0.2,
             crate::accessibility::motion_time(get_time() as f32),
@@ -3444,7 +3479,11 @@ impl Menu {
         let detail = Rect::new(x + list_w + 14.0 * s, area_y, w - list_w - 14.0 * s, area_h);
         let row_h = 56.0 * s;
         let visible = ((list.h + 6.0 * s) / (row_h + 6.0 * s)).floor().max(1.0) as usize;
-        if contains(list) && self.mod_review.is_none() {
+        let list_scrolls = self.mod_entries.len() > visible;
+        if list_scrolls {
+            crate::ui_layout::claim_wheel(list);
+        }
+        if list_scrolls && contains(list) && self.mod_review.is_none() {
             let wheel = mouse_wheel().1;
             if wheel < 0. {
                 self.mod_scroll += 1;
@@ -3585,11 +3624,11 @@ impl Menu {
             let (tw, th) = (texture.width().max(1.0), texture.height().max(1.0));
             let scale = (rect.w / tw).min(rect.h / th);
             let size = vec2(tw * scale, th * scale);
-            draw_texture_ex(
+            // Through the page offset, so icons scroll with their rows.
+            crate::ui::ui_texture(
                 texture,
                 rect.center().x - size.x * 0.5,
                 rect.center().y - size.y * 0.5,
-                WHITE,
                 DrawTextureParams {
                     dest_size: Some(size),
                     ..Default::default()
@@ -4095,6 +4134,27 @@ impl Menu {
             Err(error) => self.error = format!("Could not open {}: {error}", entry.name()),
         }
     }
+    /// Report enabled packs that were held back from loading.
+    pub fn held_mods(&mut self, held: &[String], missing: Vec<String>) {
+        self.error = held.join(" ");
+        self.mod_missing = (!missing.is_empty()).then(|| (self.error.clone(), missing));
+    }
+    /// Enabled packs that are gone, while the message about them is shown.
+    fn missing_offer(&self) -> Option<&[String]> {
+        self.mod_missing
+            .as_ref()
+            .filter(|(message, _)| !self.error.is_empty() && *message == self.error)
+            .map(|(_, missing)| missing.as_slice())
+    }
+    /// The width the bottom message wraps to, leaving room for its switch.
+    fn message_room(&self, w: f32, margin: f32, s: f32) -> f32 {
+        let switch = if self.missing_offer().is_some() {
+            136.
+        } else {
+            0.
+        };
+        (w - margin * 2. - (24. + switch) * s).max(1.)
+    }
     fn toggle_mod(&mut self, settings: &mut Settings, index: usize) {
         let Some(entry) = self.mod_entries.get(index) else {
             return;
@@ -4111,12 +4171,12 @@ impl Menu {
         } else {
             settings.enabled_mods.push(id);
         }
-        let (ready, held) = crate::mod_library::ready_paths(settings);
-        match crate::mod_library::load(&ready) {
+        let ready = crate::mod_library::ready_paths(settings);
+        match crate::mod_library::load(&ready.paths) {
             Ok(loaded) => {
                 self.maps = loaded.bundle.maps;
-                self.map = self.map.min(self.maps.len() - 1);
-                self.error = held.join(" ");
+                self.map = self.map.min(self.maps.len().saturating_sub(1));
+                self.held_mods(&ready.held, ready.missing);
                 self.info.clear();
                 let _ = settings.save();
             }
@@ -4167,9 +4227,10 @@ impl Menu {
         }
     }
 }
-/// The Bastion mark and motto from Credits, in the main menu's lower right.
-/// It steps aside on windows too small to show it beside the menu.
-fn bastion_badge(pane: Rect, time: f32, s: f32) {
+/// The Bastion mark and motto from Credits, in the main menu's lower right,
+/// above any message. It steps aside on windows too small to show it beside
+/// the menu.
+fn bastion_badge(pane: Rect, lift: f32, time: f32, s: f32) {
     let w = screen_width();
     let h = screen_height();
     let name = tankyard_server::bastion::NAME;
@@ -4177,7 +4238,7 @@ fn bastion_badge(pane: Rect, time: f32, s: f32) {
     let text_width = label_width(name, 14.0 * s).max(label_width(motto, 11.0 * s));
     let badge = Rect::new(
         w - 22.0 * s - (74.0 * s + text_width + 18.0 * s),
-        h - 22.0 * s - 66.0 * s,
+        h - 22.0 * s - 66.0 * s - lift,
         74.0 * s + text_width + 18.0 * s,
         66.0 * s,
     );
@@ -4189,7 +4250,7 @@ fn bastion_badge(pane: Rect, time: f32, s: f32) {
     panel(badge);
     tankyard_client::boss_model::boss_model_geometry(
         tankyard_core::BossKind::Bastion,
-        vec2(badge.x + 36.0 * s, badge.center().y),
+        crate::ui_layout::position(vec2(badge.x + 36.0 * s, badge.center().y)),
         17.0 * s,
         -0.2,
         crate::accessibility::motion_time(time),

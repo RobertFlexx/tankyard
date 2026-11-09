@@ -26,6 +26,19 @@ fn draw_circle(x: f32, y: f32, radius: f32, color: Color) {
     let p = crate::ui_layout::position(vec2(x, y));
     macroquad::shapes::draw_circle(p.x, p.y, radius, color);
 }
+fn draw_triangle(a: Vec2, b: Vec2, c: Vec2, color: Color) {
+    let p = crate::ui_layout::position;
+    macroquad::shapes::draw_triangle(p(a), p(b), p(c), color);
+}
+fn draw_circle_lines(x: f32, y: f32, radius: f32, thickness: f32, color: Color) {
+    let p = crate::ui_layout::position(vec2(x, y));
+    macroquad::shapes::draw_circle_lines(p.x, p.y, radius, thickness, color);
+}
+/// Draw a texture at a page position, so it scrolls with everything else.
+pub(crate) fn ui_texture(texture: &Texture2D, x: f32, y: f32, params: DrawTextureParams) {
+    let p = crate::ui_layout::position(vec2(x, y));
+    draw_texture_ex(texture, p.x, p.y, WHITE, params);
+}
 fn draw_poly(x: f32, y: f32, sides: u8, radius: f32, rotation: f32, color: Color) {
     let p = crate::ui_layout::position(vec2(x, y));
     macroquad::shapes::draw_poly(p.x, p.y, sides, radius, rotation, color);
@@ -183,6 +196,10 @@ pub fn unload_font() {
 }
 pub fn set_interactive(value: bool) -> bool {
     INTERACTIVE.with(|state| state.replace(value))
+}
+/// False while an overlay owns the pointer and the page beneath must not react.
+pub fn interactive() -> bool {
+    INTERACTIVE.with(|state| state.get())
 }
 // The main loop sets the theme before drawing menus, the HUD, and overlays.
 thread_local! { static DARK_THEME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }

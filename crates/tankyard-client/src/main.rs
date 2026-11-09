@@ -247,9 +247,9 @@ impl App {
         }
         let mut menu = Menu::new();
         menu.difficulty = settings.bot_difficulty;
-        let (paths, held) = mod_library::ready_paths(&settings);
-        menu.error = held.join(" ");
-        match mod_library::load(&paths) {
+        let ready = mod_library::ready_paths(&settings);
+        menu.held_mods(&ready.held, ready.missing);
+        match mod_library::load(&ready.paths) {
             Ok(loaded) => {
                 graphics::load(&loaded.bundle.textures, settings.anisotropic_filtering);
                 ui::set_presentation(&loaded.presentation);
@@ -443,6 +443,7 @@ impl App {
         self.fire_queued = false;
         self.menu.clear_focus();
         self.effects = effects::Effects::new();
+        self.spectate_death = 0;
         self.hud = Hud::new();
         self.hud.practice = self
             .session
@@ -848,11 +849,11 @@ impl App {
     /// Enabled packs that passed review or were confirmed by the player.
     /// Anything held back is reported on the menu instead of loading.
     fn ready_mods(&mut self) -> Vec<std::path::PathBuf> {
-        let (ready, held) = mod_library::ready_paths(&self.settings);
-        if !held.is_empty() {
-            self.menu.error = held.join(" ");
+        let ready = mod_library::ready_paths(&self.settings);
+        if !ready.held.is_empty() {
+            self.menu.held_mods(&ready.held, ready.missing);
         }
-        ready
+        ready.paths
     }
     /// Archives dropped onto the window are imported and reviewed.
     fn dropped_files(&mut self) {
@@ -1310,7 +1311,7 @@ impl App {
                     &session.bundle.textures,
                     self.settings.anisotropic_filtering,
                 );
-                self.hud = Hud::new();
+                self.hud = self.hud.rebuilt();
             }
             if let Some(message) = session.notice.take() {
                 if self.party_ui.open {

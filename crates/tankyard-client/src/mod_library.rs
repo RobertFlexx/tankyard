@@ -101,6 +101,12 @@ fn file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
+/// A pack's folder or archive name, which is its ID when the game stored it.
+fn stem(path: &str) -> &str {
+    let name = file_name(path.trim_end_matches(['/', '\\']));
+    name.strip_suffix(".zip").unwrap_or(name)
+}
+
 /// Where imported packs live, beside the player's settings.
 pub fn library_dir() -> PathBuf {
     ProjectDirs::from("org", "Tank Yard", "Tank Yard")
@@ -305,8 +311,7 @@ pub fn migrate(settings: &mut Settings) {
                 .map(str::to_owned)
                 .or_else(|| {
                     // A pack that moved: its folder or archive name is its ID.
-                    let name = file_name(entry.trim_end_matches(['/', '\\']));
-                    let stem = name.strip_suffix(".zip").unwrap_or(name);
+                    let stem = stem(&entry);
                     tankyard_mods::identifier(stem).then(|| stem.to_owned())
                 })
         };
@@ -319,48 +324,72 @@ pub fn migrate(settings: &mut Settings) {
     settings.enabled_mods = migrated;
 }
 
-/// Enabled packs that may load now, in the order they were enabled. Packs
-/// whose reviewed contents changed, were never confirmed or are missing are
-/// held back with a reason.
-pub fn ready_paths(settings: &Settings) -> (Vec<PathBuf>, Vec<String>) {
-    let mut ready = Vec::new();
-    let mut held = Vec::new();
+/// Enabled packs sorted into those that may load now and those held back.
+#[derive(Default)]
+pub struct Ready {
+    /// In the order they were enabled.
+    pub paths: Vec<PathBuf>,
+    /// Why each held pack is waiting.
+    pub held: Vec<String>,
+    /// Enabled IDs with no installed pack that can load, which only
+    /// disabling them clears.
+    pub missing: Vec<String>,
+}
+
+/// Enabled packs that may load now. Packs whose reviewed contents changed,
+/// were never confirmed, are missing or are broken are held back with a reason.
+pub fn ready_paths(settings: &Settings) -> Ready {
+    ready_in(settings, discover)
+}
+
+fn ready_in(settings: &Settings, discover: impl FnOnce() -> Vec<Entry>) -> Ready {
+    let mut ready = Ready::default();
     if let Some(paths) = &settings.session_mods {
         // Packs named on the command line, for this run only.
         for path in paths {
             let entry = inspect(path);
             if let Some(error) = &entry.error {
-                held.push(format!("{}: {error}", entry.name()));
+                ready.held.push(format!("{}: {error}", entry.name()));
             } else if !settings.session_mods_trusted && !entry.approved(settings) {
-                held.push(format!(
+                ready.held.push(format!(
                     "{} needs review; pass --accept-mod-risk to load it anyway.",
                     entry.name()
                 ));
             } else {
-                ready.push(path.clone());
+                ready.paths.push(path.clone());
             }
         }
-        return (ready, held);
+        return ready;
     }
     if settings.enabled_mods.is_empty() {
-        return (ready, held);
+        return ready;
     }
     let library = discover();
     for id in &settings.enabled_mods {
         let Some(entry) = library.iter().find(|entry| entry.id() == Some(id)) else {
-            held.push(format!("{id} is enabled but no longer installed."));
+            // A broken pack has no readable ID, but the game stores packs
+            // under their ID, so its file name still says which it is.
+            let broken = library
+                .iter()
+                .any(|entry| entry.id().is_none() && stem(&entry.path) == id);
+            ready.held.push(if broken {
+                format!("{id} is enabled but cannot load; see Mods.")
+            } else {
+                format!("{id} is enabled but no longer installed.")
+            });
+            ready.missing.push(id.clone());
             continue;
         };
         if !entry.approved(settings) {
-            held.push(format!(
+            ready.held.push(format!(
                 "{} changed or was never reviewed; confirm it in Mods before playing with it.",
                 entry.name()
             ));
         } else {
-            ready.push(PathBuf::from(&entry.path));
+            ready.paths.push(PathBuf::from(&entry.path));
         }
     }
-    (ready, held)
+    ready
 }
 
 /// Load packs, reusing the last result while the same unchanged packs are
@@ -517,6 +546,47 @@ mod tests {
         std::fs::write(root.join("lib/a.lua"), "return 12").unwrap();
         assert_ne!(stamp(&root), Some(before));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn enabled_packs_without_a_loadable_copy_can_be_disabled() {
+        let pack = |path: &str, id: Option<&str>| Entry {
+            path: path.into(),
+            manifest: id.map(|id| {
+                serde_json::from_value(serde_json::json!({
+                    "api_version": 1, "id": id, "name": id, "version": "1.0.0"
+                }))
+                .unwrap()
+            }),
+            report: ScanReport::default(),
+            digest: String::new(),
+            archive: false,
+            error: id.is_none().then(|| "mod.json: missing field".to_owned()),
+            project: None,
+            project_error: None,
+            icon: None,
+            size: 0,
+            files: 0,
+        };
+        let settings = Settings {
+            enabled_mods: vec!["vampire".into(), "gone".into(), "broken".into()],
+            ..Settings::default()
+        };
+        let ready = ready_in(&settings, || {
+            vec![
+                pack("/library/vampire", Some("vampire")),
+                pack("/library/broken.zip", None),
+            ]
+        });
+        assert_eq!(ready.paths, [PathBuf::from("/library/vampire")]);
+        assert_eq!(ready.missing, ["gone", "broken"]);
+        assert_eq!(
+            ready.held,
+            [
+                "gone is enabled but no longer installed.",
+                "broken is enabled but cannot load; see Mods.",
+            ]
+        );
     }
 
     #[test]
