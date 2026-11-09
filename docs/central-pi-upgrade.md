@@ -1,4 +1,5 @@
 # Upgrade the central Pi
+> # for central server maintainer.
 
 The central server runs in Docker behind the existing Cloudflare tunnel. Release v0.10.0 uses protocol **22**. Update the regular `tankyard-server` and `tankyard-relay` together; v0.9.x clients cannot join a v0.10.0 server, and v0.10.0 clients cannot join the old one. The new server also answers status probes, which power the lobby list on the title screen; nothing else needs configuring. The central profile now splits into arenas of twenty players on the same port (`max_players = 80`, `arena_capacity = 20`).
 
