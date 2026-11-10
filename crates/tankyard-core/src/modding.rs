@@ -147,6 +147,7 @@ impl ModRuntime {
         if self.round != Some(world.match_state.round) {
             self.round = Some(world.match_state.round);
             self.seen.clear();
+            world.hud.clear();
             for m in &mut self.modules {
                 m.last_run.clear();
                 m.counters.clear();
@@ -170,6 +171,12 @@ impl ModRuntime {
             .collect();
         self.seen
             .retain(|id, _| world.tanks.iter().any(|t| t.id == *id));
+        if !world.hud.is_empty() {
+            let seen = &self.seen;
+            world
+                .hud
+                .retain(|(_, viewer, _), _| *viewer == 0 || seen.contains_key(viewer));
+        }
         for t in &world.tanks {
             self.seen.insert(t.id, (t.deaths, t.alive));
         }
@@ -312,6 +319,7 @@ impl ModRuntime {
             if let Err(error) = result {
                 module.disabled = true;
                 module.commands.queued.clear();
+                world.hud.retain(|(pack, _, _), _| *pack != module.id);
                 if self.errors.len() < tankyard_mods::MAX_MODS {
                     self.errors.push(format!("{} disabled: {error}", module.id));
                 }
@@ -319,11 +327,28 @@ impl ModRuntime {
             }
             module.commands_this_tick += module.commands.queued.len();
             for (actor, effect) in module.commands.queued.drain(..) {
-                if let Effect::Counter { name, add } = effect {
-                    let value = module.counters.entry((actor, name)).or_default();
-                    *value = (*value + add).clamp(-1e9, 1e9);
-                } else {
-                    apply(world, actor, effect);
+                match effect {
+                    Effect::Counter { name, add } => {
+                        let value = module.counters.entry((actor, name)).or_default();
+                        *value = (*value + add).clamp(-1e9, 1e9);
+                    }
+                    Effect::Hud { id, widget } => {
+                        let key = (module.id.clone(), actor, id);
+                        match widget {
+                            // Bots have no screen to show a widget on.
+                            Some(widget)
+                                if actor == 0
+                                    || world.tanks.iter().any(|t| t.id == actor && !t.bot) =>
+                            {
+                                world.hud.insert(key, widget);
+                            }
+                            Some(_) => {}
+                            None => {
+                                world.hud.remove(&key);
+                            }
+                        }
+                    }
+                    effect => apply(world, actor, effect),
                 }
             }
         }
@@ -350,6 +375,7 @@ fn validate_commands(module: &Module, world: &World) -> Result<(), String> {
         return Err("per-tick command budget exceeded".into());
     }
     let mut counters = std::collections::HashSet::new();
+    let mut widgets = std::collections::BTreeSet::new();
     for (actor, effect) in &module.commands.queued {
         effect.validate(&world.content)?;
         if let Effect::SpawnBoss { boss } = effect
@@ -367,9 +393,39 @@ fn validate_commands(module: &Module, world: &World) -> Result<(), String> {
         {
             counters.insert((*actor, name));
         }
+        if let Effect::Hud {
+            id,
+            widget: Some(_),
+        } = effect
+        {
+            let key = (module.id.clone(), *actor, id.clone());
+            if !world.hud.contains_key(&key) {
+                widgets.insert(key);
+            }
+        }
     }
     if counters.len() + module.counters.len() > 4096 {
         return Err("counter budget exceeded".into());
+    }
+    if !widgets.is_empty() {
+        let mut per_viewer: HashMap<EntityId, usize> = HashMap::new();
+        for (pack, viewer, _) in world.hud.keys().chain(widgets.iter()) {
+            if *pack == module.id {
+                *per_viewer.entry(*viewer).or_default() += 1;
+            }
+        }
+        if per_viewer
+            .values()
+            .any(|&count| count > tankyard_mods::MAX_HUD_WIDGETS)
+        {
+            return Err(format!(
+                "HUD widget budget exceeded ({} per player)",
+                tankyard_mods::MAX_HUD_WIDGETS
+            ));
+        }
+        if world.hud.len() + widgets.len() > 4096 {
+            return Err("HUD widget budget exceeded".into());
+        }
     }
     Ok(())
 }
@@ -690,7 +746,8 @@ fn apply(world: &mut World, actor: EntityId, effect: Effect) {
                     || (actor != 0 && p.owner != actor)
             });
         }
-        Effect::Counter { .. } => {}
+        // Per-pack state, kept by the dispatcher.
+        Effect::Counter { .. } | Effect::Hud { .. } => {}
     }
 }
 

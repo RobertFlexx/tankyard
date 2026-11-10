@@ -413,6 +413,77 @@ pub enum Effect {
     },
     /// Remove the actor's projectiles, or every non-guardian projectile for actor 0.
     ClearProjectiles,
+    /// Show or change a HUD widget on the actor's screen (everyone's for
+    /// actor 0); without a widget, remove it.
+    Hud {
+        id: String,
+        #[serde(default)]
+        widget: Option<HudWidget>,
+    },
+}
+/// Widgets one pack may show to one player (or to everyone).
+pub const MAX_HUD_WIDGETS: usize = 16;
+/// Widgets a player receives from every pack together.
+pub const MAX_HUD_SENT: usize = 64;
+/// A line of text, a progress bar or both, drawn on players' screens. The
+/// server decides what each player sees and clients only draw it, so a HUD
+/// can't drift from the game.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HudWidget {
+    #[serde(default)]
+    pub text: String,
+    /// Position as a fraction of the screen's width and height.
+    #[serde(default = "HudWidget::default_x")]
+    pub x: f32,
+    #[serde(default = "HudWidget::default_y")]
+    pub y: f32,
+    #[serde(default)]
+    pub align: HudAlign,
+    /// Text size in points at the default interface scale.
+    #[serde(default = "HudWidget::default_size")]
+    pub size: f32,
+    /// Text color; the theme's text color when unset.
+    #[serde(default)]
+    pub color: Option<[u8; 3]>,
+    /// A bar below the text, filled from 0 to 1.
+    #[serde(default)]
+    pub progress: Option<f32>,
+    #[serde(default)]
+    pub bar_color: Option<[u8; 3]>,
+    /// The bar's width as a fraction of the screen's width.
+    #[serde(default = "HudWidget::default_width")]
+    pub width: f32,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HudAlign {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+impl HudWidget {
+    fn default_x() -> f32 {
+        0.5
+    }
+    fn default_y() -> f32 {
+        0.2
+    }
+    fn default_size() -> f32 {
+        18.
+    }
+    fn default_width() -> f32 {
+        0.2
+    }
+    pub fn valid(&self) -> bool {
+        (display_text(&self.text, 120) || (self.text.is_empty() && self.progress.is_some()))
+            && finite_range(self.x, 0., 1.)
+            && finite_range(self.y, 0., 1.)
+            && finite_range(self.size, 10., 48.)
+            && self.progress.is_none_or(|p| finite_range(p, 0., 1.))
+            && finite_range(self.width, 0.02, 1.)
+    }
 }
 impl Effect {
     pub fn validate(&self, content: &Content) -> Result<(), String> {
@@ -468,6 +539,9 @@ impl Effect {
             Self::SetScore { score } => *score <= 1_000_000_000,
             Self::SetTeamScore { team, score } => (1..=4).contains(team) && *score <= 1_000_000,
             Self::SpawnBoss { boss } => display_text(boss, 48),
+            Self::Hud { id, widget } => {
+                identifier(id) && widget.as_ref().is_none_or(HudWidget::valid)
+            }
         };
         if !valid {
             return Err("invalid hook action or class reference".into());

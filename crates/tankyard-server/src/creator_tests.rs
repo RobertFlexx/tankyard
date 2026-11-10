@@ -86,6 +86,9 @@ impl Arena {
                 walls_sent_at: Duration::ZERO,
                 strikes: 0,
                 strike_window: Duration::ZERO,
+                protocol: PROTOCOL_VERSION,
+                hud_sent: None,
+                hud_sent_at: Duration::ZERO,
             },
         );
         Self {
@@ -411,6 +414,9 @@ fn creator_moderation_is_host_local_and_preserves_regular_achievement_eligibilit
         walls_sent_at: Duration::ZERO,
         strikes: 0,
         strike_window: Duration::ZERO,
+        protocol: PROTOCOL_VERSION,
+        hud_sent: None,
+        hud_sent_at: Duration::ZERO,
     };
     arena.server.peers.insert(42, peer);
     arena.command("mute").unwrap();

@@ -313,6 +313,13 @@ pub struct MetalContext {
     // cached pipeline from apply_pipeline
     current_pipeline: Option<Pipeline>,
     current_ub_offset: u64,
+    /// Tank Yard: the last frame's command buffer, which the GPU may still be
+    /// running. CPU writes wait for it (see `wait_for_gpu`).
+    in_flight: Option<ObjcId>,
+    /// Tank Yard: whether CPU-written buffers use Managed storage, which needs
+    /// `didModifyRange`. GPUs that share system memory (Apple silicon, Intel
+    /// integrated graphics) and iOS use Shared storage instead.
+    managed: bool,
     /// Tank Yard: MetalFX spatial upscaling, where the system has it.
     metalfx: Option<&'static objc::runtime::Class>,
     spatial: Option<SpatialScaler>,
@@ -344,6 +351,30 @@ fn load_metalfx(device: ObjcId) -> Option<&'static objc::runtime::Class> {
     let class = objc::runtime::Class::get("MTLFXSpatialScalerDescriptor")?;
     let supported: BOOL = unsafe { msg_send![class, supportsDevice: device] };
     (supported == YES).then_some(class)
+}
+
+/// Tank Yard: Managed storage only helps GPUs with memory of their own.
+fn needs_managed_storage(device: ObjcId) -> bool {
+    if cfg!(target_os = "ios") {
+        return false;
+    }
+    unsafe {
+        let responds: BOOL = msg_send![device, respondsToSelector: sel!(hasUnifiedMemory)];
+        if responds != YES {
+            return true;
+        }
+        let unified: BOOL = msg_send![device, hasUnifiedMemory];
+        unified != YES
+    }
+}
+
+/// Tank Yard: options for buffers the CPU rewrites every frame.
+fn cpu_written_options(managed: bool) -> u64 {
+    if managed {
+        MTLResourceOptions::CPUCacheModeWriteCombined | MTLResourceOptions::StorageModeManaged
+    } else {
+        MTLResourceOptions::CPUCacheModeWriteCombined | MTLResourceOptions::StorageModeShared
+    }
 }
 
 impl Default for MetalContext {
@@ -405,13 +436,8 @@ impl MetalContext {
                 }
             }
 
-            #[cfg(target_os = "macos")]
-            let options = {
-                MTLResourceOptions::CPUCacheModeWriteCombined
-                    | MTLResourceOptions::StorageModeManaged
-            };
-            #[cfg(target_os = "ios")]
-            let options = { MTLResourceOptions::CPUCacheModeWriteCombined };
+            let managed = needs_managed_storage(device);
+            let options = cpu_written_options(managed);
 
             let uniform_buffers = [
                 msg_send![device, newBufferWithLength:MAX_UNIFORM_BUFFER_SIZE
@@ -446,6 +472,8 @@ impl MetalContext {
                 uniform_buffers,
                 current_frame_index: 1,
                 current_ub_offset: 0,
+                in_flight: None,
+                managed,
                 metalfx: load_metalfx(device),
                 spatial: None,
             }
@@ -518,6 +546,7 @@ impl MetalContext {
     /// Tank Yard: copy a texture's pixels (4 bytes each, top row first).
     fn read_texture(&mut self, texture: ObjcId, width: u32, height: u32) -> Vec<u8> {
         self.close_encoder();
+        self.wait_for_gpu();
         let row = u64::from(width) * 4;
         let length = row * u64::from(height);
         let mut pixels = vec![0u8; length as usize];
@@ -545,6 +574,18 @@ impl MetalContext {
             msg_send_![buffer, release];
         }
         pixels
+    }
+
+    /// Tank Yard: wait for the previous frame before the CPU rewrites memory
+    /// it may still read. Frames used to wait for the GPU as they ended, so
+    /// the CPU never prepared a frame while the GPU drew the last one.
+    fn wait_for_gpu(&mut self) {
+        if let Some(command_buffer) = self.in_flight.take() {
+            unsafe {
+                msg_send_![command_buffer, waitUntilCompleted];
+                msg_send_![command_buffer, release];
+            }
+        }
     }
 
     fn command_buffer(&mut self) -> ObjcId {
@@ -872,11 +913,7 @@ impl RenderingBackend for MetalContext {
                               options:MTLResourceOptions::StorageModeShared]
                 }
             } else {
-                #[cfg(target_os = "macos")]
-                let options = MTLResourceOptions::CPUCacheModeWriteCombined
-                    | MTLResourceOptions::StorageModeManaged;
-                #[cfg(target_os = "ios")]
-                let options = MTLResourceOptions::CPUCacheModeWriteCombined;
+                let options = cpu_written_options(self.managed);
                 unsafe {
                     msg_send![self.device,
                               newBufferWithLength:size
@@ -904,6 +941,8 @@ impl RenderingBackend for MetalContext {
             BufferSource::Slice(data) => data,
             _ => panic!("buffer_update expects BufferSource::slice"),
         };
+        self.wait_for_gpu();
+        let managed = self.managed;
         let buffer = &mut self.buffers[buffer.0];
         assert!(data.size <= buffer.size);
 
@@ -911,8 +950,9 @@ impl RenderingBackend for MetalContext {
             let dest: *mut std::ffi::c_void = msg_send![buffer.raw[buffer.next_value], contents];
             std::ptr::copy(data.ptr, dest, data.size);
 
-            #[cfg(target_os = "macos")]
-            msg_send_![buffer.raw[buffer.next_value], didModifyRange:NSRange::new(0, data.size as u64)];
+            if managed {
+                msg_send_![buffer.raw[buffer.next_value], didModifyRange:NSRange::new(0, data.size as u64)];
+            }
         }
         buffer.value = buffer.next_value;
     }
@@ -1110,7 +1150,7 @@ impl RenderingBackend for MetalContext {
                                   slice: n
                                   withBytes:bytes.as_ptr()
                                   bytesPerRow:(params.width * 4) as u64
-                                  bytesPerImage:0
+                                  bytesPerImage:0u64
                             ];
                         }
                     }
@@ -1129,6 +1169,8 @@ impl RenderingBackend for MetalContext {
         height: i32,
         bytes: &[u8],
     ) {
+        // Tank Yard: the last frame may still sample this texture.
+        self.wait_for_gpu();
         let raw_texture = self.textures.get(texture).texture;
         let region = MTLRegion {
             origin: MTLOrigin {
@@ -1144,7 +1186,7 @@ impl RenderingBackend for MetalContext {
         };
         unsafe {
             msg_send_![raw_texture, replaceRegion:region
-                       mipmapLevel:0
+                       mipmapLevel:0u64
                        withBytes:bytes.as_ptr()
                        bytesPerRow:(width * 4) as u64];
         }
@@ -1212,7 +1254,7 @@ impl RenderingBackend for MetalContext {
             msg_send_![descriptor, setFragmentFunction:shader_internal.fragment_function];
             msg_send_![descriptor, setVertexDescriptor: vertex_descriptor];
             let color_attachments = msg_send_![descriptor, colorAttachments];
-            for i in 0..2 {
+            for i in 0..2u64 {
                 let color_attachment = msg_send_![color_attachments, objectAtIndexedSubscript: i];
                 let view_pixel_format: MTLPixelFormat = msg_send![self.view, colorPixelFormat];
                 msg_send_![color_attachment, setPixelFormat: view_pixel_format];
@@ -1347,7 +1389,7 @@ impl RenderingBackend for MetalContext {
                 let buffer = &mut self.buffers[vertex_buffer.0];
                 let () = msg_send![render_encoder,
                                    setVertexBuffer:buffer.raw[buffer.value]
-                                   offset:0
+                                   offset:0u64
                                    atIndex:(index + 1) as u64];
                 buffer.next_value = buffer.value + 1;
             }
@@ -1383,6 +1425,7 @@ impl RenderingBackend for MetalContext {
         );
 
         let render_encoder = self.render_encoder.unwrap();
+        self.wait_for_gpu();
 
         self.current_frame_index = (self.current_frame_index + 1) % NUM_INFLIGHT_FRAMES;
 
@@ -1399,17 +1442,21 @@ impl RenderingBackend for MetalContext {
                 size,
             );
 
-            #[cfg(target_os = "macos")]
-            msg_send_![buffer, didModifyRange:NSRange::new(0, size as u64)];
+            // Tank Yard: mark the range that was written (upstream marked
+            // the start of the buffer, which left later uniforms stale on
+            // GPUs with their own memory).
+            if self.managed {
+                msg_send_![buffer, didModifyRange:NSRange::new(self.current_ub_offset, size as u64)];
+            }
 
             msg_send_![render_encoder,
                        setVertexBuffer:buffer
                        offset:self.current_ub_offset
-                       atIndex:0];
+                       atIndex:0u64];
             msg_send_![render_encoder,
                        setFragmentBuffer:buffer
                        offset:self.current_ub_offset
-                       atIndex:0];
+                       atIndex:0u64];
         }
         self.current_ub_offset = roundup_ub_buffer(self.current_ub_offset + size as u64);
     }
@@ -1452,7 +1499,7 @@ impl RenderingBackend for MetalContext {
             assert!(!descriptor.is_null());
 
             let color_attachments = msg_send_![descriptor, colorAttachments];
-            let color_attachment = msg_send_![color_attachments, objectAtIndexedSubscript: 0];
+            let color_attachment = msg_send_![color_attachments, objectAtIndexedSubscript: 0u64];
             let color_texture = msg_send_![color_attachment, texture];
             let width: u64 = msg_send![color_texture, width];
             let height: u64 = msg_send![color_texture, height];
@@ -1515,10 +1562,10 @@ impl RenderingBackend for MetalContext {
                        indexCount:num_elements as u64
                        indexType:MTLIndexType::UInt16
                        indexBuffer:index_buffer
-                       indexBufferOffset:0
+                       indexBufferOffset:0u64
                        instanceCount:num_instances as u64
-                       baseVertex:0
-                       baseInstance:0
+                       baseVertex:0i64
+                       baseInstance:0u64
             ];
         }
     }
@@ -1631,9 +1678,14 @@ impl RenderingBackend for MetalContext {
                 msg_send_![command_buffer, presentDrawable: drawable];
             }
             msg_send_![command_buffer, commit];
-            // Buffers rotate per frame, so the frame must finish before the
-            // next one rewrites them.
-            msg_send_![command_buffer, waitUntilCompleted];
+            // Tank Yard: buffers rotate per frame, so the next frame waits
+            // for this one before its first write instead of here, and the
+            // CPU prepares that frame while the GPU draws this one. A frame
+            // without writes still waits, so the CPU stays one frame ahead
+            // at most.
+            self.wait_for_gpu();
+            msg_send_![command_buffer, retain];
+            self.in_flight = Some(command_buffer);
         }
         for buffer in &mut self.buffers {
             buffer.next_value = 0;

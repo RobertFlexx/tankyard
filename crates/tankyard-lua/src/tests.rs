@@ -93,6 +93,25 @@ fn precompiled_chunks_are_refused() {
         .sources
         .insert("blob.lua".into(), "\u{1b}LJ\u{2}\u{0}garbage".into());
     LuaPlugin::new(&info("bytecode"), &scripts, &Content::builtin(), 1).unwrap();
+    // Luau bytecode starts with its version byte; it must not load either.
+    let bytecode = mlua::chunk::Compiler::new().compile("return 1").unwrap();
+    let mut scripts = pack(
+        "local ok, err = pcall(require, 'blob') assert(not ok) assert(tostring(err):find('binary'))",
+    );
+    scripts.sources.insert(
+        "blob.lua".into(),
+        String::from_utf8_lossy(&bytecode).into_owned(),
+    );
+    LuaPlugin::new(&info("bytecode"), &scripts, &Content::builtin(), 1).unwrap();
+    let error = LuaPlugin::new(
+        &info("bytecode"),
+        &pack(&String::from_utf8_lossy(&bytecode)),
+        &Content::builtin(),
+        1,
+    )
+    .err()
+    .unwrap();
+    assert!(error.contains("binary"), "{error}");
 }
 
 #[test]
@@ -413,4 +432,144 @@ fn tank_queries_match_the_world() {
     );
     assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
     assert_eq!(world.tanks[0].score, 4321);
+}
+
+/// Packs written for the LuaJIT sandbox keep their exact results on Luau.
+#[test]
+fn luajit_semantics_are_preserved() {
+    let source = r##"
+        assert(_VERSION == "Lua 5.1")
+        -- Lua 5.3 bitwise operators with LuaJIT's signed 32-bit results.
+        assert((5 & 3) == 1 and (5 | 3) == 7 and (5 ~ 3) == 6 and ~5 == -6)
+        assert(1 << 31 == -2147483648 and -1 >> 28 == 15 and (2^32 | 1) == 1)
+        assert((5 & 3 | 8 ~ 1) == 9 and (1 << 2 + 1) == 8 and (0xff & ~0xf) == 240)
+        assert(not pcall(function() return "3" | 0 end))
+        assert(bit.tobit(2^32 + 5) == 5 and bit.tobit(2.5) == 2 and bit.tobit(3.5) == 4)
+        assert(bit.band(-1, 0xff) == 255 and bit.bor(1, 2, 4) == 7 and bit.bxor(5, 3, 1) == 7)
+        assert(bit.lshift(1, 33) == 2 and bit.arshift(-256, 4) == -16 and bit.rol(0x12345678, 8) == 0x34567812)
+        assert(bit.tohex(255) == "000000ff" and bit.tohex(-1) == "ffffffff" and bit.tohex(255, -4) == "00FF")
+        assert(bit.bswap(0x12345678) == 0x78563412 and bit.tobit("12") == 12)
+        -- goto as loop continue.
+        local sum = 0
+        for i = 1, 5 do
+          if i % 2 == 0 then goto continue end
+          sum = sum + i
+          ::continue::
+        end
+        assert(sum == 9)
+        -- Number formatting and parsing.
+        assert(tostring(0.1) == "0.1" and tostring(1e15) == "1e+15" and tostring(2^53) == "9.007199254741e+15")
+        assert(tostring(-0.0) == "-0" and tostring(1/0) == "inf" and tostring(100 / 3) == "33.333333333333")
+        assert(0x1p4 == 16 and 0xA.8p0 == 10.5 and 0x1P-2 == 0.25)
+        assert(string.format("%s|%5.1f|%q", 1.5, 2.25, "a\r") == '1.5|  2.2|"a\\13"')
+        -- Library details.
+        assert(math.max(0/0, 1) == 1 and math.min(0/0, 1) == 1 and math.max(1, 0/0) ~= math.max(1, 0/0))
+        assert(1 / math.max(0, -0.0) == -1/0 and 1 / math.min(-0.0, 0) == 1/0)
+        local t = setmetatable({1, 2}, { __len = function() return 42 end, __tostring = function() return 5 end })
+        assert(#t == 2 and tostring(t) == 5)
+        assert(select(1, ("hello"):gsub("l", "%a")) == "heaao")
+        local records = {}
+        for i = 1, 40 do records[i] = { id = i, k = (i * 7919) % 5 } end
+        table.sort(records, function(a, b) return a.k < b.k end)
+        local order = {}
+        for i = 1, 8 do order[i] = records[i].id end
+        assert(table.concat(order, ",") == "40,25,15,30,35,10,20,5", table.concat(order, ","))
+        -- Out-of-range integer arguments saturate on every CPU.
+        assert(("abc"):sub(2^31) == "" and ("abc"):sub(-2^31) == "abc" and string.sub("abc", 0/0) == "abc")
+        assert(string.byte("abc", 2^40) == nil and math.ldexp(1, 2^31) == math.huge and select("#", select(2^31, 1)) == 0)
+        local shifted = { 10, 20, 30 }
+        table.insert(shifted, 0, 5)
+        assert(shifted[0] == 5 and shifted[1] == nil and shifted[4] == 30)
+        -- Library tables stay writable, and overrides are honored even where
+        -- Luau would otherwise call the builtin directly.
+        math.floor = function() return "mine" end
+        assert(math.floor(1.5) == "mine")
+        function string.trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
+        assert(("  x "):trim() == "x")
+        require("other")
+        assert(shared_counter == 1)
+        bump()
+        assert(shared_counter == 2)
+        tankyard.on("tick", function() tankyard.state.ok = true end)
+    "##;
+    let mut scripts = pack(source);
+    scripts.sources.insert(
+        "other.lua".into(),
+        "shared_counter = 1 function bump() shared_counter = shared_counter + 1 end".into(),
+    );
+    let mut world = world();
+    world.add_player("Pilot", false);
+    let mut runtime = ModRuntime::default();
+    runtime
+        .install(Box::new(
+            LuaPlugin::new(&info("parity"), &scripts, &Content::builtin(), 7).unwrap(),
+        ))
+        .unwrap();
+    world.step_with(|w| runtime.before_step(w));
+    runtime.after_step(&mut world);
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+}
+
+/// A pack that reaches the global table directly still sees every write.
+#[test]
+fn packs_using_the_global_table_see_every_global_write() {
+    let source = r#"
+        _G.answer = 1
+        local function read() return answer end
+        _G["answer"] = 2
+        assert(read() == 2)
+        rawset(_G, "math", setmetatable({ floor = function() return 7 end }, { __index = math }))
+        assert(math.floor(1.5) == 7 and math.sqrt(4) == 2)
+        tankyard.on("tick", function() end)
+    "#;
+    LuaPlugin::new(&info("globals"), &pack(source), &Content::builtin(), 1).unwrap();
+}
+
+#[test]
+fn scripts_show_hud_widgets_to_everyone_or_one_player() {
+    let (world, runtime) = run(
+        r##"
+        tankyard.on("tick", function(event)
+          local players = tankyard.players()
+          tankyard.hud("wave", { text = "Wave " .. 3, y = 0.1, color = "#ff8800", size = 24 })
+          tankyard.hud("charge", { progress = 0.5, bar_color = { 0, 128, 255 }, align = "left", x = 0 }, players[1].id)
+          tankyard.hud("gone", { text = "temporary" })
+          tankyard.hud("gone", nil)
+        end)
+        "##,
+        2,
+    );
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    let player = world.tanks.iter().find(|t| !t.bot).unwrap().id;
+    let mine = world.hud_for(player);
+    assert_eq!(mine.len(), 2);
+    let wave = mine.iter().find(|w| w.text == "Wave 3").unwrap();
+    assert_eq!(wave.color, Some([255, 136, 0]));
+    assert_eq!((wave.y, wave.size), (0.1, 24.));
+    let charge = mine.iter().find(|w| w.progress.is_some()).unwrap();
+    assert_eq!(charge.bar_color, Some([0, 128, 255]));
+    assert_eq!(charge.align, tankyard_mods::HudAlign::Left);
+    assert_eq!(world.hud_for(player + 1000).len(), 1);
+
+    for (source, error) in [
+        (r#"tankyard.hud("Bad Id", { text = "x" })"#, "widget ids"),
+        (
+            r#"tankyard.hud("a", { text = "x", x = 2 })"#,
+            "x must be between",
+        ),
+        (
+            r#"tankyard.hud("a", { text = "x", color = "orange" })"#,
+            "#rrggbb",
+        ),
+        (r#"tankyard.hud("a", {})"#, "needs text, progress"),
+        (
+            r#"for i = 1, 17 do tankyard.hud("w" .. i, { text = "x" }) end"#,
+            "16 per player",
+        ),
+    ] {
+        let (world, runtime) = run(&format!("tankyard.on('tick', function() {source} end)"), 1);
+        let errors = runtime.errors.join(" | ");
+        assert!(errors.contains(error), "{source}: {errors}");
+        assert!(world.hud.is_empty(), "{source}");
+    }
 }

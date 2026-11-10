@@ -1425,3 +1425,38 @@ fn picking_a_full_lobby_opens_a_new_one_and_single_lobbies_report_the_server_lim
     .unwrap();
     assert!(single.status().lobbies.iter().all(|l| l.capacity == 12));
 }
+
+#[test]
+fn mod_hud_widgets_reach_only_the_players_they_are_for() {
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Pilot", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    let player = client.player_id.unwrap();
+    let widget = |text: &str| tankyard_mods::HudWidget {
+        text: text.into(),
+        x: 0.5,
+        y: 0.2,
+        align: tankyard_mods::HudAlign::Center,
+        size: 18.,
+        color: Some([255, 0, 0]),
+        progress: Some(0.25),
+        bar_color: None,
+        width: 0.2,
+    };
+    let hud = &mut server.arenas[0].session.world.hud;
+    hud.insert(("pack".into(), 0, "all".into()), widget("Everyone"));
+    hud.insert(("pack".into(), player, "mine".into()), widget("Mine"));
+    hud.insert(
+        ("pack".into(), player + 99, "theirs".into()),
+        widget("Theirs"),
+    );
+    pump(&mut server, &mut [&mut client], 30);
+    let mut texts: Vec<_> = client.mod_hud.iter().map(|w| w.text.as_str()).collect();
+    texts.sort_unstable();
+    assert_eq!(texts, ["Everyone", "Mine"]);
+    assert_eq!(client.mod_hud[0].color, Some([255, 0, 0]));
+    server.arenas[0].session.world.hud.clear();
+    pump(&mut server, &mut [&mut client], 30);
+    assert!(client.mod_hud.is_empty());
+    assert!(client.is_ready());
+}

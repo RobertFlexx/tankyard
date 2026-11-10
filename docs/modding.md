@@ -2,7 +2,7 @@
 
 Tank Yard has two kinds of packs, and both are a folder or a `.zip` archive with a `mod.json` at the root:
 
-- **Lua script packs** (manifest `api_version` 2) can change almost everything about a match: custom modes, scoring, physics nudges, new tanks and maps, timed events and rule changes. Scripts run on LuaJIT inside a sandbox with no file, network, process or native-code access.
+- **Lua script packs** (manifest `api_version` 2) can change almost everything about a match: custom modes, scoring, physics nudges, new tanks and maps, timed events and rule changes. Scripts run on Luau, compiled to machine code where the platform allows, inside a sandbox with no file, network, process or native-code access.
 - **Data packs** (manifest `api_version` 1) add or replace tanks, maps, rules and textures, and can attach bounded JSON behavior hooks.
 
 In the game, open **Mods** and press **Browse for a pack…** to pick a `.zip` (or the `mod.json` inside a pack folder) in your system's file chooser. You can also paste a `.zip` or folder path and press **Import**, or drop a `.zip` onto the window. Imported packs are copied into your library (`…/Tank Yard/mods` in your application data folder; **Open mods folder** shows it), and a pack that passes review is enabled straight away. Pack folders or archives you put in the library yourself appear after **Refresh**. Folders in a `mods` directory next to the game are listed too; a library pack with the same ID replaces a bundled one. **Remove** deletes an imported pack. **View files** browses everything in a pack, straight from its folder or `.zip` without extracting it: scripts, JSON and TOML with line numbers and syntax colors, Markdown rendered with headings, lists, tables and code (the **Rendered** switch shows it as written), art and models as previews (the **Preview** switch shows an SVG's code), and anything else as a hex dump. Drag over code to highlight it and press Cmd/Ctrl+C to copy; code blocks in rendered Markdown have a copy button. Clicking a finding in **Safety review** opens its file at that line. Enabled packs are remembered by ID, so they stay enabled across restarts, updates and moves, and apply to offline games and servers you host. `--mod` on the command line loads packs for that run only and leaves your saved list alone. Community servers load packs with `--mod path` or the `mods` setting; joining players receive only validated data and never run server scripts.
@@ -53,7 +53,7 @@ cargo run --release --locked -p tankyard-tools -- mod-bench --mod mods/gravity_w
 
 Every pack is reviewed statically before it can be enabled. The review never runs the pack. It tokenizes each Lua file properly, so comments, ordinary text, table keys such as `{ os = 1 }`, fields such as `player.os` and local variables that share a library's name are not reported. Findings have three levels:
 
-- **Danger** — attempts to reach the computer: `os.execute`, `io.popen`, `io.open`, `os.remove`, `os.getenv`, `loadfile`, `dofile`, `package.loadlib`, the LuaJIT FFI (`require "ffi"`, `ffi.load`, C declarations of `system`, `CreateProcess`, `LoadLibrary`, `dlopen`, `mprotect` and similar), debug-library escapes, network modules, embedded bytecode, executables or native libraries of any platform (PE, ELF, Mach-O, universal binaries, WebAssembly, shell and batch scripts), and code that decodes data and runs it.
+- **Danger** — attempts to reach the computer: `os.execute`, `io.popen`, `io.open`, `os.remove`, `os.getenv`, `loadfile`, `dofile`, `package.loadlib`, LuaJIT's FFI (`require "ffi"`, `ffi.load`, C declarations of `system`, `CreateProcess`, `LoadLibrary`, `dlopen`, `mprotect` and similar), debug-library escapes, network modules, embedded bytecode, executables or native libraries of any platform (PE, ELF, Mach-O, universal binaries, WebAssembly, shell and batch scripts), and code that decodes data and runs it.
 - **Review** — unusual content: shell, PowerShell, AppleScript, `launchctl`, `schtasks`, registry, `curl … | sh`, reverse-shell and keychain or SSH-key strings for Windows, macOS and Linux; long base64 or hex payloads; large byte arrays; escape-encoded binary strings; nested archives; files whose contents are not recognized; `load`/`loadstring`.
 - **Note** — harmless but useful advice, such as `os.time()` being unavailable (use `tankyard.time()`).
 
@@ -135,6 +135,36 @@ Every request is validated, and a pack's requests in one event either all apply 
 | `spawn_shape(x, y, {sides, health, xp})`, `spawn_boss(name)` | arena contents |
 | `clear_projectiles(id)` | remove a tank's projectiles (`0`: all except base guardians) |
 | `announce(text)`, `finish_round(team, reason)` | match flow |
+| `hud(widget_id, widget, id)` | a HUD widget on one player's screen, or everyone's without `id`; a `nil` widget removes it |
+
+### HUD widgets
+
+Packs can put their own text and progress bars on players' screens:
+
+```lua
+tankyard.on("tick", function(event)
+  -- Everyone sees the round clock; it changes only once a second.
+  local left = math.max(0, 300 - math.floor(event.tick / 60))
+  tankyard.hud("clock", { text = ("%d:%02d"):format(left // 60, left % 60), y = 0.08, size = 22 })
+  for _, tank in ipairs(tankyard.players()) do
+    -- Each player sees their own charge meter.
+    tankyard.hud("charge", { text = "Overdrive", progress = tank.health / tank.max_health,
+      x = 0.02, y = 0.9, align = "left", bar_color = "#ffb000", width = 0.18 }, tank.id)
+  end
+end)
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `text` | none | up to 120 bytes; a widget needs `text`, `progress` or both |
+| `x`, `y` | `0.5`, `0.2` | position as a fraction of the screen (`y` is the middle of the text) |
+| `align` | `"center"` | `"left"`, `"center"` or `"right"` of `x` |
+| `size` | `18` | text size, 10 to 48, scaled with the interface |
+| `color`, `bar_color` | theme colors | `"#rrggbb"` or `{ r, g, b }` from 0 to 255 |
+| `progress` | none | a bar below the text, filled from 0 to 1 |
+| `width` | `0.2` | the bar's width as a fraction of the screen, 0.02 to 1 |
+
+Widget ids use lowercase letters, digits and underscores; setting an id again replaces that widget. A pack may show 16 widgets to everyone and 16 to each player. Widgets end with the round, with their player, or when the pack is disabled. The server decides what every player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. Clients draw exactly what they receive, so a HUD can't fall out of step with the game. Data packs use the same widgets through the `hud` action (see [Data packs](#data-packs)). Players need Tank Yard 0.12 or later to see them; older clients still join and play.
 
 ### Defining content from Lua
 
@@ -175,9 +205,22 @@ Data packs use the same fields as `"menu"`, `"theme"` and `"text"` objects in `m
 
 ### Sandbox and limits
 
-Scripts run on LuaJIT's interpreter, one isolated state per pack, recreated every round. They get the base functions, `string`, `table`, `math`, `bit` and `coroutine`. Removed: `os`, `io`, `debug`, `ffi`, `jit`, `package`, `load`, `loadstring`, `loadfile`, `dofile`, `getfenv`, `setfenv`, `collectgarbage`, `newproxy` and `string.dump`; only text source is accepted. `math.random` is seeded per round, and `print` writes to the pack's log (shown in the server console).
+Scripts run on Luau, one isolated state per pack, recreated every round. They get the base functions, `string`, `table`, `math`, `bit`, `bit32`, `utf8`, `buffer` and `coroutine`. Removed: `os`, `io`, `debug`, `ffi`, `jit`, `package`, `load`, `loadstring`, `loadfile`, `dofile`, `getfenv`, `setfenv`, `collectgarbage`, `newproxy` and `string.dump`; only text source is accepted. `math.random` is seeded per round, and `print` writes to the pack's log (shown in the server console).
 
-The JIT trace compiler is off inside the sandbox because compiled traces skip LuaJIT's instruction hook; the interpreter keeps every instruction accountable. Each event handler may run 500,000 instructions and each pack 1,000,000 per tick (20,000,000 while loading), with 64 MiB of memory. `pcall`, `xpcall` and `coroutine.resume` cannot swallow a budget error. C-level library calls are bounded too: `string.rep` results to 1 MiB, pattern matching to 64 KiB subjects and a quantifier cost limit, and `table.sort` to 100,000 elements. Archives are limited to 8 MiB, 256 files, 2 MiB per file and safe relative names; links, encrypted entries and size-header mismatches are rejected.
+Luau calls back into the host at every loop iteration and function call, in its interpreter and in compiled machine code alike, so budgets hold without turning anything off. Each event handler may run 500,000 steps (loop iterations and calls) and each pack 1,000,000 per tick (20,000,000 while loading), with 64 MiB of memory. `pcall`, `xpcall` and `coroutine.resume` cannot swallow a budget error. C-level library calls are bounded too: `string.rep` results to 1 MiB, pattern matching to 64 KiB subjects and a quantifier cost limit, and `table.sort` to 100,000 elements. Archives are limited to 8 MiB, 256 files, 2 MiB per file and safe relative names; links, encrypted entries and size-header mismatches are rejected.
+
+### Luau for script authors
+
+Packs written for the earlier LuaJIT sandbox run unchanged and give the same results: numbers print the same way (`tostring(0.1)` is `0.1`, `%.14g` throughout), `string.format`, `%q`, `string.rep` with a separator and `gsub` replacement escapes behave as before, `table.sort` orders equal elements exactly as before, `math.max`/`math.min` treat NaN and `-0` the same, `#` ignores `__len` on tables, `tostring` returns whatever `__tostring` returns, hexadecimal floats such as `0x1p4` parse, and `_VERSION` is still `Lua 5.1`. The Lua 5.3 bitwise operators (`&`, `|`, `~`, `<<`, `>>`, unary `~`) and the `bit` library keep LuaJIT's signed 32-bit results. Library tables stay writable, so helpers such as `function string.trim(s) … end` work in every file.
+
+What changes for authors:
+
+- **Faster scripts.** Script code is compiled to machine code (except on platforms that forbid it), library calls such as `math.floor` and `bit32.band` run without a function call, and a pack is compiled once per server rather than every round. A pack that assigns a library function (`math.floor = …`) or touches `_G` still sees every change; Luau only skips the shortcuts for those names.
+- **New syntax:** `continue`, compound assignment (`x += 1`, `s ..= "!"`), `if … then … else …` expressions, string interpolation (`` `{name} has {score}` ``), floor division `//`, optional type annotations, and iteration over a table directly (`for k, v in t do`).
+- **New libraries:** `bit32`, `utf8`, `buffer`, `table.find`, `table.clear`, `table.create`, `table.clone`, `table.freeze`, `table.pack`/`table.unpack`, `string.split`, `string.pack`/`unpack`, `math.clamp`, `math.round`, `math.sign`, `math.noise`, `coroutine.close` and `typeof`.
+- **`goto`:** Luau has no `goto`. The common LuaJIT pattern, `goto continue` with `::continue::` as the last statement of a loop body, is converted to `continue` automatically; any other `goto` is reported with its line.
+- **Error messages** are worded by Luau (`attempt to index nil with 'x'`), with the same file and line prefix.
+- **Unspecified behavior** can differ: the order `pairs` visits keys, and `#` on a table with holes. Neither was guaranteed before; use arrays or sort keys when order matters.
 
 ## Data packs
 
@@ -198,7 +241,7 @@ A behavior hook looks like this:
 
 Events are `tick`, `spawn`, `kill`, `death`, `shot`, `level_up`, `evolve`, `capture`, `round_start`, `round_end`, and `damage`. Targets are `actor`, `all_players`, and `alive_players`. `every_ticks` controls frequency; `cooldown_ticks` limits each actor independently. `conditions` combine health fraction, level, class, team, bot status, or module counters, with `any` and `not` expressions.
 
-Actions can heal or damage, award XP and score, change class or team, apply an impulse, teleport, update a counter, announce text, finish a round, spawn a polygon target, fire a bullet, set movement/aim/fire controls, and use every Lua command above (`set_level`, `raise_stat`, `set_scales`, `set_armor`, `set_shield`, `set_protection`, `set_velocity`, `kill`, `set_score`, `set_team_score`, `spawn_boss`, `clear_projectiles`). Teleports and spawned entities respect walls and arena limits. Bot control hooks run after bot decisions and before physics. Effects are validated as a batch before application. The Rust definitions in [tankyard-mods](../crates/tankyard-mods/src/lib.rs) specify every field and numeric bound.
+Actions can heal or damage, award XP and score, change class or team, apply an impulse, teleport, update a counter, announce text, finish a round, spawn a polygon target, fire a bullet, set movement/aim/fire controls, and use every Lua command above (`set_level`, `raise_stat`, `set_scales`, `set_armor`, `set_shield`, `set_protection`, `set_velocity`, `kill`, `set_score`, `set_team_score`, `spawn_boss`, `clear_projectiles`) and show HUD widgets (`{"type": "hud", "id": "streak", "widget": {"text": "On a streak", "color": [255, 176, 0]}}` shows a widget to the event's tank, or to everyone for round events; leave out `widget` to remove it). Teleports and spawned entities respect walls and arena limits. Bot control hooks run after bot decisions and before physics. Effects are validated as a batch before application. The Rust definitions in [tankyard-mods](../crates/tankyard-mods/src/lib.rs) specify every field and numeric bound.
 
 JSON behavior runs on the server through bounded hooks, alongside Lua packs. A module has at most 64 hooks, 16 conditions and actions per hook, four nested condition levels, 512 effect commands and 10,000 condition operations per tick, 4,096 counters, and 16,384 cooldown entries. Faulty modules are disabled without applying the failing batch. Hooks do not recursively dispatch their own effects. Reloading or restarting a round resets runtime state.
 

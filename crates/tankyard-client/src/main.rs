@@ -140,6 +140,7 @@ fn window_conf(cli: &Cli) -> Conf {
         platform: macroquad::miniquad::conf::Platform {
             linux_wm_class: "tankyard",
             swap_interval: Some(if settings.vsync { 1 } else { 0 }),
+            apple_low_power_gpu: settings.battery_saver,
             apple_gfx_api: if settings.metal && graphics::metal_device_present() {
                 macroquad::miniquad::conf::AppleGfxApi::Metal
             } else {
@@ -2015,6 +2016,7 @@ impl App {
                     s,
                     &self.view,
                 );
+                hud::mod_widgets(&session.mod_hud(), s);
                 if let Some(axiom) = axiom {
                     let r = hud::boss_banner_layout(screen_width(), s);
                     let r = Rect::new(r.x, 106. * s, r.w, 52. * s);
@@ -2586,6 +2588,11 @@ async fn run(cli: Cli) {
         );
         let s = app.scale();
         app.update(dt, s);
+        // Send this frame's input now; drawing takes a few milliseconds
+        // more, and anything queued while drawing goes after it.
+        if let Some(session) = &mut app.session {
+            session.flush_network();
+        }
         let post_error = app.presentation.post_processing_error();
         if app.menu.post_error.as_deref() != post_error {
             app.menu.post_error = post_error.map(str::to_owned);
@@ -2651,21 +2658,20 @@ async fn run(cli: Cli) {
         if app.quit {
             break;
         }
-        // Menus don't need more than 60 fps, so without vsync they don't run
-        // the GPU flat out; games keep the chosen cap.
-        let cap = match (
-            app.session.is_none() && !app.settings.vsync,
+        let cap = frame_cap(
             app.settings.frame_cap,
-        ) {
-            (true, 0) => 60,
-            (true, cap) => cap.min(60),
-            (false, cap) => cap,
-        };
+            app.session.is_some(),
+            app.settings.battery_saver,
+        );
         if cap > 0 && app.smoke.is_none() {
+            // With vsync the sleep ends early, so the frame still catches the
+            // display refresh it is due for (menus on a 120 Hz display run
+            // at 60 rather than 120).
+            let margin = if app.settings.vsync { 0.002 } else { 0.0005 };
             let target = 1.0 / f64::from(cap);
             let remaining = target - (get_time() - start);
-            if remaining > 0.001 {
-                std::thread::sleep(std::time::Duration::from_secs_f64(remaining - 0.0005));
+            if remaining > margin + 0.0005 {
+                std::thread::sleep(std::time::Duration::from_secs_f64(remaining - margin));
             }
         }
         next_frame().await;
@@ -2673,6 +2679,21 @@ async fn run(cli: Cli) {
     native_resolution.remember(&mut app.settings);
     app.save_progress();
     clipboard::shutdown();
+}
+/// The frame rate to hold (0 for none). Menus don't need more than 60 fps,
+/// so they don't run the GPU flat out, even on high refresh displays; games
+/// keep the chosen cap. Battery saver halves both.
+fn frame_cap(chosen: u32, in_game: bool, battery_saver: bool) -> u32 {
+    let limit = match (in_game, battery_saver) {
+        (true, false) => u32::MAX,
+        (true, true) | (false, false) => 60,
+        (false, true) => 30,
+    };
+    match chosen {
+        0 if limit == u32::MAX => 0,
+        0 => limit,
+        cap => cap.min(limit),
+    }
 }
 fn parse_mode(value: &str) -> Mode {
     match value
@@ -2710,5 +2731,22 @@ mod tap_input_regressions {
         assert!(!manual_fire(true, false, true));
         assert!(!manual_fire(false, false, false));
         assert!(manual_fire(true, false, false));
+    }
+}
+
+#[cfg(test)]
+mod frame_cap_regressions {
+    use super::frame_cap;
+
+    #[test]
+    fn menus_hold_sixty_and_battery_saver_halves_the_caps() {
+        assert_eq!(frame_cap(0, true, false), 0);
+        assert_eq!(frame_cap(144, true, false), 144);
+        assert_eq!(frame_cap(0, false, false), 60);
+        assert_eq!(frame_cap(144, false, false), 60);
+        assert_eq!(frame_cap(0, true, true), 60);
+        assert_eq!(frame_cap(144, true, true), 60);
+        assert_eq!(frame_cap(0, false, true), 30);
+        assert_eq!(frame_cap(30, true, true), 30);
     }
 }

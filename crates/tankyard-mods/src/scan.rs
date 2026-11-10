@@ -368,7 +368,7 @@ const KEYWORDS: &[&str] = &[
 ];
 const OPERATORS: &[&str] = &[
     "...", "..", "==", "~=", "<=", ">=", "::", "+", "-", "*", "/", "%", "^", "#", "<", ">", "=",
-    "(", ")", "{", "}", "[", "]", ";", ":", ",", ".", "&", "|", "~",
+    "(", ")", "{", "}", "[", "]", ";", ":", ",", ".", "&", "|", "~", "?", "@",
 ];
 
 struct Lexer<'a> {
@@ -383,6 +383,10 @@ impl<'a> Lexer<'a> {
     }
     fn tokens(mut self) -> Result<Vec<Token>, (u32, &'static str)> {
         let mut tokens = Vec::new();
+        // Open braces inside each unfinished `{expression}` of a Luau
+        // interpolated string, innermost last. The expressions are code and
+        // are tokenized like any other.
+        let mut interpolations: Vec<usize> = Vec::new();
         if self.bytes.starts_with(b"\xef\xbb\xbf") {
             self.at = 3;
         }
@@ -424,12 +428,48 @@ impl<'a> Lexer<'a> {
                         line,
                     });
                 }
-                b'"' | b'\'' => {
+                b'"' | b'\'' | b'`' => {
                     let line = self.line;
-                    let (text, escapes) = self.quoted(c)?;
+                    let (text, escapes, opened) = self.quoted(c)?;
                     tokens.push(Token {
                         tok: Tok::Str(text, escapes),
                         line,
+                    });
+                    if opened {
+                        interpolations.push(0);
+                    }
+                }
+                b'{' if !interpolations.is_empty() => {
+                    if let Some(depth) = interpolations.last_mut() {
+                        *depth += 1;
+                    }
+                    self.at += 1;
+                    tokens.push(Token {
+                        tok: Tok::Op("{"),
+                        line: self.line,
+                    });
+                }
+                b'}' if interpolations.last() == Some(&0) => {
+                    // The expression ends; the string continues after it.
+                    interpolations.pop();
+                    let line = self.line;
+                    let (text, escapes, opened) = self.quoted(b'`')?;
+                    tokens.push(Token {
+                        tok: Tok::Str(text, escapes),
+                        line,
+                    });
+                    if opened {
+                        interpolations.push(0);
+                    }
+                }
+                b'}' if !interpolations.is_empty() => {
+                    if let Some(depth) = interpolations.last_mut() {
+                        *depth -= 1;
+                    }
+                    self.at += 1;
+                    tokens.push(Token {
+                        tok: Tok::Op("}"),
+                        line: self.line,
                     });
                 }
                 b'0'..=b'9' => tokens.push(Token {
@@ -472,6 +512,9 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
+        if !interpolations.is_empty() {
+            return Err((self.line, "unfinished string"));
+        }
         Ok(tokens)
     }
     fn long_bracket_level(&self) -> Option<usize> {
@@ -507,7 +550,10 @@ impl<'a> Lexer<'a> {
         }
         Err((self.line, "unfinished long string or comment"))
     }
-    fn quoted(&mut self, quote: u8) -> Result<(Vec<u8>, u32), (u32, &'static str)> {
+    /// A quoted string after its opening quote (or, for a Luau interpolated
+    /// string, after the `}` that closes an expression). Also says whether
+    /// the text stopped at an interpolated string's `{`.
+    fn quoted(&mut self, quote: u8) -> Result<(Vec<u8>, u32, bool), (u32, &'static str)> {
         self.at += 1;
         let mut text = Vec::new();
         let mut escapes = 0;
@@ -518,7 +564,10 @@ impl<'a> Lexer<'a> {
             }
             self.at += 1;
             if c == quote {
-                return Ok((text, escapes));
+                return Ok((text, escapes, false));
+            }
+            if quote == b'`' && c == b'{' {
+                return Ok((text, escapes, true));
             }
             if c != b'\\' {
                 text.push(c);
@@ -683,7 +732,7 @@ fn scan_lua(name: &str, text: &str, modules: &HashSet<String>, report: &mut Scan
     {
         Ok(tokens) => tokens,
         Err((line, message)) => {
-            // LuaJIT rejects the same input, but a file that cannot be read in
+            // Luau rejects the same input, but a file that cannot be read in
             // full must never pass as reviewed.
             report.push(
                 Severity::Warning,
@@ -1844,6 +1893,10 @@ mod tests {
             "local t = setmetatable({}, { __index = function(_, k) return k end })",
             "local s = ('x'):rep(10) .. string.format('%d', 5)",
             "goto continue\n::continue::",
+            // Luau syntax.
+            "local n = 3\nprint(`{n} tanks, {#{1, 2}} teams, \\{literal}`)",
+            "local x: number? = nil\nx += 1\nlocal y = if x then x // 2 else 0",
+            "@native local function f(a: { number }): number return a[1] end",
             "local s = 'fork your own copy of this mod; it uses no system calls'",
             "local cdef_like = 'int main(void); is how C starts, but this is just text without ffi'",
         ];
@@ -1851,6 +1904,15 @@ mod tests {
             let (verdict, report) = verdict(source);
             assert_eq!(verdict, Verdict::Clean, "{source}\n{:?}", report.findings);
         }
+    }
+
+    #[test]
+    fn interpolated_strings_are_scanned_as_code() {
+        let (result, report) = verdict("print(`result: {os.execute('rm -rf /')}`)");
+        assert_eq!(result, Verdict::Dangerous, "{:?}", report.findings);
+        let (result, report) = verdict("print(`{ {a = 1} } then {`nested {io.popen('x')}`}`)");
+        assert_eq!(result, Verdict::Dangerous, "{:?}", report.findings);
+        assert_ne!(verdict("print(`unfinished {1 + 2`)").0, Verdict::Clean);
     }
 
     #[test]

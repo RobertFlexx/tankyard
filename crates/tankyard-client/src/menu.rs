@@ -21,6 +21,8 @@ const DISPLAY_RESOLUTION_ROW: f32 = 30.0;
 const DISPLAY_RESOLUTION_STEP: f32 = 33.0;
 const DISPLAY_FRAME_LABEL: f32 = 215.0;
 const DISPLAY_FRAME_ROW: f32 = 226.0;
+const DISPLAY_BATTERY_ROW: f32 = 272.0;
+const DISPLAY_BATTERY_NOTE: f32 = 318.0;
 // The Graphics tab's right column.
 const GRAPHICS_AA_LABEL: f32 = 19.0;
 const GRAPHICS_AA_ROW: f32 = 30.0;
@@ -2728,6 +2730,26 @@ impl Menu {
                         settings.frame_cap = cap;
                     }
                 }
+                if toggle(
+                    Rect::new(rx, by + DISPLAY_BATTERY_ROW * s, col, 33.0 * s),
+                    "Battery saver",
+                    &mut settings.battery_saver,
+                    s,
+                ) {
+                    return Action::Save;
+                }
+                wrap(
+                    if cfg!(target_os = "macos") {
+                        "Games run at up to 60 fps and menus at 30. Macs with two GPUs use the integrated one after a restart."
+                    } else {
+                        "Games run at up to 60 fps and menus at 30."
+                    },
+                    rx,
+                    by + DISPLAY_BATTERY_NOTE * s,
+                    col,
+                    11.0 * s,
+                    muted_color(),
+                );
             }
             7 => {
                 if let Some(action) = self.graphics(settings, x, by, col, s) {
@@ -3595,7 +3617,7 @@ impl Menu {
         label(
             &fitted_label(
                 &format!(
-                    "Library: {}  ·  Scripts run in a LuaJIT sandbox with no file, network or system access.",
+                    "Library: {}  ·  Scripts run in a Luau sandbox with no file, network or system access.",
                     crate::mod_library::library_dir().display()
                 ),
                 13.0 * s,
@@ -4371,6 +4393,7 @@ mod tests {
                 DISPLAY_RESOLUTION_ROW + 4.0 * DISPLAY_RESOLUTION_STEP + 28.0,
             ),
             (DISPLAY_FRAME_LABEL - 13.0, DISPLAY_FRAME_ROW + 34.0),
+            (DISPLAY_BATTERY_ROW, DISPLAY_BATTERY_NOTE + 28.0),
         ];
         assert!(groups.windows(2).all(|pair| pair[0].1 + 6.0 <= pair[1].0));
         let graphics = [

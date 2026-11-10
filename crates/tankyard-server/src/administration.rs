@@ -271,6 +271,9 @@ mod tests {
                     walls_sent_at: Duration::ZERO,
                     strikes: 0,
                     strike_window: Duration::ZERO,
+                    protocol: PROTOCOL_VERSION,
+                    hud_sent: None,
+                    hud_sent_at: Duration::ZERO,
                 },
             );
             Self { server, key, audit }

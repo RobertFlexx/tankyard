@@ -1,7 +1,11 @@
 [env]
-# LuaJIT's Makefile builds small host tools with `gcc` by default. Use the
-# platform compiler instead, so clang-only systems and unrelated GCC toolchains
-# earlier on PATH cannot break the vendored build. Only LuaJIT reads this
-# variable: HOST_CC or CC here would also replace the compiler the `cc` crate
-# uses for every other C dependency. An exported value still wins.
-DEFAULT_CC = "cc"
+# Luau is C++. Build it with the platform's compiler on Macs, so an unrelated
+# GCC toolchain earlier on PATH (for example one installed for Ada) cannot
+# break the vendored build. Other platforms use cc-rs's usual choice. An
+# exported value still wins.
+CXX_aarch64_apple_darwin = "clang++"
+CXX_x86_64_apple_darwin = "clang++"
+# Compiled code must run on every Mac the app supports (macOS 11 on Intel and
+# Apple Silicon), not only the machine that built it; C and C++ build scripts
+# otherwise target the build machine's macOS version.
+MACOSX_DEPLOYMENT_TARGET = "11.0"

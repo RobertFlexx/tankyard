@@ -5,8 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-# LuaJIT is built from vendored sources and linked statically on every platform.
-mlua = { version = "0.12", default-features = false, features = ["luajit", "vendored", "send", "serde"] }
+# Luau (with its native code generator) is built from vendor/luau0-src and
+# linked statically on every platform.
+mlua = { version = "0.12", default-features = false, features = ["luau-jit", "send", "serde"] }
 tankyard-content.workspace = true
 tankyard-core.workspace = true
 tankyard-mods.workspace = true

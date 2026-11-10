@@ -51,21 +51,25 @@ pub fn screen_image() -> Option<Image> {
 /// Mac without one starts with OpenGL.
 #[cfg(target_os = "macos")]
 pub fn metal_device_present() -> bool {
+    // Listing devices, unlike creating the default one, doesn't switch a Mac
+    // with two GPUs over to the discrete GPU.
     #[link(name = "Metal", kind = "framework")]
     unsafe extern "C" {
-        fn MTLCreateSystemDefaultDevice() -> *mut std::ffi::c_void;
+        fn MTLCopyAllDevices() -> *const std::ffi::c_void;
     }
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {
+        fn CFArrayGetCount(array: *const std::ffi::c_void) -> isize;
         fn CFRelease(object: *const std::ffi::c_void);
     }
     unsafe {
-        let device = MTLCreateSystemDefaultDevice();
-        if device.is_null() {
+        let devices = MTLCopyAllDevices();
+        if devices.is_null() {
             return false;
         }
-        CFRelease(device);
-        true
+        let count = CFArrayGetCount(devices);
+        CFRelease(devices);
+        count > 0
     }
 }
 #[cfg(not(target_os = "macos"))]

@@ -44,6 +44,8 @@ pub struct NetworkClient {
     pub chat_messages: std::collections::VecDeque<ChatMessage>,
     pub chat_revision: u64,
     pub voice_enabled: bool,
+    /// HUD widgets behavior mods on the server show this player.
+    pub mod_hud: Vec<tankyard_mods::HudWidget>,
     pub voice_muted: bool,
     pub voice_packets: std::collections::VecDeque<VoicePacket>,
     pub audit_lines: Vec<String>,
@@ -260,6 +262,7 @@ impl NetworkClient {
             chat_messages: std::collections::VecDeque::with_capacity(64),
             chat_revision: 0,
             voice_enabled: false,
+            mod_hud: Vec::new(),
             voice_muted: false,
             voice_packets: std::collections::VecDeque::with_capacity(32),
             audit_lines: Vec::new(),
@@ -367,6 +370,12 @@ impl NetworkClient {
                     self.voice_enabled = enabled;
                     self.voice_muted = muted;
                 }
+                ServerControl::ModHud { widgets } => {
+                    if !tankyard_protocol::valid_mod_hud(&widgets) {
+                        return self.fail("Server sent an invalid mod HUD.".into());
+                    }
+                    self.mod_hud = widgets;
+                }
                 ServerControl::Audit { lines } => {
                     if lines.len() > 32
                         || lines
@@ -465,6 +474,7 @@ impl NetworkClient {
                         return self
                             .fail("Server gameplay content or protocol is incompatible.".into());
                     }
+                    self.mod_hud.clear();
                     if self.player_id != Some(player) || self.player_round != Some(round) {
                         self.snapshot = None;
                         self.previous_snapshot = None;

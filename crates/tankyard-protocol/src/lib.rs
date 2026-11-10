@@ -19,7 +19,14 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-pub const PROTOCOL_VERSION: u32 = 22;
+/// Version 23 adds `ServerControl::ModHud`. Servers still welcome version 22
+/// clients and never send them messages they can't read, so the netcode
+/// protocol id stays at 22's.
+pub const PROTOCOL_VERSION: u32 = 23;
+/// The oldest client version servers accept.
+pub const MIN_PROTOCOL_VERSION: u32 = 22;
+/// The first version that reads `ServerControl::ModHud`.
+pub const MOD_HUD_PROTOCOL: u32 = 23;
 pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0016;
 pub const CONTROL_CHANNEL: u8 = 0;
 pub const REALTIME_CHANNEL: u8 = 1;
@@ -268,6 +275,15 @@ pub enum ServerControl {
         enabled: bool,
         muted: bool,
     },
+    /// Every HUD widget behavior mods show this player, replacing the last
+    /// list. Sent only to clients of `MOD_HUD_PROTOCOL` or later.
+    ModHud {
+        widgets: Vec<tankyard_mods::HudWidget>,
+    },
+}
+/// Whether a HUD list from a server is one this client should draw.
+pub fn valid_mod_hud(widgets: &[tankyard_mods::HudWidget]) -> bool {
+    widgets.len() <= tankyard_mods::MAX_HUD_SENT && widgets.iter().all(|w| w.valid())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

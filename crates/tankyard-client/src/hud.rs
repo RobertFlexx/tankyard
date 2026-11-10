@@ -1856,6 +1856,56 @@ fn killer_card(
     }
 }
 
+/// HUD widgets from behavior mods, placed by fractions of the screen and
+/// kept inside it. `y` is the middle of the text line, and a bar sits below.
+pub fn mod_widgets(widgets: &[tankyard_mods::HudWidget], s: f32) {
+    let (w, h) = (screen_width(), screen_height());
+    let margin = 12. * s;
+    let place = |anchor: f32, width: f32, align: tankyard_mods::HudAlign| {
+        let left = match align {
+            tankyard_mods::HudAlign::Left => anchor,
+            tankyard_mods::HudAlign::Center => anchor - width * 0.5,
+            tankyard_mods::HudAlign::Right => anchor - width,
+        };
+        left.clamp(margin, (w - margin - width).max(margin))
+    };
+    for widget in widgets {
+        let size = widget.size * s;
+        let x = widget.x * w;
+        let mut y = (widget.y * h).clamp(size, h - size);
+        if !widget.text.is_empty() {
+            let text = fitted_label(&widget.text, size, w - margin * 2.);
+            let width = label_width(&text, size);
+            let color = widget
+                .color
+                .map_or_else(text_color, |[r, g, b]| Color::from_rgba(r, g, b, 255));
+            label(
+                &text,
+                place(x, width, widget.align),
+                y + size * 0.35,
+                size,
+                color,
+            );
+            y += size * 0.75;
+        }
+        if let Some(progress) = widget.progress {
+            let width = (widget.width * w).min(w - margin * 2.);
+            let fill = widget
+                .bar_color
+                .map_or_else(accent, |[r, g, b]| Color::from_rgba(r, g, b, 255));
+            arcade_track(
+                Rect::new(
+                    place(x, width, widget.align),
+                    y,
+                    width,
+                    (size * 0.45).max(8. * s),
+                ),
+                progress,
+                fill,
+            );
+        }
+    }
+}
 fn ease_out(t: f32) -> f32 {
     1. - (1. - t).powi(3)
 }

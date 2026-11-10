@@ -240,9 +240,28 @@ impl PackFiles {
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
-    /// Content fingerprint over names and bytes. Approval of a scanned pack is
-    /// bound to this value; any later change requires a new review.
+    /// Marks digests from `content_digest`.
+    pub const SHA256_PREFIX: &'static str = "sha256:";
+    /// SHA-256 over every file's name and bytes. Approval of a scanned pack
+    /// is bound to this value; any later change requires a new review.
     pub fn content_digest(&self) -> String {
+        let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+        for (name, data) in &self.files {
+            // Lengths keep name and content boundaries unambiguous.
+            context.update(&(name.len() as u64).to_le_bytes());
+            context.update(name.as_bytes());
+            context.update(&(data.len() as u64).to_le_bytes());
+            context.update(data);
+        }
+        let mut digest = String::from(Self::SHA256_PREFIX);
+        for byte in context.finish().as_ref() {
+            digest.push_str(&format!("{byte:02x}"));
+        }
+        digest
+    }
+    /// The checksum approvals were bound to before 0.12. Unlike SHA-256, two
+    /// packs can be made to share it, so it only carries old approvals over.
+    pub fn legacy_content_digest(&self) -> String {
         let mut state = 0xcbf2_9ce4_8422_2325_u64;
         let mut second = 0x9e37_79b9_7f4a_7c15_u64;
         for (name, data) in &self.files {
@@ -334,6 +353,36 @@ pub(crate) fn zip_bytes(files: &[(&str, &[u8])]) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn approval_digests_change_with_any_byte_and_keep_file_boundaries() {
+        let pack = |files: &[(&str, &str)]| {
+            PackFiles::from_files(
+                files
+                    .iter()
+                    .map(|(name, data)| ((*name).to_owned(), data.as_bytes().to_vec())),
+            )
+            .unwrap()
+        };
+        let base = pack(&[("a.lua", "print(1)"), ("b.lua", "print(2)")]);
+        let digest = base.content_digest();
+        assert!(digest.starts_with(PackFiles::SHA256_PREFIX));
+        assert_eq!(digest.len(), PackFiles::SHA256_PREFIX.len() + 64);
+        assert_eq!(digest, base.clone().content_digest());
+        for other in [
+            pack(&[("a.lua", "print(2)"), ("b.lua", "print(1)")]),
+            pack(&[("a.lua", "print(1)"), ("b.lua", "print(3)")]),
+            pack(&[("a.lu", "aprint(1)"), ("b.lua", "print(2)")]),
+        ] {
+            assert_ne!(other.content_digest(), digest);
+        }
+        // Old approvals are recognized by the unchanged legacy checksum.
+        assert_eq!(base.legacy_content_digest().len(), 32);
+        assert!(
+            !base
+                .legacy_content_digest()
+                .starts_with(PackFiles::SHA256_PREFIX)
+        );
+    }
     #[test]
     fn archives_strip_one_wrapper_folder_and_ignore_os_metadata() {
         let bytes = zip_bytes(&[

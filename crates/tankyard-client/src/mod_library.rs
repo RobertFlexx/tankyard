@@ -27,6 +27,8 @@ pub struct Entry {
     pub manifest: Option<Manifest>,
     pub report: ScanReport,
     pub digest: String,
+    /// The pre-0.12 checksum, for carrying old approvals over.
+    pub legacy_digest: String,
     pub archive: bool,
     pub error: Option<String>,
     /// Storefront details from `tankyard.toml`.
@@ -202,6 +204,7 @@ fn read_entry(path: &Path) -> Entry {
                 path: display,
                 report: scan_pack(&pack),
                 digest: pack.content_digest(),
+                legacy_digest: pack.legacy_content_digest(),
                 archive: pack.archive,
                 size: pack.files().map(|(_, data)| data.len() as u64).sum(),
                 files: pack.len(),
@@ -222,6 +225,7 @@ fn read_entry(path: &Path) -> Entry {
                 manifest: None,
                 report,
                 digest: String::new(),
+                legacy_digest: String::new(),
                 archive: path
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("zip")),
@@ -292,8 +296,32 @@ pub fn discover() -> Vec<Entry> {
         .collect()
 }
 
-/// Turn enabled entries saved as paths by older versions into pack IDs.
+/// Approvals made before 0.12 were bound to a weak checksum. Each one that
+/// still matches an installed pack moves to that pack's SHA-256 digest, once;
+/// the rest are dropped.
+fn carry_over_approvals(settings: &mut Settings) {
+    let current = |digest: &String| digest.starts_with(PackFiles::SHA256_PREFIX);
+    if settings.approved_mods.iter().all(current) {
+        return;
+    }
+    let (kept, legacy): (Vec<_>, Vec<_>) = std::mem::take(&mut settings.approved_mods)
+        .into_iter()
+        .partition(current);
+    settings.approved_mods = kept;
+    for entry in discover() {
+        if !entry.digest.is_empty()
+            && legacy.contains(&entry.legacy_digest)
+            && !settings.approved_mods.contains(&entry.digest)
+        {
+            settings.approved_mods.push(entry.digest);
+        }
+    }
+}
+
+/// Turn enabled entries saved as paths by older versions into pack IDs, and
+/// carry old approvals over to current digests.
 pub fn migrate(settings: &mut Settings) {
+    carry_over_approvals(settings);
     if settings
         .enabled_mods
         .iter()
@@ -560,6 +588,7 @@ mod tests {
             }),
             report: ScanReport::default(),
             digest: String::new(),
+            legacy_digest: String::new(),
             archive: false,
             error: id.is_none().then(|| "mod.json: missing field".to_owned()),
             project: None,

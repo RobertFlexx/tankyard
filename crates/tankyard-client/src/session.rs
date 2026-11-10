@@ -272,6 +272,13 @@ impl Session {
         };
         Ok(session)
     }
+    /// HUD widgets that behavior mods show this player.
+    pub fn mod_hud(&self) -> std::borrow::Cow<'_, [tankyard_mods::HudWidget]> {
+        match &self.engine {
+            Engine::Offline(local) => local.world.hud_for(self.player).into(),
+            Engine::Online { client, .. } => client.mod_hud.as_slice().into(),
+        }
+    }
     pub fn map_remaining(&self) -> Option<u32> {
         match &self.engine {
             Engine::Online { client, .. } => client.map_rotation.map(|(remaining, received)| {

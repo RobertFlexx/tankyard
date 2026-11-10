@@ -171,6 +171,43 @@ function tankyard.set_team_score(team, score)
   emit("set_team_score", number("set_team_score", team, "team"), number("set_team_score", score, "score"))
 end
 
+-- A color as "#rrggbb" or { r, g, b } (0-255), packed into one number.
+local function hud_color(value, what)
+  if value == nil then return nil end
+  if type(value) == "string" then
+    local hex = value:match("^#?(%x%x%x%x%x%x)$")
+    if not hex then error(("tankyard.hud: %s must be \"#rrggbb\" or { r, g, b }"):format(what), 3) end
+    return tonumber(hex, 16)
+  end
+  check("table", value, "hud", what)
+  local packed = 0
+  for index, key in ipairs({ "r", "g", "b" }) do
+    local channel = value[index] or value[key]
+    if type(channel) ~= "number" or channel < 0 or channel > 255 then
+      error(("tankyard.hud: %s needs red, green and blue from 0 to 255"):format(what), 3)
+    end
+    packed = packed * 256 + math.floor(channel)
+  end
+  return packed
+end
+-- Show, change or (with a nil widget) remove a HUD widget, on one tank's
+-- screen or, without a tank, on everyone's.
+function tankyard.hud(widget_id, widget, tank)
+  check("string", widget_id, "hud", "widget id")
+  optional("number", tank, "hud", "tank id")
+  if widget == nil then
+    emit("hud", tank or 0, widget_id)
+    return
+  end
+  check("table", widget, "hud", "widget")
+  local text = widget.text
+  emit("hud", tank or 0, widget_id, text ~= nil and tostring(text) or "",
+    optional("number", widget.x, "hud", "x"), optional("number", widget.y, "hud", "y"),
+    optional("string", widget.align, "hud", "align"), optional("number", widget.size, "hud", "size"),
+    hud_color(widget.color, "color"), optional("number", widget.progress, "hud", "progress"),
+    hud_color(widget.bar_color, "bar_color"), optional("number", widget.width, "hud", "width"))
+end
+
 -- Definitions (load phase only; ignored while a round is running) ------------
 
 local function define(call, list, value, limit)

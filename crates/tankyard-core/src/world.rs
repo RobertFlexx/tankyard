@@ -20,6 +20,9 @@ pub struct World {
     pub admin_modifiers: BTreeMap<EntityId, crate::administration::Modifiers>,
     /// Incoming damage multipliers set by behavior mods.
     pub incoming_damage: BTreeMap<EntityId, f32>,
+    /// HUD widgets from behavior mods by pack, viewer (0 for everyone) and
+    /// widget id. Servers send each player theirs outside snapshots.
+    pub hud: BTreeMap<(String, EntityId, String), tankyard_mods::HudWidget>,
     /// Damage dealt during the current tick; never replicated.
     pub damage_log: Vec<DamageRecord>,
     pub bots_frozen: bool,
@@ -54,6 +57,15 @@ pub struct World {
     pub(crate) base_guard_timers: [f32; 4],
 }
 impl World {
+    /// The HUD widgets one player sees, in a stable order.
+    pub fn hud_for(&self, viewer: EntityId) -> Vec<tankyard_mods::HudWidget> {
+        self.hud
+            .iter()
+            .filter(|((_, shown_to, _), _)| *shown_to == 0 || *shown_to == viewer)
+            .map(|(_, widget)| widget.clone())
+            .take(tankyard_mods::MAX_HUD_SENT)
+            .collect()
+    }
     pub fn new(mut config: WorldConfig, content: Content) -> Self {
         if config.rules.validate().is_err() {
             config.rules = tankyard_mods::GameRules::default();
@@ -124,6 +136,7 @@ impl World {
         let mut world = Self {
             admin_modifiers: BTreeMap::new(),
             incoming_damage: BTreeMap::new(),
+            hud: BTreeMap::new(),
             damage_log: Vec::with_capacity(64),
             bots_frozen: false,
             grid: SpatialGrid::new(config.width, config.height),

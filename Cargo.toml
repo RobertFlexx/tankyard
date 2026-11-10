@@ -4,7 +4,7 @@ exclude = ["vendor/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.11.8"
+version = "0.12.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.88"
@@ -37,6 +37,8 @@ tankyard-server = { path = "crates/tankyard-server" }
 [patch.crates-io]
 # Metal improvements for Macs; see vendor/README.md.
 miniquad = { path = "vendor/miniquad" }
+# Luau for mod scripts, with LuaJIT-compatible output; see vendor/README.md.
+luau0-src = { path = "vendor/luau0-src" }
 
 [profile.release]
 lto = "thin"

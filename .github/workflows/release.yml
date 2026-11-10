@@ -55,7 +55,7 @@ jobs:
           cargo test --locked --workspace
       - name: Check installers
         run: |
-          shellcheck install.sh install-macos.sh scripts/build_linux_compatible.sh scripts/link_linux_compatible.sh scripts/compile_linux_compatible.sh
+          shellcheck install.sh install-macos.sh scripts/build_linux_compatible.sh scripts/link_linux_compatible.sh scripts/compile_linux_compatible.sh scripts/compile_linux_compatible_cxx.sh
           python -m unittest discover -s scripts/tests -v
       - name: Validate content and render offline
         run: |
@@ -176,7 +176,7 @@ jobs:
           tools = Path(os.environ["BINARY_DIR"]) / ("tankyard-tools" + suffix)
           packs = ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler")
           subprocess.run([str(tools), "validate-mods", *(arg for pack in packs for arg in ("--mod", f"mods/{pack}"))], check=True)
-          # A script error must unwind through the linked LuaJIT into a reported failure.
+          # A script error must unwind through the linked Luau (C++) into a reported failure.
           broken = Path(os.environ["RUNNER_TEMP"]) / "unwind_check"
           broken.mkdir(exist_ok=True)
           (broken / "mod.json").write_text('{"api_version": 2, "id": "unwind_check", "name": "Unwind check", "version": "1", "scripts": ["main.lua"]}', encoding="utf-8")

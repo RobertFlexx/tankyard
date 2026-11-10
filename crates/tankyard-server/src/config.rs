@@ -277,8 +277,9 @@ impl ServerSettings {
         {
             return invalid("shared_relay_ips must contain at most 16 unicast addresses");
         }
-        if !(1..=30).contains(&self.snapshot_rate) {
-            return invalid("snapshot_rate must be between 1 and 30");
+        // Up to one snapshot per simulation tick; clients blend by tick.
+        if !(1..=60).contains(&self.snapshot_rate) {
+            return invalid("snapshot_rate must be between 1 and 60");
         }
         if !self.interest_radius.is_finite() || !(400.0..=5000.0).contains(&self.interest_radius) {
             return invalid("interest_radius must be between 400 and 5000");

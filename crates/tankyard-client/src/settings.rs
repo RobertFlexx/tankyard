@@ -72,6 +72,8 @@ pub struct Settings {
     pub anisotropic_filtering: u8,
     pub camera_smoothing: f32,
     pub frame_cap: u32,
+    /// Lower frame rates, and the integrated GPU on Macs that have two.
+    pub battery_saver: bool,
     pub ui_scale: f32,
     pub effects: f32,
     pub shake: f32,
@@ -180,6 +182,7 @@ impl Default for Settings {
             anisotropic_filtering: 1,
             camera_smoothing: 0.75,
             frame_cap: 0,
+            battery_saver: false,
             ui_scale: 1.0,
             effects: 0.8,
             shake: 0.25,

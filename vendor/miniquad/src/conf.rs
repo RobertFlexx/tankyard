@@ -181,6 +181,10 @@ pub struct Platform {
     /// Whether to automatically setup the panic hook for Android.
     /// Set this to false if your app does its own panic_hook setup to avoid conflicts.
     pub android_panic_hook: bool,
+
+    /// Tank Yard: on Macs with two GPUs, render with the integrated one,
+    /// which runs cooler and uses less power. Others ignore it.
+    pub apple_low_power_gpu: bool,
 }
 
 impl Default for Platform {
@@ -197,6 +201,7 @@ impl Default for Platform {
             wayland_decorations: WaylandDecorations::default(),
             linux_wm_class: "miniquad-application",
             android_panic_hook: true,
+            apple_low_power_gpu: false,
         }
     }
 }

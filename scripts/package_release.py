@@ -74,6 +74,7 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
                     "CFBundleVersion": version.removeprefix("v").split("-")[0],
                     "LSMinimumSystemVersion": "11.0",
                     "NSHighResolutionCapable": True,
+                    "NSSupportsAutomaticGraphicsSwitching": True,
                     "NSMicrophoneUsageDescription": "Tank Yard uses your microphone for proximity voice chat when you unmute it.",
                 }, stream)
             subprocess.run(["codesign", "--force", "--sign", "-", str(app.parent)], check=True)

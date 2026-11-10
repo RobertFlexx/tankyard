@@ -61,7 +61,11 @@ def sign_app(app: Path) -> None:
               "--sign", APP_IDENTITY]
     entitlements = RESOURCES / "entitlements.plist"
     for binary in sorted((app / "Contents/MacOS").iterdir()):
-        if binary.name != "tankyard":
+        if binary.name == "tankyard-server":
+            # Hosted servers run mod scripts, which Luau compiles to machine code.
+            subprocess.run([*common, "--entitlements", str(RESOURCES / "server-entitlements.plist"),
+                            str(binary)], check=True)
+        elif binary.name != "tankyard":
             subprocess.run([*common, str(binary)], check=True)
     subprocess.run([*common, "--entitlements", str(entitlements), str(app)], check=True)
 

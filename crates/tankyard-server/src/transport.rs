@@ -42,6 +42,11 @@ pub(crate) struct Peer {
     /// Malformed or invalid packets within the current strike window.
     pub strikes: u32,
     pub strike_window: Duration,
+    /// The protocol version this client said hello with.
+    pub protocol: u32,
+    /// The last HUD list sent to this client, encoded, and when.
+    pub hud_sent: Option<Bytes>,
+    pub hud_sent_at: Duration,
 }
 #[derive(Default, Clone, Debug)]
 pub struct ServerMetrics {
@@ -480,6 +485,9 @@ impl UdpServer {
                             walls_sent_at: Duration::ZERO,
                             strikes: 0,
                             strike_window: Duration::ZERO,
+                            protocol: PROTOCOL_VERSION,
+                            hud_sent: None,
+                            hud_sent_at: Duration::ZERO,
                         },
                     );
                     let blocked = self
@@ -763,9 +771,12 @@ impl UdpServer {
                 self.reject(client, "Duplicate handshake.");
                 return;
             }
-            if protocol != PROTOCOL_VERSION {
+            if !(MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&protocol) {
                 self.reject(client, "Incompatible protocol version.");
                 return;
+            }
+            if let Some(peer) = self.peers.get_mut(&client) {
+                peer.protocol = protocol;
             }
             if let Some(party) = &self.settings.party {
                 if let Some(signature) = party_proof {
@@ -1206,10 +1217,19 @@ impl UdpServer {
             self.settings.name.clone()
         };
         self.send_control_bytes(client, self.game_data.clone());
+        // Clients check that the welcome carries their own version.
+        let protocol = self
+            .peers
+            .get_mut(&client)
+            .map_or(PROTOCOL_VERSION, |peer| {
+                // A new welcome starts a new HUD on the client.
+                peer.hud_sent = None;
+                peer.protocol
+            });
         self.send_control(
             client,
             &ServerControl::Welcome {
-                protocol: PROTOCOL_VERSION,
+                protocol,
                 content: self.content_hash,
                 player,
                 round: self.arenas[arena].session.world.match_state.round,
@@ -1651,6 +1671,44 @@ impl UdpServer {
                 }
             } else {
                 self.metrics.snapshots_skipped += 1;
+            }
+            // Mod HUDs change rarely; each client gets its whole list again
+            // when it differs, at most ten times a second. A congested
+            // channel skips the update and the next one catches up.
+            if peer.protocol >= MOD_HUD_PROTOCOL
+                && (!world.hud.is_empty() || peer.hud_sent.is_some())
+                && elapsed.saturating_sub(peer.hud_sent_at) >= Duration::from_millis(100)
+            {
+                let widgets = world.hud_for(entity);
+                let bytes = if widgets.is_empty() {
+                    None
+                } else {
+                    encode(&ServerControl::ModHud { widgets }, MAX_SERVER_CONTROL_BYTES)
+                        .ok()
+                        .map(Bytes::from)
+                };
+                if bytes != peer.hud_sent {
+                    let message = bytes.clone().map_or_else(
+                        || {
+                            encode(
+                                &ServerControl::ModHud { widgets: vec![] },
+                                MAX_SERVER_CONTROL_BYTES,
+                            )
+                            .ok()
+                            .map(Bytes::from)
+                        },
+                        Some,
+                    );
+                    if let Some(message) = message
+                        && self
+                            .server
+                            .can_send_message(client, CONTROL_CHANNEL, message.len())
+                    {
+                        self.server.send_message(client, CONTROL_CHANNEL, message);
+                        peer.hud_sent = bytes;
+                        peer.hud_sent_at = elapsed;
+                    }
+                }
             }
         }
         self.metrics.last_snapshot_micros =

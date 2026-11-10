@@ -1,12 +1,13 @@
-//! Sandboxed LuaJIT behavior packs.
+//! Sandboxed Luau behavior packs.
 //!
-//! Each pack runs in its own LuaJIT state, recreated every round. Scripts see
+//! Each pack runs in its own Luau state, recreated every round. Scripts see
 //! only computation libraries and the `tankyard` API: no files, processes,
 //! network, native code, bytecode or debug access. World data is lent to a
 //! script for the duration of one event, and every change it requests passes
 //! through the same validated command buffer as JSON hooks and native
-//! extensions. Instruction, memory and command budgets stop runaway scripts;
+//! extensions. Step, memory and command budgets stop runaway scripts;
 //! a failing pack is disabled without applying its partial batch.
+mod compat;
 mod sandbox;
 
 use mlua::{Function, Lua, LuaSerdeExt, Table, Value, Variadic};
@@ -22,11 +23,12 @@ use tankyard_mods::{
 };
 
 pub use sandbox::MEMORY_LIMIT;
-/// Instructions one event handler may run.
+/// Steps (loop iterations and calls) one event handler may run. The limits
+/// kept LuaJIT's instruction counts, which only ever allowed less work.
 pub const CALL_INSTRUCTIONS: u64 = 500_000;
-/// Instructions all of a pack's handlers may run in one simulation tick.
+/// Steps all of a pack's handlers may run in one simulation tick.
 pub const TICK_INSTRUCTIONS: u64 = 1_000_000;
-/// Instructions for loading a pack's scripts.
+/// Steps for loading a pack's scripts.
 pub const LOAD_INSTRUCTIONS: u64 = 20_000_000;
 const MAX_QUERY_RESULTS: usize = 256;
 const STAT_NAMES: [&str; 8] = [
@@ -79,7 +81,9 @@ impl Script {
         defining: bool,
     ) -> Result<Self, String> {
         let context = |e: mlua::Error| format!("{}: {}", info.id, clean_error(&e));
-        let sandbox = Sandbox::new(seed).map_err(|e| format!("{}: {e}", info.id))?;
+        let globals = sandbox::compile_globals(scripts.sources.values().map(String::as_str));
+        let sandbox =
+            Sandbox::new(seed, &globals, !defining).map_err(|e| format!("{}: {e}", info.id))?;
         sandbox
             .install_require(Arc::new(scripts.sources.clone()))
             .map_err(context)?;
@@ -91,11 +95,17 @@ impl Script {
             triggers.raw_set(trigger.name(), true).map_err(context)?;
         }
         sandbox.budget.begin(LOAD_INSTRUCTIONS);
-        let host: Table = lua
-            .load(PRELUDE)
-            .set_name("=tankyard")
-            .set_mode(mlua::chunk::ChunkMode::Text)
-            .set_environment(lua.globals())
+        // The prelude is mostly thin wrappers; only the per-event dispatch
+        // and the tank table constructor earn machine code.
+        let prelude = sandbox
+            .interpreted(|| {
+                sandbox
+                    .host_chunk("=tankyard", PRELUDE)
+                    .set_environment(lua.globals())
+                    .into_function()
+            })
+            .map_err(context)?;
+        let host: Table = prelude
             .call((native.clone(), triggers, defining))
             .map_err(context)?;
         for entry in &scripts.entries {
@@ -105,7 +115,11 @@ impl Script {
                 .ok_or_else(|| format!("{}: missing script {entry}", info.id))?;
             sandbox.run(entry, source).map_err(context)?;
         }
-        let tank = host.get("tank").map_err(context)?;
+        let tank: Function = host.get("tank").map_err(context)?;
+        let dispatch: Function = host.get("dispatch").map_err(context)?;
+        sandbox
+            .compile_native(&[&tank, &dispatch])
+            .map_err(context)?;
         Ok(Self {
             sandbox,
             native,
@@ -629,7 +643,99 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
                 score: count(arg(1), "score", 1_000_000.)?,
             },
         ),
+        "hud" => (
+            match arg(0) {
+                Some(Value::Integer(0)) => 0,
+                Some(Value::Number(n)) if *n == 0. => 0,
+                value => entity(value)?,
+            },
+            hud(args)?,
+        ),
         _ => return Err(rt(format!("unknown command {op:?}"))),
+    })
+}
+
+/// `tankyard.hud`'s arguments: tank, id, then the widget's fields (or none
+/// to remove it).
+fn hud(args: &[Value]) -> mlua::Result<Effect> {
+    let arg = |index: usize| args.get(index);
+    let id = match arg(1) {
+        Some(Value::String(id)) => id.to_string_lossy(),
+        _ => return Err(rt("tankyard.hud: widget id must be a string")),
+    };
+    if !tankyard_mods::identifier(&id) {
+        return Err(rt(
+            "tankyard.hud: widget ids use 1 to 48 lowercase letters, digits and underscores",
+        ));
+    }
+    if args.len() <= 2 {
+        return Ok(Effect::Hud { id, widget: None });
+    }
+    let raw = match arg(2) {
+        Some(Value::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    };
+    let text: String = raw.chars().filter(|c| !c.is_control()).collect();
+    let text = text.trim();
+    let mut clipped = String::new();
+    for c in text.chars() {
+        if clipped.len() + c.len_utf8() > 120 {
+            break;
+        }
+        clipped.push(c);
+    }
+    let field = |index: usize, what: &str, default: f32, low: f32, high: f32| {
+        let value = optional_number(arg(index), what)?.map_or(default, |v| v as f32);
+        if (low..=high).contains(&value) {
+            Ok(value)
+        } else {
+            Err(rt(format!(
+                "tankyard.hud: {what} must be between {low} and {high}"
+            )))
+        }
+    };
+    let color = |index: usize| {
+        optional_number(arg(index), "color").map(|value| {
+            value.map(|packed| {
+                let packed = packed as u32;
+                [(packed >> 16) as u8, (packed >> 8) as u8, packed as u8]
+            })
+        })
+    };
+    let align = match arg(5) {
+        Some(Value::String(align)) => match &*align.to_string_lossy() {
+            "left" => tankyard_mods::HudAlign::Left,
+            "center" => tankyard_mods::HudAlign::Center,
+            "right" => tankyard_mods::HudAlign::Right,
+            _ => {
+                return Err(rt(
+                    "tankyard.hud: align must be \"left\", \"center\" or \"right\"",
+                ));
+            }
+        },
+        _ => tankyard_mods::HudAlign::Center,
+    };
+    let progress = match optional_number(arg(8), "progress")? {
+        Some(p) if (0. ..=1.).contains(&p) => Some(p as f32),
+        Some(_) => return Err(rt("tankyard.hud: progress must be between 0 and 1")),
+        None => None,
+    };
+    if clipped.is_empty() && progress.is_none() {
+        return Err(rt("tankyard.hud: a widget needs text, progress or both"));
+    }
+    Ok(Effect::Hud {
+        id,
+        widget: Some(tankyard_mods::HudWidget {
+            text: clipped,
+            x: field(3, "x", 0.5, 0., 1.)?,
+            y: field(4, "y", 0.2, 0., 1.)?,
+            align,
+            size: field(6, "size", 18., 10., 48.)?,
+            color: color(7)?,
+            progress,
+            bar_color: color(9)?,
+            width: field(10, "width", 0.2, 0.02, 1.)?,
+        }),
     })
 }
 

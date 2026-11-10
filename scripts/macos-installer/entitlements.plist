@@ -5,5 +5,8 @@
     <!-- Proximity voice chat, only when the player unmutes. -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- Luau compiles mod scripts to machine code in MAP_JIT memory. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
 </dict>
 </plist>
