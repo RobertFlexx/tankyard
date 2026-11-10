@@ -124,6 +124,8 @@ pub struct CommunityServer {
     pub lobby_size: u16,
     pub bots: u16,
     pub password: String,
+    /// Loopback WebSocket listener for a separately configured TLS proxy.
+    pub websocket: bool,
 }
 impl Default for CommunityServer {
     fn default() -> Self {
@@ -134,6 +136,7 @@ impl Default for CommunityServer {
             lobby_size: 20,
             bots: 8,
             password: String::new(),
+            websocket: false,
         }
     }
 }

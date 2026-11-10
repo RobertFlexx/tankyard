@@ -34,6 +34,7 @@ pub(crate) struct Peer {
     pub last_owner_sequence: Option<u64>,
     pub party_nonce: Option<[u8; 32]>,
     pub party_in_menu: bool,
+    pub party_ready: bool,
     /// The arena this connection plays in.
     pub arena: usize,
     /// Wall geometry revision last carried in this peer's snapshots.
@@ -172,6 +173,9 @@ impl UdpServer {
         )
         .map_err(NetError)?;
         session.bots.difficulty = settings.difficulty;
+        if let Some(rules) = settings.rules_override {
+            session.world.set_rules(rules).map_err(NetError)?;
+        }
         let content_hash = session.bundle.fingerprint();
         let game_data = encode_game_data_message(&session.bundle)?;
         let socket = UdpSocket::bind(&settings.bind)?;
@@ -296,11 +300,11 @@ impl UdpServer {
             self.accumulator -= tick_time;
             catchup += 1;
             let started = std::time::Instant::now();
+            step_arenas(&mut self.arenas, &occupied);
             for (arena, &busy) in occupied.iter().enumerate() {
                 if !busy || arena >= self.arenas.len() {
                     continue;
                 }
-                self.arenas[arena].session.step();
                 self.replicate_events(arena);
                 let restart = {
                     let state = &mut self.arenas[arena];
@@ -480,6 +484,7 @@ impl UdpServer {
                             last_owner_sequence: None,
                             party_nonce: None,
                             party_in_menu: false,
+                            party_ready: false,
                             arena: 0,
                             walls_revision: None,
                             walls_sent_at: Duration::ZERO,
@@ -772,7 +777,7 @@ impl UdpServer {
                 return;
             }
             if !(MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&protocol) {
-                self.reject(client, "Incompatible protocol version.");
+                self.reject(client, protocol_mismatch(protocol));
                 return;
             }
             if let Some(peer) = self.peers.get_mut(&client) {
@@ -915,6 +920,17 @@ impl UdpServer {
         let permitted = self.settings.allow_sandbox
             && self.arenas[arena].session.world.config.mode == Mode::Sandbox;
         let accepted = match message {
+            ClientControl::PartyReady { ready } => {
+                if self.settings.party.is_some() {
+                    if let Some(peer) = self.peers.get_mut(&client) {
+                        peer.party_ready = ready;
+                    }
+                    self.party_roster_checked_at = None;
+                    true
+                } else {
+                    false
+                }
+            }
             ClientControl::PartyPresence { in_menu } => {
                 if self.settings.party.is_some() {
                     if let Some(peer) = self.peers.get_mut(&client) {
@@ -1941,6 +1957,7 @@ impl UdpServer {
             encode_game_data_message(&self.arenas[0].session.bundle).expect("validated game data");
         for peer in self.peers.values_mut() {
             peer.walls_revision = None;
+            peer.party_ready = false;
         }
     }
 
@@ -1959,6 +1976,51 @@ impl UdpServer {
 
 // Keeping the high-priority stuff in small ordered chunks means a crowded
 // fight can't silently erase every kill and capture event in one huge blob.
+/// Step every occupied arena once. Arenas share nothing, so on a server
+/// with several busy arenas each one steps on its own core; one busy arena
+/// (the common case) steps on this thread without spawning anything.
+fn step_arenas(arenas: &mut [crate::arena::Arena], occupied: &[bool]) {
+    // Most hosts have one busy arena: no allocation or thread bookkeeping.
+    if occupied.iter().filter(|&&busy| busy).take(2).count() < 2 {
+        for (arena, &busy) in arenas.iter_mut().zip(occupied) {
+            if busy {
+                arena.session.step();
+            }
+        }
+        return;
+    }
+    let mut busy: Vec<&mut crate::arena::Arena> = arenas
+        .iter_mut()
+        .zip(occupied)
+        .filter_map(|(arena, &busy)| busy.then_some(arena))
+        .collect();
+    // Linux answers this from cgroup files, so ask once, not every tick.
+    static CORES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let cores =
+        (*CORES.get_or_init(|| std::thread::available_parallelism().map_or(1, usize::from))).min(4);
+    if busy.len() < 2 || cores < 2 {
+        for arena in busy {
+            arena.session.step();
+        }
+        return;
+    }
+    let per_thread = busy.len().div_ceil(cores);
+    std::thread::scope(|scope| {
+        let mut chunks = busy.chunks_mut(per_thread);
+        let first = chunks.next();
+        for chunk in chunks {
+            scope.spawn(move || {
+                for arena in chunk {
+                    arena.session.step();
+                }
+            });
+        }
+        for arena in first.into_iter().flatten() {
+            arena.session.step();
+        }
+    });
+}
+
 fn encode_event_batches(round: u32, events: &[GameEvent]) -> Result<Vec<Vec<u8>>, DecodeError> {
     const MAX_EVENTS_PER_BATCH: usize = 128;
     events

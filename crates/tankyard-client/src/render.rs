@@ -428,6 +428,23 @@ pub fn world(
             }
         }
     }
+    if let Some(map) = map {
+        crate::scenery::floor(
+            map,
+            &snapshot.config,
+            snapshot.match_state.hidden_groups,
+            view,
+        );
+        crate::scenery::decorations(
+            map,
+            &snapshot.config,
+            snapshot.match_state.hidden_groups,
+            view,
+            animation_time,
+            false,
+            settings,
+        );
+    }
     let wall_scale = scale / snapshot.config.arena_scale.max(0.5);
     let arena_center = V2::new(snapshot.config.width * 0.5, snapshot.config.height * 0.5);
     let emblem_screen =
@@ -490,17 +507,36 @@ pub fn world(
             draw_rectangle(p.x, p.y, wall.w * z, wall.h * z, shadow);
         }
     }
-    for wall in snapshot.walls.iter().map(scaled) {
+    let styles = map.map(crate::scenery::block_styles);
+    for original in &snapshot.walls {
+        let wall = scaled(original);
         if !view.visible(wall.center(), wall.w.max(wall.h)) {
             continue;
         }
         let p = view.screen(V2::new(wall.x, wall.y));
-        tankyard_client::map_model::wall_geometry(
+        let (style, tint) = map.map_or(
+            (
+                tankyard_client::map_model::WallStyle::for_map(&snapshot.config.map),
+                None,
+            ),
+            |map| {
+                styles
+                    .as_ref()
+                    .expect("map has a style index")
+                    .collider_style(
+                        map,
+                        &snapshot.config,
+                        snapshot.match_state.hidden_groups,
+                        *original,
+                    )
+            },
+        );
+        crate::scenery::block(
             Rect::new(p.x, p.y, wall.w * z, wall.h * z),
-            tankyard_client::map_model::WallStyle::for_map(&snapshot.config.map),
+            style,
+            tint,
             dark,
             settings.shape_quality,
-            &mut draw_model_primitive,
         );
     }
     if snapshot.config.mode == Mode::Survival {
@@ -736,6 +772,29 @@ pub fn world(
         let r = boss.radius * z;
         if boss.attack_windup > 0. {
             let progress = 1. - boss.attack_windup / 0.9;
+            // Aim stays locked throughout a special's warning. Show the
+            // actual firing lanes for aimed attacks, not just a generic halo.
+            let lanes: &[f32] = match boss.kind {
+                tankyard_core::BossKind::SiegeEngine => &[-0.14, 0., 0.14],
+                tankyard_core::BossKind::Skirmisher => &[-0.36, -0.18, 0.18, 0.36],
+                tankyard_core::BossKind::Trapper => &[-1.76, -1.57, -1.38, 1.38, 1.57, 1.76],
+                tankyard_core::BossKind::Sentinel => &[-0.39, 0., 0.39],
+                _ => &[],
+            };
+            for offset in lanes {
+                let angle = boss.aim + offset;
+                let d = vec2(angle.cos(), angle.sin());
+                let start = p + d * (r + 4. * z);
+                let end = p + d * (r + 520. * z);
+                draw_line(
+                    start.x,
+                    start.y,
+                    end.x,
+                    end.y,
+                    (3. * z).max(1.),
+                    alpha(AMBER, 0.2 + progress * 0.35),
+                );
+            }
             draw_circle_lines(
                 p.x,
                 p.y,
@@ -967,6 +1026,17 @@ pub fn world(
                 c,
             );
         }
+    }
+    if let Some(map) = map {
+        crate::scenery::decorations(
+            map,
+            &snapshot.config,
+            snapshot.match_state.hidden_groups,
+            view,
+            animation_time,
+            true,
+            settings,
+        );
     }
     for popup in &effects.popups {
         let p = view.screen(popup.pos);

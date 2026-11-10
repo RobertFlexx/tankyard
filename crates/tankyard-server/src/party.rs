@@ -132,6 +132,7 @@ impl crate::UdpServer {
                     leader: self.access.grant(client, now).role
                         == tankyard_protocol::ServerRole::Owner,
                     in_menu: peer.party_in_menu,
+                    ready: peer.party_ready,
                 })
             })
             .collect();

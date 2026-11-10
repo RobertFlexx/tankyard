@@ -16,6 +16,9 @@ pub fn boss_color(kind: BossKind) -> Color {
         BossKind::Tempest => Color::new(0.18, 0.80, 0.90, 1.),
         BossKind::Bastion => Color::new(0.53, 0.66, 0.77, 1.),
         BossKind::Eclipse => Color::new(0.57, 0.38, 0.86, 1.),
+        BossKind::SiegeEngine => Color::new(0.69, 0.62, 0.41, 1.),
+        BossKind::Skirmisher => Color::new(0.25, 0.67, 0.77, 1.),
+        BossKind::Trapper => Color::new(0.75, 0.47, 0.31, 1.),
     }
 }
 
@@ -56,6 +59,22 @@ fn tint(color: Color, factor: f32) -> Color {
     )
 }
 
+fn plate(emit: &mut impl FnMut(Primitive), center: Vec2, size: Vec2, angle: f32, color: Color) {
+    let d = vec2(angle.cos(), angle.sin());
+    let side = vec2(-d.y, d.x);
+    let x = d * size.x * 0.5;
+    let y = side * size.y * 0.5;
+    emit(Primitive::Quad {
+        vertices: [
+            center - x - y,
+            center + x - y,
+            center + x + y,
+            center - x + y,
+        ],
+        color,
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn boss_model_geometry(
     kind: BossKind,
@@ -63,7 +82,7 @@ pub fn boss_model_geometry(
     r: f32,
     aim: f32,
     time: f32,
-    phase: u8,
+    _phase: u8,
     team_color: Option<Color>,
     emit: &mut impl FnMut(Primitive),
 ) {
@@ -130,16 +149,6 @@ pub fn boss_model_geometry(
             mount(emit, aim, 0.46, 1.10, 1.);
             hull(emit, p, 0, r, 0., color, edge);
             hull(emit, p, 0, r * 0.53, 0., tint(color, 0.9), edge * 0.55);
-            for n in 0..3 {
-                poly(
-                    emit,
-                    p + direction(aim + PI + (n as f32 - 1.) * 0.45) * r * 0.38,
-                    0,
-                    r * 0.10,
-                    0.,
-                    OUTLINE,
-                );
-            }
         }
         BossKind::Defender => {
             for n in 0..3 {
@@ -170,102 +179,178 @@ pub fn boss_model_geometry(
                 );
             }
         }
-        _ => {
-            let (sides, mounts, angle) = match kind {
-                BossKind::Sentinel => (6, 3, aim),
-                BossKind::Prism => (3, 3, rotate),
-                BossKind::Foundry => (5, 5, -rotate),
-                BossKind::Tempest => (8, 4, aim),
-                BossKind::Bastion => (4, 4, FRAC_PI_4),
-                _ => (7, 7, rotate),
-            };
-            for n in 0..mounts {
-                let a = aim + n as f32 * TAU / mounts as f32;
-                mount(
-                    emit,
-                    a,
-                    if kind == BossKind::Foundry {
-                        0.43
-                    } else {
-                        0.28
-                    },
-                    if kind == BossKind::Sentinel {
-                        1.05
-                    } else {
-                        0.90
-                    },
-                    if kind == BossKind::Foundry { 1.65 } else { 1. },
-                );
+        BossKind::Sentinel => {
+            for side in [-1., 1.] {
+                mount(emit, aim + side * 0.36, 0.34, 1.0, 1.);
             }
-            hull(emit, p, sides, r, angle, tint(color, 0.65), edge);
-            // Precisely nested armor, separated by a constant dark seam.
-            hull(emit, p, sides, r * 0.81, angle, color, edge * 0.65);
-            for n in 0..sides {
-                let a = angle + (n as f32 + 0.5) * TAU / sides as f32;
+            hull(emit, p, 6, r, aim, color, edge);
+            plate(emit, p, vec2(r * 0.54, r * 0.28), aim, tint(color, 0.68));
+        }
+        BossKind::Prism => {
+            for n in 0..3 {
+                mount(emit, rotate + n as f32 * TAU / 3., 0.25, 0.85, 1.);
+            }
+            hull(emit, p, 3, r, rotate, color, edge);
+            let a = p + direction(rotate) * r * 0.77;
+            let b = p + direction(rotate + TAU / 3.) * r * 0.77;
+            emit(Primitive::Triangle {
+                vertices: [p, a, b],
+                color: tint(color, 1.13),
+            });
+            poly(emit, p, 3, r * 0.25, rotate, tint(color, 0.62));
+        }
+        BossKind::Foundry => {
+            for side in [-1., 1.] {
+                mount(emit, aim + side * 1.0, 0.48, 0.82, 1.5);
+                let pod = p + direction(aim + side * FRAC_PI_2) * r * 0.64;
                 hull(
                     emit,
-                    p + direction(a) * r * 0.59,
+                    pod,
                     4,
-                    r * 0.105,
-                    a + FRAC_PI_4,
-                    tint(color, 1.12),
-                    edge * 0.3,
+                    r * 0.38,
+                    aim + FRAC_PI_4,
+                    tint(color, 0.72),
+                    edge * 0.7,
                 );
             }
-            let reactor = Color::new(0.90, 0.97, 1., 1.);
+            hull(emit, p, 4, r * 0.89, aim + FRAC_PI_4, color, edge);
+            plate(emit, p, vec2(r * 0.64, r * 0.46), aim, tint(color, 0.5));
+            for n in -1..=1 {
+                plate(
+                    emit,
+                    p + direction(aim) * n as f32 * r * 0.19,
+                    vec2(r * 0.07, r * 0.36),
+                    aim,
+                    tint(color, 1.1),
+                );
+            }
+        }
+        BossKind::Tempest => {
+            for side in [-1., 1.] {
+                mount(emit, aim + PI + side * 0.5, 0.3, 0.9, 1.);
+            }
+            mount(emit, aim, 0.3, 1.05, 1.);
+            hull(emit, p, 3, r, aim, color, edge);
+            emit(Primitive::Triangle {
+                vertices: [
+                    p + direction(aim) * r * 0.7,
+                    p + direction(aim + 2.5) * r * 0.43,
+                    p + direction(aim - 2.5) * r * 0.43,
+                ],
+                color: tint(color, 0.68),
+            });
+        }
+        BossKind::Bastion => {
+            mount(emit, aim, 0.48, 1.05, 1.);
+            hull(emit, p, 4, r, FRAC_PI_4, color, edge);
+            for n in 0..4 {
+                let corner = p + direction(FRAC_PI_4 + n as f32 * FRAC_PI_2) * r * 0.70;
+                hull(
+                    emit,
+                    corner,
+                    4,
+                    r * 0.23,
+                    FRAC_PI_4,
+                    tint(color, 0.72),
+                    edge * 0.65,
+                );
+            }
+            plate(emit, p, vec2(r * 0.44, r * 0.44), 0., tint(color, 0.56));
+        }
+        BossKind::Eclipse => {
+            mount(emit, aim + 0.8, 0.24, 0.82, 1.);
+            mount(emit, aim - 0.8, 0.24, 0.82, 1.);
+            hull(emit, p, 6, r, aim, tint(color, 0.76), edge);
             hull(
                 emit,
-                p,
-                if kind == BossKind::Bastion { 4 } else { 0 },
-                r * 0.34,
-                angle,
-                tint(color, 0.46),
-                edge * 0.8,
+                p - direction(aim) * r * 0.16,
+                6,
+                r * 0.63,
+                aim,
+                color,
+                edge * 0.6,
             );
-            poly(emit, p, 3 + phase.min(3), r * 0.22, -rotate * 2., reactor);
-            poly(emit, p, 0, r * 0.09, 0., color);
-        }
-    }
-    if matches!(
-        kind,
-        BossKind::Guardian
-            | BossKind::Summoner
-            | BossKind::Defender
-            | BossKind::FallenOverlord
-            | BossKind::FallenBooster
-    ) {
-        // Familiar broad silhouettes, with original reactor assemblies and
-        // precisely spaced armor inlays specific to Tank Yard's machines.
-        let (segments, angle, reach) = match kind {
-            BossKind::Guardian => (3, aim, 0.54),
-            BossKind::Summoner => (4, aim + FRAC_PI_4, 0.61),
-            BossKind::Defender => (3, rotate, 0.29),
-            BossKind::FallenOverlord => (4, aim + FRAC_PI_4, 0.72),
-            _ => (5, aim + PI, 0.70),
-        };
-        for i in 0..segments {
-            let a = angle + i as f32 * TAU / segments as f32;
-            let pos = p + direction(a) * r * reach;
-            hull(
+            plate(
                 emit,
-                pos,
-                4,
-                r * 0.065,
-                a + FRAC_PI_4,
-                tint(color, 0.74),
-                edge * 0.25,
+                p + direction(aim) * r * 0.25,
+                vec2(r * 0.16, r * 0.72),
+                aim,
+                tint(color, 0.45),
             );
         }
-        hull(
-            emit,
-            p,
-            if kind == BossKind::Summoner { 4 } else { 3 },
-            r * 0.18,
-            angle,
-            tint(color, 0.58),
-            edge * 0.42,
-        );
-        poly(emit, p, 0, r * 0.075, 0., Color::new(0.91, 0.97, 1., 1.));
+        BossKind::SiegeEngine => {
+            for side in [-1., 1.] {
+                let track = p + direction(aim + FRAC_PI_2) * r * 0.62 * side;
+                plate(emit, track, vec2(r * 1.40, r * 0.36), aim, OUTLINE);
+                plate(
+                    emit,
+                    track,
+                    vec2(r * 1.28, r * 0.24),
+                    aim,
+                    tint(color, 0.65),
+                );
+                for n in -2..=2 {
+                    plate(
+                        emit,
+                        track + direction(aim) * n as f32 * r * 0.24,
+                        vec2(edge * 0.8, r * 0.22),
+                        aim,
+                        OUTLINE,
+                    );
+                }
+            }
+            mount(emit, aim, 0.55, 1.25, 1.);
+            hull(emit, p, 4, r * 0.81, aim + FRAC_PI_4, color, edge);
+            plate(
+                emit,
+                p - direction(aim) * r * 0.20,
+                vec2(r * 0.4, r * 0.55),
+                aim,
+                tint(color, 0.72),
+            );
+        }
+        BossKind::Skirmisher => {
+            for side in [-1., 1.] {
+                let mount_at = p + direction(aim + side * 1.1) * r * 0.45;
+                cannon_profile(
+                    emit,
+                    mount_at,
+                    aim,
+                    r * 0.91,
+                    r * 0.23,
+                    color,
+                    0.,
+                    1.,
+                    Some(edge),
+                );
+            }
+            hull(emit, p, 3, r, aim, color, edge);
+            plate(
+                emit,
+                p - direction(aim) * r * 0.16,
+                vec2(r * 0.45, r * 0.28),
+                aim,
+                tint(color, 0.6),
+            );
+        }
+        BossKind::Trapper => {
+            for side in [-1., 1.] {
+                mount(emit, aim + side * 0.55, 0.40, 0.83, 1.4);
+            }
+            hull(emit, p, 6, r, aim, color, edge);
+            for side in [-1., 1.] {
+                let cassette = p + direction(aim + side * FRAC_PI_2) * r * 0.49;
+                hull(
+                    emit,
+                    cassette,
+                    3,
+                    r * 0.23,
+                    aim + side * FRAC_PI_2,
+                    tint(color, 0.6),
+                    edge * 0.6,
+                );
+            }
+        }
     }
 }
 

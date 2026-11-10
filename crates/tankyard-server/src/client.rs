@@ -494,6 +494,10 @@ impl NetworkClient {
                     if reason.len() > 1024 || reason.chars().any(char::is_control) {
                         return self.fail("Invalid server response.".into());
                     }
+                    // Servers before 0.14 give only this; they are older.
+                    if reason == "Incompatible protocol version." {
+                        return self.fail(SERVER_OUTDATED.into());
+                    }
                     return self.fail(reason);
                 }
                 ServerControl::Action { accepted, reason } => {
@@ -588,11 +592,12 @@ impl NetworkClient {
             if !snapshot_matches_player(&snapshot, self.player_id, self.player_round) {
                 return self.fail("Snapshot does not contain the assigned player.".into());
             }
-            if snapshot.config.rules != self.bundle.rules
-                || snapshot
-                    .tanks
-                    .iter()
-                    .any(|t| self.bundle.content.class(&t.class).is_none())
+            // Bundles carry a map's initial rules. Validated snapshots carry
+            // the current rules, which hosts may change without a restart.
+            if snapshot
+                .tanks
+                .iter()
+                .any(|t| self.bundle.content.class(&t.class).is_none())
             {
                 return self.fail("Snapshot does not match the server's game data.".into());
             }
@@ -706,6 +711,9 @@ impl NetworkClient {
     }
     pub fn party_presence(&mut self, in_menu: bool) -> bool {
         self.party_key.is_some() && self.queue_control(ClientControl::PartyPresence { in_menu })
+    }
+    pub fn party_ready(&mut self, ready: bool) -> bool {
+        self.party_key.is_some() && self.queue_control(ClientControl::PartyReady { ready })
     }
     pub fn join_room(&mut self, room: &str) -> bool {
         self.chat_enabled && self.queue_control(ClientControl::JoinRoom { room: room.into() })

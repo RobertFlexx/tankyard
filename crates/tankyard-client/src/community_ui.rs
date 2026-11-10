@@ -27,6 +27,8 @@ pub struct CommunityUi {
     permissions: Vec<Permission>,
     bots: usize,
     configuration: Option<MatchSettings>,
+    rules: tankyard_mods::GameRules,
+    rules_loaded: bool,
     match_mode: Mode,
     match_map: String,
     difficulty: usize,
@@ -62,6 +64,8 @@ impl Default for CommunityUi {
             permissions: tankyard_server::access::Grant::for_role(Role::Moderator).permissions,
             bots: 12,
             configuration: None,
+            rules: Default::default(),
+            rules_loaded: false,
             match_mode: Mode::Ffa,
             match_map: "open".into(),
             difficulty: 1,
@@ -397,15 +401,15 @@ impl CommunityUi {
         ) {
             self.admin_open = false;
         }
-        for (i, title) in ["Players", "Rooms", "Settings", "Audit", "Announce"]
+        for (i, title) in ["Players", "Rooms", "Settings", "Audit", "Announce", "Rules"]
             .iter()
             .enumerate()
         {
             if button(
                 Rect::new(
-                    r.x + 20.0 * s + i as f32 * 128.0 * s,
+                    r.x + 20.0 * s + i as f32 * 113.0 * s,
                     r.y + 50.0 * s,
-                    120.0 * s,
+                    105.0 * s,
                     29.0 * s,
                 ),
                 title,
@@ -416,6 +420,9 @@ impl CommunityUi {
                 self.tab = i;
                 self.reason_focus = false;
                 self.room_focus = false;
+                if i == 5 {
+                    self.rules_loaded = false;
+                }
             }
         }
         match self.tab {
@@ -423,6 +430,7 @@ impl CommunityUi {
             1 => self.rooms(client, r, s),
             2 => self.settings(client, r, s),
             3 => self.audit(client, r, s),
+            5 => self.rules(client, snapshot, r, s),
             _ => self.announcements(client, r, s),
         }
         let notice = fitted_label(&self.notice, 13. * s, r.w - 40. * s);
@@ -755,6 +763,52 @@ impl CommunityUi {
                 },
             );
         }
+    }
+    fn rules(&mut self, client: &mut NetworkClient, snapshot: &Snapshot, r: Rect, s: f32) {
+        if !self.rules_loaded {
+            self.rules = snapshot.config.rules;
+            self.rules_loaded = true;
+        }
+        let enabled = client.permissions.contains(&Permission::Configure);
+        let body = Rect::new(r.x + 22. * s, r.y + 104. * s, r.w - 44. * s, 290. * s);
+        set_interactive(enabled);
+        crate::rules_ui::controls(&mut self.rules, body, s);
+        crate::rules_ui::presets(
+            &mut self.rules,
+            Rect::new(body.x, r.y + 389. * s, body.w, 30. * s),
+            s,
+        );
+        set_interactive(true);
+        if button(
+            Rect::new(body.x, r.y + 438. * s, 260. * s, 35. * s),
+            "Apply live rules",
+            true,
+            enabled,
+            s * 0.9,
+        ) {
+            self.submit(client, ServerCommand::ConfigureRules { rules: self.rules });
+        }
+        if small_button(
+            Rect::new(body.x + 282. * s, r.y + 438. * s, 160. * s, 35. * s),
+            "Read current",
+            s * 0.8,
+        ) {
+            self.rules = snapshot.config.rules;
+        }
+        label(
+            "Applies to every arena. Health keeps its current percentage.",
+            body.x,
+            r.y + 501. * s,
+            13. * s,
+            muted_color(),
+        );
+        label(
+            "No restart; customized rounds do not earn standard records.",
+            body.x,
+            r.y + 525. * s,
+            13. * s,
+            muted_color(),
+        );
     }
     fn settings(&mut self, client: &mut NetworkClient, r: Rect, s: f32) {
         let x = r.x + 20.0 * s;

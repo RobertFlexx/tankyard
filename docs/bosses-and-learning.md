@@ -1,6 +1,6 @@
 # Bosses, arenas, voice, and learning
 
-Random boss events run in Free For All, Two Teams, Four Teams, Maze, and Random Events. After a 60-second initial grace period, the server makes **one aggregate 0.25% roll per simulation second**. A successful roll chooses uniformly among all eleven boss types. This is not a per-frame or per-type probability. Only one random boss can be active, with a 90-second grace period after it disappears. Dedicated Boss Rush and Co-op waves keep their own schedules; Sandbox bosses remain manual.
+Random boss events run in Free For All, Two Teams, Four Teams, Maze, and Random Events. After a 60-second initial grace period, the server makes **one aggregate 0.25% roll per simulation second**. A successful roll chooses uniformly among all fourteen boss types. This is not a per-frame or per-type probability. Only one random boss can be active, with a 90-second grace period after it disappears. Dedicated Boss Rush and Co-op waves keep their own schedules; Sandbox bosses remain manual.
 
 Boss arrivals use a reliable, deduplicated event: an original 48 kHz alarm, a brief red pulse, and a top-center banner that expires after five seconds. Reduced Motion suppresses the red flash. Audio Disabled and the master/effects volume controls apply to the alarm independently of microphone mute and voice volume. Bosses remain stationary and cannot deal contact damage during their first two seconds. Spawns search for free space away from tanks and fail safely if the map cannot accommodate them.
 
@@ -13,10 +13,13 @@ Boss arrivals use a reliable, deduplicated event: an original 48 kHz alarm, a br
 | Fallen Booster | Gray Booster hull, front cannon and four rear thrusters, fast pursuit | 82 |
 | Sentinel | Hexagonal armor, phased forward shell spreads | 90 |
 | Prism | Triangular armor, rotating ricocheting volleys | 90 |
-| Foundry | Pentagon, capped drone escorts and deployed turrets | 100 |
-| Tempest | Octagonal armor, homing salvos and telegraphed lunges | 78 |
+| Foundry | Armored workshop hull, capped drone escorts and deployed turrets | 100 |
+| Tempest | Arrowhead hull, homing salvos and telegraphed lunges | 78 |
 | Bastion | Square armor, rotating mine ring and explosive cannon | 100 |
-| Eclipse | Seven-sided armor, phase-dependent radial bursts and charge | 90 |
+| Eclipse | Offset hexagonal plates and phased radial bursts | 90 |
+| Siege Engine | Tracked chassis and a slow, heavy siege gun | 104 |
+| Skirmisher | Twin cannons, fast orbit and a straight charge | 72 |
+| Trapper | Twin trap launchers and side-pocket mines | 88 |
 
 The classic bosses were researched through the community's original game observations: [Guardian](https://diepio.fandom.com/wiki/Guardian), [Summoner](https://diepio.fandom.com/wiki/Summoner), [Defender](https://diepio.fandom.com/wiki/Defender), [Fallen Overlord](https://diepio.fandom.com/wiki/Fallen_Overlord), and [Fallen Booster](https://diepio.fandom.com/wiki/Fallen_Booster). Their recognizable silhouettes and arsenals are recreated with original vector geometry. Tank Yard uses its own sizes, damage values, phases, spawn schedule, and combat rules. No external game artwork or code is included.
 
@@ -44,10 +47,12 @@ cargo run --locked -p tankyard-client --bin tankyard-models -- --bosses --column
 
 ## v0.2.16 combat update
 
-Bosses now start at roughly 4,590–6,885 health before higher waves and participant scaling, with larger health reserves for defensive hulls. All eleven bosses add a secondary attack cycle with a 0.9-second white-ring windup. The new attacks complement their primary weapons: drone bosses add suppression fans, defensive bosses place trap rings with gaps, pursuers launch seeking volleys and charges, Sentinel fires an aimed piercing fan, Prism/Eclipse alternate patterned rings, and Foundry combines explosive fans with mine screens. The recognizable broad classic silhouettes now have original reactor cores and armor inlays. All shots retain normal wall collision, finite lifetime, projectile caps, and applicable parry/stasis counterplay. The aggregate random encounter chance remains 0.25% per simulation second.
+Bosses now start at roughly 4,590–6,885 health before higher waves and participant scaling, with larger health reserves for defensive hulls. All fourteen bosses have a secondary attack cycle with a 0.9-second white-ring windup. The new attacks complement their primary weapons: drone bosses add suppression fans, defensive bosses place trap rings with gaps, pursuers launch seeking volleys and charges, Sentinel fires an aimed piercing fan, Prism/Eclipse alternate patterned rings, and Foundry combines explosive fans with mine screens. Special attacks lock their aim during the warning. Each boss has a distinct silhouette with clean armor panels and mounts. All shots retain normal wall collision, finite lifetime, projectile caps, and applicable parry/stasis counterplay. The aggregate random encounter chance remains 0.25% per simulation second.
 
 ## v0.3.0 balance
 
 Summoner drones acquire players within 820 units of the drone instead of 1000, stop selecting targets beyond 950 units of the boss, and return to guard once beyond a 1050-unit owner leash. Their damage is 18 instead of 20 and four-drone replenishment takes 0.72 seconds instead of 0.6. Swarm caps remain unchanged. Guardian, Fallen Overlord, and Foundry drones also have archetype-specific leashes and observe cover, spawn protection, and the boss's restraint toward distant players below level 15.
 
 Every boss pauses primary fire during its special-attack warning and leaves at least 0.4 seconds after the secondary volley before its next primary. Fallen Booster's normal speed is 180 instead of 195 and front bullet damage is 19 instead of 21. Prism's primary rings fire every 1.45 seconds instead of 1.3, last 4.2 seconds instead of 5, and ricochet once instead of twice. Bastion mines deal 27 instead of 32 damage and last 6.5 instead of 8 seconds. Tempest fires every 1.05 seconds instead of 0.9, with a fan centered on its aim. The larger health reserves and aggregate encounter probability remain unchanged.
+
+Siege Engine holds a firing lane with slow, heavy shells. Skirmisher circles at speed and telegraphs a straight charge. Trapper places two mine pockets with a clear lane between them. The three have dedicated offline practice encounters.

@@ -95,6 +95,13 @@ impl World {
 
     /// Returns zero if the map cannot accommodate the boss safely.
     pub fn spawn_boss(&mut self, kind: BossKind) -> EntityId {
+        self.spawn_boss_from(kind, None)
+    }
+    /// A boss arriving as close to `near` as is safe, as map triggers ask.
+    pub fn spawn_boss_near(&mut self, kind: BossKind, near: V2) -> EntityId {
+        self.spawn_boss_from(kind, Some(near))
+    }
+    fn spawn_boss_from(&mut self, kind: BossKind, near: Option<V2>) -> EntityId {
         if self.bosses.len() >= 16 {
             return 0;
         }
@@ -102,14 +109,25 @@ impl World {
         let radius = kind.radius();
         let mut best = None;
         let mut safety = f32::NEG_INFINITY;
+        let inside = |p: V2| {
+            V2::new(
+                p.x.clamp(bounds.x + radius + 30., bounds.x + bounds.w - radius - 30.),
+                p.y.clamp(bounds.y + radius + 30., bounds.y + bounds.h - radius - 30.),
+            )
+        };
         for attempt in 0..128 {
-            let pos = if attempt == 0 {
-                bounds.center()
-            } else {
-                V2::new(
+            let pos = match near {
+                // Spiral outward from the requested point.
+                Some(near) => {
+                    let turn = attempt as f32 * 2.4;
+                    let reach = attempt as f32 * 14.;
+                    inside(near + V2::new(turn.cos(), turn.sin()) * reach)
+                }
+                None if attempt == 0 => bounds.center(),
+                None => V2::new(
                     bounds.x + radius + 30. + self.random() * (bounds.w - 2. * radius - 60.),
                     bounds.y + radius + 30. + self.random() * (bounds.h - 2. * radius - 60.),
-                )
+                ),
             };
             if !self.position_clear(pos, radius + 25.)
                 || self
@@ -125,6 +143,12 @@ impl World {
                 .filter(|t| t.alive)
                 .map(|t| t.pos.distance(pos) - t.radius - radius)
                 .fold(1500., f32::min);
+            if near.is_some() && nearest >= 160. {
+                // The nearest safe point, not the emptiest corner.
+                safety = nearest;
+                best = Some(pos);
+                break;
+            }
             if nearest > safety {
                 safety = nearest;
                 best = Some(pos);
@@ -142,9 +166,9 @@ impl World {
         }
         let health = (4400. + f32::from(self.match_state.boss_wave.max(1)) * 700.)
             * match kind {
-                BossKind::Bastion | BossKind::Defender => 1.35,
+                BossKind::Bastion | BossKind::Defender | BossKind::SiegeEngine => 1.35,
                 BossKind::Guardian | BossKind::Summoner => 1.15,
-                BossKind::Tempest | BossKind::FallenBooster => 0.9,
+                BossKind::Tempest | BossKind::FallenBooster | BossKind::Skirmisher => 0.9,
                 _ => 1.,
             };
         let health = health * (1. + self.tanks.len().saturating_sub(4).min(16) as f32 * 0.045);
@@ -245,12 +269,20 @@ impl World {
             let to = b.goal - b.pos;
             let velocity = target.map_or(V2::ZERO, |(_, _, v)| v);
             let lead = (to.length() / 420.).clamp(0., 0.7);
-            if b.tactic != BossTactic::Windup && b.tactic != BossTactic::Charge {
+            if b.tactic != BossTactic::Windup
+                && b.tactic != BossTactic::Charge
+                && b.attack_windup <= 0.
+            {
                 let aim = (to + velocity * lead).angle();
                 let difference = (aim - b.aim + std::f32::consts::PI)
                     .rem_euclid(std::f32::consts::TAU)
                     - std::f32::consts::PI;
-                b.aim += difference.clamp(-2.8 * DT, 2.8 * DT);
+                let turn_rate = if b.kind == BossKind::SiegeEngine {
+                    0.85
+                } else {
+                    2.8
+                };
+                b.aim += difference.clamp(-turn_rate * DT, turn_rate * DT);
             }
             b.tactic_time = (b.tactic_time - DT).max(0.);
             let speed = if b.mothership {
@@ -263,6 +295,9 @@ impl World {
                     BossKind::Guardian => 90.,
                     BossKind::Summoner => 45.,
                     BossKind::FallenOverlord => 65.,
+                    BossKind::SiegeEngine => 25.,
+                    BossKind::Skirmisher => 145.,
+                    BossKind::Trapper => 62.,
                     BossKind::Foundry | BossKind::Bastion | BossKind::Defender => 32.,
                     _ => 55.,
                 }
@@ -272,6 +307,9 @@ impl World {
                 BossKind::Guardian => 330.,
                 BossKind::Summoner | BossKind::FallenOverlord | BossKind::Foundry => 540.,
                 BossKind::Bastion | BossKind::Defender => 650.,
+                BossKind::SiegeEngine => 720.,
+                BossKind::Skirmisher => 420.,
+                BossKind::Trapper => 580.,
                 _ => 450.,
             };
             let depleted = b.kind.drone_limit() > 0 && owned < b.kind.drone_limit() / 3;
@@ -317,11 +355,14 @@ impl World {
                     evasion += side * if delta.dot(side) < 0. { -1. } else { 1. };
                 }
             }
-            if b.tactic != BossTactic::Charge {
+            if b.tactic != BossTactic::Charge
+                && b.tactic != BossTactic::Windup
+                && b.attack_windup <= 0.
+            {
                 desired += evasion.clamp_length(1.) * speed * 0.7;
             }
             desired = boss_clear_steering(b.pos, desired, b.radius, bounds, &self.walls);
-            if b.arrival > 0. {
+            if b.arrival > 0. || b.attack_windup > 0. {
                 desired = V2::ZERO;
             }
             b.vel = b.vel.lerp(desired, 1. - (-DT * 3.5).exp());
@@ -401,6 +442,55 @@ impl World {
                 // wall collisions, parries, lifetime and resource limits.
                 let turn = f32::from(b.attack) * 0.33;
                 match b.kind {
+                    BossKind::SiegeEngine => {
+                        // A locked, slow-turning siege gun. The broad warning
+                        // leaves time to cross its firing line before the salvo.
+                        for n in -1..=1 {
+                            emit(
+                                b.aim + n as f32 * 0.14,
+                                ProjectileKind::Explosive,
+                                380.,
+                                38.,
+                                14.,
+                                3.,
+                                1.8,
+                                0,
+                            );
+                        }
+                    }
+                    BossKind::Skirmisher => {
+                        for n in [-2., -1., 1., 2.] {
+                            emit(
+                                b.aim + n * 0.18,
+                                ProjectileKind::Bullet,
+                                420.,
+                                18.,
+                                7.,
+                                2.4,
+                                1.2,
+                                0,
+                            );
+                        }
+                        b.tactic = BossTactic::Windup;
+                        b.tactic_time = 0.55;
+                    }
+                    BossKind::Trapper => {
+                        // Two side pockets leave the whole forward lane open.
+                        for side in [-1., 1.] {
+                            for n in -1..=1 {
+                                emit(
+                                    b.aim + side * std::f32::consts::FRAC_PI_2 + n as f32 * 0.19,
+                                    ProjectileKind::Mine,
+                                    230.,
+                                    23.,
+                                    11.,
+                                    5.,
+                                    2.2,
+                                    0,
+                                );
+                            }
+                        }
+                    }
                     BossKind::Guardian | BossKind::Summoner | BossKind::FallenOverlord => {
                         for n in 0..12 {
                             let a = b.aim + turn + (n as f32 - 5.5) * 0.24;
@@ -509,6 +599,40 @@ impl World {
                 continue;
             }
             match b.kind {
+                BossKind::SiegeEngine => {
+                    emit(b.aim, ProjectileKind::Shell, 390., 34., 15., 3., 2.5, 0);
+                    b.timer = 1.65;
+                }
+                BossKind::Skirmisher => {
+                    for n in [-1., 1.] {
+                        emit(
+                            b.aim + n * 0.055,
+                            ProjectileKind::Bullet,
+                            450.,
+                            14.,
+                            7.,
+                            2.2,
+                            1.3,
+                            0,
+                        );
+                    }
+                    b.timer = 0.68;
+                }
+                BossKind::Trapper => {
+                    for n in [-1., 1.] {
+                        emit(
+                            b.aim + n * 0.55,
+                            ProjectileKind::Trap,
+                            240.,
+                            21.,
+                            11.,
+                            4.,
+                            2.5,
+                            0,
+                        );
+                    }
+                    b.timer = 1.35;
+                }
                 BossKind::Guardian => {
                     for n in 0..4 {
                         emit(

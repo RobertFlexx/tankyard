@@ -353,7 +353,7 @@ All commands need a tank ID where they act on a tank. Values outside the bounds 
 | `fire(id, { speed, damage, radius, lifetime, angle })` | an extra bullet: speed 1–1,600 (520), damage 0–10,000 (20), radius 1–60 (8), lifetime 0.05–30 s (2), angle relative to aim (0) |
 | `control(id, { x =, y =, aim =, fire =, ability = })` | drives a tank for this tick: movement `x`, `y` from −1 to 1, `aim` in radians (default: current aim), `fire` and `ability` booleans. Runs after bots decide, before physics |
 | `spawn_shape(x, y, { sides, health, xp })` | a shape: 3–12 sides (4), health 1–10,000 (60), up to 1,000,000 XP (25) |
-| `spawn_boss(name)` | `"Sentinel"`, `"Prism"`, `"Foundry"`, `"Tempest"`, `"Bastion"`, `"Eclipse"`, `"Guardian"`, `"Summoner"`, `"Defender"`, `"Fallen Overlord"` or `"Fallen Booster"` (case and spaces don't matter) |
+| `spawn_boss(name)` | `"Sentinel"`, `"Prism"`, `"Foundry"`, `"Tempest"`, `"Bastion"`, `"Eclipse"`, `"Guardian"`, `"Summoner"`, `"Defender"`, `"Fallen Overlord"`, `"Fallen Booster"`, `"Siege Engine"`, `"Skirmisher"` or `"Trapper"` (case and spaces don't matter) |
 | `clear_projectiles(id)` | removes a tank's projectiles; with no ID, every projectile except base guardians' |
 | `announce(text)` | a message to everyone, up to 160 characters |
 | `finish_round(team, reason)` | ends the round; team 0–4 (0 or `nil` for no winner) |
@@ -394,7 +394,7 @@ end)
 
 Widget IDs use lowercase letters, digits and `_`. A pack may show 16 widgets to everyone and 16 to each player, and a player receives at most 64 from all packs. Bots have no screen, so widgets for bots are dropped. Widgets end with the round, with their player, or when the pack is disabled.
 
-The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. Clients draw exactly what they receive. Players need Tank Yard 0.12 or later to see widgets; older clients still join and play.
+The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. Clients draw exactly what they receive. HUD widgets were introduced in 0.12. Extended map features use protocol 24; players and servers must use matching supported protocols.
 
 ### Defining content
 
@@ -648,6 +648,33 @@ Map definitions use the schema of [`assets/content/maps.json`](../assets/content
 | `spawn_regions` | `{ "team": 0–4, "rect": [x, y, w, h] }`; team 0 is everyone |
 | `team_bases` | `{ "team": 1–4, "position": [x, y] }` |
 | `background` | a background name, such as `"teal"` |
+
+The [Arena Workshop](map-editor.md) creates these definitions without writing code. Optional extended fields use protocol 24:
+
+- `style`: `map`, `slate`, `garden`, `circuit`, `bastion`, `relay`, `orrery` or `sand`.
+- `blocks`: `{ "rect": [x,y,w,h], "style": "slate", "color": [r,g,b], "group": 0 }`. Color is optional; these are solid, axis-aligned rectangles.
+- `zones`: `{ "kind": "speed", "rect": [x,y,w,h], "strength": 1, "group": 0 }`. Kinds are `speed`, `mud`, `repair`, `hazard`, `shelter`; strength is 0.25–2. See the [pad formulas](map-editor.md#objects).
+- `decor`: `{ "kind": "tile", "rect": [x,y,w,h], "color": [120,160,190], "alpha": 255, "rotation": 0, "pulse": 0, "spin": 0, "above": false, "text": "", "effect": null, "group": 0 }`. Kinds: `tile`, `stripes`, `light`, `ring`, `arrow`, `label`, `emitter`. Rotation/spin are degrees; pulse is cycles/second. Text has at most 64 characters.
+- `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`. Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`). The [trigger guide](map-editor.md#groups-and-triggers) explains schedules, entry edges and restoration.
+- `hidden_groups`: groups 1–32 hidden at round start. Group 0 is always visible. Blocks, zones and decor sharing a group change together.
+
+Emitters' `effect` is an optional particle profile. Defaults are:
+
+```json
+{
+  "shape": "dot", "rate": 8, "lifetime": 1.6,
+  "speed": 60, "direction": 270, "spread": 50,
+  "gravity": 0, "drag": 0.6, "size": 9, "end_size": 3,
+  "color": [255,200,90], "end_color": [230,90,60],
+  "fade": true, "spin": 0
+}
+```
+
+Particle shapes are `dot`, `square`, `spark`, `ring`, `triangle`. Rate is 0.2–60/s, lifetime 0.1–8 s, speed 0–800, spread 0–360°, gravity ±800, drag 0–8, initial size 1–120, final size 0–120, and spin ±1080°/s. `rate × lifetime` must not exceed 240. Colors are three bytes; direction 0° points right and 90° down.
+
+Maps allow 2,048 walls/blocks combined, 256 zones, 1,024 decor items (48 emitters), 128 triggers, 32 spawn regions, 4 team bases and 32 objectives. Geometry validation also has a catalog-wide work budget. Dimensions are 900–16,000 by 700–16,000 world units. Every rectangle must fit inside `[0,1]²`. Validation checks starting collision/connectivity, finite values and count limits before accepting a pack.
+
+Boss IDs are `sentinel`, `prism`, `foundry`, `tempest`, `bastion`, `eclipse`, `guardian`, `summoner`, `defender`, `fallen_overlord`, `fallen_booster`, `siege_engine`, `skirmisher`, `trapper`. Boss triggers use these IDs. Scripts' `spawn_boss` also accepts the existing display names.
 
 ### Textures and models
 

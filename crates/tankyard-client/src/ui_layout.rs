@@ -11,6 +11,16 @@ struct Canvas {
 thread_local! {
     static CANVAS: Cell<Option<Canvas>> = const { Cell::new(None) };
     static WHEEL_CLAIM: Cell<Option<Rect>> = const { Cell::new(None) };
+    /// The lowest point the current page has drawn, in page units.
+    static REACH: Cell<f32> = const { Cell::new(0.) };
+}
+/// Record that the page shows text or an image down to `y` (page units), so
+/// the panel scrolls far enough to show it. Panels and outlines may tuck under
+/// the footer by design, so only `ui::label` and `ui::ui_texture` call this.
+pub fn reach(y: f32) {
+    if y.is_finite() && CANVAS.with(|c| c.get().is_some()) {
+        REACH.with(|r| r.set(r.get().max(y)));
+    }
 }
 pub fn height() -> f32 {
     CANVAS.with(|c| c.get().map_or_else(screen_height, |c| c.height))
@@ -88,10 +98,17 @@ pub struct ScrollPanel {
 impl ScrollPanel {
     pub fn reset(&mut self) {
         *self = Self::default();
+        REACH.with(|r| r.set(0.));
     }
     pub fn begin(&mut self, s: f32, top: f32, bottom: f32, anchor: Option<f32>) -> CanvasGuard {
         let height = screen_height().max(800. * s);
-        let maximum = (height - 79. * s - bottom).max(0.);
+        // Pages are laid out on an 800-unit canvas, but text can run past it
+        // (long credits, wrapped notices): the last frame's lowest text
+        // extends the range, with a little room below it.
+        let drawn = REACH.with(|r| r.replace(0.));
+        let maximum = (height - 79. * s - bottom)
+            .max(drawn + 6. * s - bottom)
+            .max(0.);
         if self.previous_scale > 0.
             && let Some(anchor) = anchor
         {
@@ -155,6 +172,20 @@ impl ScrollPanel {
     }
 }
 pub struct CanvasGuard;
+/// An independently scrolled tool panel, with drawing and hit testing in the
+/// same coordinates. The caller measures its own content and scroll range.
+pub fn region(clip: Rect, height: f32, offset: f32) -> CanvasGuard {
+    CANVAS.with(|canvas| {
+        assert!(canvas.get().is_none(), "nested menu canvas");
+        canvas.set(Some(Canvas {
+            height,
+            offset,
+            clip,
+        }));
+    });
+    scissor(Some(clip));
+    CanvasGuard
+}
 impl Drop for CanvasGuard {
     fn drop(&mut self) {
         scissor(None);

@@ -59,7 +59,24 @@ pub fn start_command() -> String {
     let server = server_executable()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "tankyard-server".into());
-    format!("\"{server}\" --config \"{}\"", config_path().display())
+    let quote = |value: &str| {
+        let escaped = if cfg!(windows) {
+            value.replace('\'', "''")
+        } else {
+            value.replace('\'', "'\\''")
+        };
+        format!("'{escaped}'")
+    };
+    let directory = quote(&server_dir().to_string_lossy());
+    let server = quote(&server);
+    let config = quote(&config_path().to_string_lossy());
+    if cfg!(windows) {
+        format!(
+            "Set-Location -LiteralPath {directory} -ErrorAction Stop; & {server} --config {config}"
+        )
+    } else {
+        format!("cd {directory} && {server} --config {config}")
+    }
 }
 
 /// The address other computers on this network use to reach `port`.
@@ -78,10 +95,20 @@ pub fn settings(
     mods: Vec<PathBuf>,
     difficulty: &str,
 ) -> Result<ServerSettings, String> {
+    let mods = mods
+        .into_iter()
+        .map(std::path::absolute)
+        .collect::<std::io::Result<_>>()
+        .map_err(|e| format!("Could not resolve a mod path: {e}"))?;
     // Bans and logs use the server's relative defaults, inside `server_dir`.
     let settings = ServerSettings {
         name: server.name.clone(),
         bind: format!("0.0.0.0:{}", server.port),
+        websocket: if server.websocket {
+            "127.0.0.1:8080".into()
+        } else {
+            String::new()
+        },
         max_players: usize::from(server.max_players),
         arena_capacity: usize::from(server.lobby_size),
         bot_count: usize::from(server.bots),

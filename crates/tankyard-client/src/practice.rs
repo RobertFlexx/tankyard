@@ -20,7 +20,7 @@ pub struct Challenge {
     pub seconds: u32,
     pub goal: Goal,
 }
-pub const CHALLENGES: [Challenge; 8] = [
+pub const CHALLENGES: [Challenge; 11] = [
     Challenge {
         id: "shape_sprint",
         title: "Shape sprint",
@@ -109,8 +109,51 @@ pub const CHALLENGES: [Challenge; 8] = [
         seconds: 180,
         goal: Goal::Kills(3),
     },
+    Challenge {
+        id: "siege_school",
+        title: "Break the siege",
+        description: "Defeat the Siege Engine in four minutes with a complete Reprisal build.",
+        tip: "The gun locks its aim before firing. Cross the warning lanes, then counterattack while it recovers.",
+        class: "reprisal",
+        level: 55,
+        bots: 0,
+        seconds: 240,
+        goal: Goal::Boss,
+    },
+    Challenge {
+        id: "skirmisher_hunt",
+        title: "Cut off the skirmisher",
+        description: "Defeat the Skirmisher in three minutes with the Gunner.",
+        tip: "Lead its orbit. After its warning it charges straight ahead; move sideways instead of backing away.",
+        class: "gunner",
+        level: 45,
+        bots: 0,
+        seconds: 180,
+        goal: Goal::Boss,
+    },
+    Challenge {
+        id: "trapper_hunt",
+        title: "Clear the minefield",
+        description: "Defeat the Trapper in four minutes with the Triple Trapper.",
+        tip: "Keep the forward lane open. Its special attack lays mines at the sides, leaving a path through the center.",
+        class: "tri_bastion",
+        level: 45,
+        bots: 0,
+        seconds: 240,
+        goal: Goal::Boss,
+    },
 ];
 impl Challenge {
+    pub fn boss(self) -> Option<tankyard_core::BossKind> {
+        use tankyard_core::BossKind;
+        match self.id {
+            "boss_hunt" => Some(BossKind::Sentinel),
+            "siege_school" => Some(BossKind::SiegeEngine),
+            "skirmisher_hunt" => Some(BossKind::Skirmisher),
+            "trapper_hunt" => Some(BossKind::Trapper),
+            _ => None,
+        }
+    }
     pub fn config(self, seed: u64) -> WorldConfig {
         WorldConfig {
             mode: if self.goal == Goal::Survive {

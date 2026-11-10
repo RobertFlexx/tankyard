@@ -36,6 +36,7 @@ fn draw_circle_lines(x: f32, y: f32, radius: f32, thickness: f32, color: Color) 
 }
 /// Draw a texture at a page position, so it scrolls with everything else.
 pub(crate) fn ui_texture(texture: &Texture2D, x: f32, y: f32, params: DrawTextureParams) {
+    crate::ui_layout::reach(y + params.dest_size.map_or(texture.height(), |size| size.y));
     let p = crate::ui_layout::position(vec2(x, y));
     draw_texture_ex(texture, p.x, p.y, WHITE, params);
 }
@@ -361,6 +362,7 @@ pub(crate) fn fitted_label(value: &str, size: f32, width: f32) -> Cow<'_, str> {
 
 pub fn label(value: &str, x: f32, y: f32, size: f32, color: Color) {
     let value = &*tr(value);
+    crate::ui_layout::reach(y + size * 0.4);
     let position = crate::ui_layout::position(vec2(x, y));
     if !crate::ui_layout::visible_y(position.y - size * 1.2, position.y + size * 0.4) {
         return;

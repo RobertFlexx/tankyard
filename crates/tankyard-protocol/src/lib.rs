@@ -19,12 +19,26 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 23 adds `ServerControl::ModHud`. Servers still welcome version 22
-/// clients and never send them messages they can't read, so the netcode
-/// protocol id stays at 22's.
-pub const PROTOCOL_VERSION: u32 = 23;
+/// Version 24 adds map blocks, pads, decor and triggers, pad speed on tanks,
+/// map group visibility in match state, and live rule changes. Snapshots
+/// changed shape, so servers accept only version 24 clients. The netcode
+/// protocol id stays at 22's so older clients still connect far enough to
+/// be told which side needs updating.
+pub const PROTOCOL_VERSION: u32 = 24;
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 22;
+pub const MIN_PROTOCOL_VERSION: u32 = 24;
+pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
+pub const SERVER_OUTDATED: &str =
+    "This server runs an older Tank Yard. Its host needs to update it.";
+/// Why a server turned a client of `protocol` away, in words a player can
+/// act on.
+pub fn protocol_mismatch(protocol: u32) -> &'static str {
+    if protocol < MIN_PROTOCOL_VERSION {
+        CLIENT_OUTDATED
+    } else {
+        SERVER_OUTDATED
+    }
+}
 /// The first version that reads `ServerControl::ModHud`.
 pub const MOD_HUD_PROTOCOL: u32 = 23;
 pub const PROTOCOL_ID: u64 = 0x5441_4e4b_5941_0016;
@@ -148,12 +162,15 @@ pub enum ClientControl {
         round: u32,
         target: Option<EntityId>,
     },
+    PartyReady {
+        ready: bool,
+    },
 }
 
 impl ClientControl {
     pub fn valid(&self) -> bool {
         match self {
-            Self::PartyPresence { .. } => true,
+            Self::PartyPresence { .. } | Self::PartyReady { .. } => true,
             Self::CreatorProof { signature } | Self::CentralOwnerProof { signature } => {
                 signature.len() == 64
             }
@@ -546,6 +563,7 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && scalar(t.charge)
                 && scalar(t.boost)
                 && (0.25..=6.).contains(&t.speed_scale)
+                && (0.3..=2.5).contains(&t.terrain)
                 && (0.25..=6.).contains(&t.reload_scale)
                 && (0.25..=8.).contains(&t.damage_scale)
                 && (0.0..=1.).contains(&t.knockback)

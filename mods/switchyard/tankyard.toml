@@ -1,0 +1,12 @@
+[mod]
+name = "Switchyard"
+version = "1.0.0"
+description = "A workshop example with a timed gate, linked pad and particle emitter."
+license = "MIT OR Apache-2.0"
+tags = ["map", "example"]
+
+[creator]
+name = "Tank Yard"
+
+[source]
+viewable = true

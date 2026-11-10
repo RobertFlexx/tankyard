@@ -11,6 +11,9 @@ require_accounts = false
 mods = []
 name = "Tank Yard Community Arena"
 bind = "0.0.0.0:5000"
+# Accept WebSocket players too, for a domain behind a TLS proxy such as Caddy
+# (players then join just "play.example.com"). See docs/hosting.md.
+# websocket = "127.0.0.1:8080"
 public_addresses = []
 max_players = 64
 arena_capacity = 20 # Players per lobby; more players open more lobbies. 0 keeps one lobby.

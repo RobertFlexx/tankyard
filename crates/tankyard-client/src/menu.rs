@@ -53,6 +53,7 @@ pub enum Page {
 }
 pub enum Action {
     None,
+    OpenEditor,
     Page(Page),
     Back,
     QuickPlay,
@@ -65,6 +66,7 @@ pub enum Action {
     ResumeParty,
     LeaveParty,
     OpenParty,
+    PartyReady(bool),
     Join,
     Quit,
     Save,
@@ -763,11 +765,12 @@ impl Menu {
                 Action::Offline
             };
         }
-        let third = (pane_w - 18.0 * s) / 3.0;
-        for (index, (title, page)) in [
-            ("Practice [F6]", Page::Practice),
-            ("Host server", Page::Host),
-            ("Join server", Page::Join),
+        let third = (pane_w - 27.0 * s) / 4.0;
+        for (index, (title, action)) in [
+            ("Practice [F6]", Action::Page(Page::Practice)),
+            ("Host server", Action::Page(Page::Host)),
+            ("Join server", Action::Page(Page::Join)),
+            ("Map editor", Action::OpenEditor),
         ]
         .into_iter()
         .enumerate()
@@ -785,7 +788,7 @@ impl Menu {
                 s * 0.85,
             ) {
                 let _ = settings.save();
-                return Action::Page(page);
+                return action;
             }
         }
         let links_y = play_y + 122.0 * s;
@@ -977,6 +980,25 @@ impl Menu {
             );
             server.bots = value as u16;
             y += 58.0 * s;
+            toggle(
+                Rect::new(px, y, pw, 30. * s),
+                "Domain listener (WebSocket)",
+                &mut server.websocket,
+                s * 0.8,
+            );
+            y += 50. * s;
+            y = wrap(
+                if server.websocket {
+                    "Listens at 127.0.0.1:8080. Put Caddy or a tunnel in front for HTTPS; see docs/hosting-domain.md."
+                } else {
+                    "A domain listener lets friends join a hostname over HTTPS. Setup: docs/hosting-domain.md."
+                },
+                px,
+                y,
+                pw,
+                12. * s,
+                muted_color(),
+            ) + 18. * s;
             server.clean();
             let mods = settings.enabled_mods.len();
             wrap(
@@ -996,15 +1018,21 @@ impl Menu {
                 "Copy command for an always-on machine",
                 s * 0.7,
             ) {
-                let saved =
-                    crate::hosting::settings(server, self.config(), vec![], self.difficulty_name())
-                        .and_then(|config| {
-                            std::fs::create_dir_all(crate::hosting::server_dir())
-                                .map_err(|e| e.to_string())?;
-                            config
-                                .save(crate::hosting::config_path())
-                                .map_err(|e| e.to_string())
-                        });
+                let server = server.clone();
+                let server_mods = crate::mod_library::ready_paths(settings).paths;
+                let saved = crate::hosting::settings(
+                    &server,
+                    self.config(),
+                    server_mods,
+                    self.difficulty_name(),
+                )
+                .and_then(|config| {
+                    std::fs::create_dir_all(crate::hosting::server_dir())
+                        .map_err(|e| e.to_string())?;
+                    config
+                        .save(crate::hosting::config_path())
+                        .map_err(|e| e.to_string())
+                });
                 match saved {
                     Ok(()) => {
                         drop(crate::clipboard::copy(&crate::hosting::start_command()));
@@ -1872,30 +1900,35 @@ impl Menu {
             .enumerate()
         {
             if is_key_pressed(key) {
-                return Action::Practice(self.practice_page * 4 + index);
+                let index = self.practice_page * 4 + index;
+                if index < CHALLENGES.len() {
+                    return Action::Practice(index);
+                }
             }
         }
         let margin = 40.0 * s;
         label("Practice", margin, 164.0 * s, 26.0 * s, text_color());
         label(
-            "Eight challenges. Personal bests are saved on this device.",
+            "Combat trials and boss encounters. Personal bests stay on this device.",
             margin,
             190.0 * s,
             15.0 * s,
             muted_color(),
         );
-        for page in 0..2 {
+        for page in 0..CHALLENGES.len().div_ceil(4) {
             if button(
                 Rect::new(
-                    screen_width() - (330. - page as f32 * 145.) * s,
+                    screen_width() - (475. - page as f32 * 145.) * s,
                     153. * s,
                     135. * s,
                     32. * s,
                 ),
                 if page == 0 {
                     "Foundations"
-                } else {
+                } else if page == 1 {
                     "Combat trials"
+                } else {
+                    "Boss encounters"
                 },
                 self.practice_page == page,
                 true,
@@ -2274,7 +2307,7 @@ impl Menu {
         let rw = screen_width() - rx - 40.0 * s;
         if community {
             if let Some(action) =
-                self.community_panel(settings, Rect::new(rx, y - 16.0 * s, rw, 438.0 * s), s)
+                self.community_panel(settings, Rect::new(rx, y - 16.0 * s, rw, 570.0 * s), s)
             {
                 return action;
             }

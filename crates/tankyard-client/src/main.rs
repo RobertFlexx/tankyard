@@ -11,6 +11,7 @@ mod community_ui;
 mod creator;
 mod credentials;
 mod dlss;
+mod editor;
 mod effects;
 mod file_dialog;
 mod first_run;
@@ -29,6 +30,8 @@ mod party_ui;
 mod practice_ui;
 mod presentation;
 mod render;
+mod rules_ui;
+mod scenery;
 mod server_browser;
 mod server_status;
 mod session;
@@ -72,7 +75,7 @@ struct Cli {
     #[arg(long)]
     offline: bool,
     /// Open a practice challenge directly.
-    #[arg(long, value_parser = ["shape_sprint", "drone_drill", "skirmish", "last_stand", "parry_lab", "stasis_lab", "boss_hunt", "trap_fort"], conflicts_with_all = ["offline", "host", "join", "connect_token", "class", "level"])]
+    #[arg(long, value_parser = ["shape_sprint", "drone_drill", "skirmish", "last_stand", "parry_lab", "stasis_lab", "boss_hunt", "trap_fort", "siege_school", "skirmisher_hunt", "trapper_hunt"], conflicts_with_all = ["offline", "host", "join", "connect_token", "class", "level"])]
     practice: Option<String>,
     #[arg(long)]
     host: bool,
@@ -106,7 +109,7 @@ struct Cli {
     #[arg(long)]
     screenshot: Option<String>,
     /// Open a menu page instead of a game (for screenshots and checks).
-    #[arg(long, hide = true, value_parser = ["main", "mods", "tree", "credits", "settings", "party", "modes", "party-panel", "mods-review", "mods-files", "lobbies", "community", "graphics", "join"])]
+    #[arg(long, hide = true, value_parser = ["main", "mods", "tree", "credits", "settings", "party", "modes", "party-panel", "mods-review", "mods-files", "lobbies", "community", "graphics", "join", "editor"])]
     page: Option<String>,
     #[arg(long = "mod")]
     mods: Vec<std::path::PathBuf>,
@@ -178,6 +181,8 @@ struct PendingJoin {
     return_page: Page,
 }
 struct App {
+    editor: Option<editor::Editor>,
+    editor_playtest: bool,
     party_copy: Option<clipboard::Request<()>>,
     /// The last death whose killer the camera was pointed at.
     spectate_death: u32,
@@ -290,6 +295,8 @@ impl App {
         }
         let catalog_paths = settings.enabled_mods.clone();
         let mut app = Self {
+            editor: None,
+            editor_playtest: false,
             party_copy: None,
             spectate_death: 0,
             party_restart: None,
@@ -384,6 +391,9 @@ impl App {
             }
             if page == "community" {
                 app.menu.open_community();
+            }
+            if page == "editor" {
+                app.handle(Action::OpenEditor);
             }
             app.menu.page = match page {
                 "mods" | "mods-review" | "mods-files" => Page::Mods,
@@ -497,9 +507,29 @@ impl App {
         }
         match action {
             Action::None => {}
+            Action::OpenEditor => {
+                if self.session.is_some() {
+                    self.menu.error =
+                        "Leave the current match before opening the map editor.".into();
+                } else {
+                    self.editor = Some(editor::Editor::new(None));
+                    self.editor_playtest = false;
+                    self.menu.clear_focus();
+                }
+            }
             Action::OpenParty => {
                 self.party_ui.open = self.active_party();
                 self.menu.clear_focus();
+            }
+            Action::PartyReady(ready) => {
+                if let Some(Session {
+                    engine: session::Engine::Online { client, .. },
+                    ..
+                }) = &mut self.session
+                    && !client.party_ready(ready)
+                {
+                    self.party_ui.notice = "Ready status could not be sent. Try again.".into();
+                }
             }
             Action::ResumeParty => self.resume_party(),
             Action::LeaveParty => self.finish_session(),
@@ -1253,6 +1283,16 @@ impl App {
             })
     }
     fn update(&mut self, dt: f32, s: f32) {
+        if self.editor.is_some() {
+            if !self.editor_playtest {
+                return;
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                self.finish_session();
+                self.editor_playtest = false;
+                return;
+            }
+        }
         self.dropped_files();
         let party_key = self.party_ui.keys();
         if let Some(result) = self.party_copy.as_ref().and_then(|request| request.poll()) {
@@ -1761,6 +1801,29 @@ impl App {
         }
     }
     fn draw(&mut self, s: f32) {
+        if !self.editor_playtest
+            && let Some(editor) = &mut self.editor
+        {
+            let action = editor.draw(&self.settings, s);
+            match action {
+                editor::Action::None => {}
+                editor::Action::Exit => {
+                    self.editor = None;
+                    self.menu.clear_focus();
+                }
+                editor::Action::Play(loaded, config) => {
+                    match Session::editor(config, *loaded, &self.settings.player_name) {
+                        Ok(session) => {
+                            self.launch(session);
+                            self.editor_playtest = true;
+                            self.hud.editor_playtest = true;
+                        }
+                        Err(error) => self.menu.error = error,
+                    }
+                }
+            }
+            return;
+        }
         if self.party_preview {
             render::menu_grid();
             let members: Vec<_> = [
@@ -1779,6 +1842,7 @@ impl App {
                     class: class.into(),
                     leader,
                     in_menu,
+                    ready: n < 2,
                 },
             )
             .collect();
@@ -2405,6 +2469,10 @@ impl App {
                 }
                 self.hud.evolution = false;
                 self.open_menu(Page::Encyclopedia);
+            }
+            HudAction::Pause if self.editor_playtest => {
+                self.finish_session();
+                self.editor_playtest = false;
             }
             HudAction::Pause => self.paused = true,
             HudAction::Controls => self.open_menu(Page::Controls),

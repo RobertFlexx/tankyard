@@ -1460,3 +1460,92 @@ fn mod_hud_widgets_reach_only_the_players_they_are_for() {
     assert!(client.mod_hud.is_empty());
     assert!(client.is_ready());
 }
+
+#[test]
+fn live_rules_preserve_players_health_and_connections_and_survive_saved_restarts() {
+    use tankyard_protocol::ServerCommand;
+    let mut config = settings();
+    config.world.rules.regen_multiplier = 0.;
+    let mut server = UdpServer::bind(config).unwrap();
+    let mut owner = NetworkClient::connect(&server.address.to_string(), "Owner", "").unwrap();
+    ready(&mut server, &mut [&mut owner]);
+    assert!(
+        !server
+            .admin_command(&format!("owner-client {}", owner.client_id()))
+            .message
+            .starts_with("Error:")
+    );
+    pump(&mut server, &mut [&mut owner], 8);
+    let id = owner.player_id.unwrap();
+    let round = owner.player_round.unwrap();
+    let tank = server.arenas[0]
+        .session
+        .world
+        .tanks
+        .iter_mut()
+        .find(|t| t.id == id)
+        .unwrap();
+    tank.health = tank.max_health * 0.4;
+    let rules = tankyard_mods::GameRules {
+        health_multiplier: 2.,
+        movement_multiplier: 1.3,
+        regen_multiplier: 0.,
+        ..Default::default()
+    };
+    assert!(owner.admin(ServerCommand::ConfigureRules { rules }));
+    pump(&mut server, &mut [&mut owner], 24);
+    assert!(owner.is_ready());
+    assert_eq!(owner.player_id, Some(id));
+    assert_eq!(owner.player_round, Some(round));
+    let snapshot = owner.snapshot.as_ref().unwrap();
+    assert_eq!(snapshot.config.rules, rules);
+    assert!(snapshot.config.modded);
+    let tank = snapshot.tanks.iter().find(|t| t.id == id).unwrap();
+    assert!((tank.health / tank.max_health - 0.4).abs() < 0.001);
+    assert!((tank.max_health - 200.).abs() < 0.001);
+    let saved = toml::to_string(&server.settings).unwrap();
+    let restored: ServerSettings = toml::from_str(&saved).unwrap();
+    assert_eq!(restored.rules_override, Some(rules));
+    let restarted = UdpServer::bind(ServerSettings {
+        bind: "127.0.0.1:0".into(),
+        ..restored
+    })
+    .unwrap();
+    assert_eq!(restarted.arenas[0].session.world.config.rules, rules);
+    assert!(
+        server
+            .admin_command("rules movement_multiplier NaN")
+            .message
+            .starts_with("Error:")
+    );
+    assert_eq!(server.arenas[0].session.world.config.rules, rules);
+}
+
+#[test]
+fn party_ready_status_is_authoritative_shared_and_cleared_for_a_new_round() {
+    let mut invite = tankyard_server::party::Invite::create("127.0.0.1:5000".parse().unwrap());
+    let mut config = settings();
+    config.party = Some(invite.settings(2));
+    let mut server = UdpServer::bind(config).unwrap();
+    invite.address = server.address;
+    let mut alice = NetworkClient::connect(&invite.link(), "Alice", "").unwrap();
+    let mut bob = NetworkClient::connect(&invite.link(), "Bob", "").unwrap();
+    ready(&mut server, &mut [&mut alice, &mut bob]);
+    assert!(alice.party_ready(true));
+    pump(&mut server, &mut [&mut alice, &mut bob], 12);
+    assert_eq!(bob.party_members.iter().filter(|m| m.ready).count(), 1);
+    assert!(
+        bob.party_members
+            .iter()
+            .any(|m| m.client == alice.client_id() && m.ready)
+    );
+    assert!(
+        server
+            .admin_command("restart")
+            .message
+            .contains("new round")
+    );
+    pump(&mut server, &mut [&mut alice, &mut bob], 24);
+    assert!(bob.party_members.iter().all(|m| !m.ready));
+    assert!(alice.is_ready() && bob.is_ready());
+}

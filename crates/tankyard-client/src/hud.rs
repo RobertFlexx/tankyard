@@ -399,6 +399,7 @@ pub struct Hud {
     /// The current map's palette accent, which tints minimap cover.
     pub palette: Color,
     pub practice: bool,
+    pub editor_playtest: bool,
     pub evolution: bool,
     pub sandbox: bool,
     pub sandbox_page: usize,
@@ -422,6 +423,7 @@ impl Hud {
             deaths: self.deaths,
             cards_shown: self.cards_shown,
             card: self.card,
+            editor_playtest: self.editor_playtest,
             ..Self::new()
         }
     }
@@ -434,6 +436,7 @@ impl Hud {
             card: None,
             palette: tankyard_client::map_model::palette("slate"),
             practice: false,
+            editor_playtest: false,
             evolution: false,
             sandbox: false,
             sandbox_page: 0,
@@ -610,7 +613,11 @@ impl Hud {
         }
         if small_button(
             Rect::new(m + 116.0 * s, m, 110.0 * s, 26.0 * s),
-            "Menu [Esc]",
+            if self.editor_playtest {
+                "Editor [Esc]"
+            } else {
+                "Menu [Esc]"
+            },
             s * 0.76,
         ) && !modal
         {

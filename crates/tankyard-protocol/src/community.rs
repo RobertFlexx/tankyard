@@ -145,6 +145,9 @@ pub enum ServerCommand {
     ConfigureParty {
         settings: MatchSettings,
     },
+    ConfigureRules {
+        rules: tankyard_mods::GameRules,
+    },
 }
 impl ServerCommand {
     pub fn valid(&self) -> bool {
@@ -196,6 +199,7 @@ impl ServerCommand {
             }
             .valid(),
             Self::ConfigureParty { settings } => settings.party.is_some() && settings.valid(),
+            Self::ConfigureRules { rules } => rules.validate().is_ok(),
             Self::ReloadMods | Self::ReadAudit | Self::RestartRound => true,
         }
     }
@@ -211,6 +215,7 @@ impl ServerCommand {
             Self::SetBots { .. }
             | Self::ConfigureMatch { .. }
             | Self::ConfigureParty { .. }
+            | Self::ConfigureRules { .. }
             | Self::RestartRound => ServerPermission::Configure,
             Self::ReloadMods => ServerPermission::ReloadMods,
             Self::ReadAudit => ServerPermission::ViewAudit,

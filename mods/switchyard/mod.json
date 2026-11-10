@@ -1,0 +1,180 @@
+{
+  "api_version": 1,
+  "id": "switchyard",
+  "name": "Switchyard",
+  "version": "1.0.0",
+  "description": "Timed gates, linked speed pads and a quiet particle effect. Built with the Arena Workshop schema.",
+  "author": "Tank Yard",
+  "maps": [
+    {
+      "id": "switchyard",
+      "name": "Switchyard",
+      "description": "Timed gates, linked speed pads and a quiet particle effect. Built with the Arena Workshop schema.",
+      "width": 3600.0,
+      "height": 2600.0,
+      "capacity": 16,
+      "recommended_modes": [
+        "ffa",
+        "sandbox",
+        "two_teams"
+      ],
+      "walls": [
+        [
+          0.2,
+          0.36,
+          0.18,
+          0.035
+        ],
+        [
+          0.62,
+          0.605,
+          0.18,
+          0.035
+        ]
+      ],
+      "procedural": "None",
+      "objective_positions": [],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.05,
+            0.05,
+            0.15,
+            0.15
+          ]
+        },
+        {
+          "team": 0,
+          "rect": [
+            0.8,
+            0.8,
+            0.15,
+            0.15
+          ]
+        }
+      ],
+      "team_bases": [],
+      "background": "teal",
+      "style": "relay",
+      "blocks": [
+        {
+          "rect": [
+            0.485,
+            0.32,
+            0.03,
+            0.36
+          ],
+          "style": "circuit",
+          "color": null,
+          "group": 1
+        }
+      ],
+      "zones": [
+        {
+          "kind": "speed",
+          "rect": [
+            0.2,
+            0.2,
+            0.18,
+            0.08
+          ],
+          "strength": 1.0,
+          "group": 1
+        },
+        {
+          "kind": "repair",
+          "rect": [
+            0.76,
+            0.25,
+            0.08,
+            0.1
+          ],
+          "strength": 0.75,
+          "group": 0
+        }
+      ],
+      "decor": [
+        {
+          "kind": "label",
+          "rect": [
+            0.34,
+            0.08,
+            0.32,
+            0.055
+          ],
+          "color": [
+            102,
+            159,
+            170
+          ],
+          "alpha": 210,
+          "text": "SWITCHYARD"
+        },
+        {
+          "kind": "emitter",
+          "rect": [
+            0.44,
+            0.19,
+            0.12,
+            0.015
+          ],
+          "effect": {
+            "shape": "spark",
+            "rate": 5.0,
+            "lifetime": 1.2,
+            "speed": 40.0,
+            "direction": 270.0,
+            "spread": 30.0,
+            "gravity": -8.0,
+            "drag": 0.6,
+            "size": 5.0,
+            "end_size": 1.0,
+            "color": [
+              156,
+              190,
+              183
+            ],
+            "end_color": [
+              99,
+              147,
+              150
+            ],
+            "fade": true,
+            "spin": 0.0
+          },
+          "group": 1
+        }
+      ],
+      "triggers": [
+        {
+          "when": "every",
+          "action": "toggle",
+          "rect": [
+            0.485,
+            0.2,
+            0.03,
+            0.05
+          ],
+          "group": 1,
+          "seconds": 8.0,
+          "offset": 0.0,
+          "duration": 3.0
+        },
+        {
+          "when": "start",
+          "action": "announce",
+          "rect": [
+            0.45,
+            0.15,
+            0.1,
+            0.05
+          ],
+          "seconds": 0.0,
+          "text": "The gate opens every eight seconds. Use the sides while it is closed."
+        }
+      ],
+      "hidden_groups": []
+    }
+  ]
+}

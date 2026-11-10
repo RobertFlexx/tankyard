@@ -440,6 +440,16 @@ impl Drop for ClientBridge {
 /// Accepts WebSocket connections on `listen` and bridges each one to the UDP
 /// game server at `server`. Runs until the listener fails.
 pub fn run_relay(listen: &str, server: SocketAddr, max_connections: usize) -> io::Result<()> {
+    serve_relay(TcpListener::bind(listen)?, server, max_connections)
+}
+
+/// [`run_relay`] on a listener the caller has already bound, so a server can
+/// report a busy port at startup instead of from a background thread.
+pub fn serve_relay(
+    listener: TcpListener,
+    server: SocketAddr,
+    max_connections: usize,
+) -> io::Result<()> {
     if !(1..=1024).contains(&max_connections)
         || server.port() == 0
         || server.ip().is_unspecified()
@@ -450,7 +460,6 @@ pub fn run_relay(listen: &str, server: SocketAddr, max_connections: usize) -> io
             "relay requires 1–1024 connections and a unicast UDP destination with a nonzero port",
         ));
     }
-    let listener = TcpListener::bind(listen)?;
     log::info!(
         "Relaying WebSocket {} to UDP {server}",
         listener.local_addr()?

@@ -118,13 +118,22 @@ impl Session {
                 local.world.sandbox_level(bot, challenge.level);
             }
         }
-        if challenge.id == "boss_hunt" && local.world.spawn_boss(BossKind::Sentinel) == 0 {
-            return Err("Could not place the practice boss.".into());
+        if let Some(kind) = challenge.boss() {
+            let center = local.world.config.bounds().center();
+            let spawn = local
+                .world
+                .tanks
+                .iter()
+                .find(|t| t.id == player)
+                .map_or(center, |t| t.pos);
+            let near = spawn + (center - spawn).normalized() * 460.;
+            if local.world.spawn_boss_near(kind, near) == 0 && local.world.spawn_boss(kind) == 0 {
+                return Err("Could not place the practice boss.".into());
+            }
         }
-        if matches!(
-            challenge.id,
-            "parry_lab" | "stasis_lab" | "trap_fort" | "boss_hunt"
-        ) {
+        if challenge.boss().is_some()
+            || matches!(challenge.id, "parry_lab" | "stasis_lab" | "trap_fort")
+        {
             for index in [6, 5, 4, 3, 7, 0, 1, 2] {
                 while local.world.upgrade_stat(player, index) {}
             }
@@ -146,6 +155,22 @@ impl Session {
         let id = local.world.add_player(name, false);
         let snapshot = local.world.snapshot();
         Self::create(Engine::Offline(Box::new(local)), id, Some(snapshot))
+    }
+    pub fn editor(
+        mut config: WorldConfig,
+        loaded: tankyard_mods::LoadedMods,
+        name: &str,
+    ) -> Result<Self, String> {
+        config.mode_name = Some("Workshop playtest".into());
+        let mut local = LocalSession::with_mods(config, 2, loaded)?;
+        let id = local.world.add_player(name, false);
+        local.world.sandbox_level(id, tankyard_core::MAX_LEVEL);
+        let snapshot = local.world.snapshot();
+        Ok(Self::create(
+            Engine::Offline(Box::new(local)),
+            id,
+            Some(snapshot),
+        ))
     }
     pub fn offline_modded(
         config: WorldConfig,
@@ -616,6 +641,19 @@ impl Session {
                 for input in &self.pending {
                     predicted.input = *input;
                     self.predicted_tick += 1;
+                    if let Some(map) = self
+                        .bundle
+                        .maps
+                        .iter()
+                        .find(|map| map.id == snapshot.config.map)
+                    {
+                        predicted.terrain = tankyard_core::terrain_factor(
+                            map,
+                            &snapshot.config,
+                            snapshot.match_state.hidden_groups,
+                            predicted.pos,
+                        );
+                    }
                     predict_tank(
                         &mut predicted,
                         content,
@@ -761,6 +799,19 @@ impl Session {
                     {
                         predicted.input = input;
                         self.predicted_tick += 1;
+                        if let Some(map) = self
+                            .bundle
+                            .maps
+                            .iter()
+                            .find(|map| map.id == snapshot.config.map)
+                        {
+                            predicted.terrain = tankyard_core::terrain_factor(
+                                map,
+                                &snapshot.config,
+                                snapshot.match_state.hidden_groups,
+                                predicted.pos,
+                            );
+                        }
                         predict_tank(
                             predicted,
                             content,
@@ -1224,8 +1275,11 @@ mod tests {
                 assert_eq!(local.world.tanks.len(), challenge.bots + 1);
                 assert_eq!(
                     local.world.bosses.len(),
-                    usize::from(challenge.id == "boss_hunt")
+                    usize::from(challenge.boss().is_some())
                 );
+                if let Some(kind) = challenge.boss() {
+                    assert_eq!(local.world.bosses[0].kind, kind);
+                }
                 let human = local.world.tanks.iter().find(|tank| !tank.bot).unwrap();
                 assert_eq!(human.level, challenge.level);
                 assert_eq!(human.class, challenge.class);

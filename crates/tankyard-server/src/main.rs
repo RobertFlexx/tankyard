@@ -1,6 +1,7 @@
 use clap::Parser;
 use std::{
     io::{self, BufRead},
+    net::SocketAddr,
     path::PathBuf,
     sync::{
         Arc,
@@ -50,6 +51,10 @@ struct Args {
     /// Listen on all interfaces at this UDP port (shorthand for --bind).
     #[arg(long, conflicts_with = "bind")]
     port: Option<u16>,
+    /// Also accept WebSocket players on this TCP address (for example
+    /// 127.0.0.1:8080 behind Caddy or nginx, so players join wss://your.domain).
+    #[arg(long)]
+    websocket: Option<String>,
     /// Split players into lobbies of this size; 0 keeps one lobby.
     #[arg(long)]
     arena_capacity: Option<usize>,
@@ -88,6 +93,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(port) = args.port {
         settings.bind = format!("0.0.0.0:{port}");
+    }
+    if let Some(websocket) = args.websocket {
+        settings.websocket = websocket;
     }
     if let Some(capacity) = args.arena_capacity {
         settings.arena_capacity = capacity;
@@ -145,6 +153,32 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         server.settings.world.mode.name(),
         server.settings.snapshot_rate
     );
+    if !server.settings.websocket.is_empty() {
+        // The relay reaches this process over loopback, which the server
+        // already treats as a shared address: bans target players, not it.
+        let target = SocketAddr::new(
+            match server.address.ip() {
+                ip if !ip.is_unspecified() => ip,
+                std::net::IpAddr::V4(_) => std::net::Ipv4Addr::LOCALHOST.into(),
+                std::net::IpAddr::V6(_) => std::net::Ipv6Addr::LOCALHOST.into(),
+            },
+            server.address.port(),
+        );
+        let listen = &server.settings.websocket;
+        let listener = std::net::TcpListener::bind(listen)
+            .map_err(|error| format!("WebSocket listener on {listen}: {error}"))?;
+        thread::Builder::new()
+            .name("websocket".into())
+            .spawn(move || {
+                if let Err(error) = tankyard_server::websocket::serve_relay(listener, target, 256) {
+                    log::error!("WebSocket listener stopped: {error}");
+                }
+            })?;
+        println!(
+            "Accepting WebSocket players on TCP {} (put TLS in front for wss://)",
+            server.settings.websocket
+        );
+    }
     println!("Type help for local administration.");
     let stopping = Arc::new(AtomicBool::new(false));
     let signal_flag = stopping.clone();

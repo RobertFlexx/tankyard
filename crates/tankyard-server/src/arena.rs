@@ -148,6 +148,9 @@ impl UdpServer {
         )
         .map_err(NetError)?;
         session.bots.difficulty = self.settings.difficulty;
+        if let Some(rules) = self.settings.rules_override {
+            session.world.set_rules(rules).map_err(NetError)?;
+        }
         for factory in &self.native_plugins {
             session.install_plugin(factory()).map_err(NetError)?;
         }

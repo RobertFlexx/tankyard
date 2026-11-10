@@ -39,8 +39,9 @@ impl World {
                     .collect();
             }
         }
-        self.map_walls.clone_from(&self.walls);
-        self.scale_map_walls();
+        // Blocks join these in `compose_walls`, so groups can come and go.
+        self.static_walls = std::mem::take(&mut self.walls);
+        self.compose_walls();
     }
 
     pub(crate) fn scale_map_walls(&mut self) {
@@ -64,8 +65,11 @@ impl World {
         let old_next_id = self.next_id;
         let old_walls = std::mem::take(&mut self.walls);
         let old_map_walls = std::mem::take(&mut self.map_walls);
+        let old_static_walls = std::mem::take(&mut self.static_walls);
         let old_objectives = std::mem::take(&mut self.objectives);
+        let old_hidden = self.match_state.hidden_groups;
         self.config.map.clone_from(&map.id);
+        self.match_state.hidden_groups = map.starting_mask();
         let old_map = std::mem::replace(&mut self.map, map);
         self.initialize_map();
         let bounds = self.config.bounds();
@@ -112,6 +116,8 @@ impl World {
             self.map = old_map;
             self.walls = old_walls;
             self.map_walls = old_map_walls;
+            self.static_walls = old_static_walls;
+            self.match_state.hidden_groups = old_hidden;
             self.objectives = old_objectives;
             return Err(
                 "This map cannot safely fit the current tanks, bosses or objectives.".into(),
@@ -120,7 +126,9 @@ impl World {
         for (tank, pos) in self.tanks.iter_mut().zip(tanks) {
             tank.pos = pos;
             tank.vel = V2::ZERO;
+            tank.terrain = 1.;
         }
+        self.trigger_state = Default::default();
         for (boss, pos) in self.bosses.iter_mut().zip(bosses) {
             boss.pos = pos;
             boss.goal = pos;
@@ -285,7 +293,7 @@ impl World {
 }
 
 /// Split intersecting cover along base edges; preserve the remaining map.
-fn outside_base(wall: Rect, base: Rect) -> Vec<Rect> {
+pub(crate) fn outside_base(wall: Rect, base: Rect) -> Vec<Rect> {
     let left = wall.x.max(base.x);
     let top = wall.y.max(base.y);
     let right = (wall.x + wall.w).min(base.x + base.w);

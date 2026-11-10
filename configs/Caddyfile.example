@@ -1,0 +1,5 @@
+# Point this hostname's DNS at the host, and allow TCP 80/443.
+# Tank Yard: websocket = "127.0.0.1:8080" in the server config.
+play.example.com {
+    reverse_proxy 127.0.0.1:8080
+}

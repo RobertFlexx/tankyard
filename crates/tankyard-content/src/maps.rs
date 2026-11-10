@@ -10,7 +10,7 @@ pub enum MapProcedure {
     Dense,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpawnRegion {
     /// Zero means an unteamed spawn region; one through four select a faction.
@@ -18,14 +18,361 @@ pub struct SpawnRegion {
     pub rect: [f32; 4],
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TeamBase {
     pub team: u8,
     pub position: [f32; 2],
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// The furniture look of a block. `Map` follows the arena's own style.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockStyle {
+    #[default]
+    Map,
+    Slate,
+    Garden,
+    Circuit,
+    Bastion,
+    Relay,
+    Orrery,
+    Sand,
+}
+impl BlockStyle {
+    pub const ALL: [Self; 8] = [
+        Self::Map,
+        Self::Slate,
+        Self::Garden,
+        Self::Circuit,
+        Self::Bastion,
+        Self::Relay,
+        Self::Orrery,
+        Self::Sand,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Map => "Arena default",
+            Self::Slate => "Slate",
+            Self::Garden => "Hedge",
+            Self::Circuit => "Circuit",
+            Self::Bastion => "Rampart",
+            Self::Relay => "Relay",
+            Self::Orrery => "Orrery",
+            Self::Sand => "Sandstone",
+        }
+    }
+}
+
+/// A solid block: a wall with its own look, colour and group.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapBlock {
+    /// Normalized x, y, width and height, like `walls`.
+    pub rect: [f32; 4],
+    #[serde(default)]
+    pub style: BlockStyle,
+    #[serde(default)]
+    pub color: Option<[u8; 3]>,
+    /// Zero for none; 1 to 32 lets triggers show and hide it.
+    #[serde(default)]
+    pub group: u8,
+}
+
+/// What a pad does to tanks over it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneKind {
+    /// Faster movement.
+    Speed,
+    /// Slower movement.
+    Mud,
+    /// Health regenerates.
+    Repair,
+    /// Health drains; it can destroy a tank.
+    Hazard,
+    /// Incoming damage is reduced.
+    Shelter,
+}
+impl ZoneKind {
+    pub const ALL: [Self; 5] = [
+        Self::Speed,
+        Self::Mud,
+        Self::Repair,
+        Self::Hazard,
+        Self::Shelter,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Speed => "Speed pad",
+            Self::Mud => "Mud",
+            Self::Repair => "Repair pad",
+            Self::Hazard => "Hazard",
+            Self::Shelter => "Shelter",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapZone {
+    pub kind: ZoneKind,
+    pub rect: [f32; 4],
+    /// 0.25 to 2; 1 is the standard effect.
+    #[serde(default = "unit")]
+    pub strength: f32,
+    #[serde(default)]
+    pub group: u8,
+}
+fn unit() -> f32 {
+    1.
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecorKind {
+    /// A flat floor panel.
+    #[default]
+    Tile,
+    /// Diagonal warning stripes.
+    Stripes,
+    /// A soft round glow.
+    Light,
+    /// An outlined circle.
+    Ring,
+    /// A floor arrow, pointing along `rotation`.
+    Arrow,
+    /// Painted text.
+    Label,
+    /// A particle emitter; its look is `effect`.
+    Emitter,
+}
+impl DecorKind {
+    pub const ALL: [Self; 7] = [
+        Self::Tile,
+        Self::Stripes,
+        Self::Light,
+        Self::Ring,
+        Self::Arrow,
+        Self::Label,
+        Self::Emitter,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Tile => "Floor tile",
+            Self::Stripes => "Stripes",
+            Self::Light => "Light",
+            Self::Ring => "Ring",
+            Self::Arrow => "Arrow",
+            Self::Label => "Text",
+            Self::Emitter => "Particles",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParticleShape {
+    #[default]
+    Dot,
+    Square,
+    Spark,
+    Ring,
+    Triangle,
+}
+impl ParticleShape {
+    pub const ALL: [Self; 5] = [
+        Self::Dot,
+        Self::Square,
+        Self::Spark,
+        Self::Ring,
+        Self::Triangle,
+    ];
+}
+
+/// A particle effect, drawn by clients only. Every field has a bounded range
+/// so a map cannot ask for more particles than a client can afford.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ParticleEffect {
+    pub shape: ParticleShape,
+    /// Particles per second, 0.2 to 60.
+    pub rate: f32,
+    /// Seconds each particle lives, 0.1 to 8.
+    pub lifetime: f32,
+    /// Launch speed in world units per second, 0 to 800.
+    pub speed: f32,
+    /// Launch direction in degrees, 0 pointing right, 90 down.
+    pub direction: f32,
+    /// Spread around the direction in degrees, 0 to 360.
+    pub spread: f32,
+    /// Constant downward pull, -800 to 800; negative floats upward.
+    pub gravity: f32,
+    /// Speed lost per second as a fraction, 0 to 8.
+    pub drag: f32,
+    /// Start and end size in world units, 1 to 120.
+    pub size: f32,
+    pub end_size: f32,
+    pub color: [u8; 3],
+    pub end_color: [u8; 3],
+    /// Fade out over the particle's life.
+    pub fade: bool,
+    /// Spin in degrees per second, -1080 to 1080.
+    pub spin: f32,
+}
+impl Default for ParticleEffect {
+    fn default() -> Self {
+        Self {
+            shape: ParticleShape::Dot,
+            rate: 8.,
+            lifetime: 1.6,
+            speed: 60.,
+            direction: 270.,
+            spread: 50.,
+            gravity: 0.,
+            drag: 0.6,
+            size: 9.,
+            end_size: 3.,
+            color: [255, 200, 90],
+            end_color: [230, 90, 60],
+            fade: true,
+            spin: 0.,
+        }
+    }
+}
+impl ParticleEffect {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if range(self.rate, 0.2, 60.)
+            && range(self.lifetime, 0.1, 8.)
+            && range(self.speed, 0., 800.)
+            && self.direction.is_finite()
+            && range(self.spread, 0., 360.)
+            && range(self.gravity, -800., 800.)
+            && range(self.drag, 0., 8.)
+            && range(self.size, 1., 120.)
+            && range(self.end_size, 0., 120.)
+            && range(self.spin, -1080., 1080.)
+            && self.rate * self.lifetime <= 240.
+        {
+            Ok(())
+        } else {
+            Err("particle effect values are out of range")
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapDecor {
+    pub kind: DecorKind,
+    pub rect: [f32; 4],
+    #[serde(default = "decor_color")]
+    pub color: [u8; 3],
+    /// 0 is invisible, 255 opaque.
+    #[serde(default = "opaque")]
+    pub alpha: u8,
+    /// Degrees; arrows point this way and text and stripes turn with it.
+    #[serde(default)]
+    pub rotation: f32,
+    /// Brightness pulses per second, 0 to 4.
+    #[serde(default)]
+    pub pulse: f32,
+    /// Degrees per second, -720 to 720.
+    #[serde(default)]
+    pub spin: f32,
+    /// Drawn above tanks instead of on the floor.
+    #[serde(default)]
+    pub above: bool,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub effect: Option<ParticleEffect>,
+    #[serde(default)]
+    pub group: u8,
+}
+fn decor_color() -> [u8; 3] {
+    [120, 160, 190]
+}
+fn opaque() -> u8 {
+    255
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerWhen {
+    /// Repeats every `seconds`, starting `offset` seconds into the round.
+    #[default]
+    Every,
+    /// When a living tank enters `rect`; `seconds` is the cooldown.
+    Enter,
+    /// Once, `seconds` after the round starts.
+    Start,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerAction {
+    #[default]
+    Toggle,
+    Show,
+    Hide,
+    /// Shows `text` to everyone in the arena.
+    Announce,
+    /// Brings the `boss` named boss into the arena at `rect`.
+    Boss,
+}
+
+/// A rule that runs during a round: GD-style toggles, timed gates, hazards
+/// that come and go, announcements and boss arrivals.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapTrigger {
+    pub when: TriggerWhen,
+    pub action: TriggerAction,
+    /// The area an Enter trigger watches; where a boss arrives. Also where
+    /// the editor shows the trigger.
+    pub rect: [f32; 4],
+    /// The group Toggle, Show and Hide act on.
+    #[serde(default)]
+    pub group: u8,
+    #[serde(default)]
+    pub seconds: f32,
+    #[serde(default)]
+    pub offset: f32,
+    /// When above zero, the change reverts after this many seconds.
+    #[serde(default)]
+    pub duration: f32,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub boss: String,
+    /// Fires at most once a round.
+    #[serde(default)]
+    pub once: bool,
+}
+
+/// Most groups a map can name; they fit one 32-bit mask in snapshots.
+pub const MAP_GROUPS: u8 = 32;
+/// Stable IDs accepted by map boss triggers. Core verifies this catalog stays
+/// in sync with its boss enum.
+pub const BOSS_IDS: [&str; 14] = [
+    "sentinel",
+    "prism",
+    "foundry",
+    "tempest",
+    "bastion",
+    "eclipse",
+    "guardian",
+    "summoner",
+    "defender",
+    "fallen_overlord",
+    "fallen_booster",
+    "siege_engine",
+    "skirmisher",
+    "trapper",
+];
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MapDef {
     pub id: String,
@@ -44,6 +391,47 @@ pub struct MapDef {
     pub spawn_regions: Vec<SpawnRegion>,
     pub team_bases: Vec<TeamBase>,
     pub background: String,
+    /// The look of `walls` and of blocks left at `Map`. `Map` picks one from
+    /// the arena's id, as built-in arenas do.
+    #[serde(default)]
+    pub style: BlockStyle,
+    #[serde(default)]
+    pub blocks: Vec<MapBlock>,
+    #[serde(default)]
+    pub zones: Vec<MapZone>,
+    #[serde(default)]
+    pub decor: Vec<MapDecor>,
+    #[serde(default)]
+    pub triggers: Vec<MapTrigger>,
+    /// Groups hidden when a round starts, such as gates a trigger opens.
+    #[serde(default)]
+    pub hidden_groups: Vec<u8>,
+}
+impl MapDef {
+    /// The bit of `group` in a hidden-group mask; group 0 has none.
+    pub fn group_bit(group: u8) -> u32 {
+        if (1..=MAP_GROUPS).contains(&group) {
+            1 << (group - 1)
+        } else {
+            0
+        }
+    }
+    /// Groups hidden at the start of a round, as a mask.
+    pub fn starting_mask(&self) -> u32 {
+        self.hidden_groups
+            .iter()
+            .fold(0, |mask, &group| mask | Self::group_bit(group))
+    }
+    /// Every solid rectangle (normalized) while the groups in `hidden` are
+    /// hidden: plain walls first, then blocks in order.
+    pub fn solid_rects(&self, hidden: u32) -> impl Iterator<Item = [f32; 4]> + '_ {
+        self.walls.iter().copied().chain(
+            self.blocks
+                .iter()
+                .filter(move |block| Self::group_bit(block.group) & hidden == 0)
+                .map(|block| block.rect),
+        )
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -75,7 +463,7 @@ pub fn validate_maps(maps: &[MapDef]) -> Result<(), String> {
     for map in maps {
         if !range(map.width, 900., 16000.)
             || !range(map.height, 700., 16000.)
-            || map.walls.len() > 2048
+            || map.walls.len() + map.blocks.len() > 2048
         {
             return Err(format!(
                 "{}: invalid dimensions or excessive geometry",
@@ -84,7 +472,7 @@ pub fn validate_maps(maps: &[MapDef]) -> Result<(), String> {
         }
         geometry_work += (map.width / 80.).ceil() as u64
             * (map.height / 80.).ceil() as u64
-            * map.walls.len().max(1) as u64;
+            * (map.walls.len() + map.blocks.len()).max(1) as u64;
         if geometry_work > 16_000_000 {
             return Err("map catalog exceeds the geometry validation budget".into());
         }
@@ -161,6 +549,7 @@ pub fn validate_maps(maps: &[MapDef]) -> Result<(), String> {
         for &wall in &map.walls {
             validate_rect(wall).map_err(|error| format!("{} wall: {error}", map.id))?;
         }
+        validate_map_features(map)?;
         for &position in &map.objective_positions {
             validate_point(position).map_err(|error| format!("{} objective: {error}", map.id))?;
             if !point_clear(position[0] * map.width, position[1] * map.height, map, 42.) {
@@ -233,6 +622,96 @@ pub fn validate_maps(maps: &[MapDef]) -> Result<(), String> {
     Ok(())
 }
 
+/// Blocks, pads, decor, triggers and groups: counts, ranges and text.
+pub fn validate_map_features(map: &MapDef) -> Result<(), String> {
+    let id = &map.id;
+    if map.zones.len() > 256
+        || map.decor.len() > 1024
+        || map.triggers.len() > 128
+        || map.hidden_groups.len() > usize::from(MAP_GROUPS)
+    {
+        return Err(format!("{id}: too many pads, decorations or triggers"));
+    }
+    let group = |group: u8| group <= MAP_GROUPS;
+    for block in &map.blocks {
+        validate_rect(block.rect).map_err(|error| format!("{id} block: {error}"))?;
+        if !group(block.group) {
+            return Err(format!("{id}: block group must be 0 to {MAP_GROUPS}"));
+        }
+    }
+    for zone in &map.zones {
+        validate_rect(zone.rect).map_err(|error| format!("{id} pad: {error}"))?;
+        if !range(zone.strength, 0.25, 2.) || !group(zone.group) {
+            return Err(format!(
+                "{id}: pad strength must be 0.25 to 2 and its group 0 to {MAP_GROUPS}"
+            ));
+        }
+    }
+    let mut emitters = 0;
+    for decor in &map.decor {
+        validate_rect(decor.rect).map_err(|error| format!("{id} decoration: {error}"))?;
+        if !decor.rotation.is_finite()
+            || !range(decor.pulse, 0., 4.)
+            || !range(decor.spin, -720., 720.)
+            || !group(decor.group)
+            || !display_text(&decor.text, 64)
+        {
+            return Err(format!("{id}: decoration settings are out of range"));
+        }
+        if let Some(effect) = &decor.effect {
+            effect.validate().map_err(|e| format!("{id}: {e}"))?;
+        }
+        if decor.kind == DecorKind::Emitter {
+            emitters += 1;
+            decor
+                .effect
+                .unwrap_or_default()
+                .validate()
+                .map_err(|error| format!("{id}: {error}"))?;
+        }
+    }
+    if emitters > 48 {
+        return Err(format!("{id}: at most 48 particle emitters"));
+    }
+    for trigger in &map.triggers {
+        validate_rect(trigger.rect).map_err(|error| format!("{id} trigger: {error}"))?;
+        let timing = match trigger.when {
+            TriggerWhen::Every => range(trigger.seconds, 0.5, 3600.),
+            TriggerWhen::Enter => range(trigger.seconds, 0., 3600.),
+            TriggerWhen::Start => range(trigger.seconds, 0., 86400.),
+        };
+        let target = match trigger.action {
+            TriggerAction::Toggle | TriggerAction::Show | TriggerAction::Hide => {
+                (1..=MAP_GROUPS).contains(&trigger.group)
+            }
+            TriggerAction::Announce => !trigger.text.trim().is_empty(),
+            TriggerAction::Boss => BOSS_IDS.contains(&trigger.boss.as_str()),
+        };
+        if !timing
+            || !target
+            || !range(trigger.offset, 0., 3600.)
+            || !range(trigger.duration, 0., 3600.)
+            || !display_text(&trigger.text, 96)
+        {
+            return Err(format!(
+                "{id}: a trigger has invalid timing, target or text"
+            ));
+        }
+    }
+    if map
+        .hidden_groups
+        .iter()
+        .any(|&g| !(1..=MAP_GROUPS).contains(&g))
+    {
+        return Err(format!("{id}: hidden groups must be 1 to {MAP_GROUPS}"));
+    }
+    Ok(())
+}
+
+fn display_text(text: &str, limit: usize) -> bool {
+    text.chars().count() <= limit && !text.chars().any(char::is_control)
+}
+
 fn range(value: f32, min: f32, max: f32) -> bool {
     value.is_finite() && value >= min && value <= max
 }
@@ -263,7 +742,7 @@ fn point_clear(x: f32, y: f32, map: &MapDef, radius: f32) -> bool {
     if x < radius || y < radius || x > map.width - radius || y > map.height - radius {
         return false;
     }
-    map.walls.iter().all(|&[wx, wy, w, h]| {
+    map.solid_rects(map.starting_mask()).all(|[wx, wy, w, h]| {
         let (wx, wy, w, h) = (
             wx * map.width,
             wy * map.height,
@@ -277,7 +756,7 @@ fn point_clear(x: f32, y: f32, map: &MapDef, radius: f32) -> bool {
 }
 
 fn segment_clear(a: [f32; 2], b: [f32; 2], map: &MapDef) -> bool {
-    map.walls.iter().all(|&[x, y, w, h]| {
+    map.solid_rects(map.starting_mask()).all(|[x, y, w, h]| {
         let mins = [x * map.width - 30., y * map.height - 30.];
         let maxs = [(x + w) * map.width + 30., (y + h) * map.height + 30.];
         let mut entry: f32 = 0.;

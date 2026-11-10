@@ -124,7 +124,7 @@ Choose Host server to play with friends or Join server to enter an address. A lo
 
 ## New combat trials and Chronarch
 
-Practice (F6) now has Foundations and Combat trials pages. Counter school teaches body parries, Frozen front introduces the Chronarch, Sentinel hunt is a one-life boss duel, and Hold the line tests trap placement. Each challenge saves its own personal best and supports Retry. Offline modes also offer a bot-count slider, level 1/30/45 starts, arena-size presets, and an adaptive-border toggle. Preset levels disable arena achievements.
+Practice (F6) has Foundations, Combat trials and Boss encounters pages. Counter school teaches body parries, Frozen front introduces the Chronarch, Sentinel hunt is a one-life boss duel, and Hold the line tests trap placement. Each challenge saves its own personal best and supports Retry. Offline modes also offer a bot-count slider, level 1/30/45 starts, arena-size presets, and an adaptive-border toggle. Preset levels disable arena achievements.
 
 Chronarch is a level-55 evolution from Counterguard or Relay. Its Stasis wave ability has an 18-second cooldown: for three seconds it catches your own and hostile kinetic rounds within 330 units, up to 96 rounds. They move with the tank without aging, then release radially as your shots. Rounds cannot be captured repeatedly. Friendly teammates' rounds, drones, traps, mines, and melee bypass the field; cover blocks it. Killing the caster cancels conversion and restores the original rounds.
 
@@ -172,3 +172,13 @@ The game opens with a two-second splash that ends on the main menu's arena, and 
 The Graphics tab also names the GPU the game is drawing on, with its video memory and driver. A warning appears there if the system is rendering in software, which usually means the GPU driver is missing. Laptops with both integrated and NVIDIA or AMD graphics use the faster GPU automatically: on Windows through the drivers' high-performance request, and on Linux through PRIME render offload when the NVIDIA GPU isn't driving the display. On Linux with NVIDIA drivers, the game also queues fewer frames ahead for lower input latency. If a launch with these changes fails to open a window, the next launch starts without them, as does `--safe-graphics`.
 
 **Adaptive VSync** (Display tab, on by default with VSync, not on macOS): when a frame misses the display's refresh, it's shown at once instead of waiting a whole refresh, which avoids a stutter at the cost of a brief tear. It needs driver support (NVIDIA and AMD drivers provide it); without it, normal VSync is used. It applies after a restart.
+
+## Arena Workshop and community rules
+
+**Map editor** on the main menu opens the [Arena Workshop](map-editor.md). Build cover, pads, decoration, particles and group triggers; test with F5 and return with Escape. Save an editable project or export a pack for offline games and community servers. The Files panel can import packs or copy an existing arena as a template.
+
+The party roster includes **I'm ready** and a ready count. Readiness is shared with the party and resets for a new round; it does not pause the running match or grant host tools.
+
+Siege Engine, Skirmisher and Trapper add three boss encounters, each with a practice trial. Special attacks lock their aim during the warning. Heavy siege shots, a straight skirmisher charge and side-pocket mines each leave a different escape route. Boss models use distinct mechanical silhouettes rather than a shared stack of rotating armor.
+
+Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Extended maps and snapshots need protocol 24 on both server and client.

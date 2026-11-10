@@ -17,3 +17,7 @@ Automatic address discovery uses fixed HTTPS services, and router mapping reques
 Party voice mutes follow the member's connection across respawns and rounds. Enter while alive or Slash opens party chat; new messages appear in the collapsed roster. The online match keeps running while you browse menus.
 
 The host role comes from a process-local channel. The invitation proves entry with a fresh signature bound to the connection, server and administration key. It stays out of saved server history and is never sent as a password. Relayed traffic uses TLS between each participant and the relay; the relay can observe forwarded game traffic. Direct UDP parties retain the regular unsecure netcode transport, so invitation proofs alone do not authenticate the server or encrypt chat/voice against an on-path observer. Creator and central-owner credentials remain separate.
+
+## Ready check
+
+Open the party roster and click **I'm ready**. Every member sees the ready markers and count, alongside whether each person is in a menu or a match. Click again to clear your status. Readiness resets when a new round starts. It is a coordination aid: the current match keeps running and readiness never grants leader permissions.

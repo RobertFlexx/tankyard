@@ -44,6 +44,20 @@ impl UdpServer {
         self.restart_round();
         Ok(())
     }
+    pub(crate) fn configure_rules(
+        &mut self,
+        rules: tankyard_mods::GameRules,
+    ) -> Result<(), NetError> {
+        rules.validate().map_err(NetError)?;
+        for arena in &mut self.arenas {
+            arena.session.world.set_rules(rules).map_err(NetError)?;
+        }
+        self.settings.world.rules = rules;
+        self.settings.world.modded = true;
+        self.settings.rules_override = Some(rules);
+        self.announce("The host updated the arena rules.".into());
+        Ok(())
+    }
     pub(crate) fn send_rooms(&mut self, client: u64) {
         let role = self.access.grant(client, unix_time().as_secs()).role;
         self.send_control(
@@ -269,6 +283,7 @@ impl UdpServer {
                 self.restart_round();
             }
             ServerCommand::RestartRound => self.restart_round(),
+            ServerCommand::ConfigureRules { rules } => self.configure_rules(rules)?,
             ServerCommand::ReadAudit => {
                 if self.settings.audit_file.is_empty() {
                     return Err(NetError("Audit logging is disabled by the host.".into()));

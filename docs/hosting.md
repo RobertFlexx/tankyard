@@ -8,6 +8,8 @@ Open **Host server → Community server**. Name the server, pick a UDP port, max
 
 Servers answer status queries, so anyone who saves yours sees its name, player count, lobbies, mods, whether it needs a password, and a measured connection quality in **Join server**. Clicking the main server card on the title screen lists its lobbies; picking one joins that lobby.
 
+For a public hostname such as `play.example.com`, follow the [domain, DNS and HTTPS guide](hosting-domain.md). The server now includes an optional WebSocket listener, so a separate relay process is not needed.
+
 ## From the command line
 
 Build and start a community server:
@@ -21,7 +23,7 @@ cargo build --locked --release -p tankyard-server --bin tankyard-server
 
 The port is UDP 5000. Local players join `127.0.0.1:5000`; LAN players use the host's local address. Internet players need a reachable public address and a forwarded UDP port. IPv6 addresses use brackets, such as `[2001:db8::1234]:5000`.
 
-Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default; `snapshot_rate` takes 1 to 60, and higher rates are smoother at the cost of bandwidth. Clients use protocol 23; servers also accept protocol 22 clients (Tank Yard 0.10 and 0.11), which play normally but don't see mod HUD widgets. Validated mod data is sent when joining, so clients do not need to install server packs.
+Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default; `snapshot_rate` takes 1 to 60, and higher rates are smoother at the cost of bandwidth. The map workshop and live rules use protocol 24; 0.13 and earlier clients must update before joining these servers. Validated mod data is sent when joining, so clients do not need to install server packs.
 
 Inputs are sent as soon as each frame's update finishes, before drawing; menu commands go out before the frame ends. Movement abilities use shared prediction rules. Remote movement can bridge a packet gap for up to 75 ms, constrained by walls and the arena boundary; longer gaps freeze until a new snapshot arrives. The server reuses snapshot storage between viewers and bounds catch-up work during overload.
 
@@ -33,7 +35,7 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 
 Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
 
-Current clients and servers use protocol 23; servers still welcome protocol 22 clients. Clients from 0.12 on need a server from 0.12 on, so update servers first; 0.12 and 0.13 play together. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
+Tank Yard 0.14 uses protocol 24, including the extended map schema and new snapshot fields. Upgrade clients and servers together; protocol 23 snapshots are incompatible. Older clients receive an update message. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
 
 The ordinary server includes signed creator tools by default on official public arenas (`--central`); `creator_admin = false` overrides that policy. Default community/personal hosts are disabled; public community operators can explicitly opt in. Password-protected hosts cannot enable the tools. See [creator administration](creator-administration.md) for policy, immediate revocation, auditing, and updating the central Raspberry Pi/Docker deployment.
 
@@ -48,12 +50,15 @@ The process console is the host's administration interface:
 | `mode domination` | Start another mode |
 | `maps`, `map maze` | List loaded maps or select a map and start a new round |
 | `restart` | Start a new round with the current settings |
+| `rules`, `rules movement_multiplier 1.2`, `rules reset` | Read rules, change one value live, or restore defaults |
 | `kick 123`, `ban 123 60` | Remove a player or ban their address for 60 minutes |
 | `unban 192.168.1.20`, `bans` | Manage address bans |
 | `reload-mods` | Validate packs, then start a new round; a failed load preserves the current round |
 | `save my-server.toml`, `shutdown` | Save settings or stop cleanly |
 
-The in-game Server panel appears only to players with server permissions. Its Settings tab shows the server's current mode, map, bot population, and difficulty. The Settings permission allows changing the match and restarting a round. Bot population changes apply immediately; applying mode, map, and difficulty starts a new round while keeping players connected and retaining their server roles. A plain restart uses the current settings. Unknown maps and Sandbox selection without `allow_sandbox` are rejected before replacing the match. Maze mode with map `open` selects map `maze` automatically. Console `status` includes the active map, round, and difficulty; commands reject missing or extra arguments.
+The in-game Server panel appears only to players with server permissions. Its **Rules** tab changes movement, acceleration, coasting, damage, health, regeneration, XP, score and respawn time without a restart. Health preserves each tank's current percentage; existing bullets keep their damage. The Configure permission is required, and the change applies to every arena. `save` persists an explicit `rules_override` profile, taking priority over a pack's initial rules on later process restarts. Modified rounds do not earn standard achievements.
+
+Its Settings tab shows the server's current mode, map, bot population, and difficulty. The Settings permission allows changing the match and restarting a round. Bot population changes apply immediately; applying mode, map, and difficulty starts a new round while keeping players connected and retaining their server roles. A plain restart uses the current settings. Unknown maps and Sandbox selection without `allow_sandbox` are rejected before replacing the match. Maze mode with map `open` selects map `maze` automatically. Console `status` includes the active map, round, and difficulty; commands reject missing or extra arguments.
 
 Owners can nominate lower roles and choose Kick, Ban, Mute, Manage rooms, Manage roles, Settings, Reload mods, and View audit individually. Delegates cannot grant permissions they lack, appoint an owner, or moderate someone of equal or higher authority. Every request is checked on the server and rate limited. Gameplay mods have no administration API.
 
@@ -71,7 +76,7 @@ For authenticated connections, set a private 32-byte hexadecimal `netcode_privat
 
 Global staff authority is a separate trusted backend gateway, restricted to official servers with authenticated transport and a private `global_audit_file`. It supports account suspension, official player removal, and community directory delisting. Staff credentials, roles, and actions have no client packet or user-facing panel. A community role cannot grant global access. The gateway must enforce revocation and propagate account suspensions to the other official servers. Global and community audit paths must differ.
 
-To publish a server behind an HTTP-only proxy such as a Cloudflare Tunnel hostname, run `tankyard-relay --listen 0.0.0.0:8080 --server 127.0.0.1:5000` and route the hostname to port 8080. Players join `wss://host` or just `host`; the client carries netcode packets over the WebSocket. Every player then shares the relay's address, so use `kick` or a password rather than address bans. The relay log shows each player's original IP when Cloudflare forwards it.
+To publish a server behind an HTTP-only proxy such as a Cloudflare Tunnel hostname, set `websocket = "127.0.0.1:8080"` in the game server config and route the hostname to port 8080. The standalone `tankyard-relay` remains available for separate-process deployments. Players join `wss://host` or just `host`; the client carries netcode packets over the WebSocket. The server scopes loopback bans to a connection, so banning one proxied player cannot exclude everyone on that relay. Lasting individual bans for anonymous guests behind a shared proxy still need verified accounts. The relay log shows each player's original IP when Cloudflare forwards it.
 
 Use `scripts/host_server.sh` for a convenience launcher. `configs/tankyard.service` runs under a dedicated user at `/opt/tankyard`, restarts on failure, and handles SIGTERM. Adjust paths and allow that user to write the configuration directory. Use `--no-console` under a service manager. Logs use `RUST_LOG`.
 
@@ -95,7 +100,7 @@ The central profile uses `arena_capacity = 20` with `max_players = 80`, so up to
 
 Realtime input bursts from delayed connections are coalesced. The server retains bounded processing and drops excess input instead of kicking a player for packet bunching. Malformed input and control-message limits still apply. UDP buffers absorb short bursts where the operating system allows it; WebSocket queues are bounded and pause UDP reads when TCP is blocked.
 
-Run each arena in its own server process. That lets separate CPU cores and machines handle additional rooms. The central lobby should send players to an arena's UDP address and issue its connection token before they join. Account, database, and matchmaking requests belong outside the simulation thread; account verifiers should read cached claims and revocations.
+Occupied arenas step concurrently on up to four available CPU cores; one active arena stays on the calling thread without allocating a work list. The game thread still orders network replication and round transitions after simulation completes. For more isolation, run arenas in separate server processes or on different machines. The central lobby should send players to an arena's UDP address and issue its connection token before they join. Account, database, and matchmaking requests belong outside the simulation thread; account verifiers should read cached claims and revocations.
 
 Start with the current 64-player room limit and measure on the hosting hardware before increasing it. At 60 ticks per second, each tick has 16.7 ms; snapshot batches and network work need CPU time too. Monitor `status` for tick percentiles, snapshot time, skipped snapshots, and dropped catch-up ticks. Add rooms while there is still CPU and network headroom. The configured player limit alone does not establish capacity.
 

@@ -137,6 +137,14 @@ impl PartyUi {
                     warm_text_color(),
                 );
             }
+            if member.ready {
+                ui_circle(
+                    center.x + 10. * s,
+                    center.y + 10. * s,
+                    3. * s,
+                    accent_color(),
+                );
+            }
         }
         if unread > 0 {
             let text = format!("{} new", unread.min(64));
@@ -230,7 +238,11 @@ impl PartyUi {
             .map_or_else(|| "the leader".to_owned(), |member| member.name.clone());
         label(
             &fitted_label(
-                &format!("{} of 8 players · hosted by {leader}", view.members.len()),
+                &format!(
+                    "{} of 8 players · {} ready · {leader} hosts",
+                    view.members.len(),
+                    view.members.iter().filter(|m| m.ready).count()
+                ),
                 12. * s,
                 r.w - 230. * s,
             ),
@@ -289,6 +301,16 @@ impl PartyUi {
             336. * s,
         );
         label("MEMBERS", left.x, left.y + 12. * s, 11. * s, muted_color());
+        let ready = view.members.iter().any(|m| m.client == view.me && m.ready);
+        if button(
+            Rect::new(left.right() - 112. * s, left.y - 5. * s, 112. * s, 24. * s),
+            if ready { "Ready ✓" } else { "I'm ready" },
+            ready,
+            true,
+            s * 0.6,
+        ) {
+            action = Action::PartyReady(!ready);
+        }
         for slot in 0..8 {
             let row = Rect::new(
                 left.x,
@@ -349,7 +371,16 @@ impl PartyUi {
                 );
             }
             let name = format!("{}{}", member.name, if me { " (you)" } else { "" });
-            let name = fitted_label(&name, 12. * s, 128. * s);
+            let badge_width = if member.leader {
+                label_width("LEADER", 9. * s) + 8. * s
+            } else {
+                0.
+            };
+            let name = fitted_label(
+                &name,
+                12. * s,
+                row.w - (if me { 58. } else { 122. }) * s - badge_width,
+            );
             label(
                 &name,
                 row.x + 46. * s,
@@ -369,7 +400,9 @@ impl PartyUi {
             let class_name = content
                 .class(&member.class)
                 .map_or(member.class.as_str(), |class| class.name.as_str());
-            let state = if member.in_menu {
+            let state = if member.ready {
+                "Ready"
+            } else if member.in_menu {
                 "In menus"
             } else {
                 "In match"

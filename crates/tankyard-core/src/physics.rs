@@ -185,6 +185,7 @@ pub fn move_tank(
     }
     let speed = tank_speed(tank, content)
         * config.rules.movement_multiplier
+        * tank.terrain.clamp(0.3, 2.5)
         * (if tank.boost > 0. { 1.55 } else { 1. })
         * (if tank.carrying { 0.75 } else { 1. });
     let desired = tank.input.movement.clamp_length(1.) * speed;

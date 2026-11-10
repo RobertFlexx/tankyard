@@ -15,7 +15,10 @@ pub fn draw(run: &Run, records: &[Record], s: f32, top: f32) -> Action {
         Goal::Score(target) => format!("Score  {} / {}", run.progress, target),
         Goal::Kills(target) => format!("Tanks  {} / {}", run.progress, target),
         Goal::Survive => format!("Survived  {}", clock(run.ticks)),
-        Goal::Boss => "Defeat the Sentinel".into(),
+        Goal::Boss => challenge.boss().map_or_else(
+            || "Defeat the boss".into(),
+            |kind| format!("Defeat the {}", kind.name()),
+        ),
     };
     if !run.done() {
         let r = Rect::new(screen_width() * 0.5 - 180.0 * s, top, 360.0 * s, 59.0 * s);

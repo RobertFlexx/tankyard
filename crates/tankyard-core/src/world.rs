@@ -36,6 +36,10 @@ pub struct World {
     pub bosses: Vec<Boss>,
     pub walls: Vec<Rect>,
     pub(crate) map_walls: Vec<Rect>,
+    /// Unscaled walls that never change during a round (map walls, generated
+    /// cover); blocks in shown groups are added to these.
+    pub(crate) static_walls: Vec<Rect>,
+    pub(crate) trigger_state: crate::map_features::TriggerState,
     pub objectives: Vec<Objective>,
     pub match_state: MatchState,
     pub events: Vec<GameEvent>,
@@ -85,6 +89,13 @@ impl World {
             bundle.content.clone(),
             bundle.maps.clone(),
         ))
+    }
+    #[cfg(test)]
+    pub(crate) fn with_maps_for_tests(
+        config: WorldConfig,
+        maps: Vec<tankyard_content::MapDef>,
+    ) -> Self {
+        Self::with_maps(config, Content::builtin(), maps)
     }
     fn with_maps(
         mut config: WorldConfig,
@@ -151,6 +162,8 @@ impl World {
             bosses: vec![],
             walls: vec![],
             map_walls: vec![],
+            static_walls: vec![],
+            trigger_state: Default::default(),
             objectives: vec![],
             match_state: MatchState {
                 elapsed: 0.,
@@ -165,6 +178,7 @@ impl World {
                     .clone()
                     .unwrap_or_else(|| config.mode.name().into()),
                 arena: ArenaStatus::default(),
+                hidden_groups: map.starting_mask(),
             },
             config,
             content,
@@ -318,6 +332,7 @@ impl World {
             spawn_immunity: protection > 0.0,
             knockback: 0.,
             speed_scale: 1.,
+            terrain: 1.,
             reload_scale: 1.,
             damage_scale: 1.,
             stasis: 0.,
@@ -523,6 +538,38 @@ impl World {
         t.points = allowed.saturating_sub(t.stats.iter().copied().sum());
         self.refresh_stats(id, true);
     }
+    /// Apply validated live rules without resetting players or the round.
+    /// Health changes preserve each tank's health fraction, including deaths.
+    pub fn set_rules(&mut self, rules: tankyard_mods::GameRules) -> Result<(), String> {
+        rules.validate()?;
+        if rules == self.config.rules {
+            return Ok(());
+        }
+        self.config.rules = rules;
+        self.config.modded = true;
+        let health: Vec<_> = self
+            .tanks
+            .iter()
+            .map(|tank| {
+                (
+                    tank.id,
+                    if tank.max_health > 0. {
+                        (tank.health / tank.max_health).clamp(0., 1.)
+                    } else {
+                        0.
+                    },
+                )
+            })
+            .collect();
+        for (id, fraction) in health {
+            self.refresh_stats(id, false);
+            if let Some(tank) = self.tanks.iter_mut().find(|tank| tank.id == id) {
+                tank.health = tank.max_health * fraction;
+                tank.respawn_timer = tank.respawn_timer.min(rules.respawn_seconds);
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn refresh_stats(&mut self, id: EntityId, heal: bool) {
         let Some(t) = self.tanks.iter_mut().find(|t| t.id == id) else {
             return;
@@ -596,6 +643,8 @@ impl World {
         self.match_state.elapsed += DT;
         self.update_arena_size();
         self.random_boss_event();
+        self.run_triggers();
+        self.update_zones();
         self.update_tanks();
         self.update_targets();
         self.update_bosses();
@@ -1009,8 +1058,19 @@ impl World {
         {
             return;
         }
+        let sheltered = if self.map.zones.is_empty() {
+            1.
+        } else {
+            crate::shelter_factor(
+                &self.map,
+                &self.config,
+                self.match_state.hidden_groups,
+                t.pos,
+            )
+        };
         let reduction = if t.shield > 0. { 0.18 } else { 1. }
-            * self.incoming_damage.get(&t.id).copied().unwrap_or(1.);
+            * self.incoming_damage.get(&t.id).copied().unwrap_or(1.)
+            * sheltered;
         let amount = (damage * reduction).max(0.);
         t.vel = (t.vel + knockback).clamp_length(1200.);
         if amount <= 0.0 || !amount.is_finite() {

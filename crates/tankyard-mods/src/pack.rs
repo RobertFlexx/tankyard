@@ -180,6 +180,20 @@ impl PackFiles {
         Ok(pack)
     }
 
+    /// Export the already validated file map as a portable pack.
+    pub fn to_zip(&self) -> Result<Vec<u8>, String> {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &self.files {
+            writer
+                .start_file(name, options)
+                .map_err(|e| e.to_string())?;
+            writer.write_all(data).map_err(|e| e.to_string())?;
+        }
+        Ok(writer.finish().map_err(|e| e.to_string())?.into_inner())
+    }
     fn insert(&mut self, name: String, data: Vec<u8>) -> Result<(), String> {
         if self.files.len() >= MAX_PACK_FILES {
             return Err("mod pack has more than 256 files".into());

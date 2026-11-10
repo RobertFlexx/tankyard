@@ -11,6 +11,7 @@ pub struct PartyMember {
     pub class: String,
     pub leader: bool,
     pub in_menu: bool,
+    pub ready: bool,
 }
 
 pub fn valid_party_roster(members: &[PartyMember]) -> bool {
@@ -43,6 +44,7 @@ mod tests {
             class: "vector".into(),
             leader: true,
             in_menu: false,
+            ready: false,
         };
         assert!(valid_party_roster(std::slice::from_ref(&member)));
         assert!(!valid_party_roster(&[member.clone(), member.clone()]));

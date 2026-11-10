@@ -265,6 +265,9 @@ pub struct Tank {
     pub creator_attacks: [f32; crate::creator_boss::ATTACK_COUNT],
     #[serde(default)]
     pub server_badge: ServerBadge,
+    /// Movement factor from the map pad under the tank; 1 off pads.
+    #[serde(default = "unit_scale")]
+    pub terrain: f32,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerBadge {
@@ -361,6 +364,7 @@ impl Clone for Tank {
             creator_boss: self.creator_boss,
             creator_attacks: self.creator_attacks,
             server_badge: self.server_badge,
+            terrain: self.terrain,
         }
     }
     fn clone_from(&mut self, source: &Self) {
@@ -411,6 +415,7 @@ impl Clone for Tank {
         self.creator_boss = source.creator_boss;
         self.creator_attacks = source.creator_attacks;
         self.server_badge = source.server_badge;
+        self.terrain = source.terrain;
     }
 }
 
@@ -546,9 +551,12 @@ pub enum BossKind {
     Defender,
     FallenOverlord,
     FallenBooster,
+    SiegeEngine,
+    Skirmisher,
+    Trapper,
 }
 impl BossKind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 14] = [
         Self::Sentinel,
         Self::Prism,
         Self::Foundry,
@@ -560,6 +568,9 @@ impl BossKind {
         Self::Defender,
         Self::FallenOverlord,
         Self::FallenBooster,
+        Self::SiegeEngine,
+        Self::Skirmisher,
+        Self::Trapper,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -574,7 +585,32 @@ impl BossKind {
             Self::Defender => "Defender",
             Self::FallenOverlord => "Fallen Overlord",
             Self::FallenBooster => "Fallen Booster",
+            Self::SiegeEngine => "Siege Engine",
+            Self::Skirmisher => "Skirmisher",
+            Self::Trapper => "Trapper",
         }
+    }
+    /// The lowercase id maps and commands use, such as `fallen_overlord`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Sentinel => "sentinel",
+            Self::Prism => "prism",
+            Self::Foundry => "foundry",
+            Self::Tempest => "tempest",
+            Self::Bastion => "bastion",
+            Self::Eclipse => "eclipse",
+            Self::Guardian => "guardian",
+            Self::Summoner => "summoner",
+            Self::Defender => "defender",
+            Self::FallenOverlord => "fallen_overlord",
+            Self::FallenBooster => "fallen_booster",
+            Self::SiegeEngine => "siege_engine",
+            Self::Skirmisher => "skirmisher",
+            Self::Trapper => "trapper",
+        }
+    }
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.id() == id)
     }
     pub fn radius(self) -> f32 {
         match self {
@@ -585,6 +621,9 @@ impl BossKind {
             Self::FallenBooster => 82.,
             Self::Foundry | Self::Bastion => 100.,
             Self::Tempest => 78.,
+            Self::SiegeEngine => 104.,
+            Self::Skirmisher => 72.,
+            Self::Trapper => 88.,
             _ => 90.,
         }
     }
@@ -695,6 +734,9 @@ pub struct MatchState {
     pub announcement: String,
     #[serde(default)]
     pub arena: ArenaStatus,
+    /// Map groups hidden right now, one bit per group (group 1 is bit 0).
+    #[serde(default)]
+    pub hidden_groups: u32,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum EventKind {

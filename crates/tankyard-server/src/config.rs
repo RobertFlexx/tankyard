@@ -28,6 +28,10 @@ pub struct ServerSettings {
     pub netcode_private_key: Option<String>,
     pub name: String,
     pub bind: String,
+    /// Also accept players over WebSocket on this TCP address, such as
+    /// `127.0.0.1:8080` behind a TLS reverse proxy for `wss://` joins on a
+    /// domain. Empty (the default) leaves WebSocket off.
+    pub websocket: String,
     pub public_addresses: Vec<std::net::SocketAddr>,
     pub max_players: usize,
     /// Human players per arena. Larger populations open more arenas on the
@@ -50,6 +54,10 @@ pub struct ServerSettings {
     pub map_rotation_seconds: u32,
     pub party: Option<crate::party::PartySettings>,
     pub world: WorldConfig,
+    /// A host-applied profile takes priority over a pack's initial rules and
+    /// survives process restarts when the configuration is saved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules_override: Option<tankyard_mods::GameRules>,
     pub mods: Vec<std::path::PathBuf>,
 }
 impl Default for ServerSettings {
@@ -68,6 +76,7 @@ impl Default for ServerSettings {
             netcode_private_key: None,
             name: "Tank Yard Community Arena".into(),
             bind: "0.0.0.0:5000".into(),
+            websocket: String::new(),
             public_addresses: vec![],
             max_players: 64,
             arena_capacity: DEFAULT_LOBBY_SIZE,
@@ -86,6 +95,7 @@ impl Default for ServerSettings {
             map_rotation_seconds: 7200,
             party: None,
             world: WorldConfig::default(),
+            rules_override: None,
             mods: vec![],
         }
     }
@@ -178,6 +188,15 @@ impl ServerSettings {
         Ok(())
     }
     pub fn validate(&self) -> Result<(), NetError> {
+        if let Some(rules) = self.rules_override {
+            rules.validate().map_err(NetError)?;
+        }
+        if !self.websocket.is_empty() && self.websocket.parse::<std::net::SocketAddr>().is_err() {
+            return Err(NetError(format!(
+                "websocket must be an address and port such as 127.0.0.1:8080, not {:?}",
+                self.websocket
+            )));
+        }
         if (self.map_rotation_seconds != 0 && !(60..=604800).contains(&self.map_rotation_seconds))
             || self.party.as_ref().is_some_and(|p| {
                 !(2..=8).contains(&p.ally_slots)

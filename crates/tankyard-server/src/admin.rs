@@ -158,6 +158,25 @@ impl UdpServer {
                 self.configure_match(self.settings.world.mode, map, self.settings.difficulty)?;
                 Ok(format!("Started map {}.", self.settings.world.map))
             }
+            "rules" => {
+                let current = self.arenas[0].session.world.config.rules;
+                let Some(field) = args.next() else {
+                    return serde_json::to_string_pretty(&current).map_err(|e| NetError(e.to_string()));
+                };
+                let rules = if field == "reset" && args.clone().count() == 0 {
+                    tankyard_mods::GameRules::default()
+                } else {
+                    let value: f32 = args.next().ok_or_else(|| NetError("Use rules <field> <number>, rules reset, or rules.".into()))?
+                        .parse().map_err(|_| NetError("Rule value must be a finite number.".into()))?;
+                    if !value.is_finite() { return Err(NetError("Rule value must be finite.".into())); }
+                    let mut document = serde_json::to_value(current).map_err(|e| NetError(e.to_string()))?;
+                    if document.get(field).is_none() { return Err(NetError("Unknown rule. Enter rules to list field names.".into())); }
+                    document[field] = serde_json::json!(value);
+                    serde_json::from_value(document).map_err(|e| NetError(e.to_string()))?
+                };
+                self.configure_rules(rules)?;
+                Ok("Rules applied live. Use save to retain them in the server configuration.".into())
+            }
             "restart" => { self.restart_round(); Ok("A new round has started.".into()) }
             "difficulty" => {
                 let difficulty = difficulty_from_name(args.next().ok_or_else(|| NetError("expected a bot difficulty".into()))?).map_err(NetError)?;
@@ -252,6 +271,7 @@ fn validate_arguments(verb: &str, count: usize) -> Result<(), NetError> {
         "role" => count == 2,
         "ban" => (1..=2).contains(&count),
         "save" | "creator-admin" | "central-owner" => count <= 1,
+        "rules" => count <= 2,
         "help" | "status" | "players" | "maps" | "bans" | "reload-mods" | "restart"
         | "shutdown" | "quit" => count == 0,
         _ => true,
