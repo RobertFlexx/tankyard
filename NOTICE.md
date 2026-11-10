@@ -40,3 +40,14 @@ and linked statically, through the `mlua` bindings. Mod archives are read with t
 `zlib-rs` crates. Their full notices (MIT and Zlib) are in
 [licenses/lua-and-archives.txt](licenses/lua-and-archives.txt), which release
 archives include.
+
+On Linux x86-64 and Windows x64, the client links NVIDIA's NGX loader from the
+[NVIDIA DLSS SDK](https://github.com/NVIDIA/DLSS) 310.9.16, fetched at build
+time by `scripts/fetch_dlss_sdk.py` and not kept in this repository. On a
+GeForce RTX GPU, the game downloads NVIDIA's DLSS runtime from that SDK release
+when the player chooses DLSS, and checks its SHA-256 before use. Both are
+NVIDIA's software under the NVIDIA RTX SDKs license, whose text is in the SDK
+(`LICENSE.txt`). NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA
+Corporation. Tank Yard's own DLSS integration (`crates/tankyard-client/native`
+and `src/dlss`) is covered by this project's license; the libstdc++ bridge
+there reimplements a few GCC runtime functions and contains no NVIDIA code.

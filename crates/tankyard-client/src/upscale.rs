@@ -6,12 +6,18 @@
 //! The FSR 1 passes follow AMD's published algorithm (MIT licensed) and run on
 //! GLSL ES 1.0, so they work wherever the game does. A driver that rejects a
 //! shader falls back to bilinear filtering.
+//!
+//! On GeForce RTX GPUs, NVIDIA DLSS can take over: it renders the arena
+//! jittered at a lower resolution (or full resolution for DLAA), adds motion
+//! vectors, and reconstructs the output over time. See `dlss`.
 use crate::{settings::Settings, target::Target};
 use macroquad::prelude::*;
 
-pub const UPSCALERS: [&str; 3] = ["Bilinear", "FSR 1", "MetalFX"];
+pub const UPSCALERS: [&str; 4] = ["Bilinear", "FSR 1", "MetalFX", "NVIDIA DLSS"];
 /// Index of MetalFX in `UPSCALERS`; offered only where the system has it.
 pub const METALFX: u8 = 2;
+/// Index of DLSS in `UPSCALERS`; offered only on NVIDIA RTX GPUs.
+pub const DLSS: u8 = 3;
 
 const VERTEX: &str = r#"#version 100
 attribute vec3 position;
@@ -352,19 +358,41 @@ pub struct Plan {
     pub easu: bool,
     /// Upscale with MetalFX; FSR 1 stands in if MetalFX fails at runtime.
     pub metalfx: bool,
+    /// Reconstruct with DLSS in this mode; FSR 1 stands in if it fails.
+    pub dlss: Option<crate::dlss::Mode>,
     pub sharpness: f32,
 }
 
 impl Plan {
-    /// `metalfx` says whether the system can upscale with MetalFX; FSR 1
-    /// replaces it elsewhere.
-    pub fn new(settings: &Settings, output: (u32, u32), metalfx: bool) -> Option<Self> {
+    /// `metalfx` and `dlss` say whether the system can upscale with them;
+    /// FSR 1 replaces either elsewhere.
+    pub fn new(settings: &Settings, output: (u32, u32), metalfx: bool, dlss: bool) -> Option<Self> {
         let scale = settings.render_scale.clamp(0.5, 2.0);
+        if dlss && settings.upscaler == DLSS {
+            // DLSS anti-aliases on its own and never renders above the
+            // output: at 100% and over it runs as DLAA.
+            let mode = crate::dlss::Mode::for_scale(scale);
+            let scene = if mode == crate::dlss::Mode::Dlaa {
+                output
+            } else {
+                bounded((output.0 as f32 * scale, output.1 as f32 * scale))
+            };
+            return Some(Self {
+                scene,
+                fxaa: false,
+                easu: false,
+                metalfx: false,
+                dlss: Some(mode),
+                sharpness: settings.sharpness.clamp(0., 1.),
+            });
+        }
         let scene = bounded((output.0 as f32 * scale, output.1 as f32 * scale));
         let upscaling = scene.0 < output.0;
         let metalfx = metalfx && settings.upscaler == METALFX && upscaling;
-        let easu =
-            upscaling && (settings.upscaler == 1 || (settings.upscaler == METALFX && !metalfx));
+        let easu = upscaling
+            && (settings.upscaler == 1
+                || (settings.upscaler == METALFX && !metalfx)
+                || settings.upscaler == DLSS);
         // FSR pairs its upscale with RCAS; elsewhere sharpening is opt-in, so
         // FSR at native scale costs nothing.
         let sharpness = if easu {
@@ -377,6 +405,7 @@ impl Plan {
             fxaa: settings.fxaa,
             easu,
             metalfx,
+            dlss: None,
             sharpness,
         };
         (scene != output || plan.fxaa || plan.sharpness > 0.).then_some(plan)
@@ -390,6 +419,7 @@ pub struct Scaler {
     smoothed: Option<Target>,
     upscaled: Option<Target>,
     plan: Option<(Plan, (u32, u32))>,
+    dlss: Option<crate::dlss::Upscaler>,
 }
 
 /// The slot's target, recreated only when its size or sampling changes.
@@ -440,28 +470,51 @@ impl Scaler {
     /// whatever the world would otherwise draw into.
     pub fn begin(&mut self, settings: &Settings, output: (u32, u32)) {
         let metalfx = crate::graphics::metalfx_available();
-        self.plan = Plan::new(settings, output, metalfx).map(|plan| (plan, output));
-        let Some((plan, _)) = self.plan else {
+        let dlss = settings.upscaler == DLSS && crate::dlss::available();
+        self.plan = Plan::new(settings, output, metalfx, dlss).map(|plan| (plan, output));
+        let Some((mut plan, _)) = self.plan else {
             // Free the targets once post-processing is off.
             self.scene = None;
             self.smoothed = None;
             self.upscaled = None;
+            self.dlss = None;
             return;
         };
+        if let Some(mode) = plan.dlss {
+            if self.dlss.is_none() {
+                self.dlss = crate::dlss::Upscaler::new();
+            }
+            let scale = plan.scene.0 as f32 / output.0 as f32;
+            let selected = self.dlss.as_mut().and_then(|dlss| {
+                let render = dlss.render_size(output, mode, scale)?;
+                dlss.select_scene(render, output, mode).map(|_| render)
+            });
+            if let Some(render) = selected {
+                plan.scene = render;
+                self.plan = Some((plan, output));
+                self.scene = None;
+                self.smoothed = None;
+                self.upscaled = None;
+                if self.materials.is_none() && plan.sharpness > 0. {
+                    self.materials = Some(load_materials());
+                }
+                clear_background(BLANK);
+                return;
+            }
+            // DLSS couldn't run here: upscale with FSR 1 instead.
+            plan.dlss = None;
+            plan.easu = plan.scene.0 < output.0;
+            if plan.easu {
+                plan.sharpness = plan.sharpness.max(0.1);
+            }
+            self.plan = Some((plan, output));
+        } else {
+            self.dlss = None;
+        }
         if self.materials.is_none()
             && (plan.fxaa || plan.easu || plan.metalfx || plan.sharpness > 0.)
         {
-            let loaded = (|| {
-                Ok(Materials {
-                    easu: material(EASU, EASU_MSL, false)?,
-                    rcas: material(RCAS, RCAS_MSL, true)?,
-                    fxaa: material(FXAA, FXAA_MSL, false)?,
-                })
-            })();
-            if let Err(error) = &loaded {
-                log::warn!("Post-processing unavailable, using bilinear filtering: {error}");
-            }
-            self.materials = Some(loaded);
+            self.materials = Some(load_materials());
         }
         let samples = crate::graphics::samples(settings.anti_aliasing);
         if self
@@ -481,10 +534,16 @@ impl Scaler {
     }
 
     /// Resolve the world into the output. `restore` reselects the output.
-    pub fn finish(&mut self, mut restore: impl FnMut()) {
+    /// `motion` draws motion vectors when DLSS asks for them: it gets render
+    /// pixels per window unit and returns true after a camera cut.
+    pub fn finish(&mut self, motion: impl FnOnce(Vec2) -> bool, mut restore: impl FnMut()) {
         let Some((plan, output)) = self.plan.take() else {
             return;
         };
+        if plan.dlss.is_some() {
+            self.finish_dlss(plan, output, motion, restore);
+            return;
+        }
         let Some((_, scene)) = &mut self.scene else {
             return;
         };
@@ -540,6 +599,63 @@ impl Scaler {
         // it opaque over the arena background.
         blit(&source, final_pass, size, plan.sharpness);
     }
+
+    fn finish_dlss(
+        &mut self,
+        plan: Plan,
+        output: (u32, u32),
+        motion: impl FnOnce(Vec2) -> bool,
+        mut restore: impl FnMut(),
+    ) {
+        let Some(dlss) = &mut self.dlss else {
+            return;
+        };
+        let render = plan.scene;
+        let reset = if dlss.select_motion() {
+            clear_background(BLANK);
+            motion(vec2(
+                render.0 as f32 / screen_width(),
+                render.1 as f32 / screen_height(),
+            ))
+        } else {
+            true
+        };
+        let (source, size) = match dlss.upscale(reset) {
+            Some(texture) => (texture, output),
+            // DLSS failed this frame; show the unscaled scene once, and the
+            // next frame falls back to FSR 1.
+            None => match dlss.input() {
+                Some(texture) => (texture, render),
+                None => return,
+            },
+        };
+        let materials = match &self.materials {
+            Some(Ok(materials)) => Some(materials),
+            _ => None,
+        };
+        let sharpen = plan.sharpness > 0. && materials.is_some() && size == output;
+        restore();
+        blit(
+            &source,
+            materials.filter(|_| sharpen).map(|m| &m.rcas),
+            size,
+            if sharpen { plan.sharpness } else { 0. },
+        );
+    }
+}
+
+fn load_materials() -> Result<Materials, String> {
+    let loaded = (|| {
+        Ok(Materials {
+            easu: material(EASU, EASU_MSL, false)?,
+            rcas: material(RCAS, RCAS_MSL, true)?,
+            fxaa: material(FXAA, FXAA_MSL, false)?,
+        })
+    })();
+    if let Err(error) = &loaded {
+        log::warn!("Post-processing unavailable, using bilinear filtering: {error}");
+    }
+    loaded
 }
 
 #[cfg(test)]
@@ -555,20 +671,20 @@ mod tests {
             fxaa: false,
             ..Default::default()
         };
-        assert_eq!(Plan::new(&settings, (1920, 1080), false), None);
+        assert_eq!(Plan::new(&settings, (1920, 1080), false, false), None);
         settings.render_scale = 0.5;
         settings.upscaler = 1;
-        let plan = Plan::new(&settings, (1920, 1080), false).unwrap();
+        let plan = Plan::new(&settings, (1920, 1080), false, false).unwrap();
         assert_eq!(plan.scene, (960, 540));
         assert!(plan.easu);
         assert!(plan.sharpness > 0.);
         settings.render_scale = 2.;
-        let plan = Plan::new(&settings, (3000, 2000), false).unwrap();
+        let plan = Plan::new(&settings, (3000, 2000), false, false).unwrap();
         assert_eq!(plan.scene, (4096, 2731));
         assert!(!plan.easu);
         // FSR with nothing to upscale draws the world directly.
         settings.render_scale = 1.;
-        assert_eq!(Plan::new(&settings, (1920, 1080), false), None);
+        assert_eq!(Plan::new(&settings, (1920, 1080), false, false), None);
     }
 
     #[test]
@@ -580,16 +696,41 @@ mod tests {
             fxaa: false,
             ..Default::default()
         };
-        let plan = Plan::new(&settings, (1920, 1080), true).unwrap();
+        let plan = Plan::new(&settings, (1920, 1080), true, false).unwrap();
         assert!(plan.metalfx && !plan.easu);
         // MetalFX needs no forced sharpening.
         assert_eq!(plan.sharpness, 0.);
-        let plan = Plan::new(&settings, (1920, 1080), false).unwrap();
+        let plan = Plan::new(&settings, (1920, 1080), false, false).unwrap();
         assert!(!plan.metalfx && plan.easu && plan.sharpness > 0.);
         let native = Settings {
             render_scale: 1.,
             ..settings
         };
-        assert_eq!(Plan::new(&native, (1920, 1080), true), None);
+        assert_eq!(Plan::new(&native, (1920, 1080), true, false), None);
+    }
+
+    #[test]
+    fn dlss_runs_at_its_mode_scale_or_falls_back_to_fsr() {
+        use crate::dlss::Mode;
+        let mut settings = Settings {
+            render_scale: 0.5,
+            upscaler: DLSS,
+            sharpness: 0.,
+            fxaa: true,
+            ..Default::default()
+        };
+        let plan = Plan::new(&settings, (1920, 1080), false, true).unwrap();
+        assert_eq!(plan.dlss, Some(Mode::Performance));
+        assert_eq!(plan.scene, (960, 540));
+        // DLSS replaces FXAA and FSR's forced sharpening.
+        assert!(!plan.fxaa && !plan.easu && plan.sharpness == 0.);
+        // Full scale and supersampling run as DLAA, at the output size.
+        settings.render_scale = 1.5;
+        let plan = Plan::new(&settings, (1920, 1080), false, true).unwrap();
+        assert_eq!((plan.dlss, plan.scene), (Some(Mode::Dlaa), (1920, 1080)));
+        // Without DLSS the same settings upscale with FSR 1.
+        settings.render_scale = 0.5;
+        let plan = Plan::new(&settings, (1920, 1080), false, false).unwrap();
+        assert!(plan.dlss.is_none() && plan.easu);
     }
 }

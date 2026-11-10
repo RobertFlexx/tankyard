@@ -379,9 +379,12 @@ pub fn label(value: &str, x: f32, y: f32, size: f32, color: Color) {
     }
     raw_label(value, x, y, size, color);
 }
-fn raw_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
+/// Load the glyphs for `value` at `size` without drawing it. A new glyph
+/// can make the font replace its texture, which blanks text already drawn
+/// this frame, so animated text loads its glyphs before the frame's first
+/// draw.
+pub fn prepare_label(value: &str, size: f32) {
     let pixels = crate::ui_text::raster_size(size);
-    let p = crate::ui_layout::position(vec2(x, y));
     if TEXT_CACHE.with(|cache| {
         cache
             .borrow_mut()
@@ -396,6 +399,11 @@ fn raw_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
             }
         });
     }
+}
+fn raw_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
+    let pixels = crate::ui_text::raster_size(size);
+    let p = crate::ui_layout::position(vec2(x, y));
+    prepare_label(value, size);
     UI_FONT.with(|font| {
         let rendered = draw_text_ex(
             value,

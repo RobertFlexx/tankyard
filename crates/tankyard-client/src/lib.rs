@@ -6,6 +6,7 @@ pub mod credential_vault;
 pub mod map_model;
 pub mod party_network;
 pub mod practice;
+pub mod staff_pack;
 pub mod tank_model;
 pub mod tank_tree_layout;
 pub mod text_edit;

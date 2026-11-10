@@ -58,6 +58,9 @@ pub struct Settings {
     pub native_resolution: bool,
     pub fullscreen: bool,
     pub vsync: bool,
+    /// With vsync, let a late frame tear rather than wait a whole refresh
+    /// (where the driver supports it).
+    pub adaptive_vsync: bool,
     /// Render with Metal on Macs (OpenGL otherwise). Other systems ignore it.
     pub metal: bool,
     pub anti_aliasing: u8,
@@ -172,6 +175,7 @@ impl Default for Settings {
             native_resolution: false,
             fullscreen: false,
             vsync: true,
+            adaptive_vsync: true,
             metal: true,
             anti_aliasing: 4,
             render_scale: 1.0,

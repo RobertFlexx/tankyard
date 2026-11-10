@@ -276,7 +276,7 @@ fn scan_file(name: &str, data: &[u8], modules: &HashSet<String>, report: &mut Sc
         }
         _ => {
             if std::str::from_utf8(data).is_ok_and(|text| !text.contains('\0')) {
-                if !matches!(ext.as_str(), "md" | "txt" | "" | "license" | "toml") {
+                if !matches!(ext.as_str(), "md" | "txt" | "" | "license" | "toml" | "sig") {
                     report.push(
                         Severity::Info,
                         Category::Compatibility,

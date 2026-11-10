@@ -386,10 +386,23 @@ impl Glx {
     ) {
         self.libgl.glxMakeCurrent.unwrap()(display, window, ctx);
 
+        // A negative interval is adaptive sync: it tears when a frame runs
+        // late. Without the tear extension, plain vsync is the safe choice.
+        let interval = if interval < 0
+            && !(self.extensions.glxSwapIntervalExt.is_some()
+                && self
+                    .extensions
+                    .extensions_string
+                    .contains("GLX_EXT_swap_control_tear"))
+        {
+            -interval
+        } else {
+            interval
+        };
         if self.extensions.glxSwapIntervalExt.is_some() {
             self.extensions.glxSwapIntervalExt.unwrap()(display, window, interval);
         } else if self.extensions.glxSwapIntervalMesa.is_some() {
-            self.extensions.glxSwapIntervalMesa.unwrap()(interval);
+            self.extensions.glxSwapIntervalMesa.unwrap()(interval.max(0));
         };
     }
 }

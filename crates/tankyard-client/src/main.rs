@@ -10,16 +10,19 @@ mod central_owner;
 mod community_ui;
 mod creator;
 mod credentials;
+mod dlss;
 mod effects;
 mod file_dialog;
 mod first_run;
 mod graphics;
+mod hardware;
 mod hosting;
 mod hud;
 mod links;
 mod menu;
 mod mod_library;
 mod mod_viewer;
+mod motion;
 mod native_resolution;
 mod notifications;
 mod party_ui;
@@ -30,6 +33,7 @@ mod server_browser;
 mod server_status;
 mod session;
 mod settings;
+mod splash;
 mod startup;
 mod syntax;
 mod tank_tree;
@@ -120,7 +124,9 @@ fn window_conf(cli: &Cli) -> Conf {
         settings.use_safe_graphics();
     }
     Conf {
-        window_title: window_control::bootstrap_title("Tank Yard"),
+        window_title: window_control::bootstrap_title(mod_library::staff_title(
+            &mod_library::staff_packs(&settings),
+        )),
         window_width: settings.width as i32,
         window_height: settings.height as i32,
         high_dpi: true,
@@ -139,7 +145,13 @@ fn window_conf(cli: &Cli) -> Conf {
         }),
         platform: macroquad::miniquad::conf::Platform {
             linux_wm_class: "tankyard",
-            swap_interval: Some(if settings.vsync { 1 } else { 0 }),
+            // -1 is adaptive sync where the driver has it, plain vsync
+            // elsewhere.
+            swap_interval: Some(match (settings.vsync, settings.adaptive_vsync) {
+                (false, _) => 0,
+                (true, true) => -1,
+                (true, false) => 1,
+            }),
             apple_low_power_gpu: settings.battery_saver,
             apple_gfx_api: if settings.metal && graphics::metal_device_present() {
                 macroquad::miniquad::conf::AppleGfxApi::Metal
@@ -174,6 +186,8 @@ struct App {
     /// Draw the party overlay with sample data (screenshot checks only).
     party_preview: bool,
     creator: creator::CreatorUi,
+    /// Where things were last frame, for DLSS motion vectors.
+    motion: motion::History,
     central_owner: central_owner::CentralOwner,
     settings: Settings,
     display_revision: u64,
@@ -285,6 +299,7 @@ impl App {
             menu,
             hud: Hud::new(),
             creator: creator::CreatorUi::new(),
+            motion: motion::History::default(),
             central_owner: central_owner::CentralOwner::new(),
             session: None,
             pending_join: None,
@@ -1986,7 +2001,18 @@ impl App {
                     };
                     draw_rectangle(0., 0., screen_width(), screen_height(), alpha(RED, flash));
                 }
-                self.presentation.finish_world();
+                let fraction = session.render_fraction(self.accumulator / DT);
+                self.presentation.finish_world(|render| {
+                    self.motion.draw(
+                        snapshot,
+                        &self.content,
+                        session.player,
+                        &self.view,
+                        &session.previous_positions,
+                        fraction,
+                        render,
+                    )
+                });
                 self.hud.local_simulation = session.offline_mode();
                 self.hud.sandbox_allowed = match &session.engine {
                     session::Engine::Offline(_) => true,
@@ -2495,6 +2521,7 @@ impl App {
 fn main() {
     let cli = Cli::parse();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    hardware::prepare(&Settings::load(), cli.safe_graphics);
     let conf = window_conf(&cli);
     startup::install(&conf);
     macroquad::Window::from_config(
@@ -2524,7 +2551,21 @@ async fn run(cli: Cli) {
     }
     let mut native_resolution = native_resolution::NativeResolution::new(&initial_settings);
     ui::init_font();
-    if !unlock::require_password().await {
+    // The splash hands over the live arena it revealed, which the password
+    // prompt and then the menu carry on drawing.
+    let mut arena = None;
+    if cli.smoke_frames.is_none() && cli.screenshot.is_none() {
+        let Some(revealed) = splash::show(&initial_settings).await else {
+            clipboard::shutdown();
+            ui::unload_font();
+            return;
+        };
+        arena = Some(revealed);
+    }
+    if cli.smoke_frames.is_none()
+        && let unlock::Outcome::Quit =
+            unlock::unlock_packs(&mod_library::staff_packs(&initial_settings), arena.as_mut()).await
+    {
         clipboard::shutdown();
         ui::unload_font();
         return;
@@ -2537,10 +2578,24 @@ async fn run(cli: Cli) {
         graphics::prepare_screen_capture();
     }
     let mut app = App::new(cli, dark_theme).await;
+    if let Some(arena) = arena {
+        app.menu.ambient = arena;
+    }
     macroquad::texture::set_default_filter_mode(FilterMode::Linear);
     loop {
         if is_quit_requested() {
             break;
+        }
+        if std::mem::take(&mut app.menu.staff_unlock) {
+            let packs = mod_library::staff_packs(&app.settings);
+            if let unlock::Outcome::Quit = unlock::unlock_packs(&packs, None).await {
+                break;
+            }
+            app.menu.staff_changed = true;
+        }
+        if std::mem::take(&mut app.menu.staff_changed) {
+            app.creator.reload_key();
+            app.central_owner = central_owner::CentralOwner::new();
         }
         let start = get_time();
         let dt = get_frame_time().clamp(0.0, 0.15);
@@ -2578,6 +2633,7 @@ async fn run(cli: Cli) {
         graphics::set_quality(app.settings.shape_quality);
         graphics::set_filter(app.settings.anisotropic_filtering);
         if app.frames == 1 {
+            hardware::probe();
             graphics::refresh_capabilities(app.settings.anisotropic_filtering);
         }
         set_reduced_motion(app.settings.reduced_motion);
@@ -2658,27 +2714,34 @@ async fn run(cli: Cli) {
         if app.quit {
             break;
         }
-        let cap = frame_cap(
-            app.settings.frame_cap,
-            app.session.is_some(),
-            app.settings.battery_saver,
-        );
-        if cap > 0 && app.smoke.is_none() {
-            // With vsync the sleep ends early, so the frame still catches the
-            // display refresh it is due for (menus on a 120 Hz display run
-            // at 60 rather than 120).
-            let margin = if app.settings.vsync { 0.002 } else { 0.0005 };
-            let target = 1.0 / f64::from(cap);
-            let remaining = target - (get_time() - start);
-            if remaining > margin + 0.0005 {
-                std::thread::sleep(std::time::Duration::from_secs_f64(remaining - margin));
-            }
+        if app.smoke.is_none() {
+            let cap = frame_cap(
+                app.settings.frame_cap,
+                app.session.is_some(),
+                app.settings.battery_saver,
+            );
+            hold_frame_rate(start, cap, app.settings.vsync);
         }
         next_frame().await;
     }
     native_resolution.remember(&mut app.settings);
     app.save_progress();
     clipboard::shutdown();
+}
+/// Sleep out the rest of a frame that began at `start`, to hold `cap` frames
+/// per second (0 for none).
+fn hold_frame_rate(start: f64, cap: u32, vsync: bool) {
+    if cap == 0 {
+        return;
+    }
+    // With vsync the sleep ends early, so the frame still catches the display
+    // refresh it is due for (menus on a 120 Hz display run at 60 rather than
+    // 120).
+    let margin = if vsync { 0.002 } else { 0.0005 };
+    let remaining = 1.0 / f64::from(cap) - (get_time() - start);
+    if remaining > margin + 0.0005 {
+        std::thread::sleep(std::time::Duration::from_secs_f64(remaining - margin));
+    }
 }
 /// The frame rate to hold (0 for none). Menus don't need more than 60 fps,
 /// so they don't run the GPU flat out, even on high refresh displays; games

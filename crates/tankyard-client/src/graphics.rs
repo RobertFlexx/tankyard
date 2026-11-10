@@ -146,6 +146,36 @@ pub fn max_anisotropy() -> u8 {
 pub fn texture_count() -> usize {
     TEXTURES.with(|cache| cache.borrow().len())
 }
+/// The OpenGL extensions the driver reports. Call only on OpenGL.
+pub unsafe fn gl_extensions() -> Vec<String> {
+    use miniquad::graphics::raw_gl::*;
+    let text = |name: *const u8| unsafe {
+        std::ffi::CStr::from_ptr(name.cast())
+            .to_string_lossy()
+            .into_owned()
+    };
+    unsafe {
+        if is_gl2() {
+            let extensions = glGetString(GL_EXTENSIONS);
+            if extensions.is_null() {
+                return Vec::new();
+            }
+            text(extensions.cast())
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect()
+        } else {
+            let mut count = 0;
+            glGetIntegerv(GL_NUM_EXTENSIONS, &mut count);
+            (0..count.clamp(0, 4096) as u32)
+                .filter_map(|index| {
+                    let extension = glGetStringi(GL_EXTENSIONS, index);
+                    (!extension.is_null()).then(|| text(extension.cast()))
+                })
+                .collect()
+        }
+    }
+}
 pub fn refresh_capabilities(filter: u8) {
     let samples = unsafe {
         let gl = get_internal_gl();
@@ -169,28 +199,9 @@ pub fn refresh_capabilities(filter: u8) {
         } else if gl.quad_context.info().backend != miniquad::Backend::OpenGl {
             1
         } else {
-            use miniquad::graphics::raw_gl::*;
-            let supported = if is_gl2() {
-                let extensions = glGetString(GL_EXTENSIONS);
-                !extensions.is_null()
-                    && std::ffi::CStr::from_ptr(extensions.cast())
-                        .to_string_lossy()
-                        .split_whitespace()
-                        .any(anisotropy_extension)
-            } else {
-                let mut count = 0;
-                glGetIntegerv(GL_NUM_EXTENSIONS, &mut count);
-                (0..count.clamp(0, 4096)).any(|index| {
-                    let extension = glGetStringi(GL_EXTENSIONS, index as u32);
-                    !extension.is_null()
-                        && anisotropy_extension(
-                            &std::ffi::CStr::from_ptr(extension.cast()).to_string_lossy(),
-                        )
-                })
-            };
-            if supported {
+            if gl_extensions().iter().any(|e| anisotropy_extension(e)) {
                 let mut limit = 1;
-                glGetIntegerv(0x84FF, &mut limit);
+                miniquad::graphics::raw_gl::glGetIntegerv(0x84FF, &mut limit);
                 limit.clamp(1, 16) as u8
             } else {
                 1

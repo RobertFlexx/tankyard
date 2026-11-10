@@ -13,6 +13,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
+use tankyard_client::staff_pack::{self, Identity, Verified};
 use tankyard_mods::{
     LoadedMods, Manifest, PackFiles, TextureData,
     project::Project,
@@ -36,6 +37,8 @@ pub struct Entry {
     /// Why `tankyard.toml` or its icon could not be read.
     pub project_error: Option<String>,
     pub icon: Option<TextureData>,
+    /// A signed staff credential, which unlocks tools instead of adding content.
+    pub staff: Option<Verified>,
     /// Bytes across every file in the pack.
     pub size: u64,
     pub files: usize,
@@ -187,6 +190,15 @@ fn read_entry(path: &Path) -> Entry {
     let display = path.to_string_lossy().into_owned();
     match tankyard_mods::read_pack(path) {
         Ok((manifest, pack)) => {
+            // A staff pack someone changed, or signed with another key, is
+            // shown as broken and never asks for a password.
+            let (staff, staff_error) = match manifest.staff.is_some() {
+                true => match staff_pack::verify(&manifest, &pack) {
+                    Ok(verified) => (Some(verified), None),
+                    Err(error) => (None, Some(error)),
+                },
+                false => (None, None),
+            };
             let (project, mut project_error) = match Project::read(&pack) {
                 Some(Ok(project)) => (Some(project), None),
                 Some(Err(error)) => (None, Some(error)),
@@ -209,10 +221,11 @@ fn read_entry(path: &Path) -> Entry {
                 size: pack.files().map(|(_, data)| data.len() as u64).sum(),
                 files: pack.len(),
                 manifest: Some(manifest),
-                error: None,
+                error: staff_error,
                 project,
                 project_error,
                 icon,
+                staff,
             }
         }
         Err(error) => {
@@ -233,6 +246,7 @@ fn read_entry(path: &Path) -> Entry {
                 project: None,
                 project_error: None,
                 icon: None,
+                staff: None,
                 size: 0,
                 files: 0,
             }
@@ -376,6 +390,9 @@ fn ready_in(settings: &Settings, discover: impl FnOnce() -> Vec<Entry>) -> Ready
         // Packs named on the command line, for this run only.
         for path in paths {
             let entry = inspect(path);
+            if entry.staff.is_some() {
+                continue;
+            }
             if let Some(error) = &entry.error {
                 ready.held.push(format!("{}: {error}", entry.name()));
             } else if !settings.session_mods_trusted && !entry.approved(settings) {
@@ -408,6 +425,10 @@ fn ready_in(settings: &Settings, discover: impl FnOnce() -> Vec<Entry>) -> Ready
             ready.missing.push(id.clone());
             continue;
         };
+        if entry.staff.is_some() {
+            // Staff packs unlock tools; they never load into a match.
+            continue;
+        }
         if !entry.approved(settings) {
             ready.held.push(format!(
                 "{} changed or was never reviewed; confirm it in Mods before playing with it.",
@@ -418,6 +439,35 @@ fn ready_in(settings: &Settings, discover: impl FnOnce() -> Vec<Entry>) -> Ready
         }
     }
     ready
+}
+
+/// Enabled staff packs whose signatures checked out, one per identity, by
+/// pack name.
+pub fn staff_packs(settings: &Settings) -> Vec<(String, Verified)> {
+    let mut packs: Vec<(String, Verified)> = Vec::new();
+    for entry in discover() {
+        if let Some(verified) = &entry.staff
+            && entry.enabled(settings)
+            && !packs
+                .iter()
+                .any(|(_, known)| known.identity == verified.identity)
+        {
+            packs.push((entry.name().to_owned(), verified.clone()));
+        }
+    }
+    packs
+}
+
+/// The window title for the staff packs a player has enabled, matching the
+/// editions these packs replace.
+pub fn staff_title(packs: &[(String, Verified)]) -> &'static str {
+    let has = |identity| packs.iter().any(|(_, v)| v.identity == identity);
+    match (has(Identity::Creator), has(Identity::CentralOwner)) {
+        (true, true) => "Tank Yard · Creator + Central Owner",
+        (true, false) => "Tank Yard · Creator Edition",
+        (false, true) => "Tank Yard · Central Owner Edition",
+        (false, false) => "Tank Yard",
+    }
 }
 
 /// Load packs, reusing the last result while the same unchanged packs are
@@ -594,6 +644,7 @@ mod tests {
             project: None,
             project_error: None,
             icon: None,
+            staff: None,
             size: 0,
             files: 0,
         };

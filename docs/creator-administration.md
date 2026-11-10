@@ -1,6 +1,6 @@
 # Server administration
 
-Any current game client can use creator or central-owner tools when it holds the corresponding private signing key. Menu and verification code are public and reviewable. Public binaries and GitHub contain no private signing credentials. The optional self-contained credential editions remain private.
+Any current game client can use creator or central-owner tools when it holds the corresponding private signing key. Menu and verification code are public and reviewable. Public binaries and GitHub contain no private signing credentials. Private [staff credential packs](#staff-credential-packs) replace the self-contained credential editions.
 
 Version 0.4.1 adds a bottom-right owner toggle with authorization diagnostics and a Maps tab in the creator panel. Map changes are signed, audited and checked against the server's catalog. They retain identities, roles, upgrades and scores, refresh map-dependent objects and projectiles, and roll back if current entities cannot fit safely.
 
@@ -24,6 +24,24 @@ Bans affect only the current server and its local ban/account records. Neither c
 Use a matching **raw 32-byte Ed25519 seed** named `creator.key` or `central-owner.key`. The keys are different; a generated replacement or a public verification key cannot authenticate as either identity.
 
 The public client checks beside its executable and then the `keys` directory beside its profile's `settings.json`. Settings → Profile shows that profile path. On Linux the default is `~/.config/tankyard/keys/`. Restart after installing a key. Lookup never depends on the working directory. A key in the profile works after moving or renaming the executable; an adjacent key travels with the executable. Private credential editions from v0.6.0 contain a password-encrypted identity seed and work without sidecars after unlocking. Each identity has a separate, randomly generated password, required on every launch before the menu, simulation, network, mods or microphone start. Keep the password file separate from the executable and archive. Moving or renaming either edition does not change its password. Public clients still support the explicit key files described above.
+
+### Staff credential packs
+
+Staff credential packs replace the separately compiled creator and central-owner editions. A staff pack is an ordinary `.zip` pack published by **Tankyard Moderation**, so any public game build reads it and it keeps working across updates without a private rebuild. Its source is readable, but it is not publicly distributed.
+
+- **What it holds:** a `mod.json` whose `staff` section names the identity (`creator` or `central-owner`) and carries the password-sealed identity seed, plus `staff.sig`, a signature by that identity over every other file. It carries no game content, so it never changes a match and never reaches a server.
+- **Installing:** import it on the Mods page like any pack. Before anyone types a password, the game checks the signature against the public key compiled into every build. An altered pack, or one signed by any other key, is refused. One staff pack per identity can be enabled.
+- **Unlocking:** an enabled staff pack asks for its password on every launch, before the simulation, network, mods or microphone start. Each wrong password doubles the wait before the next try (2, 4, 8 … 60 seconds), even if the prompt is reopened. A skipped pack can be unlocked later from the Mods page. Servers still verify every staff request on their own.
+- **Building one** (privately, never uploaded):
+
+  ```sh
+  cargo run --release --locked -p tankyard-client --example staff_pack -- \
+    <creator|central-owner> <seed file> <password file> <output.zip> [README.md tankyard.toml icon.svg]
+  ```
+
+  The seed and password are read from files, never arguments or logs. The output is written readable only by its owner. Extra files are added at their file names and covered by the signature.
+
+A staff pack and its password together are as powerful as the raw key. If both are exposed, revoke and rotate that identity, as described below.
 
 Keep key files readable only by their owner (`chmod 600` on Unix). Keep credential editions and their passwords private. Older unprotected editions still contain a usable seed; if one was exposed, revoke and rotate that identity. Adding a lock to a newer edition does not revoke older copies. No software-only check can establish that a particular executable, rather than another client holding the same key, signed a request. Compromise requires revoking the affected policy and rotating that identity's public/private key pair. Public source changes alone cannot manufacture a matching signature.
 

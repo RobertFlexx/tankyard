@@ -198,6 +198,7 @@ pub struct Wgl {
     arb_create_context: bool,
     arb_create_context_profile: bool,
     ext_swap_control: bool,
+    ext_swap_control_tear: bool,
     arb_pixel_format: bool,
 }
 
@@ -275,6 +276,7 @@ impl Wgl {
         let arb_create_context = wgl_ext_supported("WGL_ARB_create_context");
         let arb_create_context_profile = wgl_ext_supported("WGL_ARB_create_context_profile");
         let ext_swap_control = wgl_ext_supported("WGL_EXT_swap_control");
+        let ext_swap_control_tear = wgl_ext_supported("WGL_EXT_swap_control_tear");
         let arb_pixel_format = wgl_ext_supported("WGL_ARB_pixel_format");
         assert!(arb_pixel_format, "WGL_ARB_pixel_format is required");
 
@@ -291,6 +293,7 @@ impl Wgl {
             arb_create_context,
             arb_create_context_profile,
             ext_swap_control,
+            ext_swap_control_tear,
             arb_pixel_format,
         }
     }
@@ -461,6 +464,12 @@ impl Wgl {
         (display.libopengl32.wglMakeCurrent)(display.dc, gl_ctx);
         if self.ext_swap_control {
             /* FIXME: DwmIsCompositionEnabled() (see GLFW) */
+            // A negative interval is adaptive sync, where the driver has it.
+            let swap_interval = if swap_interval < 0 && !self.ext_swap_control_tear {
+                -swap_interval
+            } else {
+                swap_interval
+            };
             (self.SwapIntervalEXT.unwrap())(swap_interval);
         }
 

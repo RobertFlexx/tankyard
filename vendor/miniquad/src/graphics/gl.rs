@@ -910,6 +910,14 @@ impl RenderingBackend for GlContext {
         TextureId(TextureIdInner::Managed(self.textures.0.len() - 1))
     }
 
+    fn adopt_gl_texture(&mut self, texture: u32, params: TextureParams) -> Option<TextureId> {
+        self.textures.0.push(Texture {
+            raw: TextureOrRenderbuffer::Texture(texture),
+            params,
+        });
+        Some(TextureId(TextureIdInner::Managed(self.textures.0.len() - 1)))
+    }
+
     fn delete_texture(&mut self, texture: TextureId) {
         //self.cache.clear_texture_bindings();
 

@@ -26,6 +26,31 @@ pub fn contrast() -> bool {
 pub fn reduced_motion() -> bool {
     REDUCED.with(Cell::get)
 }
+/// Whether the system asks apps to keep motion down: Reduce motion on a
+/// Mac, or "Show animations in Windows" turned off. Linux desktops have no
+/// common setting, so there the game's own setting decides.
+pub fn system_reduces_motion() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW,
+        };
+        let mut animate: windows_sys::core::BOOL = 1;
+        // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL.
+        let read = unsafe {
+            SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut animate).cast(), 0)
+        };
+        read != 0 && animate == 0
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
+}
 pub fn motion_time(time: f32) -> f32 {
     if reduced_motion() { 0. } else { time }
 }

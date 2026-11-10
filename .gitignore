@@ -14,6 +14,7 @@ __pycache__/
 
 # Local creator edition and signing credentials never enter public source.
 /private-creator/
+tankyard-creator
 
 # Local identity credentials must never enter source or release assets.
 creator.key

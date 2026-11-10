@@ -1594,6 +1594,50 @@ impl RenderingBackend for MetalContext {
         self.metalfx.is_some()
     }
 
+    fn device_info(&self) -> Option<DeviceInfo> {
+        let device = self.device;
+        if device.is_null() {
+            return None;
+        }
+        unsafe {
+            let name: ObjcId = msg_send![device, name];
+            let name = if name.is_null() {
+                String::new()
+            } else {
+                apple_util::nsstring_to_string(name)
+            };
+            let unified_memory = !cfg!(target_os = "macos") || !needs_managed_storage(device);
+            // These are macOS's; iOS devices don't answer them.
+            let responds: BOOL = msg_send![device, respondsToSelector: sel!(isLowPower)];
+            let low_power = responds == YES && {
+                let value: BOOL = msg_send![device, isLowPower];
+                value == YES
+            };
+            let responds: BOOL = msg_send![device, respondsToSelector: sel!(isRemovable)];
+            let removable = responds == YES && {
+                let value: BOOL = msg_send![device, isRemovable];
+                value == YES
+            };
+            // With memory of its own, the working set Metal recommends is
+            // about the size of that memory.
+            let responds: BOOL =
+                msg_send![device, respondsToSelector: sel!(recommendedMaxWorkingSetSize)];
+            let memory_mb = if unified_memory || responds != YES {
+                None
+            } else {
+                let bytes: u64 = msg_send![device, recommendedMaxWorkingSetSize];
+                Some((bytes >> 20).min(u64::from(u32::MAX)) as u32).filter(|&mb| mb > 0)
+            };
+            Some(DeviceInfo {
+                name: name.trim().to_owned(),
+                memory_mb,
+                unified_memory,
+                low_power,
+                removable,
+            })
+        }
+    }
+
     fn spatial_upscale(&mut self, input: TextureId, output: TextureId) -> bool {
         let Some(class) = self.metalfx else {
             return false;

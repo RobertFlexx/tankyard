@@ -23,6 +23,8 @@ pub(crate) struct NativeDisplayData {
     pub clipboard: Box<dyn Clipboard>,
     pub dropped_files: DroppedFiles,
     pub blocking_event_loop: bool,
+    /// Tank Yard: the window is moving into or out of full screen (macOS).
+    pub fullscreen_transition: bool,
 
     #[cfg(target_vendor = "apple")]
     pub view: crate::native::apple::frameworks::ObjcId,
@@ -56,6 +58,7 @@ impl NativeDisplayData {
             clipboard,
             dropped_files: Default::default(),
             blocking_event_loop: false,
+            fullscreen_transition: false,
             #[cfg(target_vendor = "apple")]
             gfx_api: crate::conf::AppleGfxApi::OpenGl,
             #[cfg(target_vendor = "apple")]

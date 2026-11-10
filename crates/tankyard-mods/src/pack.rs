@@ -259,6 +259,22 @@ impl PackFiles {
         }
         digest
     }
+    /// SHA-256 over every file except `skip`, in the same form as
+    /// `content_digest`, for signatures stored inside the pack they cover.
+    pub fn digest_without(&self, skip: &str) -> [u8; 32] {
+        let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+        for (name, data) in self.files.iter().filter(|(name, _)| name.as_str() != skip) {
+            context.update(&(name.len() as u64).to_le_bytes());
+            context.update(name.as_bytes());
+            context.update(&(data.len() as u64).to_le_bytes());
+            context.update(data);
+        }
+        context
+            .finish()
+            .as_ref()
+            .try_into()
+            .expect("SHA-256 digests are 32 bytes")
+    }
     /// The checksum approvals were bound to before 0.12. Unlike SHA-256, two
     /// packs can be made to share it, so it only carries old approvals over.
     pub fn legacy_content_digest(&self) -> String {

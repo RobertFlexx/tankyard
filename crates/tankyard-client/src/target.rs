@@ -81,14 +81,40 @@ impl Target {
         }
     }
 
+    /// Draw into an OpenGL texture made elsewhere, such as one shared with
+    /// Vulkan. The target takes ownership: dropping it deletes the texture.
+    #[cfg_attr(not(tankyard_dlss), allow(dead_code))]
+    pub fn from_raw_gl(size: (u32, u32), texture: u32) -> Option<Self> {
+        let color = adopt_gl_texture(size, texture)?;
+        let draw = unsafe { get_internal_gl().quad_context.new_render_pass(color, None) };
+        Some(Self {
+            size,
+            texture: Texture2D::from_miniquad_texture(color),
+            draw,
+            resolve: None,
+            samples: None,
+            dirty: false,
+        })
+    }
+
     pub fn size(&self) -> (u32, u32) {
         self.size
     }
 
     /// Make this the target for following draws, in window coordinates.
     pub fn select(&mut self) {
-        let mut camera =
-            Camera2D::from_display_rect(Rect::new(0., 0., screen_width(), screen_height()));
+        self.select_offset(Vec2::ZERO);
+    }
+
+    /// `select`, with everything drawn moved by `offset` window units, as
+    /// temporal upscalers need for their sub-pixel jitter.
+    pub fn select_offset(&mut self, offset: Vec2) {
+        let mut camera = Camera2D::from_display_rect(Rect::new(
+            -offset.x,
+            -offset.y,
+            screen_width(),
+            screen_height(),
+        ));
         // OpenGL stores render targets bottom-up; macroquad flips cameras that
         // name one, and this camera names its pass directly instead. Metal
         // stores them top-down like the screen, so the camera stays as is and
@@ -138,5 +164,23 @@ impl Drop for Target {
                 }
             }
         }
+    }
+}
+
+/// Hand an OpenGL texture made outside miniquad to it, with its size, so
+/// macroquad can draw with and into it.
+#[cfg_attr(not(tankyard_dlss), allow(dead_code))]
+pub fn adopt_gl_texture(size: (u32, u32), texture: u32) -> Option<miniquad::TextureId> {
+    unsafe {
+        get_internal_gl().quad_context.adopt_gl_texture(
+            texture,
+            miniquad::TextureParams {
+                width: size.0,
+                height: size.1,
+                min_filter: FilterMode::Linear,
+                mag_filter: FilterMode::Linear,
+                ..Default::default()
+            },
+        )
     }
 }

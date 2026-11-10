@@ -12,6 +12,7 @@ pub mod pack;
 pub mod presentation;
 pub mod project;
 pub mod scan;
+pub mod staff;
 pub use pack::PackFiles;
 pub use presentation::Presentation;
 
@@ -228,6 +229,9 @@ pub struct Manifest {
     pub theme: Option<presentation::Theme>,
     #[serde(default)]
     pub text: BTreeMap<String, String>,
+    /// A signed, password-sealed staff credential instead of game content.
+    #[serde(default)]
+    pub staff: Option<staff::StaffSection>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -692,6 +696,9 @@ pub fn parse_manifest(pack: &PackFiles) -> Result<Manifest, String> {
     if !manifest.scripts.is_empty() && !manifest.hooks.is_empty() {
         return Err("script packs define behavior in Lua; remove the JSON hooks".into());
     }
+    if let Some(section) = &manifest.staff {
+        staff::validate(&manifest, section, pack)?;
+    }
     Ok(manifest)
 }
 
@@ -708,6 +715,12 @@ pub fn load_with(
     let mut ids = HashSet::new();
     for path in paths {
         let (manifest, pack) = read_pack(path)?;
+        if manifest.staff.is_some() {
+            return Err(format!(
+                "{}: staff credential packs unlock tools in the game client and carry no game content",
+                path.display()
+            ));
+        }
         if !ids.insert(manifest.id.clone()) {
             return Err("invalid, duplicate, or incompatible mod manifest".into());
         }

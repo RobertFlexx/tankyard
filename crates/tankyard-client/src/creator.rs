@@ -71,6 +71,14 @@ impl CreatorUi {
     pub fn enabled(&self) -> bool {
         self.key.is_some()
     }
+    /// Pick up a staff pack unlocked or locked since the game started.
+    pub fn reload_key(&mut self) {
+        self.key = crate::credentials::load("creator.key", &tankyard_protocol::CREATOR_PUBLIC_KEY);
+        if self.key.is_none() {
+            self.open = false;
+            self.pending.clear();
+        }
+    }
     pub fn authenticate(&mut self, session: &mut Session) {
         self.in_form = session
             .display

@@ -648,8 +648,96 @@ gl_loader!(
     fn glGetQueryObjectui64v(id: GLuint, pname: GLenum, params: *mut GLuint64) -> (),
     fn glFlush() -> (),
     fn glFinish() -> (),
-    fn glPolygonMode(face: GLenum, mode: GLenum) -> ()
+    fn glPolygonMode(face: GLenum, mode: GLenum) -> (),
+    // Tank Yard: sharing images with Vulkan (EXT_external_objects), for
+    // upscalers that only run there. Each is None where unsupported.
+    fn glCopyImageSubData(
+        src_name: GLuint,
+        src_target: GLenum,
+        src_level: GLint,
+        src_x: GLint,
+        src_y: GLint,
+        src_z: GLint,
+        dst_name: GLuint,
+        dst_target: GLenum,
+        dst_level: GLint,
+        dst_x: GLint,
+        dst_y: GLint,
+        dst_z: GLint,
+        width: GLsizei,
+        height: GLsizei,
+        depth: GLsizei
+    ) -> (),
+    fn glGetUnsignedBytei_vEXT(target: GLenum, index: GLuint, data: *mut GLubyte) -> (),
+    fn glCreateMemoryObjectsEXT(n: GLsizei, memory_objects: *mut GLuint) -> (),
+    fn glDeleteMemoryObjectsEXT(n: GLsizei, memory_objects: *const GLuint) -> (),
+    fn glMemoryObjectParameterivEXT(memory_object: GLuint, pname: GLenum, params: *const GLint) -> (),
+    fn glImportMemoryFdEXT(memory: GLuint, size: GLuint64, handle_type: GLenum, fd: GLint) -> (),
+    fn glImportMemoryWin32HandleEXT(
+        memory: GLuint,
+        size: GLuint64,
+        handle_type: GLenum,
+        handle: *mut GLvoid
+    ) -> (),
+    fn glTexStorageMem2DEXT(
+        target: GLenum,
+        levels: GLsizei,
+        internal_format: GLenum,
+        width: GLsizei,
+        height: GLsizei,
+        memory: GLuint,
+        offset: GLuint64
+    ) -> (),
+    fn glGenSemaphoresEXT(n: GLsizei, semaphores: *mut GLuint) -> (),
+    fn glDeleteSemaphoresEXT(n: GLsizei, semaphores: *const GLuint) -> (),
+    fn glImportSemaphoreFdEXT(semaphore: GLuint, handle_type: GLenum, fd: GLint) -> (),
+    fn glImportSemaphoreWin32HandleEXT(
+        semaphore: GLuint,
+        handle_type: GLenum,
+        handle: *mut GLvoid
+    ) -> (),
+    fn glSignalSemaphoreEXT(
+        semaphore: GLuint,
+        num_buffer_barriers: GLuint,
+        buffers: *const GLuint,
+        num_texture_barriers: GLuint,
+        textures: *const GLuint,
+        dst_layouts: *const GLenum
+    ) -> (),
+    fn glWaitSemaphoreEXT(
+        semaphore: GLuint,
+        num_buffer_barriers: GLuint,
+        buffers: *const GLuint,
+        num_texture_barriers: GLuint,
+        textures: *const GLuint,
+        src_layouts: *const GLenum
+    ) -> ()
 );
+
+/// Tank Yard: whether this context can share images and semaphores with
+/// Vulkan, by file descriptor (`fd`) or Windows handle.
+#[allow(static_mut_refs)]
+pub fn external_objects_loaded(fd: bool) -> bool {
+    unsafe {
+        let common = __pfns::glCopyImageSubData.is_some()
+            && __pfns::glGetUnsignedBytei_vEXT.is_some()
+            && __pfns::glCreateMemoryObjectsEXT.is_some()
+            && __pfns::glDeleteMemoryObjectsEXT.is_some()
+            && __pfns::glMemoryObjectParameterivEXT.is_some()
+            && __pfns::glTexStorageMem2DEXT.is_some()
+            && __pfns::glGenSemaphoresEXT.is_some()
+            && __pfns::glDeleteSemaphoresEXT.is_some()
+            && __pfns::glSignalSemaphoreEXT.is_some()
+            && __pfns::glWaitSemaphoreEXT.is_some();
+        common
+            && if fd {
+                __pfns::glImportMemoryFdEXT.is_some() && __pfns::glImportSemaphoreFdEXT.is_some()
+            } else {
+                __pfns::glImportMemoryWin32HandleEXT.is_some()
+                    && __pfns::glImportSemaphoreWin32HandleEXT.is_some()
+            }
+    }
+}
 
 // note that glGetString only works after first glSwapBuffer,
 // not just after context creation

@@ -573,7 +573,8 @@ where
         panic!("eglMakeCurrent failed");
     }
 
-    if (egl_lib.eglSwapInterval)(egl_display, conf.platform.swap_interval.unwrap_or(1)) == 0 {
+    // EGL has no adaptive sync; a negative interval means vsync.
+    if (egl_lib.eglSwapInterval)(egl_display, conf.platform.swap_interval.unwrap_or(1).abs()) == 0 {
         eprintln!("eglSwapInterval failed");
     }
 

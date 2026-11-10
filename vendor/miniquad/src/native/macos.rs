@@ -103,6 +103,10 @@ impl MacosDisplay {
     fn set_fullscreen(&mut self, fullscreen: bool) {
         if self.fullscreen != fullscreen {
             self.fullscreen = fullscreen;
+            // Tank Yard: the move takes most of a second, and the delegate
+            // clears this however it ends. The lock is released first: AppKit
+            // may call the delegate before toggleFullScreen returns.
+            native_display().lock().unwrap().fullscreen_transition = true;
             unsafe {
                 let () = msg_send![self.window, toggleFullScreen: nil];
             }
@@ -425,13 +429,32 @@ pub fn define_cocoa_window_delegate() -> *const Class {
             }
         }
     }
+    // Tank Yard: track full screen moves, including ones the user starts.
+    fn set_fullscreen_transition(moving: bool) {
+        native_display().lock().unwrap().fullscreen_transition = moving;
+    }
+    extern "C" fn window_will_change_fullscreen(_: &Object, _: Sel, _: ObjcId) {
+        set_fullscreen_transition(true);
+    }
     extern "C" fn window_did_enter_fullscreen(this: &Object, _: Sel, _: ObjcId) {
         let payload = get_window_payload(this);
         payload.fullscreen = true;
+        set_fullscreen_transition(false);
     }
     extern "C" fn window_did_exit_fullscreen(this: &Object, _: Sel, _: ObjcId) {
         let payload = get_window_payload(this);
         payload.fullscreen = false;
+        set_fullscreen_transition(false);
+    }
+    extern "C" fn window_did_fail_to_enter_fullscreen(this: &Object, _: Sel, _: ObjcId) {
+        let payload = get_window_payload(this);
+        payload.fullscreen = false;
+        set_fullscreen_transition(false);
+    }
+    extern "C" fn window_did_fail_to_exit_fullscreen(this: &Object, _: Sel, _: ObjcId) {
+        let payload = get_window_payload(this);
+        payload.fullscreen = true;
+        set_fullscreen_transition(false);
     }
     extern "C" fn window_did_change_occlusion_state(this: &Object, _: Sel, _: ObjcId) {
         unsafe {
@@ -479,12 +502,28 @@ pub fn define_cocoa_window_delegate() -> *const Class {
             window_did_change_screen as extern "C" fn(&Object, Sel, ObjcId),
         );
         decl.add_method(
+            sel!(windowWillEnterFullScreen:),
+            window_will_change_fullscreen as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
+            sel!(windowWillExitFullScreen:),
+            window_will_change_fullscreen as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
             sel!(windowDidEnterFullScreen:),
             window_did_enter_fullscreen as extern "C" fn(&Object, Sel, ObjcId),
         );
         decl.add_method(
             sel!(windowDidExitFullScreen:),
             window_did_exit_fullscreen as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
+            sel!(windowDidFailToEnterFullScreen:),
+            window_did_fail_to_enter_fullscreen as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
+            sel!(windowDidFailToExitFullScreen:),
+            window_did_fail_to_exit_fullscreen as extern "C" fn(&Object, Sel, ObjcId),
         );
         decl.add_method(
             sel!(windowDidChangeOcclusionState:),

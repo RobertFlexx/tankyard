@@ -342,6 +342,15 @@ pub mod window {
         }
     }
 
+    /// Tank Yard: whether the window is moving into or out of full screen,
+    /// which macOS animates for most of a second. The move starts when the
+    /// request from `set_fullscreen` is handled, at the next frame. Always
+    /// false where the switch is immediate.
+    pub fn fullscreen_transition() -> bool {
+        let d = native_display().lock().unwrap();
+        d.fullscreen_transition
+    }
+
     /// Get current OS clipboard value
     pub fn clipboard_get() -> Option<String> {
         let mut d = native_display().lock().unwrap();

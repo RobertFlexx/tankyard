@@ -64,9 +64,11 @@ impl Presentation {
     pub fn begin_world(&mut self, settings: &Settings) {
         self.world.begin(settings, self.output);
     }
-    pub fn finish_world(&mut self) {
+    /// `motion` draws motion vectors if the upscaler needs them; see
+    /// `upscale::Scaler::finish`.
+    pub fn finish_world(&mut self, motion: impl FnOnce(Vec2) -> bool) {
         let mut world = std::mem::take(&mut self.world);
-        world.finish(|| self.select_output());
+        world.finish(motion, || self.select_output());
         self.world = world;
     }
     pub fn post_processing_error(&self) -> Option<&str> {

@@ -48,6 +48,9 @@ jobs:
           sudo apt-get install -y libx11-dev libxi-dev libgl1-mesa-dev libasound2-dev cmake xvfb shellcheck
           rustup toolchain install stable --profile minimal --component rustfmt,clippy
           rustup default stable
+      - name: Fetch the NVIDIA DLSS SDK
+        # Pinned by SHA-256; with it, clippy and the tests cover DLSS too.
+        run: python scripts/fetch_dlss_sdk.py
       - name: Check source
         run: |
           cargo fmt --all -- --check
@@ -114,6 +117,9 @@ jobs:
           rustup default stable
           rustup target add "$BUILD_TARGET"
           cargo fetch --locked
+      - name: Fetch the NVIDIA DLSS SDK
+        if: matrix.platform == 'linux-x86_64' || runner.os == 'Windows'
+        run: python scripts/fetch_dlss_sdk.py
       - name: Build compatible Linux binaries
         if: matrix.platform == 'linux-x86_64'
         env:
@@ -173,6 +179,10 @@ jobs:
               result = subprocess.run([str(executable), "--version"], check=True, text=True, capture_output=True)
               assert os.environ["RELEASE_TAG"][1:] in result.stdout, result.stdout
               print(result.stdout.strip())
+          if os.environ["BUILD_PLATFORM"] in ("linux-x86_64", "windows-x86_64"):
+              game = (Path(os.environ["BINARY_DIR"]) / ("tankyard" + suffix)).read_bytes()
+              assert b"libnvidia-ngx-dlss.so" in game or b"nvngx_dlss.dll" in game, "DLSS is missing"
+              print("DLSS is linked")
           tools = Path(os.environ["BINARY_DIR"]) / ("tankyard-tools" + suffix)
           packs = ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler")
           subprocess.run([str(tools), "validate-mods", *(arg for pack in packs for arg in ("--mod", f"mods/{pack}"))], check=True)

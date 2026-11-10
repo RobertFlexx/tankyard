@@ -33,6 +33,8 @@ const GRAPHICS_TEXTURE_ROW: f32 = 163.0;
 const GRAPHICS_TEXTURE_NOTE: f32 = 213.0;
 const GRAPHICS_RENDERER_ROW: f32 = 240.0;
 const GRAPHICS_RENDERER_NOTE: f32 = 292.0;
+const GRAPHICS_DEVICE_LABEL: f32 = 253.0;
+const GRAPHICS_DEVICE_TEXT: f32 = 275.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -113,7 +115,7 @@ pub struct Menu {
     pub error: String,
     pub info: String,
     motion_time: f32,
-    ambient: crate::ambient::Ambient,
+    pub(crate) ambient: crate::ambient::Ambient,
     scroll_panel: crate::ui_layout::ScrollPanel,
     scroll_page: Option<(Page, usize)>,
     scale_edit: crate::ui_layout::ScaleEdit,
@@ -134,6 +136,10 @@ pub struct Menu {
     mod_chooser: Option<crate::file_dialog::Pending>,
     /// The pack whose Remove button was pressed once and awaits a second press.
     mod_remove: Option<String>,
+    /// Ask for staff pack passwords on the next frame.
+    pub staff_unlock: bool,
+    /// A staff pack was disabled, so tools must reload their keys.
+    pub staff_changed: bool,
     /// Enabled pack IDs with no installed copy that loads, and the message
     /// that reported them; it offers to disable them while it is shown.
     mod_missing: Option<(String, Vec<String>)>,
@@ -220,6 +226,8 @@ impl Menu {
             mod_icons: Default::default(),
             mod_chooser: None,
             mod_remove: None,
+            staff_unlock: false,
+            staff_changed: false,
             mod_missing: None,
             message_lift: 0.0,
             catalog_stale: false,
@@ -2455,17 +2463,34 @@ impl Menu {
         // (name, render scale, upscaler, sharpness, FXAA, shape quality)
         // Macs with MetalFX upscale with it; it needs less sharpening.
         let metalfx = crate::graphics::metalfx_available();
+        let dlss_status = crate::dlss::status();
+        let dlss_ready = dlss_status == crate::dlss::Status::Ready;
+        let dlss_offered = dlss_ready || dlss_status == crate::dlss::Status::NeedsRuntime;
+        let dlss_selected = dlss_offered && settings.upscaler == crate::upscale::DLSS;
         let (upscaler, performance, balanced) = if metalfx {
             (crate::upscale::METALFX, 0.3, 0.15)
         } else {
             (1, 0.45, 0.3)
         };
-        let presets = [
-            ("Performance", 0.65, upscaler, performance, false, 0),
-            ("Balanced", 0.85, upscaler, balanced, false, 1),
-            ("Quality", 1.0, upscaler, 0.0, true, 2),
-            ("Ultra", 1.5, 0, 0.15, false, 2),
-        ];
+        let presets = if dlss_ready {
+            // GeForce RTX: the arena is light to draw, so DLSS's fixed cost
+            // buys image quality rather than speed. The fast presets stay on
+            // FSR 1; Quality is DLSS Quality and Ultra is DLAA.
+            let dlss = crate::upscale::DLSS;
+            [
+                ("Performance", 0.65, upscaler, performance, false, 0),
+                ("Balanced", 0.85, upscaler, balanced, false, 1),
+                ("Quality", 0.67, dlss, 0.0, false, 2),
+                ("Ultra", 1.0, dlss, 0.0, false, 2),
+            ]
+        } else {
+            [
+                ("Performance", 0.65, upscaler, performance, false, 0),
+                ("Balanced", 0.85, upscaler, balanced, false, 1),
+                ("Quality", 1.0, upscaler, 0.0, true, 2),
+                ("Ultra", 1.5, 0, 0.15, false, 2),
+            ]
+        };
         let width = col / presets.len() as f32;
         for (i, (name, scale, upscaler, sharpness, fxaa, shape)) in presets.into_iter().enumerate()
         {
@@ -2513,23 +2538,41 @@ impl Menu {
                 )
             },
         );
-        label(
-            if settings.render_scale > 1.0 {
-                "Above 100% supersamples: smoother edges, more GPU work."
-            } else if settings.render_scale < 1.0 {
-                "Below 100% renders fewer pixels, then upscales. Menus stay sharp."
-            } else {
-                "The arena renders at full resolution."
-            },
-            x,
-            by + 143.0 * s,
-            11.0 * s,
-            muted_color(),
-        );
+        let scale_note = if dlss_selected {
+            match crate::dlss::Mode::for_scale(settings.render_scale) {
+                crate::dlss::Mode::Dlaa => {
+                    "DLAA: full resolution, anti-aliased by DLSS.".to_owned()
+                }
+                mode => format!(
+                    "DLSS {}: fewer pixels, rebuilt to full detail.",
+                    mode.name()
+                ),
+            }
+        } else if settings.render_scale > 1.0 {
+            "Above 100% supersamples: smoother edges, more GPU work.".to_owned()
+        } else if settings.render_scale < 1.0 {
+            "Below 100% renders fewer pixels, then upscales. Menus stay sharp.".to_owned()
+        } else {
+            "The arena renders at full resolution.".to_owned()
+        };
+        label(&scale_note, x, by + 143.0 * s, 11.0 * s, muted_color());
         label("UPSCALER", x, by + 172.0 * s, 13.0 * s, muted_color());
-        let names = &crate::upscale::UPSCALERS[..if metalfx { 3 } else { 2 }];
+        let mut names = vec![(0, "Bilinear"), (1, "AMD FSR 1")];
+        if metalfx {
+            names.push((crate::upscale::METALFX, "MetalFX"));
+        }
+        if dlss_offered {
+            names.push((crate::upscale::DLSS, "NVIDIA DLSS"));
+        }
+        // An upscaler this system lacks (a copied settings file) runs as
+        // FSR 1 here.
+        let current = match settings.upscaler {
+            crate::upscale::METALFX if !metalfx => 1,
+            crate::upscale::DLSS if !dlss_offered => 1,
+            upscaler => upscaler,
+        };
         let width = col / names.len() as f32;
-        for (i, &name) in names.iter().enumerate() {
+        for (i, &(index, name)) in names.iter().enumerate() {
             if button(
                 Rect::new(
                     x + i as f32 * width,
@@ -2537,16 +2580,15 @@ impl Menu {
                     width - 6.0 * s,
                     33.0 * s,
                 ),
-                if i == 1 { "AMD FSR 1" } else { name },
-                // A MetalFX setting from another Mac runs as FSR 1 here.
-                usize::from(match settings.upscaler {
-                    crate::upscale::METALFX if !metalfx => 1,
-                    upscaler => upscaler,
-                }) == i,
+                name,
+                current == index,
                 true,
                 s * 0.72,
             ) {
-                settings.upscaler = i as u8;
+                settings.upscaler = index;
+                if index == crate::upscale::DLSS && !dlss_ready {
+                    crate::dlss::start_runtime_download();
+                }
             }
         }
         slider(
@@ -2557,12 +2599,32 @@ impl Menu {
             1.0,
             s,
         );
-        toggle(
-            Rect::new(x, by + 290.0 * s, col, 33.0 * s),
-            "FXAA edge smoothing",
-            &mut settings.fxaa,
-            s,
-        );
+        if dlss_selected {
+            self.dlss_status(&dlss_status, Rect::new(x, by + 290.0 * s, col, 33.0 * s), s);
+        } else {
+            toggle(
+                Rect::new(x, by + 290.0 * s, col, 33.0 * s),
+                "FXAA edge smoothing",
+                &mut settings.fxaa,
+                s,
+            );
+        }
+        let device = crate::hardware::device();
+        if let crate::dlss::Status::Unavailable(reason) = &dlss_status
+            && self.post_error.is_none()
+            && device.as_ref().is_some_and(crate::hardware::Device::nvidia)
+        {
+            // Say why an NVIDIA GPU can't offer DLSS (a GTX card, an old
+            // driver, a build without it).
+            wrap(
+                &format!("NVIDIA DLSS: {reason}"),
+                x,
+                by + 348.0 * s,
+                col,
+                12.0 * s,
+                muted_color(),
+            );
+        }
         if let Some(error) = &self.post_error {
             wrap(
                 &format!(
@@ -2576,6 +2638,57 @@ impl Menu {
             );
         }
         None
+    }
+    /// DLSS's state where the FXAA toggle would be (DLSS anti-aliases).
+    fn dlss_status(&mut self, status: &crate::dlss::Status, rect: Rect, s: f32) {
+        use crate::dlss::download::Progress;
+        if *status == crate::dlss::Status::Ready {
+            label(
+                "NVIDIA DLSS is on. It also anti-aliases, so FXAA is off.",
+                rect.x,
+                rect.y + 21.0 * s,
+                12.0 * s,
+                muted_color(),
+            );
+            return;
+        }
+        match crate::dlss::runtime_download() {
+            Some(Progress::Running { done, total }) => {
+                let title = if total > 0 {
+                    format!(
+                        "Downloading DLSS from NVIDIA…  {:.0}%",
+                        done as f32 * 100. / total as f32
+                    )
+                } else {
+                    "Downloading DLSS from NVIDIA…".to_owned()
+                };
+                button(rect, &title, false, false, s * 0.72);
+            }
+            Some(Progress::Failed(error)) => {
+                if button(rect, "Retry the DLSS download", false, true, s * 0.72) {
+                    crate::dlss::start_runtime_download();
+                }
+                label(&error, rect.x, rect.bottom() + 16.0 * s, 11.0 * s, RED);
+            }
+            _ => {
+                if button(
+                    rect,
+                    "Download DLSS  (60 MB, from NVIDIA)",
+                    false,
+                    true,
+                    s * 0.72,
+                ) {
+                    crate::dlss::start_runtime_download();
+                }
+                label(
+                    "Until then the arena upscales with FSR 1.",
+                    rect.x,
+                    rect.bottom() + 16.0 * s,
+                    11.0 * s,
+                    muted_color(),
+                );
+            }
+        }
     }
     fn interface_scale(&mut self, rect: Rect, settings: &mut Settings, s: f32, anchor: f32) {
         let mut preview = self.scale_edit.preview(settings.ui_scale);
@@ -2655,6 +2768,16 @@ impl Menu {
                     15.0 * s,
                     muted_color(),
                 );
+                // Macs pace frames with the display link, which has no
+                // adaptive mode.
+                if settings.vsync && !cfg!(target_os = "macos") {
+                    toggle(
+                        Rect::new(x, by + 300.0 * s, col, 33.0 * s),
+                        "Adaptive VSync  (restart required)",
+                        &mut settings.adaptive_vsync,
+                        s,
+                    );
+                }
                 label(
                     "RESOLUTION · render size in fullscreen",
                     rx,
@@ -2841,6 +2964,36 @@ impl Menu {
                     11. * s,
                     muted_color(),
                 );
+                if !cfg!(target_os = "macos")
+                    && let Some(device) = crate::hardware::device()
+                {
+                    label(
+                        "GRAPHICS DEVICE",
+                        rx,
+                        by + GRAPHICS_DEVICE_LABEL * s,
+                        13.0 * s,
+                        muted_color(),
+                    );
+                    let below = wrap(
+                        &device.summary(),
+                        rx,
+                        by + GRAPHICS_DEVICE_TEXT * s,
+                        col,
+                        12.0 * s,
+                        text_color(),
+                    );
+                    let (note, color) = if device.software {
+                        (
+                            "No hardware acceleration: this is a software renderer. Install the graphics driver for your GPU.",
+                            RED,
+                        )
+                    } else if device.offloaded {
+                        ("Running on the discrete NVIDIA GPU.", muted_color())
+                    } else {
+                        ("Hardware accelerated.", muted_color())
+                    };
+                    wrap(note, rx, below + 6.0 * s, col, 11.0 * s, color);
+                }
                 if cfg!(target_os = "macos") {
                     if toggle(
                         Rect::new(rx, by + GRAPHICS_RENDERER_ROW * s, col, 33.0 * s),
@@ -2850,15 +3003,23 @@ impl Menu {
                     ) {
                         let _ = settings.save();
                     }
-                    wrap(
-                        match (crate::graphics::metal(), settings.metal) {
-                            (true, true) => "Rendering with Metal, native to Apple GPUs.",
-                            (false, false) => {
-                                "Rendering with OpenGL, translated to Metal by macOS. Metal is faster."
-                            }
-                            (_, true) => "Metal starts after a restart.",
-                            (_, false) => "OpenGL starts after a restart.",
+                    let gpu = crate::hardware::device()
+                        .map(|device| device.name())
+                        .filter(|name| !name.is_empty());
+                    let note = match (crate::graphics::metal(), settings.metal) {
+                        (true, true) => match gpu {
+                            Some(gpu) => format!("Rendering with Metal on {gpu}."),
+                            None => "Rendering with Metal.".into(),
                         },
+                        (false, false) => {
+                            "Rendering with OpenGL, which macOS has deprecated. Metal is faster."
+                                .into()
+                        }
+                        (_, true) => "Metal starts after a restart.".into(),
+                        (_, false) => "OpenGL starts after a restart.".into(),
+                    };
+                    wrap(
+                        &note,
                         rx,
                         by + GRAPHICS_RENDERER_NOTE * s,
                         col,
@@ -3177,22 +3338,39 @@ impl Menu {
             23.0 * s,
             text_color(),
         );
-        wrap(
-            "DejaVu Sans Bold and Mono fonts; Lucide microphone icons (ISC). Third-party licenses are in NOTICE.md.",
+        let mut notices = String::new();
+        if cfg!(tankyard_dlss) {
+            notices +=
+                "Upscaling by AMD FidelityFX Super Resolution 1, and NVIDIA DLSS on GeForce RTX. ";
+        }
+        if cfg!(target_vendor = "apple") {
+            notices += "Rendering with Metal and upscaling with MetalFX by Apple. ";
+        }
+        notices += "DejaVu Sans Bold and Mono fonts; Lucide microphone icons (ISC). Third-party licenses are in NOTICE.md.";
+        if cfg!(tankyard_dlss) {
+            notices += " NVIDIA, GeForce, RTX and DLSS are trademarks and/or registered trademarks of NVIDIA Corporation in the U.S. and other countries.";
+        }
+        if cfg!(target_vendor = "apple") {
+            notices += " Apple, Metal and MetalFX are trademarks of Apple Inc., registered in the U.S. and other countries and regions.";
+        }
+        let below = wrap(
+            &notices,
             x,
             y + 355.0 * s,
             width.min(900.0 * s),
             18.0 * s,
             muted_color(),
         );
-        wrap(
+        let affiliation = wrap(
             "Tank Yard is not affiliated with Diep.io or Arras.io.",
             x,
-            y + 411.0 * s,
+            (y + 411.0 * s).max(below + 8.0 * s),
             width.min(900.0 * s),
             18.0 * s,
             muted_color(),
         );
+        // The credit below moves down when the notices above wrap further.
+        let y = y + (affiliation + 40. * s - (y + 480. * s)).max(0.);
         tankyard_client::boss_model::boss_model_geometry(
             tankyard_core::BossKind::Bastion,
             crate::ui_layout::position(vec2(x + 28. * s, y + 488. * s)),
@@ -3816,7 +3994,18 @@ impl Menu {
             .collect();
             label("CONTENTS", px, y, 11.0 * s, muted_color());
             y += 18.0 * s;
-            let summary = if contents.is_empty() {
+            let summary = if let Some(staff) = &entry.staff {
+                format!(
+                    "{}  ·  signed by {}  ·  {}",
+                    staff.identity.title(),
+                    tankyard_client::staff_pack::PUBLISHER,
+                    if crate::credentials::unlocked(staff.identity) {
+                        "unlocked"
+                    } else {
+                        "locked"
+                    }
+                )
+            } else if contents.is_empty() {
                 "Settings only".to_owned()
             } else {
                 contents.join("  ·  ")
@@ -3834,7 +4023,9 @@ impl Menu {
                 &fitted_label(
                     &format!(
                         "{} · {} · {} files · {} · id {}",
-                        if entry.scripted() {
+                        if entry.staff.is_some() {
+                            "Staff pack"
+                        } else if entry.scripted() {
                             "Lua script pack"
                         } else {
                             "Data pack"
@@ -3953,7 +4144,19 @@ impl Menu {
         ) {
             view_files = true;
         }
-        if small_button(
+        let locked_staff = entry
+            .staff
+            .as_ref()
+            .is_some_and(|staff| enabled && !crate::credentials::unlocked(staff.identity));
+        if locked_staff {
+            if small_button(
+                Rect::new(r.right() - 290.0 * s, footer, 120.0 * s, 34.0 * s),
+                "Unlock…",
+                s * 0.78,
+            ) {
+                self.staff_unlock = true;
+            }
+        } else if small_button(
             Rect::new(r.right() - 290.0 * s, footer, 120.0 * s, 34.0 * s),
             "Safety review",
             s * 0.78,
@@ -4185,6 +4388,22 @@ impl Menu {
             return;
         };
         let previous = settings.enabled_mods.clone();
+        if let Some(staff) = &entry.staff {
+            // Staff packs never load into a match; they only lock or unlock tools.
+            if settings.enabled_mods.contains(&id) {
+                settings.enabled_mods.retain(|e| e != &id);
+                crate::credentials::lock(staff.identity);
+                self.staff_changed = true;
+                self.info = format!("{} locked and disabled.", staff.identity.title());
+            } else {
+                settings.enabled_mods.push(id);
+                self.staff_unlock = true;
+                self.info.clear();
+            }
+            self.error.clear();
+            let _ = settings.save();
+            return;
+        }
         if settings.enabled_mods.contains(&id) {
             settings.enabled_mods.retain(|e| e != &id);
         } else if settings.enabled_mods.len() >= tankyard_mods::MAX_MODS {
@@ -4218,6 +4437,14 @@ impl Menu {
         match result {
             Ok(entry) => {
                 self.error.clear();
+                if let Some(error) = &entry.error {
+                    // A staff pack whose signature failed is kept out of use.
+                    self.info.clear();
+                    self.error = format!("Added {}, but it cannot load: {error}", entry.name());
+                    self.mods_scanned = false;
+                    self.catalog_stale = true;
+                    return;
+                }
                 let clean = entry.verdict() == tankyard_mods::scan::Verdict::Clean;
                 let id = entry.id().unwrap_or_default().to_owned();
                 let room = settings.enabled_mods.len() < tankyard_mods::MAX_MODS;
@@ -4226,7 +4453,12 @@ impl Menu {
                         settings.enabled_mods.push(id.clone());
                         let _ = settings.save();
                     }
-                    format!("Added and enabled {}. It passed review.", entry.name())
+                    if entry.staff.is_some() {
+                        self.staff_unlock = true;
+                        format!("Added {}. Enter its password to unlock it.", entry.name())
+                    } else {
+                        format!("Added and enabled {}. It passed review.", entry.name())
+                    }
                 } else if clean {
                     format!(
                         "Added {}. Disable another pack to enable it (16 at most).",
@@ -4346,6 +4578,14 @@ fn mod_status(entry: &crate::mod_library::Entry, settings: &Settings) -> (&'stat
     let enabled = entry.enabled(settings);
     match entry.verdict() {
         _ if entry.error.is_some() => ("Cannot load", RED),
+        _ if entry
+            .staff
+            .as_ref()
+            .is_some_and(|staff| crate::credentials::unlocked(staff.identity)) =>
+        {
+            ("Unlocked", accent())
+        }
+        _ if entry.staff.is_some() && enabled => ("Locked", warm_text_color()),
         Verdict::Clean if enabled => ("Enabled", accent()),
         Verdict::Clean => ("Reviewed", Color::new(0.30, 0.64, 0.30, 1.0)),
         Verdict::Review if entry.approved(settings) => ("Accepted", warm_text_color()),
