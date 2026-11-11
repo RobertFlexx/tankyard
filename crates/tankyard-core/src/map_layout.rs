@@ -127,8 +127,11 @@ impl World {
             tank.pos = pos;
             tank.vel = V2::ZERO;
             tank.terrain = 1.;
+            tank.push = V2::ZERO;
         }
-        self.trigger_state = Default::default();
+        self.logic = Default::default();
+        self.match_state.counters = Default::default();
+        self.portal_rest.clear();
         for (boss, pos) in self.bosses.iter_mut().zip(bosses) {
             boss.pos = pos;
             boss.goal = pos;

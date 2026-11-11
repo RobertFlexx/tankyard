@@ -39,7 +39,11 @@ pub struct World {
     /// Unscaled walls that never change during a round (map walls, generated
     /// cover); blocks in shown groups are added to these.
     pub(crate) static_walls: Vec<Rect>,
-    pub(crate) trigger_state: crate::map_features::TriggerState,
+    pub(crate) logic: crate::map_features::MapLogic,
+    pub(crate) logic_tanks: Vec<crate::map_features::Occupant>,
+    pub(crate) zone_areas: Vec<(usize, Rect)>,
+    /// Seconds before each tank may use a portal again; never replicated.
+    pub(crate) portal_rest: BTreeMap<EntityId, f32>,
     pub objectives: Vec<Objective>,
     pub match_state: MatchState,
     pub events: Vec<GameEvent>,
@@ -60,6 +64,15 @@ pub struct World {
     pub(crate) boss_roll_at: u64,
     pub(crate) base_guard_timers: [f32; 4],
 }
+/// SplitMix64 as a unit float; the world's and map logic's random source.
+pub(crate) fn next_random(state: &mut u64) -> f32 {
+    *state = state.wrapping_add(0x9e3779b97f4a7c15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+    ((z ^ (z >> 31)) >> 40) as f32 / (1u32 << 24) as f32
+}
+
 impl World {
     /// The HUD widgets one player sees, in a stable order.
     pub fn hud_for(&self, viewer: EntityId) -> Vec<tankyard_mods::HudWidget> {
@@ -163,7 +176,10 @@ impl World {
             walls: vec![],
             map_walls: vec![],
             static_walls: vec![],
-            trigger_state: Default::default(),
+            logic: Default::default(),
+            logic_tanks: Vec::new(),
+            zone_areas: Vec::new(),
+            portal_rest: BTreeMap::new(),
             objectives: vec![],
             match_state: MatchState {
                 elapsed: 0.,
@@ -179,6 +195,7 @@ impl World {
                     .unwrap_or_else(|| config.mode.name().into()),
                 arena: ArenaStatus::default(),
                 hidden_groups: map.starting_mask(),
+                counters: [0; tankyard_content::MAP_COUNTERS as usize],
             },
             config,
             content,
@@ -212,11 +229,7 @@ impl World {
         id
     }
     pub(crate) fn random(&mut self) -> f32 {
-        self.rng = self.rng.wrapping_add(0x9e3779b97f4a7c15);
-        let mut z = self.rng;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-        ((z ^ (z >> 31)) >> 40) as f32 / (1u32 << 24) as f32
+        next_random(&mut self.rng)
     }
     pub(crate) fn event(
         &mut self,
@@ -333,6 +346,7 @@ impl World {
             knockback: 0.,
             speed_scale: 1.,
             terrain: 1.,
+            push: V2::ZERO,
             reload_scale: 1.,
             damage_scale: 1.,
             stasis: 0.,
@@ -900,6 +914,11 @@ impl World {
         })
     }
     pub(crate) fn spawn_target(&mut self) {
+        self.spawn_target_in(None);
+    }
+    /// One shape at a clear random point, inside `area` when given (world
+    /// units, already following the arena border). Returns whether it fit.
+    pub(crate) fn spawn_target_in(&mut self, area: Option<Rect>) -> bool {
         let roll = self.random();
         let (kind, radius, health, xp) = if roll < 0.003 {
             (TargetKind::Rare, 30., 450., 1800)
@@ -917,11 +936,27 @@ impl World {
             (TargetKind::Square, 14., 35., 22)
         };
         for _ in 0..32 {
-            let base = V2::new(
-                radius + 50. + self.random() * (self.config.width - 2. * radius - 100.),
-                radius + 50. + self.random() * (self.config.height - 2. * radius - 100.),
-            );
-            let pos = self.config.arena_point(base);
+            let pos = match area {
+                Some(area) => V2::new(
+                    area.x + self.random() * area.w,
+                    area.y + self.random() * area.h,
+                ),
+                None => {
+                    let base = V2::new(
+                        radius + 50. + self.random() * (self.config.width - 2. * radius - 100.),
+                        radius + 50. + self.random() * (self.config.height - 2. * radius - 100.),
+                    );
+                    self.config.arena_point(base)
+                }
+            };
+            let bounds = self.config.bounds();
+            if pos.x < bounds.x + radius
+                || pos.y < bounds.y + radius
+                || pos.x > bounds.x + bounds.w - radius
+                || pos.y > bounds.y + bounds.h - radius
+            {
+                continue;
+            }
             if (1..=self.config.mode.teams()).any(|team| {
                 self.config
                     .team_base(team)
@@ -963,8 +998,9 @@ impl World {
                 angle,
                 xp,
             });
-            break;
+            return true;
         }
+        false
     }
     pub fn snapshot(&self) -> Snapshot {
         self.make_snapshot(None)

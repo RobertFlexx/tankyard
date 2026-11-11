@@ -188,7 +188,13 @@ pub fn move_tank(
         * tank.terrain.clamp(0.3, 2.5)
         * (if tank.boost > 0. { 1.55 } else { 1. })
         * (if tank.carrying { 0.75 } else { 1. });
-    let desired = tank.input.movement.clamp_length(1.) * speed;
+    // Conveyors carry a tank whether or not it steers, like a moving floor.
+    let push = if tank.push.finite() {
+        tank.push.clamp_length(600.)
+    } else {
+        V2::ZERO
+    };
+    let desired = tank.input.movement.clamp_length(1.) * speed + push;
     // Acceleration and coast are exponential, so prediction and the server
     // agree at every frame rate. Keep enough inertia for recoil and dodging.
     let rate = if tank.knockback > 0. {

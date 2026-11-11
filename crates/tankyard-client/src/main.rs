@@ -1290,6 +1290,9 @@ impl App {
             if is_key_pressed(KeyCode::Escape) {
                 self.finish_session();
                 self.editor_playtest = false;
+                if let Some(editor) = &mut self.editor {
+                    editor.resume();
+                }
                 return;
             }
         }
@@ -1811,16 +1814,18 @@ impl App {
                     self.editor = None;
                     self.menu.clear_focus();
                 }
-                editor::Action::Play(loaded, config) => {
-                    match Session::editor(config, *loaded, &self.settings.player_name) {
-                        Ok(session) => {
-                            self.launch(session);
-                            self.editor_playtest = true;
-                            self.hud.editor_playtest = true;
-                        }
-                        Err(error) => self.menu.error = error,
+                editor::Action::Play {
+                    loaded,
+                    config,
+                    start,
+                } => match Session::editor(config, *loaded, &self.settings.player_name, start) {
+                    Ok(session) => {
+                        self.launch(session);
+                        self.editor_playtest = true;
+                        self.hud.editor_playtest = true;
                     }
-                }
+                    Err(error) => self.menu.error = error,
+                },
             }
             return;
         }
@@ -2473,6 +2478,9 @@ impl App {
             HudAction::Pause if self.editor_playtest => {
                 self.finish_session();
                 self.editor_playtest = false;
+                if let Some(editor) = &mut self.editor {
+                    editor.resume();
+                }
             }
             HudAction::Pause => self.paused = true,
             HudAction::Controls => self.open_menu(Page::Controls),

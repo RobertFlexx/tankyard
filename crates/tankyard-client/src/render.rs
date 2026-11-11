@@ -428,17 +428,16 @@ pub fn world(
             }
         }
     }
+    let shown = crate::scenery::Shown {
+        hidden: snapshot.match_state.hidden_groups,
+        counters: snapshot.match_state.counters,
+    };
     if let Some(map) = map {
-        crate::scenery::floor(
-            map,
-            &snapshot.config,
-            snapshot.match_state.hidden_groups,
-            view,
-        );
+        crate::scenery::floor(map, &snapshot.config, shown.hidden, view, animation_time);
         crate::scenery::decorations(
             map,
             &snapshot.config,
-            snapshot.match_state.hidden_groups,
+            &shown,
             view,
             animation_time,
             false,
@@ -1031,7 +1030,10 @@ pub fn world(
         crate::scenery::decorations(
             map,
             &snapshot.config,
-            snapshot.match_state.hidden_groups,
+            &crate::scenery::Shown {
+                hidden: snapshot.match_state.hidden_groups,
+                counters: snapshot.match_state.counters,
+            },
             view,
             animation_time,
             true,

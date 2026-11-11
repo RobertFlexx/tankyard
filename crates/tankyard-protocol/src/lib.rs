@@ -19,14 +19,16 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 24 adds map blocks, pads, decor and triggers, pad speed on tanks,
-/// map group visibility in match state, and live rule changes. Snapshots
-/// changed shape, so servers accept only version 24 clients. The netcode
-/// protocol id stays at 22's so older clients still connect far enough to
-/// be told which side needs updating.
-pub const PROTOCOL_VERSION: u32 = 24;
+/// Version 25 adds conveyor and portal pads, trigger signals, counters,
+/// filters, chance and delays, and map counters in match state; pad effects
+/// no longer travel in snapshots. Version 24 added map blocks, pads, decor
+/// and triggers and live rule changes. Snapshots and map data changed shape,
+/// so servers accept only version 25 clients. The netcode protocol id stays
+/// at 22's so older clients still connect far enough to be told which side
+/// needs updating.
+pub const PROTOCOL_VERSION: u32 = 25;
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 24;
+pub const MIN_PROTOCOL_VERSION: u32 = 25;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
 pub const SERVER_OUTDATED: &str =
     "This server runs an older Tank Yard. Its host needs to update it.";

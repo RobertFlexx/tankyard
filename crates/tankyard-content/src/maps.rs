@@ -93,14 +93,20 @@ pub enum ZoneKind {
     Hazard,
     /// Incoming damage is reduced.
     Shelter,
+    /// Carries tanks along `angle`.
+    Conveyor,
+    /// Sends tanks to `exit`.
+    Portal,
 }
 impl ZoneKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Speed,
         Self::Mud,
         Self::Repair,
         Self::Hazard,
         Self::Shelter,
+        Self::Conveyor,
+        Self::Portal,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -109,6 +115,8 @@ impl ZoneKind {
             Self::Repair => "Repair pad",
             Self::Hazard => "Hazard",
             Self::Shelter => "Shelter",
+            Self::Conveyor => "Conveyor",
+            Self::Portal => "Portal",
         }
     }
 }
@@ -123,10 +131,18 @@ pub struct MapZone {
     pub strength: f32,
     #[serde(default)]
     pub group: u8,
+    /// Conveyor direction in degrees: 0 right, 90 down.
+    #[serde(default)]
+    pub angle: f32,
+    /// Where a portal sends tanks, normalized like positions.
+    #[serde(default)]
+    pub exit: [f32; 2],
 }
 fn unit() -> f32 {
     1.
 }
+/// World units per second a conveyor of strength 1 adds to a tank's motion.
+pub const CONVEYOR_SPEED: f32 = 150.;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -307,6 +323,36 @@ pub enum TriggerWhen {
     Enter,
     /// Once, `seconds` after the round starts.
     Start,
+    /// When a living tank leaves `rect`; `seconds` is the cooldown.
+    Exit,
+    /// When another trigger sends a signal on channel `source`.
+    Signal,
+    /// When counter `source` reaches `threshold`, from either side.
+    Counter,
+}
+impl TriggerWhen {
+    pub const ALL: [Self; 6] = [
+        Self::Every,
+        Self::Enter,
+        Self::Exit,
+        Self::Start,
+        Self::Signal,
+        Self::Counter,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Every => "Every",
+            Self::Enter => "On enter",
+            Self::Exit => "On exit",
+            Self::Start => "At start",
+            Self::Signal => "On signal",
+            Self::Counter => "On counter",
+        }
+    }
+    /// Whether the trigger watches its rectangle for tanks.
+    pub fn watches_area(self) -> bool {
+        matches!(self, Self::Enter | Self::Exit)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,10 +366,64 @@ pub enum TriggerAction {
     Announce,
     /// Brings the `boss` named boss into the arena at `rect`.
     Boss,
+    /// Fires every `Signal` trigger listening on channel `group`.
+    Signal,
+    /// Adds `amount` to counter `group`.
+    Count,
+    /// Spawns `amount` shapes inside `rect`.
+    Shapes,
+}
+impl TriggerAction {
+    pub const ALL: [Self; 8] = [
+        Self::Toggle,
+        Self::Show,
+        Self::Hide,
+        Self::Announce,
+        Self::Boss,
+        Self::Signal,
+        Self::Count,
+        Self::Shapes,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Toggle => "Toggle group",
+            Self::Show => "Show group",
+            Self::Hide => "Hide group",
+            Self::Announce => "Announce",
+            Self::Boss => "Boss arrives",
+            Self::Signal => "Send signal",
+            Self::Count => "Add to counter",
+            Self::Shapes => "Spawn shapes",
+        }
+    }
+    /// Whether `group` names a map group, as opposed to a channel or counter.
+    pub fn targets_group(self) -> bool {
+        matches!(self, Self::Toggle | Self::Show | Self::Hide)
+    }
 }
 
-/// A rule that runs during a round: GD-style toggles, timed gates, hazards
-/// that come and go, announcements and boss arrivals.
+/// Which tanks an Enter or Exit trigger notices.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerWho {
+    #[default]
+    Anyone,
+    Players,
+    Bots,
+}
+impl TriggerWho {
+    pub const ALL: [Self; 3] = [Self::Anyone, Self::Players, Self::Bots];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Anyone => "Any tank",
+            Self::Players => "Players only",
+            Self::Bots => "Bots only",
+        }
+    }
+}
+
+/// A rule that runs during a round: toggles, timed gates, hazards that come
+/// and go, signals, counters, announcements and boss arrivals.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MapTrigger {
@@ -349,6 +449,95 @@ pub struct MapTrigger {
     /// Fires at most once a round.
     #[serde(default)]
     pub once: bool,
+    /// The group this trigger belongs to. While that group is hidden the
+    /// trigger is switched off; group 0 is always on.
+    #[serde(default)]
+    pub member: u8,
+    /// Which tanks an Enter or Exit trigger notices.
+    #[serde(default)]
+    pub who: TriggerWho,
+    /// Enter and Exit notice only this team (1 to 4); 0 is any team.
+    #[serde(default)]
+    pub team: u8,
+    /// The channel a Signal trigger listens on, or the counter a Counter
+    /// trigger watches.
+    #[serde(default)]
+    pub source: u8,
+    /// The value a Counter trigger waits for.
+    #[serde(default)]
+    pub threshold: i32,
+    /// How much Count adds (negative subtracts), or how many shapes spawn.
+    #[serde(default)]
+    pub amount: i32,
+    /// Percent chance, 1 to 100, that the trigger acts when it fires.
+    #[serde(default = "always")]
+    pub chance: u8,
+    /// Seconds between firing and acting.
+    #[serde(default)]
+    pub delay: f32,
+}
+fn always() -> u8 {
+    100
+}
+impl Default for MapTrigger {
+    fn default() -> Self {
+        Self {
+            when: TriggerWhen::Every,
+            action: TriggerAction::Toggle,
+            rect: [0., 0., 0.05, 0.05],
+            group: 1,
+            seconds: 10.,
+            offset: 0.,
+            duration: 0.,
+            text: String::new(),
+            boss: String::new(),
+            once: false,
+            member: 0,
+            who: TriggerWho::Anyone,
+            team: 0,
+            source: 1,
+            threshold: 1,
+            amount: 1,
+            chance: 100,
+            delay: 0.,
+        }
+    }
+}
+
+/// Counters triggers can add to and watch; labels show them as `{1}`-`{8}`.
+pub const MAP_COUNTERS: u8 = 8;
+/// Counter values stay within this magnitude.
+pub const COUNTER_LIMIT: i32 = 99_999;
+/// At most this many shapes from one Spawn shapes trigger.
+pub const TRIGGER_SHAPES: i32 = 24;
+
+/// `text` with `{1}` to `{8}` replaced by the counters' values.
+pub fn fill_counters<'a>(
+    text: &'a str,
+    counters: &[i32; MAP_COUNTERS as usize],
+) -> std::borrow::Cow<'a, str> {
+    if !text.contains('{') {
+        return text.into();
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open..];
+        let digit = after.as_bytes().get(1).copied();
+        match (digit, after.as_bytes().get(2)) {
+            (Some(d @ b'1'..=b'8'), Some(b'}')) => {
+                out.push_str(&counters[usize::from(d - b'1')].to_string());
+                rest = &after[3..];
+            }
+            _ => {
+                out.push('{');
+                rest = &after[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out.into()
 }
 
 /// Most groups a map can name; they fit one 32-bit mask in snapshots.
@@ -639,12 +828,25 @@ pub fn validate_map_features(map: &MapDef) -> Result<(), String> {
             return Err(format!("{id}: block group must be 0 to {MAP_GROUPS}"));
         }
     }
-    for zone in &map.zones {
-        validate_rect(zone.rect).map_err(|error| format!("{id} pad: {error}"))?;
-        if !range(zone.strength, 0.25, 2.) || !group(zone.group) {
-            return Err(format!(
-                "{id}: pad strength must be 0.25 to 2 and its group 0 to {MAP_GROUPS}"
-            ));
+    for (index, zone) in map.zones.iter().enumerate() {
+        let name = format!("{id}: {} {}", zone.kind.name().to_lowercase(), index + 1);
+        validate_rect(zone.rect).map_err(|error| format!("{name}: {error}"))?;
+        if !range(zone.strength, 0.25, 2.) {
+            return Err(format!("{name}: strength must be 0.25 to 2"));
+        }
+        if !group(zone.group) {
+            return Err(format!("{name}: group must be 0 to {MAP_GROUPS}"));
+        }
+        if !zone.angle.is_finite() {
+            return Err(format!("{name}: direction must be a number"));
+        }
+        if zone.kind == ZoneKind::Portal {
+            validate_point(zone.exit).map_err(|error| format!("{name} exit: {error}"))?;
+            if !portal_exit_clear(map, zone.exit) {
+                return Err(format!(
+                    "{name}: its exit is inside cover or too near the edge"
+                ));
+            }
         }
     }
     let mut emitters = 0;
@@ -673,30 +875,9 @@ pub fn validate_map_features(map: &MapDef) -> Result<(), String> {
     if emitters > 48 {
         return Err(format!("{id}: at most 48 particle emitters"));
     }
-    for trigger in &map.triggers {
-        validate_rect(trigger.rect).map_err(|error| format!("{id} trigger: {error}"))?;
-        let timing = match trigger.when {
-            TriggerWhen::Every => range(trigger.seconds, 0.5, 3600.),
-            TriggerWhen::Enter => range(trigger.seconds, 0., 3600.),
-            TriggerWhen::Start => range(trigger.seconds, 0., 86400.),
-        };
-        let target = match trigger.action {
-            TriggerAction::Toggle | TriggerAction::Show | TriggerAction::Hide => {
-                (1..=MAP_GROUPS).contains(&trigger.group)
-            }
-            TriggerAction::Announce => !trigger.text.trim().is_empty(),
-            TriggerAction::Boss => BOSS_IDS.contains(&trigger.boss.as_str()),
-        };
-        if !timing
-            || !target
-            || !range(trigger.offset, 0., 3600.)
-            || !range(trigger.duration, 0., 3600.)
-            || !display_text(&trigger.text, 96)
-        {
-            return Err(format!(
-                "{id}: a trigger has invalid timing, target or text"
-            ));
-        }
+    for (index, trigger) in map.triggers.iter().enumerate() {
+        validate_trigger(trigger)
+            .map_err(|error| format!("{id}: trigger {}: {error}", index + 1))?;
     }
     if map
         .hidden_groups
@@ -704,6 +885,79 @@ pub fn validate_map_features(map: &MapDef) -> Result<(), String> {
         .any(|&g| !(1..=MAP_GROUPS).contains(&g))
     {
         return Err(format!("{id}: hidden groups must be 1 to {MAP_GROUPS}"));
+    }
+    Ok(())
+}
+
+/// One trigger's settings, with a reason a map author can act on.
+pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
+    validate_rect(trigger.rect)?;
+    let seconds = match trigger.when {
+        TriggerWhen::Every => range(trigger.seconds, 0.5, 3600.),
+        TriggerWhen::Start => range(trigger.seconds, 0., 86400.),
+        _ => range(trigger.seconds, 0., 3600.),
+    };
+    if !seconds {
+        return Err(match trigger.when {
+            TriggerWhen::Every => "repeat every 0.5 to 3600 seconds".into(),
+            TriggerWhen::Start => "start within a day of the round".into(),
+            _ => "cooldown must be 0 to 3600 seconds".into(),
+        });
+    }
+    match trigger.when {
+        TriggerWhen::Signal if !(1..=MAP_GROUPS).contains(&trigger.source) => {
+            return Err(format!("listen on a channel from 1 to {MAP_GROUPS}"));
+        }
+        TriggerWhen::Counter if !(1..=MAP_COUNTERS).contains(&trigger.source) => {
+            return Err(format!("watch a counter from 1 to {MAP_COUNTERS}"));
+        }
+        TriggerWhen::Counter if trigger.threshold.abs() > COUNTER_LIMIT => {
+            return Err(format!("wait for a value within ±{COUNTER_LIMIT}"));
+        }
+        _ => {}
+    }
+    match trigger.action {
+        action if action.targets_group() && !(1..=MAP_GROUPS).contains(&trigger.group) => {
+            return Err(format!("choose a target group from 1 to {MAP_GROUPS}"));
+        }
+        TriggerAction::Announce if trigger.text.trim().is_empty() => {
+            return Err("write the announcement".into());
+        }
+        TriggerAction::Boss if !BOSS_IDS.contains(&trigger.boss.as_str()) => {
+            return Err(format!("unknown boss {:?}", trigger.boss));
+        }
+        TriggerAction::Signal if !(1..=MAP_GROUPS).contains(&trigger.group) => {
+            return Err(format!("send on a channel from 1 to {MAP_GROUPS}"));
+        }
+        TriggerAction::Count
+            if !(1..=MAP_COUNTERS).contains(&trigger.group)
+                || trigger.amount.abs() > COUNTER_LIMIT =>
+        {
+            return Err(format!(
+                "add within ±{COUNTER_LIMIT} to a counter from 1 to {MAP_COUNTERS}"
+            ));
+        }
+        TriggerAction::Shapes if !(1..=TRIGGER_SHAPES).contains(&trigger.amount) => {
+            return Err(format!("spawn 1 to {TRIGGER_SHAPES} shapes"));
+        }
+        _ => {}
+    }
+    if !range(trigger.offset, 0., 3600.)
+        || !range(trigger.duration, 0., 3600.)
+        || !range(trigger.delay, 0., 3600.)
+    {
+        return Err("offset, delay and restore time must be 0 to 3600 seconds".into());
+    }
+    if !(1..=100).contains(&trigger.chance) {
+        return Err("chance must be 1 to 100 percent".into());
+    }
+    if trigger.member > MAP_GROUPS || trigger.team > 4 {
+        return Err(format!(
+            "its own group must be 0 to {MAP_GROUPS} and its team 0 to 4"
+        ));
+    }
+    if !display_text(&trigger.text, 96) {
+        return Err("text is limited to 96 characters on one line".into());
     }
     Ok(())
 }
@@ -736,6 +990,11 @@ fn validate_rect([x, y, w, h]: [f32; 4]) -> Result<(), &'static str> {
     } else {
         Err("rectangles must be finite, positive and contained in the unit arena")
     }
+}
+
+/// Whether a portal exit at normalized `exit` has room for a tank.
+pub fn portal_exit_clear(map: &MapDef, exit: [f32; 2]) -> bool {
+    validate_point(exit).is_ok() && point_clear(exit[0] * map.width, exit[1] * map.height, map, 40.)
 }
 
 fn point_clear(x: f32, y: f32, map: &MapDef, radius: f32) -> bool {

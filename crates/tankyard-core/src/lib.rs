@@ -29,7 +29,10 @@ pub use team_bases::{BASE_ALERT_DISTANCE, BASE_GUARD_OWNER, base_guard_owner, ba
 mod weapons;
 pub mod world;
 pub use arena::PVE_WAVES;
-pub use map_features::{map_rect, shelter_factor, terrain_factor, zones_at};
+pub use map_features::{
+    LogicEffect, MapLogic, Occupant, map_point, map_rect, shelter_factor, terrain_factor,
+    terrain_push, zones_at,
+};
 pub use math::*;
 pub use model::*;
 pub use progression::*;

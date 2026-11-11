@@ -394,7 +394,7 @@ end)
 
 Widget IDs use lowercase letters, digits and `_`. A pack may show 16 widgets to everyone and 16 to each player, and a player receives at most 64 from all packs. Bots have no screen, so widgets for bots are dropped. Widgets end with the round, with their player, or when the pack is disabled.
 
-The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. Clients draw exactly what they receive. HUD widgets were introduced in 0.12. Extended map features use protocol 24; players and servers must use matching supported protocols.
+The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. Clients draw exactly what they receive. HUD widgets were introduced in 0.12. Extended map features use protocol 25; players and servers must use matching supported protocols.
 
 ### Defining content
 
@@ -649,13 +649,19 @@ Map definitions use the schema of [`assets/content/maps.json`](../assets/content
 | `team_bases` | `{ "team": 1–4, "position": [x, y] }` |
 | `background` | a background name, such as `"teal"` |
 
-The [Arena Workshop](map-editor.md) creates these definitions without writing code. Optional extended fields use protocol 24:
+The [Arena Workshop](map-editor.md) creates these definitions without writing code. Optional extended fields use protocol 24; conveyors, portals and the trigger fields marked below need protocol 25:
 
 - `style`: `map`, `slate`, `garden`, `circuit`, `bastion`, `relay`, `orrery` or `sand`.
 - `blocks`: `{ "rect": [x,y,w,h], "style": "slate", "color": [r,g,b], "group": 0 }`. Color is optional; these are solid, axis-aligned rectangles.
-- `zones`: `{ "kind": "speed", "rect": [x,y,w,h], "strength": 1, "group": 0 }`. Kinds are `speed`, `mud`, `repair`, `hazard`, `shelter`; strength is 0.25–2. See the [pad formulas](map-editor.md#objects).
+- `zones`: `{ "kind": "speed", "rect": [x,y,w,h], "strength": 1, "group": 0, "angle": 0, "exit": [x,y] }`. Kinds are `speed`, `mud`, `repair`, `hazard`, `shelter`, and (protocol 25) `conveyor` and `portal`; strength is 0.25–2. A conveyor pushes along `angle` in degrees (0 right, 90 down) at `150 × strength` units a second. A portal sends tanks to `exit`, a map-relative point that must be open floor. See the [pad formulas](map-editor.md#objects).
 - `decor`: `{ "kind": "tile", "rect": [x,y,w,h], "color": [120,160,190], "alpha": 255, "rotation": 0, "pulse": 0, "spin": 0, "above": false, "text": "", "effect": null, "group": 0 }`. Kinds: `tile`, `stripes`, `light`, `ring`, `arrow`, `label`, `emitter`. Rotation/spin are degrees; pulse is cycles/second. Text has at most 64 characters.
-- `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`. Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`). The [trigger guide](map-editor.md#groups-and-triggers) explains schedules, entry edges and restoration.
+- `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`, and (protocol 25) `exit`, `signal`, `counter`. Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`), and (protocol 25) `signal` (channel `group`), `count` (adds `amount` to counter `group`) and `shapes` (`amount` shapes, 1–24, inside `rect`). Protocol 25 fields, all optional:
+  - `member`: the trigger's own group; it is off while that group is hidden.
+  - `who` (`anyone`, `players`, `bots`) and `team` (0–4): which tanks an enter or exit trigger notices.
+  - `source`: the signal channel (1–32) or counter (1–8) a trigger waits for. `threshold`: the counter value it waits for.
+  - `chance`: 1–100 percent, default 100. `delay`: seconds between firing and acting, 0–3600.
+
+  Counters 1–8 start at 0 each round and stay within ±99,999. Announcements and decor labels replace `{1}`–`{8}` with counter values. The [logic guide](map-editor.md#groups-and-logic) explains schedules, entry edges, chains and restoration.
 - `hidden_groups`: groups 1–32 hidden at round start. Group 0 is always visible. Blocks, zones and decor sharing a group change together.
 
 Emitters' `effect` is an optional particle profile. Defaults are:

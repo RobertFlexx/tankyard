@@ -156,15 +156,29 @@ impl Session {
         let snapshot = local.world.snapshot();
         Self::create(Engine::Offline(Box::new(local)), id, Some(snapshot))
     }
+    /// A workshop playtest, starting at `start` when it has room for a tank.
     pub fn editor(
         mut config: WorldConfig,
         loaded: tankyard_mods::LoadedMods,
         name: &str,
+        start: Option<V2>,
     ) -> Result<Self, String> {
         config.mode_name = Some("Workshop playtest".into());
         let mut local = LocalSession::with_mods(config, 2, loaded)?;
         let id = local.world.add_player(name, false);
         local.world.sandbox_level(id, tankyard_core::MAX_LEVEL);
+        let world = &mut local.world;
+        if let Some(at) = start
+            && let Some(index) = world.tanks.iter().position(|t| t.id == id)
+            && let Some(clear) = tankyard_core::physics::clear_circle_position(
+                at,
+                world.tanks[index].radius,
+                world.config.bounds(),
+                &world.walls,
+            )
+        {
+            world.tanks[index].pos = clear;
+        }
         let snapshot = local.world.snapshot();
         Ok(Self::create(
             Engine::Offline(Box::new(local)),
@@ -641,19 +655,7 @@ impl Session {
                 for input in &self.pending {
                     predicted.input = *input;
                     self.predicted_tick += 1;
-                    if let Some(map) = self
-                        .bundle
-                        .maps
-                        .iter()
-                        .find(|map| map.id == snapshot.config.map)
-                    {
-                        predicted.terrain = tankyard_core::terrain_factor(
-                            map,
-                            &snapshot.config,
-                            snapshot.match_state.hidden_groups,
-                            predicted.pos,
-                        );
-                    }
+                    predict_pads(&self.bundle.maps, snapshot, &mut predicted);
                     predict_tank(
                         &mut predicted,
                         content,
@@ -799,19 +801,7 @@ impl Session {
                     {
                         predicted.input = input;
                         self.predicted_tick += 1;
-                        if let Some(map) = self
-                            .bundle
-                            .maps
-                            .iter()
-                            .find(|map| map.id == snapshot.config.map)
-                        {
-                            predicted.terrain = tankyard_core::terrain_factor(
-                                map,
-                                &snapshot.config,
-                                snapshot.match_state.hidden_groups,
-                                predicted.pos,
-                            );
-                        }
+                        predict_pads(&self.bundle.maps, snapshot, predicted);
                         predict_tank(
                             predicted,
                             content,
@@ -1099,6 +1089,19 @@ pub(super) fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
         (b - a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
     a + delta * t
 }
+/// Pads under a predicted tank, with the server's arithmetic, since pad
+/// effects do not travel in snapshots.
+fn predict_pads(maps: &[tankyard_content::MapDef], snapshot: &Snapshot, tank: &mut Tank) {
+    let Some(map) = maps.iter().find(|map| map.id == snapshot.config.map) else {
+        tank.terrain = 1.;
+        tank.push = V2::ZERO;
+        return;
+    };
+    let hidden = snapshot.match_state.hidden_groups;
+    tank.terrain = tankyard_core::terrain_factor(map, &snapshot.config, hidden, tank.pos);
+    tank.push = tankyard_core::terrain_push(map, &snapshot.config, hidden, tank.pos);
+}
+
 pub fn interpolate_position(previous: V2, current: V2, fraction: f32) -> V2 {
     if previous.distance(current) > 150.0 {
         current

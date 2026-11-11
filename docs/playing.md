@@ -175,10 +175,10 @@ The Graphics tab also names the GPU the game is drawing on, with its video memor
 
 ## Arena Workshop and community rules
 
-**Map editor** on the main menu opens the [Arena Workshop](map-editor.md). Build cover, pads, decoration, particles and group triggers; test with F5 and return with Escape. Save an editable project or export a pack for offline games and community servers. The Files panel can import packs or copy an existing arena as a template.
+**Map editor** on the main menu opens the [Arena Workshop](map-editor.md). Build cover, pads (including conveyors and portals), decoration, particles and map logic; preview the logic in place with P, playtest with F5 and return with Escape. Save an editable project or export a pack for offline games and community servers. The Files panel can import packs or copy an existing arena as a template.
 
 The party roster includes **I'm ready** and a ready count. Readiness is shared with the party and resets for a new round; it does not pause the running match or grant host tools.
 
 Siege Engine, Skirmisher and Trapper add three boss encounters, each with a practice trial. Special attacks lock their aim during the warning. Heavy siege shots, a straight skirmisher charge and side-pocket mines each leave a different escape route. Boss models use distinct mechanical silhouettes rather than a shared stack of rotating armor.
 
-Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Extended maps and snapshots need protocol 24 on both server and client.
+Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Extended maps and snapshots need protocol 25 on both server and client.

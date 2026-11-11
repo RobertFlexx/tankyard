@@ -265,9 +265,14 @@ pub struct Tank {
     pub creator_attacks: [f32; crate::creator_boss::ATTACK_COUNT],
     #[serde(default)]
     pub server_badge: ServerBadge,
-    /// Movement factor from the map pad under the tank; 1 off pads.
-    #[serde(default = "unit_scale")]
+    /// Movement factor from the map pad under the tank; 1 off pads. Each
+    /// side computes pads itself (clients only for their own prediction),
+    /// so neither pad value travels in snapshots.
+    #[serde(skip, default = "unit_scale")]
     pub terrain: f32,
+    /// Velocity added by conveyor pads, in world units per second.
+    #[serde(skip)]
+    pub push: V2,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerBadge {
@@ -365,6 +370,7 @@ impl Clone for Tank {
             creator_attacks: self.creator_attacks,
             server_badge: self.server_badge,
             terrain: self.terrain,
+            push: self.push,
         }
     }
     fn clone_from(&mut self, source: &Self) {
@@ -416,6 +422,7 @@ impl Clone for Tank {
         self.creator_attacks = source.creator_attacks;
         self.server_badge = source.server_badge;
         self.terrain = source.terrain;
+        self.push = source.push;
     }
 }
 
@@ -737,6 +744,9 @@ pub struct MatchState {
     /// Map groups hidden right now, one bit per group (group 1 is bit 0).
     #[serde(default)]
     pub hidden_groups: u32,
+    /// Map counters 1 to 8, which labels and announcements can show.
+    #[serde(default)]
+    pub counters: [i32; tankyard_content::MAP_COUNTERS as usize],
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum EventKind {

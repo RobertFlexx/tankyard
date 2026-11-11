@@ -290,6 +290,9 @@ thread_local! {
 pub fn set_reduced_motion(reduced: bool) {
     REDUCED_MOTION.with(|state| state.set(reduced));
 }
+pub fn reduced_motion() -> bool {
+    REDUCED_MOTION.with(|state| state.get())
+}
 fn hover_ease(rect: Rect, hovered: bool) -> f32 {
     let target = if hovered { 1.0 } else { 0.0 };
     if REDUCED_MOTION.with(|value| value.get()) {

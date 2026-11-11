@@ -2,7 +2,7 @@
 
 Players can join `play.example.com` without remembering a port. Tank Yard runs the match and its WebSocket listener in one process; Caddy supplies HTTPS. You can use a subdomain of any domain you own, or the domain itself. You do not need to buy or operate a top-level domain.
 
-Use Tank Yard 0.14 or later and match the client and server versions. The map workshop and live rules use **protocol 24**, which cannot exchange snapshots with 0.13's protocol 23. Upgrade the server and players together.
+Use Tank Yard 0.15 or later and match the client and server versions. Map logic and the new pads use **protocol 25**, which cannot exchange snapshots with 0.14's protocol 24. Upgrade the server and players together.
 
 ## First, make a local server work
 

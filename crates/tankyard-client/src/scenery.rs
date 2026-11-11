@@ -8,9 +8,17 @@ use crate::{
 use macroquad::prelude::*;
 use tankyard_client::map_model::WallStyle;
 use tankyard_content::{
-    BlockStyle, DecorKind, MapDecor, MapDef, ParticleEffect, ParticleShape, ZoneKind,
+    BlockStyle, DecorKind, MAP_COUNTERS, MapDecor, MapDef, MapZone, ParticleEffect, ParticleShape,
+    ZoneKind,
 };
 use tankyard_core::{V2, WorldConfig};
+
+/// The parts of a map that change during a round, as the art needs them.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Shown {
+    pub hidden: u32,
+    pub counters: [i32; MAP_COUNTERS as usize],
+}
 
 pub fn wall_style(style: BlockStyle, map: &str) -> WallStyle {
     match style {
@@ -34,6 +42,8 @@ pub fn zone_color(kind: ZoneKind) -> Color {
         ZoneKind::Repair => Color::from_rgba(70, 174, 121, 255),
         ZoneKind::Hazard => Color::from_rgba(212, 104, 69, 255),
         ZoneKind::Shelter => Color::from_rgba(141, 133, 204, 255),
+        ZoneKind::Conveyor => Color::from_rgba(196, 158, 58, 255),
+        ZoneKind::Portal => Color::from_rgba(196, 92, 172, 255),
     }
 }
 pub fn screen_rect(view: &View, config: &WorldConfig, rect: [f32; 4]) -> Rect {
@@ -48,10 +58,15 @@ fn visible(rect: Rect, margin: f32) -> bool {
         && rect.bottom() > -margin
 }
 
-pub fn floor(map: &MapDef, config: &WorldConfig, hidden: u32, view: &View) {
+pub fn floor(map: &MapDef, config: &WorldConfig, hidden: u32, view: &View, time: f32) {
+    let time = if ui::reduced_motion() { 0. } else { time };
     let mut marks_left = 1024;
     for zone in &map.zones {
         if MapDef::group_bit(zone.group) & hidden != 0 {
+            continue;
+        }
+        if zone.kind == ZoneKind::Portal {
+            portal(zone, config, view, time);
             continue;
         }
         let r = screen_rect(view, config, zone.rect);
@@ -66,15 +81,26 @@ pub fn floor(map: &MapDef, config: &WorldConfig, hidden: u32, view: &View) {
         let spacing = (100. * view.zoom).max(24.);
         let cols = (r.w / spacing).ceil().clamp(1., 20.) as usize;
         let rows = (r.h / spacing).ceil().clamp(1., 20.) as usize;
+        // Conveyor marks travel with the belt and wrap inside the pad.
+        let travel = if zone.kind == ZoneKind::Conveyor {
+            let angle = zone.angle.to_radians();
+            let step = vec2(r.w / cols as f32, r.h / rows as f32);
+            let shift = (time * zone.strength * 0.8).fract();
+            vec2(angle.cos() * step.x, angle.sin() * step.y) * shift
+        } else {
+            Vec2::ZERO
+        };
         for y in 0..rows {
             for x in 0..cols {
                 if marks_left == 0 {
                     break;
                 }
-                let p = vec2(
+                let mut p = vec2(
                     r.x + (x as f32 + 0.5) / cols as f32 * r.w,
                     r.y + (y as f32 + 0.5) / rows as f32 * r.h,
-                );
+                ) + travel;
+                p.x = r.x + (p.x - r.x).rem_euclid(r.w.max(1.));
+                p.y = r.y + (p.y - r.y).rem_euclid(r.h.max(1.));
                 if p.x < -12.
                     || p.y < -12.
                     || p.x > screen_width() + 12.
@@ -82,14 +108,68 @@ pub fn floor(map: &MapDef, config: &WorldConfig, hidden: u32, view: &View) {
                 {
                     continue;
                 }
-                let radius = (10. * view.zoom).min(r.w.min(r.h) * 0.18).max(1.);
-                zone_mark(zone.kind, p, radius, alpha(c, 0.5));
+                // Conveyor arrows stay readable when zoomed out.
+                let least = if zone.kind == ZoneKind::Conveyor {
+                    spacing * 0.3
+                } else {
+                    1.
+                };
+                let radius = (10. * view.zoom).min(r.w.min(r.h) * 0.18).max(least);
+                zone_mark(zone.kind, zone.angle, p, radius, alpha(c, 0.5));
                 marks_left -= 1;
             }
         }
     }
 }
-pub fn zone_mark(kind: ZoneKind, p: Vec2, r: f32, c: Color) {
+/// A portal pad: turning rings over its area and a matching ring at the exit.
+fn portal(zone: &MapZone, config: &WorldConfig, view: &View, time: f32) {
+    let r = screen_rect(view, config, zone.rect);
+    let exit = view.screen(tankyard_core::map_point(config, zone.exit));
+    let exit = vec2(exit.x, exit.y);
+    let c = crate::accessibility::palette(zone_color(ZoneKind::Portal));
+    let radius = (r.w.min(r.h) * 0.5).max(4.);
+    if visible(r, 0.) {
+        let p = r.center();
+        draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.10));
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, (2. * view.zoom).max(1.), alpha(c, 0.55));
+        for ring in 0..3 {
+            let phase = (time * 0.6 + ring as f32 / 3.).fract();
+            draw_circle_lines(
+                p.x,
+                p.y,
+                radius * (0.25 + 0.7 * phase),
+                (2.5 * view.zoom).max(1.),
+                alpha(c, 0.75 * (1. - phase)),
+            );
+        }
+        draw_circle(p.x, p.y, radius * 0.18, alpha(c, 0.8));
+    }
+    let size = (34. * view.zoom).max(6.);
+    if exit.x > -size
+        && exit.y > -size
+        && exit.x < screen_width() + size
+        && exit.y < screen_height() + size
+    {
+        draw_circle_lines(
+            exit.x,
+            exit.y,
+            size,
+            (2.5 * view.zoom).max(1.),
+            alpha(c, 0.7),
+        );
+        draw_poly_lines(
+            exit.x,
+            exit.y,
+            4,
+            size * 0.55,
+            45. + time * 40.,
+            2.,
+            alpha(c, 0.6),
+        );
+    }
+}
+
+pub fn zone_mark(kind: ZoneKind, angle: f32, p: Vec2, r: f32, c: Color) {
     match kind {
         ZoneKind::Speed => {
             for offset in [-0.5, 0.35] {
@@ -109,6 +189,22 @@ pub fn zone_mark(kind: ZoneKind, p: Vec2, r: f32, c: Color) {
         ZoneKind::Shelter => {
             draw_poly_lines(p.x, p.y, 6, r, 30., 2., c);
         }
+        ZoneKind::Conveyor => {
+            let (sin, cos) = angle.to_radians().sin_cos();
+            let turn = |v: Vec2| p + vec2(v.x * cos - v.y * sin, v.x * sin + v.y * cos);
+            for offset in [-0.45, 0.4] {
+                let tip = turn(vec2((offset + 0.35) * r, 0.));
+                let a = turn(vec2((offset - 0.3) * r, -0.7 * r));
+                let b = turn(vec2((offset - 0.3) * r, 0.7 * r));
+                let thickness = (r * 0.3).clamp(1.5, 2.5);
+                draw_line(a.x, a.y, tip.x, tip.y, thickness, c);
+                draw_line(tip.x, tip.y, b.x, b.y, thickness, c);
+            }
+        }
+        ZoneKind::Portal => {
+            draw_circle_lines(p.x, p.y, r, 2., c);
+            draw_circle_lines(p.x, p.y, r * 0.5, 2., c);
+        }
         ZoneKind::Mud => {
             for offset in [-0.5, 0., 0.5] {
                 draw_line(
@@ -127,7 +223,7 @@ pub fn zone_mark(kind: ZoneKind, p: Vec2, r: f32, c: Color) {
 pub fn decorations(
     map: &MapDef,
     config: &WorldConfig,
-    hidden: u32,
+    shown: &Shown,
     view: &View,
     time: f32,
     above: bool,
@@ -140,7 +236,7 @@ pub fn decorations(
     };
     let mut remaining = (1024. * settings.effects.clamp(0., 1.)) as usize;
     for (index, item) in map.decor.iter().enumerate() {
-        if item.above != above || MapDef::group_bit(item.group) & hidden != 0 {
+        if item.above != above || MapDef::group_bit(item.group) & shown.hidden != 0 {
             continue;
         }
         let r = screen_rect(view, config, item.rect);
@@ -172,12 +268,18 @@ pub fn decorations(
                 f32::from(item.alpha) / 255. * pulse,
             );
         } else if visible(r, r.w.max(r.h) * 0.5) {
-            decoration(item, r, time, view.zoom);
+            decoration(item, r, time, view.zoom, &shown.counters);
         }
     }
 }
 
-pub fn decoration(item: &MapDecor, r: Rect, time: f32, zoom: f32) {
+pub fn decoration(
+    item: &MapDecor,
+    r: Rect,
+    time: f32,
+    zoom: f32,
+    counters: &[i32; MAP_COUNTERS as usize],
+) {
     let pulse = if item.pulse > 0. {
         0.8 + 0.2 * (time * item.pulse * std::f32::consts::TAU).cos()
     } else {
@@ -243,7 +345,8 @@ pub fn decoration(item: &MapDecor, r: Rect, time: f32, zoom: f32) {
         }
         DecorKind::Label => {
             let size = (r.h * 0.7).clamp(6., 72.);
-            let text = ui::fitted_label(&item.text, size, r.w);
+            let filled = tankyard_content::fill_counters(&item.text, counters);
+            let text = ui::fitted_label(&filled, size, r.w);
             let matrix = Mat4::from_translation(vec3(p.x, p.y, 0.))
                 * Mat4::from_rotation_z(angle)
                 * Mat4::from_translation(vec3(-p.x, -p.y, 0.));
