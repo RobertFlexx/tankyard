@@ -1,8 +1,8 @@
 # Logic Kit
 
 Example Arena Workshop plugins that build map logic out of triggers, written
-in Luau against the editor plugin API described in
-[Modding](../../docs/modding.md#workshop-plugins).
+in Luau. The [editor plugin guide](../../docs/editor-plugins.md) explains
+the API they use.
 
 Enable the pack on the Mods page, then open the map editor's **Tools** tab:
 

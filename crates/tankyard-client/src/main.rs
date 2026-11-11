@@ -2658,6 +2658,7 @@ async fn run(cli: Cli) {
         app.menu.ambient = arena;
     }
     macroquad::texture::set_default_filter_mode(FilterMode::Linear);
+    let mut pacer = FramePacer::default();
     loop {
         if is_quit_requested() {
             break;
@@ -2790,42 +2791,70 @@ async fn run(cli: Cli) {
         if app.quit {
             break;
         }
+        // Presentation submits the queued draw work and may wait for the GPU
+        // or VSync. Include that time in the frame limit.
+        next_frame().await;
         if app.smoke.is_none() {
             let cap = frame_cap(
                 app.settings.frame_cap,
                 app.session.is_some(),
                 app.settings.battery_saver,
             );
-            hold_frame_rate(start, cap, app.settings.vsync);
+            pacer.hold(cap, app.settings.vsync);
         }
-        next_frame().await;
     }
     native_resolution.remember(&mut app.settings);
     app.save_progress();
     clipboard::shutdown();
 }
-/// Sleep out the rest of a frame that began at `start`, to hold `cap` frames
-/// per second (0 for none).
-fn hold_frame_rate(start: f64, cap: u32, vsync: bool) {
-    if cap == 0 {
-        return;
+/// Holds a frame limit on a fixed schedule: each frame ends one period after
+/// the last one's deadline. Waking a little early, to catch VSync or to
+/// avoid oversleeping, then never adds up, so the average rate is the limit.
+#[derive(Default)]
+pub(crate) struct FramePacer {
+    deadline: Option<f64>,
+    period: f64,
+}
+impl FramePacer {
+    /// Sleep out the rest of this frame to hold `cap` frames per second (0
+    /// for none).
+    pub(crate) fn hold(&mut self, cap: u32, vsync: bool) {
+        let pause = self.pause(cap, vsync, get_time());
+        if pause > 0. {
+            std::thread::sleep(std::time::Duration::from_secs_f64(pause));
+        }
     }
-    // With vsync the sleep ends early, so the frame still catches the display
-    // refresh it is due for (menus on a 120 Hz display run at 60 rather than
-    // 120).
-    let margin = if vsync { 0.002 } else { 0.0005 };
-    let remaining = 1.0 / f64::from(cap) - (get_time() - start);
-    if remaining > margin + 0.0005 {
-        std::thread::sleep(std::time::Duration::from_secs_f64(remaining - margin));
+    /// How long to sleep at `now`, in seconds.
+    fn pause(&mut self, cap: u32, vsync: bool, now: f64) -> f64 {
+        if cap == 0 {
+            self.deadline = None;
+            return 0.;
+        }
+        let period = 1. / f64::from(cap);
+        let deadline = match self.deadline {
+            // After a stall or a new limit the schedule starts again, rather
+            // than racing through frames to catch up.
+            Some(last) if self.period == period && now - last < 2. * period => last + period,
+            _ => now,
+        };
+        self.deadline = Some(deadline);
+        self.period = period;
+        // With VSync the sleep ends early enough to catch the coming display
+        // refresh, which supplies the rest of the wait.
+        let margin = if vsync { 0.002 } else { 0.0005 };
+        let remaining = deadline - now;
+        if remaining > margin + 0.0005 {
+            remaining - margin
+        } else {
+            0.
+        }
     }
 }
-/// The frame rate to hold (0 for none). Menus don't need more than 60 fps,
-/// so they don't run the GPU flat out, even on high refresh displays; games
-/// keep the chosen cap. Battery saver halves both.
+/// The selected frame limit (0 for unlimited), bounded by battery saver.
 fn frame_cap(chosen: u32, in_game: bool, battery_saver: bool) -> u32 {
     let limit = match (in_game, battery_saver) {
-        (true, false) => u32::MAX,
-        (true, true) | (false, false) => 60,
+        (_, false) => u32::MAX,
+        (true, true) => 60,
         (false, true) => 30,
     };
     match chosen {
@@ -2875,17 +2904,67 @@ mod tap_input_regressions {
 
 #[cfg(test)]
 mod frame_cap_regressions {
-    use super::frame_cap;
+    use super::{FramePacer, frame_cap};
+
+    /// Frames per second over `frames` frames of `work` seconds each, when
+    /// sleeps last `late` seconds longer than asked.
+    fn paced(cap: u32, work: f64, late: f64, frames: usize) -> f64 {
+        let mut pacer = FramePacer::default();
+        let mut now = 10.;
+        let start = now;
+        for _ in 0..frames {
+            now += work;
+            let pause = pacer.pause(cap, false, now);
+            if pause > 0. {
+                now += pause + late;
+            }
+        }
+        frames as f64 / (now - start)
+    }
 
     #[test]
-    fn menus_hold_sixty_and_battery_saver_halves_the_caps() {
-        assert_eq!(frame_cap(0, true, false), 0);
-        assert_eq!(frame_cap(144, true, false), 144);
-        assert_eq!(frame_cap(0, false, false), 60);
-        assert_eq!(frame_cap(144, false, false), 60);
+    fn the_pacer_holds_the_limit_exactly_on_average() {
+        for cap in [30, 60, 144, 240] {
+            for late in [0., 0.0003] {
+                let rate = paced(cap, 0.001, late, 2000);
+                assert!(
+                    (rate - f64::from(cap)).abs() < f64::from(cap) * 0.005,
+                    "{cap} fps limit ran at {rate:.1} with sleeps {late}s late"
+                );
+            }
+        }
+        // Frames slower than the limit are never held back.
+        assert!(paced(144, 0.02, 0., 200) > 49.);
+    }
+
+    #[test]
+    fn the_pacer_starts_over_after_a_stall_and_without_a_limit() {
+        let mut pacer = FramePacer::default();
+        assert_eq!(pacer.pause(60, false, 1.), 0.);
+        assert!(pacer.pause(60, false, 1.001) > 0.014);
+        // A one-second hitch: the next frame waits a full period again
+        // instead of rushing to make up the missed ones.
+        assert_eq!(pacer.pause(60, false, 2.5), 0.);
+        assert!(pacer.pause(60, false, 2.501) > 0.014);
+        assert_eq!(pacer.pause(0, false, 2.6), 0.);
+        assert!(pacer.deadline.is_none());
+    }
+
+    #[test]
+    fn menus_and_games_follow_the_selected_frame_limit() {
+        for chosen in [0, 30, 60, 120, 144, 240, 1000] {
+            assert_eq!(frame_cap(chosen, false, false), chosen);
+            assert_eq!(frame_cap(chosen, true, false), chosen);
+        }
+    }
+
+    #[test]
+    fn battery_saver_bounds_the_selected_frame_limit() {
         assert_eq!(frame_cap(0, true, true), 60);
         assert_eq!(frame_cap(144, true, true), 60);
         assert_eq!(frame_cap(0, false, true), 30);
+        assert_eq!(frame_cap(144, false, true), 30);
         assert_eq!(frame_cap(30, true, true), 30);
+        assert_eq!(frame_cap(15, false, true), 15);
     }
 }

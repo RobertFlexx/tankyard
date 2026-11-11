@@ -18,11 +18,11 @@ The linker wrapper selects `x86_64-linux-gnu.2.31` using [Zig's versioned glibc 
 
 When linking ALSA, the wrapper permits unresolved references inside the build host's shared library: the destination loads its own `libasound.so.2`. Undefined symbols in the executable still fail linking. The release workflow runs `scripts/check_linux_abi.py` to reject executable imports newer than glibc 2.31 or ALSA 1.2.2.
 
-The old static 0.2.2 client crashed inside NVIDIA GLX initialization: a TLS lookup returned an invalid pointer in `libnvidia-gpucomp`. A small test loading `libGLX_nvidia.so.0` reproduced SIGSEGV with static glibc and initialized successfully with shared glibc. The normal host build also imported `GLIBC_2.43`. Both issues are addressed by the compatibility build. The crash records from the older launch paths were distinguished from the replacement using executable paths and version output.
+The old static 0.2.2 client crashed inside NVIDIA GLX initialization: a TLS lookup returned an invalid pointer in `libnvidia-gpucomp`. A small test loading `libGLX_nvidia.so.0` reproduced SIGSEGV with static glibc and initialized successfully with shared glibc. The normal host build also imported `GLIBC_2.43`. Both issues are addressed by the compatibility build.
 
 [glibc's maintainers document that static `dlopen` requires matching dynamic glibc](https://sourceware.org/pipermail/glibc-cvs/2021q2/073295.html). The graphical client therefore rejects `crt-static` on Linux GNU targets. Headless server builds can still use static linking. The old static package is superseded; its graphical executable and the previous release launch locations use the compatible client.
 
-The separate crash on closing came from a thread-local UI font being destroyed after OpenGL had unloaded. The client now releases font and mod texture resources while the window is still alive, and saves progress through the same exit path for the window close button and Quit.
+The separate crash on closing came from a thread-local UI font being destroyed after OpenGL had unloaded. The client releases font and mod texture resources while the window is still alive, and saves progress through the same exit path for the window close button and Quit.
 
 For static headless executables, use `scripts/build_linux_static_headless.sh`. It builds `tankyard-server`, `tankyard-load`, and `tankyard-tools` in `target/static/x86_64-unknown-linux-gnu/release`. The 0.2.5 headless package contains stripped static PIE executables with no ELF interpreter or shared-library dependencies. Its glibc ABI note specifies Linux 6.1.0. The graphical game is in the separate compatible package.
 

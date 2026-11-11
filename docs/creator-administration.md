@@ -71,6 +71,6 @@ Creator and central-owner proof domains are separate. Fresh random 256-bit nonce
 
 Creator and central-owner access require writable request auditing before privileged execution. Official servers without an explicit audit path use `creator-audit.jsonl`; Docker should mount it persistently. Logs rotate after 8 MiB with private Unix permissions. Host moderation uses the configured audit path. Requests are rate-limited and contain bounded data, never executable code.
 
-## Central Pi deployment
+## Central server deployment
 
-See [the Pi/Docker upgrade steps](central-pi-upgrade.md). Publishing a release does not replace the running server. Version 0.6.0 uses protocol **18**: clients, server and relay must update together. No creator-server binary or server-side private identity key is needed.
+The central server runs the regular `tankyard-server` and `tankyard-relay`; no creator-server binary or server-side private identity key is needed. Clients, server and relay must use the same protocol. Maintainers of the central server follow [the Pi/Docker upgrade steps](central-pi-upgrade.md).

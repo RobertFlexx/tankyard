@@ -24,4 +24,4 @@ Cryptography proves possession of the private key, not the identity of an execut
 
 This layer enforces server rules and command authenticity. It does not claim to detect every aimbot, wallhack, modified host, compromised computer, or future exploit. Existing per-viewer snapshots, visibility checks, bounded protocol decoding, relay limits, and deployment transport security remain separate protections.
 
-Tests exercise nonfinite and oversized intentions, diagonal speed, sequence wrap/reordering/resume, server tick and weapon timing after large sequence gaps, foreign signing keys, replay and tampering, host revocation, and audit failures. Separate private integration checks use the real creator key without publishing it, including authorized powers during live network input.
+Tests exercise nonfinite and oversized intentions, diagonal speed, sequence wrap/reordering/resume, server tick and weapon timing after large sequence gaps, foreign signing keys, replay and tampering, host revocation, and audit failures.

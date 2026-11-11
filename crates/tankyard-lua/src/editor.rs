@@ -705,6 +705,46 @@ editor.tool { id = "spin", name = "Spin", run = function() while true do end end
     }
 
     #[test]
+    fn the_plugin_guide_example_runs_as_written() {
+        let guide = include_str!("../../../docs/editor-plugins.md");
+        let script = guide
+            .split("```lua\n")
+            .nth(1)
+            .and_then(|rest| rest.split("```").next())
+            .unwrap();
+        let mut plugins = Plugins::load(&[plugin_pack("guide", script)]);
+        assert!(plugins.errors.is_empty(), "{:?}", plugins.errors);
+        let map = tankyard_content::builtin_maps().remove(0);
+        let before = map.blocks.len();
+        let params = [
+            ParamValue::Integer(4),
+            ParamValue::Number(10.),
+            ParamValue::Number(40.),
+            ParamValue::Choice(1),
+        ];
+        // Near the arena's far corner, the row is pulled back inside.
+        let context = Context {
+            pointer: Some([map.width - 5., map.height - 5.]),
+            grid: 40.,
+            ..Default::default()
+        };
+        let outcome = plugins.run(0, 0, &map, &params, &context).unwrap();
+        assert_eq!(outcome.map.blocks.len(), before + 4);
+        assert!(outcome.map.blocks[before..].iter().all(|block| {
+            block.rect[0] >= 0.
+                && block.rect[1] >= 0.
+                && block.rect[0] + block.rect[2] <= 1.0001
+                && block.rect[1] + block.rect[3] <= 1.0001
+        }));
+        assert_eq!(outcome.selection.unwrap().len(), 4);
+        assert_eq!(outcome.messages, vec!["Placed 4 blocks.".to_owned()]);
+        tankyard_content::validate_maps(std::slice::from_ref(&outcome.map)).unwrap();
+        let found = plugins.check(&outcome.map);
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert_eq!(found[0].1.object, Some(("blocks", before)));
+    }
+
+    #[test]
     fn bundled_toolkit_tools_keep_maps_valid() {
         let pack = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../mods/workshop_toolkit");
         let mut plugins = Plugins::load(&[pack]);

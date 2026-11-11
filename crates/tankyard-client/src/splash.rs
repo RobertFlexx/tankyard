@@ -61,6 +61,7 @@ pub async fn show(settings: &Settings) -> Option<Ambient> {
     // It animates like a game: at the chosen frame cap, or battery saver's,
     // and otherwise as smoothly as the display allows.
     let cap = crate::frame_cap(settings.frame_cap, true, settings.battery_saver);
+    let mut pacer = crate::FramePacer::default();
     // A still frame in the game's color, so the window has something to
     // show while the slow start-up work runs, before anything moves.
     clear_background(bg_color());
@@ -85,9 +86,8 @@ pub async fn show(settings: &Settings) -> Option<Ambient> {
     let settle = get_time();
     let mut size = (screen_width(), screen_height());
     loop {
-        let frame = get_time();
         clear_background(bg_color());
-        crate::hold_frame_rate(frame, cap, settings.vsync);
+        pacer.hold(cap, settings.vsync);
         next_frame().await;
         if is_quit_requested() {
             return None;
@@ -118,7 +118,7 @@ pub async fn show(settings: &Settings) -> Option<Ambient> {
             motion,
         };
         frame.draw(&mut arena, settings, &credits, tank.as_ref());
-        crate::hold_frame_rate(frame_start, cap, settings.vsync);
+        pacer.hold(cap, settings.vsync);
         // The finished frame is presented once before moving on.
         next_frame().await;
         if is_quit_requested() {
@@ -132,9 +132,8 @@ pub async fn show(settings: &Settings) -> Option<Ambient> {
     // screen doesn't receive it.
     let release = get_time();
     while held() && get_time() - release < RELEASE_LIMIT {
-        let frame_start = get_time();
         arena.draw(settings);
-        crate::hold_frame_rate(frame_start, cap, settings.vsync);
+        pacer.hold(cap, settings.vsync);
         next_frame().await;
         if is_quit_requested() {
             return None;

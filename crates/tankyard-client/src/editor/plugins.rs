@@ -134,6 +134,10 @@ impl Editor {
         let changed = doc != self.doc;
         if changed {
             self.apply(|editor| editor.doc = doc);
+            // A tool that removed objects and chose nothing leaves keys past
+            // the end of their lists; those select nothing.
+            let doc = &self.doc;
+            self.selection.retain(|&key| doc.rect(key).is_some());
         }
         if let Some(chosen) = outcome.selection {
             let keys = chosen

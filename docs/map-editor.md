@@ -1,6 +1,6 @@
 # Arena Workshop
 
-[Watch the tutorial](https://github.com/RobertFlexx/tankyard/releases/download/v0.15.1/arena-workshop-tutorial.mp4) for building, editing, map logic, plugin tools and playtesting in the workshop.
+[Watch the tutorial](arena-workshop-tutorial.mp4) (2 min 37 s) for building, editing, map logic, plugin tools and playtesting in the workshop. Plugin authors can start with the [editor plugin guide](editor-plugins.md).
 
 Open **Map editor** on the main menu. The workshop builds maps for local games and community servers using the same validated map-pack format as scripted mods. The canvas fills the middle of the screen. The **dock** along the bottom changes with the mode, and the **inspector** on the right has seven tabs: Map, Object, Logic, Check, Rules, Files and Tools.
 
@@ -189,9 +189,9 @@ Avoid closing solid cover on spawns or objectives. Map checks cover the starting
 
 ## Workshop plugins
 
-Packs can add tools and checks to the workshop. Enable a plugin pack on **Mods** (a pack from outside the bundled set needs approval first), then open the **Tools** tab. Each tool shows its settings and a Run button. A run changes the map as one undo step and usually selects what it made; **Ctrl+R** runs the last tool again with the same settings. Plugin checks add amber notes to the Check tab and never block a playtest or export.
+Packs can add tools and checks to the workshop. Enable a plugin pack on **Mods**, review any findings, then open the **Tools** tab. Each tool shows its settings and a Run button. A run changes the map as one undo step and usually selects what it made; **Ctrl+R** runs the last tool again with the same settings. Plugin checks add amber notes to the Check tab and never block a playtest or export.
 
-The bundled **Workshop Toolkit** adds Repeat, Ring of blocks, Arena frame, Snap to grid and Four-way mirror, and a check for gaps too narrow to drive through. The bundled **Logic Kit** builds logic for you: **Switch door** turns the selected blocks into a door with switches that open it when all or any are pressed, **Countdown** counts a free counter down from the start of the round and announces a message at zero, and **Sequence** makes the selected triggers act one after another when a tank enters a new plate. It also notes signal loops that would run until the arena cuts them short. Plugin packs only change the editor, so enabling one never marks a match as modded. After editing a plugin's scripts, press **Reload plugins**. A tool's result passes the same checks as an import before the workshop keeps it, and a tool that errors or runs too long changes nothing. Writing plugins is covered in [Modding](modding.md#workshop-plugins).
+The bundled **Workshop Toolkit** adds Repeat, Ring of blocks, Arena frame, Snap to grid and Four-way mirror, and a check for gaps too narrow to drive through. The bundled **Logic Kit** builds logic for you: **Switch door** turns the selected blocks into a door with switches that open it when all or any are pressed, **Countdown** counts a free counter down from the start of the round and announces a message at zero, and **Sequence** makes the selected triggers act one after another when a tank enters a new plate. It also notes signal loops that would run until the arena cuts them short. Plugin packs only change the editor, so enabling one never marks a match as modded. After editing a plugin's scripts, press **Reload plugins**. A tool's result passes the same checks as an import before the workshop keeps it, and a tool that errors or runs too long changes nothing. The full plugin guide covers pack creation, installation, tools, parameters, checks, helpers and debugging. [Editor plugin guide](editor-plugins.md)
 
 ## Particle generator
 

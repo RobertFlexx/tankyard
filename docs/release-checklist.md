@@ -1,7 +1,7 @@
 # Pre-release checks
 # for maintainers
 
-This is a checklist, not a statement that the release has passed. The recent UI and networking changes still need a Rust build and an actual graphical/multiplayer test on the target machines.
+Run these checks on the target platforms before tagging a release.
 
 ## Build and source
 
@@ -45,4 +45,4 @@ Check at 800×600, 1024×768, 1280×800, 1600×900, 1920×1080, ultrawide, and w
 - Load a corrupt/oversized bans file and server config: startup must reject them without allocating an arbitrarily large read buffer.
 - Confirm official/community chat permissions, mutes, bans, account revocation, and the host operator console still work.
 
-Release only after the actual desktop screenshot/regression checks, Cargo checks, and network abuse tests pass. Fix the first failing check rather than checking a box based on a previous version.
+Release after the desktop screenshot and regression checks, Cargo checks, and network abuse tests pass on the release candidate.

@@ -521,6 +521,8 @@ Packs as a whole:
 
 ## Workshop plugins
 
+For a complete walkthrough, API reference, runnable example and troubleshooting, see the editor plugin guide. [Editor plugins](editor-plugins.md)
+
 A workshop plugin adds tools and checks to the map editor. List its files under `editor` in `mod.json`:
 
 ```json
