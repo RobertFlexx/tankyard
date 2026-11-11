@@ -63,8 +63,8 @@ jobs:
       - name: Validate content and render offline
         run: |
           cargo run --locked -p tankyard-tools -- validate
-          cargo run --locked -p tankyard-tools -- validate-mods --mod mods/fast_arena --mod mods/vampire --mod mods/bounty_hunt --mod mods/gravity_wells --mod mods/sprinkler
-          cargo run --locked -p tankyard-tools -- scan-mod mods/fast_arena mods/vampire mods/bounty_hunt mods/gravity_wells mods/sprinkler
+          cargo run --locked -p tankyard-tools -- validate-mods --mod mods/fast_arena --mod mods/vampire --mod mods/bounty_hunt --mod mods/gravity_wells --mod mods/sprinkler --mod mods/workshop_toolkit --mod mods/logic_kit
+          cargo run --locked -p tankyard-tools -- scan-mod mods/fast_arena mods/vampire mods/bounty_hunt mods/gravity_wells mods/sprinkler mods/workshop_toolkit mods/logic_kit
           cargo build --locked -p tankyard-client --bin tankyard
           cargo build --locked -p tankyard-client --example clipboard_probe
           xvfb-run -a python3 scripts/check_clipboard.py target/debug/examples/clipboard_probe
@@ -184,7 +184,7 @@ jobs:
               assert b"libnvidia-ngx-dlss.so" in game or b"nvngx_dlss.dll" in game, "DLSS is missing"
               print("DLSS is linked")
           tools = Path(os.environ["BINARY_DIR"]) / ("tankyard-tools" + suffix)
-          packs = ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler")
+          packs = ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler", "workshop_toolkit", "logic_kit")
           subprocess.run([str(tools), "validate-mods", *(arg for pack in packs for arg in ("--mod", f"mods/{pack}"))], check=True)
           # A script error must unwind through the linked Luau (C++) into a reported failure.
           broken = Path(os.environ["RUNNER_TEMP"]) / "unwind_check"

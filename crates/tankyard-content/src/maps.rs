@@ -329,15 +329,26 @@ pub enum TriggerWhen {
     Signal,
     /// When counter `source` reaches `threshold`, from either side.
     Counter,
+    // Newer kinds go last: the wire format numbers variants in order.
+    /// Every `seconds` while at least `threshold` tanks are inside `rect`.
+    Occupied,
+    /// When the last tank inside `rect` leaves or is destroyed; `seconds` is
+    /// the cooldown.
+    Cleared,
+    /// When a tank is destroyed inside `rect`; `seconds` is the cooldown.
+    Destroyed,
 }
 impl TriggerWhen {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::Every,
         Self::Enter,
         Self::Exit,
         Self::Start,
         Self::Signal,
         Self::Counter,
+        Self::Occupied,
+        Self::Cleared,
+        Self::Destroyed,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -347,11 +358,17 @@ impl TriggerWhen {
             Self::Start => "At start",
             Self::Signal => "On signal",
             Self::Counter => "On counter",
+            Self::Occupied => "While inside",
+            Self::Cleared => "On empty",
+            Self::Destroyed => "On destroy",
         }
     }
     /// Whether the trigger watches its rectangle for tanks.
     pub fn watches_area(self) -> bool {
-        matches!(self, Self::Enter | Self::Exit)
+        matches!(
+            self,
+            Self::Enter | Self::Exit | Self::Occupied | Self::Cleared | Self::Destroyed
+        )
     }
 }
 
@@ -372,17 +389,41 @@ pub enum TriggerAction {
     Count,
     /// Spawns `amount` shapes inside `rect`.
     Shapes,
+    // Newer kinds go last: the wire format numbers variants in order.
+    /// Sets counter `group` to `amount`.
+    Set,
+    /// Signals one channel picked at random from `group` to
+    /// `group + amount - 1`.
+    Random,
+    /// Restores `amount` percent of maximum health to the tanks in `rect`.
+    Heal,
+    /// Deals `amount` percent of maximum health to the tanks in `rect`.
+    Hurt,
+    /// Gives `amount` points to each tank in `rect`.
+    Award,
+    /// Changes counter `group` by `math` with `amount`, or with counter
+    /// `operand` when that is set.
+    Calculate,
+    /// Raises the `map_event` script event named `text`, for script packs.
+    Script,
 }
 impl TriggerAction {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 15] = [
         Self::Toggle,
         Self::Show,
         Self::Hide,
         Self::Announce,
         Self::Boss,
         Self::Signal,
+        Self::Random,
         Self::Count,
+        Self::Set,
+        Self::Calculate,
         Self::Shapes,
+        Self::Heal,
+        Self::Hurt,
+        Self::Award,
+        Self::Script,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -394,11 +435,237 @@ impl TriggerAction {
             Self::Signal => "Send signal",
             Self::Count => "Add to counter",
             Self::Shapes => "Spawn shapes",
+            Self::Set => "Set counter",
+            Self::Random => "Random signal",
+            Self::Heal => "Repair tanks",
+            Self::Hurt => "Damage tanks",
+            Self::Award => "Award points",
+            Self::Calculate => "Calculate",
+            Self::Script => "Script event",
         }
     }
     /// Whether `group` names a map group, as opposed to a channel or counter.
     pub fn targets_group(self) -> bool {
         matches!(self, Self::Toggle | Self::Show | Self::Hide)
+    }
+    /// Whether `group` names a counter.
+    pub fn targets_counter(self) -> bool {
+        matches!(self, Self::Count | Self::Set | Self::Calculate)
+    }
+    /// Whether it acts on the tanks standing in the trigger's area.
+    pub fn affects_tanks(self) -> bool {
+        matches!(self, Self::Heal | Self::Hurt | Self::Award)
+    }
+}
+
+/// How Calculate changes its counter with the other value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MathOp {
+    #[default]
+    Add,
+    Subtract,
+    Multiply,
+    /// Rounds down; dividing by zero changes nothing.
+    Divide,
+    /// Never negative; by zero changes nothing.
+    Remainder,
+    Lowest,
+    Highest,
+    /// Takes the other value.
+    Copy,
+    /// A whole number from 0 up to one less than the other value.
+    Random,
+    /// 1 when the counter is 0, otherwise 0; the other value is unused.
+    Flip,
+}
+impl MathOp {
+    pub const ALL: [Self; 10] = [
+        Self::Add,
+        Self::Subtract,
+        Self::Multiply,
+        Self::Divide,
+        Self::Remainder,
+        Self::Lowest,
+        Self::Highest,
+        Self::Copy,
+        Self::Random,
+        Self::Flip,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Add => "Add",
+            Self::Subtract => "Subtract",
+            Self::Multiply => "Multiply",
+            Self::Divide => "Divide",
+            Self::Remainder => "Remainder",
+            Self::Lowest => "Lowest",
+            Self::Highest => "Highest",
+            Self::Copy => "Copy",
+            Self::Random => "Random",
+            Self::Flip => "Flip 0/1",
+        }
+    }
+    /// Whether the result depends on the other value.
+    pub fn uses_operand(self) -> bool {
+        self != Self::Flip
+    }
+    /// The counter's new value, or `None` to leave it. `roll` is a random
+    /// fraction in `[0, 1)`, used only by `Random`.
+    pub fn apply(self, value: i32, other: i32, roll: f32) -> Option<i32> {
+        let (a, b) = (i64::from(value), i64::from(other));
+        let result = match self {
+            Self::Add => a + b,
+            Self::Subtract => a - b,
+            Self::Multiply => a * b,
+            Self::Divide if b == 0 => return None,
+            Self::Divide => {
+                let q = a / b;
+                if a % b != 0 && (a < 0) != (b < 0) {
+                    q - 1
+                } else {
+                    q
+                }
+            }
+            Self::Remainder if b == 0 => return None,
+            Self::Remainder => a.rem_euclid(b),
+            Self::Lowest => a.min(b),
+            Self::Highest => a.max(b),
+            Self::Copy => b,
+            Self::Random if b < 1 => return None,
+            Self::Random => ((f64::from(roll.clamp(0., 1.)) * b as f64).floor() as i64).min(b - 1),
+            Self::Flip => i64::from(value == 0),
+        };
+        Some(result.clamp(-i64::from(COUNTER_LIMIT), i64::from(COUNTER_LIMIT)) as i32)
+    }
+}
+
+/// How a gate compares a counter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Compare {
+    #[default]
+    Equal,
+    NotEqual,
+    Below,
+    Above,
+    AtMost,
+    AtLeast,
+}
+impl Compare {
+    pub const ALL: [Self; 6] = [
+        Self::Equal,
+        Self::NotEqual,
+        Self::Below,
+        Self::Above,
+        Self::AtMost,
+        Self::AtLeast,
+    ];
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Equal => "=",
+            Self::NotEqual => "\u{2260}",
+            Self::Below => "<",
+            Self::Above => ">",
+            Self::AtMost => "\u{2264}",
+            Self::AtLeast => "\u{2265}",
+        }
+    }
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Equal => "is",
+            Self::NotEqual => "is not",
+            Self::Below => "is below",
+            Self::Above => "is above",
+            Self::AtMost => "is at most",
+            Self::AtLeast => "is at least",
+        }
+    }
+    pub fn holds(self, a: i32, b: i32) -> bool {
+        match self {
+            Self::Equal => a == b,
+            Self::NotEqual => a != b,
+            Self::Below => a < b,
+            Self::Above => a > b,
+            Self::AtMost => a <= b,
+            Self::AtLeast => a >= b,
+        }
+    }
+}
+
+/// What a gate looks at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TestKind {
+    /// Counter `index` against `value`, or against counter `against`.
+    #[default]
+    Counter,
+    /// Group `index` is shown.
+    Shown,
+    /// Group `index` is hidden.
+    Hidden,
+}
+impl TestKind {
+    pub const ALL: [Self; 3] = [Self::Counter, Self::Shown, Self::Hidden];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Counter => "Counter",
+            Self::Shown => "Group shown",
+            Self::Hidden => "Group hidden",
+        }
+    }
+}
+
+/// A gate: when a trigger fires, it acts only if this holds at that moment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TriggerTest {
+    #[serde(default)]
+    pub kind: TestKind,
+    /// The counter (1 to 8) or group (1 to 32) to look at.
+    pub index: u8,
+    #[serde(default)]
+    pub compare: Compare,
+    #[serde(default)]
+    pub value: i32,
+    /// Compare with this counter (1 to 8) instead of `value`; 0 uses `value`.
+    #[serde(default)]
+    pub against: u8,
+}
+impl Default for TriggerTest {
+    fn default() -> Self {
+        Self {
+            kind: TestKind::Counter,
+            index: 1,
+            compare: Compare::AtLeast,
+            value: 1,
+            against: 0,
+        }
+    }
+}
+impl TriggerTest {
+    /// Whether the gate is open, given the counters and the hidden groups.
+    pub fn passes(&self, counters: &[i32; MAP_COUNTERS as usize], hidden: u32) -> bool {
+        let counter = |n: u8| {
+            usize::from(n)
+                .checked_sub(1)
+                .and_then(|slot| counters.get(slot).copied())
+        };
+        match self.kind {
+            TestKind::Counter => {
+                let Some(a) = counter(self.index) else {
+                    return false;
+                };
+                let b = if self.against > 0 {
+                    counter(self.against).unwrap_or(0)
+                } else {
+                    self.value
+                };
+                self.compare.holds(a, b)
+            }
+            TestKind::Shown => hidden & MapDef::group_bit(self.index) == 0,
+            TestKind::Hidden => hidden & MapDef::group_bit(self.index) != 0,
+        }
     }
 }
 
@@ -453,20 +720,24 @@ pub struct MapTrigger {
     /// trigger is switched off; group 0 is always on.
     #[serde(default)]
     pub member: u8,
-    /// Which tanks an Enter or Exit trigger notices.
+    /// Which tanks area triggers and tank actions notice.
     #[serde(default)]
     pub who: TriggerWho,
-    /// Enter and Exit notice only this team (1 to 4); 0 is any team.
+    /// Area triggers and tank actions notice only this team (1 to 4); 0 is
+    /// any team.
     #[serde(default)]
     pub team: u8,
     /// The channel a Signal trigger listens on, or the counter a Counter
     /// trigger watches.
     #[serde(default)]
     pub source: u8,
-    /// The value a Counter trigger waits for.
+    /// The value a Counter trigger waits for, or how many tanks a While
+    /// inside trigger waits for.
     #[serde(default)]
     pub threshold: i32,
-    /// How much Count adds (negative subtracts), or how many shapes spawn.
+    /// How much Count adds (negative subtracts) or Set stores, how many
+    /// shapes spawn or channels Random picks from, the percent of health
+    /// Repair and Damage act on, or the points Award gives.
     #[serde(default)]
     pub amount: i32,
     /// Percent chance, 1 to 100, that the trigger acts when it fires.
@@ -475,9 +746,33 @@ pub struct MapTrigger {
     /// Seconds between firing and acting.
     #[serde(default)]
     pub delay: f32,
+    // Newer fields are left out when unused, so maps that do without them
+    // still load in 0.15.0. Players never receive triggers (servers strip
+    // them), so the binary wire format never meets these skipped fields.
+    /// A gate checked when the trigger fires; it acts only if this holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only_if: Option<TriggerTest>,
+    /// How Calculate changes its counter.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub math: MathOp,
+    /// Calculate uses counter `operand` (1 to 8) instead of `amount`; 0
+    /// uses `amount`.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub operand: u8,
 }
 fn always() -> u8 {
     100
+}
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+/// Script event names: lowercase letters, digits and `_`, starting with a
+/// letter, at most 32 characters.
+pub fn script_event_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && name.len() <= 32
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 impl Default for MapTrigger {
     fn default() -> Self {
@@ -500,6 +795,9 @@ impl Default for MapTrigger {
             amount: 1,
             chance: 100,
             delay: 0.,
+            only_if: None,
+            math: MathOp::Add,
+            operand: 0,
         }
     }
 }
@@ -510,6 +808,10 @@ pub const MAP_COUNTERS: u8 = 8;
 pub const COUNTER_LIMIT: i32 = 99_999;
 /// At most this many shapes from one Spawn shapes trigger.
 pub const TRIGGER_SHAPES: i32 = 24;
+/// At most this many points from one Award points trigger.
+pub const TRIGGER_AWARD: i32 = 100_000;
+/// A While inside trigger waits for at most this many tanks.
+pub const TRIGGER_CROWD: i32 = 64;
 
 /// `text` with `{1}` to `{8}` replaced by the counters' values.
 pub fn fill_counters<'a>(
@@ -895,12 +1197,14 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
     let seconds = match trigger.when {
         TriggerWhen::Every => range(trigger.seconds, 0.5, 3600.),
         TriggerWhen::Start => range(trigger.seconds, 0., 86400.),
+        TriggerWhen::Occupied => range(trigger.seconds, 0.25, 3600.),
         _ => range(trigger.seconds, 0., 3600.),
     };
     if !seconds {
         return Err(match trigger.when {
             TriggerWhen::Every => "repeat every 0.5 to 3600 seconds".into(),
             TriggerWhen::Start => "start within a day of the round".into(),
+            TriggerWhen::Occupied => "repeat every 0.25 to 3600 seconds".into(),
             _ => "cooldown must be 0 to 3600 seconds".into(),
         });
     }
@@ -911,8 +1215,11 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         TriggerWhen::Counter if !(1..=MAP_COUNTERS).contains(&trigger.source) => {
             return Err(format!("watch a counter from 1 to {MAP_COUNTERS}"));
         }
-        TriggerWhen::Counter if trigger.threshold.abs() > COUNTER_LIMIT => {
+        TriggerWhen::Counter if !(-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&trigger.threshold) => {
             return Err(format!("wait for a value within ±{COUNTER_LIMIT}"));
+        }
+        TriggerWhen::Occupied if !(1..=TRIGGER_CROWD).contains(&trigger.threshold) => {
+            return Err(format!("wait for 1 to {TRIGGER_CROWD} tanks inside"));
         }
         _ => {}
     }
@@ -931,16 +1238,68 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         }
         TriggerAction::Count
             if !(1..=MAP_COUNTERS).contains(&trigger.group)
-                || trigger.amount.abs() > COUNTER_LIMIT =>
+                || !(-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&trigger.amount) =>
         {
             return Err(format!(
                 "add within ±{COUNTER_LIMIT} to a counter from 1 to {MAP_COUNTERS}"
             ));
         }
+        TriggerAction::Set
+            if !(1..=MAP_COUNTERS).contains(&trigger.group)
+                || !(-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&trigger.amount) =>
+        {
+            return Err(format!(
+                "set a counter from 1 to {MAP_COUNTERS} within ±{COUNTER_LIMIT}"
+            ));
+        }
+        TriggerAction::Random
+            if !(1..=MAP_GROUPS).contains(&trigger.group)
+                || !(2..=i32::from(MAP_GROUPS)).contains(&trigger.amount)
+                || i32::from(trigger.group) + trigger.amount - 1 > i32::from(MAP_GROUPS) =>
+        {
+            return Err(format!(
+                "pick from 2 or more channels, all within 1 to {MAP_GROUPS}"
+            ));
+        }
+        TriggerAction::Heal | TriggerAction::Hurt if !(1..=100).contains(&trigger.amount) => {
+            return Err("act on 1 to 100 percent of health".into());
+        }
+        TriggerAction::Award if !(1..=TRIGGER_AWARD).contains(&trigger.amount) => {
+            return Err(format!("award 1 to {TRIGGER_AWARD} points"));
+        }
         TriggerAction::Shapes if !(1..=TRIGGER_SHAPES).contains(&trigger.amount) => {
             return Err(format!("spawn 1 to {TRIGGER_SHAPES} shapes"));
         }
+        TriggerAction::Calculate
+            if !(1..=MAP_COUNTERS).contains(&trigger.group)
+                || trigger.operand > MAP_COUNTERS
+                || !(-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&trigger.amount) =>
+        {
+            return Err(format!(
+                "calculate on counters from 1 to {MAP_COUNTERS} with a number within ±{COUNTER_LIMIT}"
+            ));
+        }
+        TriggerAction::Script if !script_event_name(trigger.text.trim()) => {
+            return Err(
+                "name the script event with lowercase letters, digits and _ (32 at most)".into(),
+            );
+        }
         _ => {}
+    }
+    if let Some(test) = &trigger.only_if {
+        let fits = match test.kind {
+            TestKind::Counter => {
+                (1..=MAP_COUNTERS).contains(&test.index)
+                    && test.against <= MAP_COUNTERS
+                    && (-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&test.value)
+            }
+            TestKind::Shown | TestKind::Hidden => (1..=MAP_GROUPS).contains(&test.index),
+        };
+        if !fits {
+            return Err(format!(
+                "a gate looks at a counter from 1 to {MAP_COUNTERS} (within ±{COUNTER_LIMIT}) or a group from 1 to {MAP_GROUPS}"
+            ));
+        }
     }
     if !range(trigger.offset, 0., 3600.)
         || !range(trigger.duration, 0., 3600.)
@@ -1097,6 +1456,57 @@ fn validate_connectivity(map: &MapDef) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counter_validation_rejects_extreme_integers_without_overflowing() {
+        for value in [i32::MIN, -COUNTER_LIMIT - 1, COUNTER_LIMIT + 1, i32::MAX] {
+            let mut trigger = MapTrigger {
+                when: TriggerWhen::Counter,
+                threshold: value,
+                ..Default::default()
+            };
+            assert!(validate_trigger(&trigger).is_err());
+            trigger.when = TriggerWhen::Start;
+            trigger.amount = value;
+            for action in [
+                TriggerAction::Count,
+                TriggerAction::Set,
+                TriggerAction::Calculate,
+            ] {
+                trigger.action = action;
+                assert!(validate_trigger(&trigger).is_err());
+            }
+            trigger.action = TriggerAction::Toggle;
+            trigger.only_if = Some(TriggerTest {
+                index: 1,
+                value,
+                ..Default::default()
+            });
+            assert!(validate_trigger(&trigger).is_err());
+        }
+        for value in [-COUNTER_LIMIT, COUNTER_LIMIT] {
+            let trigger = MapTrigger {
+                when: TriggerWhen::Counter,
+                action: TriggerAction::Set,
+                threshold: value,
+                amount: value,
+                only_if: Some(TriggerTest {
+                    index: 1,
+                    value,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            validate_trigger(&trigger).unwrap();
+        }
+        let random = MapTrigger {
+            action: TriggerAction::Random,
+            group: 2,
+            amount: i32::MAX,
+            ..Default::default()
+        };
+        assert!(validate_trigger(&random).is_err());
+    }
 
     #[test]
     fn compact_catalogs_cannot_request_unbounded_geometry_validation_work() {

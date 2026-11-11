@@ -41,6 +41,8 @@ pub struct World {
     pub(crate) static_walls: Vec<Rect>,
     pub(crate) logic: crate::map_features::MapLogic,
     pub(crate) logic_tanks: Vec<crate::map_features::Occupant>,
+    /// Script events map triggers raised this tick.
+    pub map_events: Vec<crate::map_features::MapEvent>,
     pub(crate) zone_areas: Vec<(usize, Rect)>,
     /// Seconds before each tank may use a portal again; never replicated.
     pub(crate) portal_rest: BTreeMap<EntityId, f32>,
@@ -178,6 +180,7 @@ impl World {
             static_walls: vec![],
             logic: Default::default(),
             logic_tanks: Vec::new(),
+            map_events: Vec::new(),
             zone_areas: Vec::new(),
             portal_rest: BTreeMap::new(),
             objectives: vec![],
@@ -649,6 +652,7 @@ impl World {
     pub fn step_with(&mut self, before: impl FnOnce(&mut Self)) {
         self.events.clear();
         self.damage_log.clear();
+        self.map_events.clear();
         before(self);
         if self.match_state.finished {
             return;

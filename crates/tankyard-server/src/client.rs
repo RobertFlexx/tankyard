@@ -70,14 +70,24 @@ pub struct NetworkClient {
     input_history: InputBundle,
     /// Walls are sent when they change; snapshots without them reuse these.
     walls: Vec<tankyard_core::Rect>,
+    /// The tick of the snapshot those walls came in.
+    walls_tick: u64,
     _bridge: Option<crate::websocket::ClientBridge>,
 }
 
 /// Keep the newest geometry a snapshot carried, and complete snapshots that
-/// omit unchanged walls. A missed update is replaced by the next repeat.
-fn restore_walls(snapshot: &mut Snapshot, cache: &mut Vec<tankyard_core::Rect>) {
+/// omit unchanged walls. A missed update is replaced by the next repeat, and
+/// a late packet never brings back walls a newer one replaced.
+fn restore_walls(
+    snapshot: &mut Snapshot,
+    cache: &mut Vec<tankyard_core::Rect>,
+    cached_tick: &mut u64,
+) {
     if snapshot.walls_included {
-        cache.clone_from(&snapshot.walls);
+        if snapshot.tick >= *cached_tick {
+            cache.clone_from(&snapshot.walls);
+            *cached_tick = snapshot.tick;
+        }
     } else {
         snapshot.walls.clone_from(cache);
         snapshot.walls_included = true;
@@ -251,6 +261,7 @@ impl NetworkClient {
             handshake_elapsed: Duration::ZERO,
             input_history: InputBundle::default(),
             walls: Vec::new(),
+            walls_tick: 0,
             _bridge: bridge,
             bundle,
             bundle_revision,
@@ -482,6 +493,7 @@ impl NetworkClient {
                         self.events.clear();
                         self.voice_packets.clear();
                         self.walls.clear();
+                        self.walls_tick = 0;
                     }
                     self.player_id = Some(player);
                     self.input_history = InputBundle::default();
@@ -601,7 +613,7 @@ impl NetworkClient {
             {
                 return self.fail("Snapshot does not match the server's game data.".into());
             }
-            restore_walls(&mut snapshot, &mut self.walls);
+            restore_walls(&mut snapshot, &mut self.walls, &mut self.walls_tick);
             let baseline = latest
                 .as_ref()
                 .map(|s: &Snapshot| s.tick)
@@ -1086,5 +1098,34 @@ mod tests {
             Some(player),
             Some(round)
         ));
+    }
+
+    #[test]
+    fn late_snapshots_never_bring_back_walls_a_newer_one_replaced() {
+        let world = World::new(WorldConfig::default(), Content::builtin());
+        let door = tankyard_core::Rect {
+            x: 100.,
+            y: 100.,
+            w: 40.,
+            h: 120.,
+        };
+        let mut shut = world.snapshot();
+        shut.tick = 10;
+        shut.walls = vec![door];
+        let mut open = world.snapshot();
+        open.tick = 11;
+        open.walls.clear();
+        let mut omitted = world.snapshot();
+        omitted.tick = 12;
+        omitted.walls_included = false;
+        omitted.walls.clear();
+        let (mut cache, mut cached_tick) = (Vec::new(), 0);
+        restore_walls(&mut open, &mut cache, &mut cached_tick);
+        // The door's closing packet turns up after the one that opened it.
+        restore_walls(&mut shut, &mut cache, &mut cached_tick);
+        restore_walls(&mut omitted, &mut cache, &mut cached_tick);
+        assert!(omitted.walls_included);
+        assert!(omitted.walls.is_empty(), "{:?}", omitted.walls);
+        assert_eq!(cached_tick, 11);
     }
 }

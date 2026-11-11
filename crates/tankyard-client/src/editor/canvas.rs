@@ -13,6 +13,9 @@ use tankyard_client::editor_document::{Key, Object, describe_trigger, trigger_ta
 use tankyard_content::*;
 use tankyard_core::{V2, WorldConfig};
 
+/// Objects as they were when a drag began.
+type Originals = Vec<(Key, Object)>;
+
 pub enum Gesture {
     /// Drawing one object's rectangle, in normalized map coordinates.
     Draw { start: Vec2, last: Vec2 },
@@ -29,10 +32,10 @@ pub enum Gesture {
         clicked: Key,
         moved: bool,
     },
-    /// Dragging one edge or corner of a single object.
+    /// Dragging one edge or corner of an object or of a selection's bounds.
     Resize {
-        key: Key,
-        original: Object,
+        originals: Originals,
+        from: [f32; 4],
         handle: (i8, i8),
     },
     /// Dragging a portal's exit.
@@ -42,6 +45,12 @@ pub enum Gesture {
     /// Deleting whatever the pointer crosses.
     Erase { last: Vec2 },
 }
+
+/// How near, in pixels, the pointer must be to grab a handle.
+const HANDLE_REACH: f32 = 9.;
+/// A selection side shorter than this on screen has the handles across it
+/// stand outside the edge, so pressing in a thin selection still moves it.
+const HANDLE_ROOM: f32 = 40.;
 
 const HANDLES: [(i8, i8); 8] = [
     (-1, -1),
@@ -53,6 +62,56 @@ const HANDLES: [(i8, i8); 8] = [
     (-1, 1),
     (-1, 0),
 ];
+
+/// `r` with the side or corner `handle` dragged to `p`, never thinner than
+/// `least`. `keep` holds the proportions; `centered` grows both sides.
+fn resized(
+    r: [f32; 4],
+    handle: (i8, i8),
+    p: [f32; 2],
+    least: [f32; 2],
+    keep: bool,
+    centered: bool,
+) -> [f32; 4] {
+    let sides = [handle.0, handle.1];
+    let mid = [r[0] + r[2] * 0.5, r[1] + r[3] * 0.5];
+    let (mut lo, mut hi) = ([r[0], r[1]], [r[0] + r[2], r[1] + r[3]]);
+    for axis in 0..2 {
+        let side = sides[axis];
+        if side == 0 {
+            continue;
+        }
+        if centered {
+            let half = ((p[axis] - mid[axis]) * f32::from(side)).max(least[axis] * 0.5);
+            lo[axis] = mid[axis] - half;
+            hi[axis] = mid[axis] + half;
+        } else if side < 0 {
+            lo[axis] = p[axis].min(hi[axis] - least[axis]);
+        } else {
+            hi[axis] = p[axis].max(lo[axis] + least[axis]);
+        }
+    }
+    if keep && r[2] > 0. && r[3] > 0. {
+        let factors = [(hi[0] - lo[0]) / r[2], (hi[1] - lo[1]) / r[3]];
+        let factor = match sides {
+            [0, _] => factors[1],
+            [_, 0] => factors[0],
+            _ => factors[0].max(factors[1]),
+        }
+        .max(least[0] / r[2])
+        .max(least[1] / r[3]);
+        for axis in 0..2 {
+            let size = r[axis + 2] * factor;
+            (lo[axis], hi[axis]) = match sides[axis] {
+                _ if centered => (mid[axis] - size * 0.5, mid[axis] + size * 0.5),
+                0 => (mid[axis] - size * 0.5, mid[axis] + size * 0.5),
+                side if side < 0 => (r[axis] + r[axis + 2] - size, r[axis] + r[axis + 2]),
+                _ => (r[axis], r[axis] + size),
+            };
+        }
+    }
+    [lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]]
+}
 
 fn overlaps(a: Rect, b: Rect) -> bool {
     a.x <= b.right() && b.x <= a.right() && a.y <= b.bottom() && b.y <= a.bottom()
@@ -167,8 +226,10 @@ impl Editor {
         }
     }
     pub(super) fn pickable(&self, group: u8) -> bool {
+        let bit = MapDef::group_bit(group);
         self.focus.is_none_or(|focus| focus == group)
-            && (self.show_hidden || MapDef::group_bit(group) & self.ghost_mask() == 0)
+            && bit & self.doc.locked == 0
+            && (self.show_hidden || bit & self.ghost_mask() == 0)
     }
     pub(super) fn pick(&self, p: Vec2) -> Option<Key> {
         self.doc
@@ -265,7 +326,7 @@ impl Editor {
         self.apply(|editor| match editor.doc.insert(object) {
             Some(key) => {
                 editor.set_selection(vec![key]);
-                if !matches!(editor.tab, Tab::Rules | Tab::Files) {
+                if !matches!(editor.tab, Tab::Rules | Tab::Files | Tab::Tools) {
                     editor.tab = Tab::Object;
                 }
             }
@@ -324,35 +385,48 @@ impl Editor {
         self.doc.delete(&keys);
         self.selection.clear();
     }
-    /// The single selected object a handle can reshape.
-    fn handle_target(&self) -> Option<(Key, Object)> {
-        let &[key] = self.selection.as_slice() else {
-            return None;
-        };
-        let object = self.doc.object(key)?;
-        (!object.is_point()).then_some((key, object))
+    /// What the handles reshape: one object, or several by their bounds.
+    fn handle_target(&self) -> Option<(Originals, [f32; 4])> {
+        let originals: Originals = self
+            .selection
+            .iter()
+            .filter_map(|&key| Some((key, self.doc.object(key)?)))
+            .collect();
+        match originals.as_slice() {
+            [] => None,
+            [(_, object)] if object.is_point() => None,
+            [(_, object)] => {
+                let r = object.rect();
+                Some((originals, r))
+            }
+            _ => {
+                let b = self.doc.bounds(&self.selection)?;
+                (b[2] > 0. && b[3] > 0.).then_some((originals, b))
+            }
+        }
     }
     fn handle_spot(r: Rect, (x, y): (i8, i8)) -> Vec2 {
+        let out = |side: f32| if side < HANDLE_ROOM { HANDLE_REACH } else { 0. };
         vec2(
-            r.x + r.w * (f32::from(x) + 1.) * 0.5,
-            r.y + r.h * (f32::from(y) + 1.) * 0.5,
+            r.x + r.w * (f32::from(x) + 1.) * 0.5 + f32::from(x) * out(r.w),
+            r.y + r.h * (f32::from(y) + 1.) * 0.5 + f32::from(y) * out(r.h),
         )
     }
     fn handle_at(&self, p: Vec2) -> Option<Gesture> {
-        let (key, object) = self.handle_target()?;
-        if let Object::Zone(zone) = &object
+        let (originals, from) = self.handle_target()?;
+        if let [(key, Object::Zone(zone))] = originals.as_slice()
             && zone.kind == ZoneKind::Portal
             && self.point_on_screen(zone.exit).distance(p) < 12.
         {
-            return Some(Gesture::Exit { key });
+            return Some(Gesture::Exit { key: *key });
         }
-        let r = self.on_screen(object.rect());
+        let r = self.on_screen(from);
         let handle = HANDLES
             .into_iter()
-            .find(|&h| Self::handle_spot(r, h).distance(p) < 9.)?;
+            .find(|&h| Self::handle_spot(r, h).distance(p) < HANDLE_REACH)?;
         Some(Gesture::Resize {
-            key,
-            original: object,
+            originals,
+            from,
             handle,
         })
     }
@@ -384,6 +458,13 @@ impl Editor {
         let canvas = layout.canvas;
         let inside = canvas.contains(pointer) && !self.help;
         if inside {
+            // Where tools run from the Tools tab: the last click, since the
+            // pointer always crosses the canvas edge on its way there.
+            if is_mouse_button_pressed(MouseButton::Left)
+                || is_mouse_button_pressed(MouseButton::Right)
+            {
+                self.last_pointer = Some(self.view.world(pointer));
+            }
             let wheel = mouse_wheel().1;
             if wheel != 0. {
                 self.zoom_at(pointer, (wheel.signum() * 0.18).exp());
@@ -562,25 +643,14 @@ impl Editor {
                 self.doc.nudge(&keys, delta.x, delta.y);
             }
             Gesture::Resize {
-                key,
-                original,
+                originals,
+                from,
                 handle,
             } => {
                 let p = self.snapped(pointer);
-                let r = original.rect();
                 let least = [4. / self.doc.map.width, 4. / self.doc.map.height];
-                let (mut lo, mut hi) = ([r[0], r[1]], [r[0] + r[2], r[1] + r[3]]);
-                for (axis, side) in [handle.0, handle.1].into_iter().enumerate() {
-                    let value = if axis == 0 { p.x } else { p.y };
-                    if side < 0 {
-                        lo[axis] = value.min(hi[axis] - least[axis]);
-                    } else if side > 0 {
-                        hi[axis] = value.max(lo[axis] + least[axis]);
-                    }
-                }
-                let mut object = original.clone();
-                object.set_rect([lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]]);
-                self.doc.replace(*key, object);
+                let to = resized(*from, *handle, [p.x, p.y], least, shift(), alt());
+                self.doc.stretch(originals, *from, to);
             }
             Gesture::Exit { key } => {
                 let p = self.snapped(pointer);
@@ -842,6 +912,9 @@ impl Editor {
             );
         }
         brushes::trigger_badge(trigger.action, badge, lit);
+        if trigger.only_if.is_some() {
+            brushes::gate_mark(badge, lit);
+        }
         if badge.w >= 26. && self.view.zoom > 0.12 {
             let tag = trigger_tag(trigger);
             let size = 11. * s.max(0.8);
@@ -1010,10 +1083,15 @@ impl Editor {
         {
             dashed_rect(self.on_screen(b), 1., 4., alpha(accent, 0.6));
         }
-        let Some((_, object)) = self.handle_target() else {
+        let Some((originals, from)) = self.handle_target() else {
             return;
         };
-        let r = self.on_screen(object.rect());
+        // Mid-drag, the handles follow the new bounds.
+        let from = match &self.gesture {
+            Some(Gesture::Resize { .. }) => self.doc.bounds(&self.selection).unwrap_or(from),
+            _ => from,
+        };
+        let r = self.on_screen(from);
         let size = 7. * s.max(0.8);
         for handle in HANDLES {
             let p = Self::handle_spot(r, handle);
@@ -1026,7 +1104,7 @@ impl Editor {
             );
             draw_rectangle_lines(p.x - size * 0.5, p.y - size * 0.5, size, size, 1.5, accent);
         }
-        if let Object::Zone(zone) = &object
+        if let [(_, Object::Zone(zone))] = originals.as_slice()
             && zone.kind == ZoneKind::Portal
         {
             let exit = self.point_on_screen(zone.exit);
@@ -1274,5 +1352,34 @@ impl Editor {
                 muted_color(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thin_selections_move_when_pressed_inside() {
+        // Three blocks in a row at a zoomed-out view: 56 by 19 pixels.
+        let r = Rect::new(100., 100., 56., 19.);
+        // Away from the ends, which grab the side handles as on any object.
+        let inside = [
+            r.center(),
+            vec2(r.center().x, r.y + 1.),
+            vec2(r.x + 12., r.bottom() - 1.),
+        ];
+        for p in inside {
+            let near = HANDLES
+                .into_iter()
+                .find(|&h| Editor::handle_spot(r, h).distance(p) < HANDLE_REACH);
+            assert_eq!(near, None, "{p:?} grabs a handle");
+        }
+        // The wide side keeps its handles on the edge; the thin one stands off.
+        assert_eq!(Editor::handle_spot(r, (1, 0)), vec2(156., 109.5));
+        assert_eq!(Editor::handle_spot(r, (0, -1)), vec2(128., 91.));
+        // A roomy selection's handles sit on its corners.
+        let big = Rect::new(0., 0., 200., 120.);
+        assert_eq!(Editor::handle_spot(big, (1, 1)), vec2(200., 120.));
     }
 }

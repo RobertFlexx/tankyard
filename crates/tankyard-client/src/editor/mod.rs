@@ -5,6 +5,8 @@ mod brushes;
 mod canvas;
 mod dock;
 mod inspector;
+mod panels;
+mod plugins;
 mod preview;
 
 use crate::{
@@ -45,6 +47,7 @@ enum Tab {
     Check,
     Rules,
     Files,
+    Tools,
 }
 /// Where each part of the editor sits this frame.
 #[derive(Clone, Copy)]
@@ -155,6 +158,22 @@ pub struct Editor {
     reset_confirm: bool,
     /// Set when a playtest ends, so the key that ended it does nothing here.
     resumed: bool,
+    prefs: panels::Prefs,
+    prefs_saved: panels::Prefs,
+    prefs_checked: f64,
+    resizing: Option<panels::Edge>,
+    /// The edge under the pointer or being dragged, drawn lit.
+    edge_lit: Option<panels::Edge>,
+    edge_click: f64,
+    cursor: macroquad::miniquad::CursorIcon,
+    /// The last duplicate's keys and where its source sat, so the next
+    /// duplicate of the moved copy repeats the move.
+    repeat: Option<(Vec<Key>, [f32; 2])>,
+    workshop: plugins::Workshop,
+    /// Where the canvas was last clicked, in world units.
+    last_pointer: Option<V2>,
+    /// Where the canvas was last drawn, for plugins that ask what is in view.
+    canvas_area: Rect,
 }
 
 impl Editor {
@@ -166,6 +185,7 @@ impl Editor {
         let restored = draft.is_some();
         let doc = draft.unwrap_or_else(|| map.map(Document::from_map).unwrap_or_default());
         let preview = preview::Preview::new(&doc.map);
+        let prefs = panels::Prefs::load();
         let mut editor = Self {
             doc,
             undo: vec![],
@@ -188,12 +208,12 @@ impl Editor {
             stamp: None,
             build_group: 0,
             swipe: false,
-            snap: true,
-            grid: 40.,
-            step: 2,
+            snap: prefs.snap,
+            grid: prefs.grid,
+            step: prefs.step,
             show_hidden: true,
-            show_groups: true,
-            show_links: false,
+            show_groups: prefs.show_groups,
+            show_links: prefs.show_links,
             focus: None,
             preview,
             probe: None,
@@ -225,6 +245,17 @@ impl Editor {
             close_confirm: false,
             reset_confirm: false,
             resumed: false,
+            prefs_saved: prefs.clone(),
+            prefs,
+            prefs_checked: 0.,
+            resizing: None,
+            edge_lit: None,
+            edge_click: 0.,
+            cursor: macroquad::miniquad::CursorIcon::Default,
+            repeat: None,
+            workshop: plugins::Workshop::default(),
+            last_pointer: None,
+            canvas_area: Rect::default(),
         };
         editor.say(if restored {
             "Recovered your last draft. Press F1 for shortcuts."
@@ -400,6 +431,8 @@ impl Editor {
         self.clipboard = objects;
         self.mode = Mode::Edit;
     }
+    /// Copy the selection one cell over; once a copy has been moved, the
+    /// next duplicate repeats that move, so rows build themselves.
     fn duplicate(&mut self) {
         let objects: Vec<Object> = self
             .selection
@@ -409,14 +442,88 @@ impl Editor {
         let Some(b) = self.doc.bounds(&self.selection) else {
             return;
         };
-        let at = [
-            b[0] + self.grid / self.doc.map.width,
-            b[1] + self.grid / self.doc.map.height,
+        let cell = [
+            self.grid / self.doc.map.width,
+            self.grid / self.doc.map.height,
         ];
+        let offset = match &self.repeat {
+            Some((keys, from)) if *keys == self.selection => {
+                let moved = [b[0] - from[0], b[1] - from[1]];
+                if moved[0].abs() + moved[1].abs() > 1e-5 {
+                    moved
+                } else {
+                    cell
+                }
+            }
+            _ => cell,
+        };
+        let at = [b[0] + offset[0], b[1] + offset[1]];
         self.apply(|editor| {
             let added = editor.doc.place(&objects, at);
             editor.set_selection(added);
         });
+        self.repeat = Some((self.selection.clone(), [b[0], b[1]]));
+    }
+    /// Copy the selection to the other side of the arena, mirrored across
+    /// its middle line.
+    fn mirror_copy(&mut self, axis: Transform) {
+        let keys = self.selection.clone();
+        let mut added = 0;
+        self.apply(|editor| {
+            let copies = editor.doc.mirror_copy(&keys, axis);
+            added = copies.len();
+            editor.set_selection(copies);
+        });
+        self.say(match (added, axis) {
+            (0, _) => "The map is at its object limit.".to_owned(),
+            (n, Transform::FlipX) => format!(
+                "Mirrored {} across the arena. Shift+M mirrors up and down.",
+                objects(n)
+            ),
+            (n, _) => format!("Mirrored {} up and down the arena.", objects(n)),
+        });
+    }
+    /// Zoom so the selection fills most of the canvas.
+    fn frame_selection(&mut self, canvas: Rect) {
+        let Some(b) = self.doc.bounds(&self.selection) else {
+            self.fitted = false;
+            return;
+        };
+        let (w, h) = (self.doc.map.width, self.doc.map.height);
+        let size = [
+            (b[2] * w).max(self.grid * 4.),
+            (b[3] * h).max(self.grid * 4.),
+        ];
+        self.view.center = V2::new((b[0] + b[2] * 0.5) * w, (b[1] + b[3] * 0.5) * h);
+        self.view.zoom = (canvas.w * 0.7 / size[0])
+            .min(canvas.h * 0.7 / size[1])
+            .clamp(0.015, 4.);
+    }
+    /// Lock the groups of the selection, so clicks pass through them.
+    fn lock_selection(&mut self) {
+        let mask = self
+            .selection
+            .iter()
+            .filter_map(|&key| self.doc.object(key))
+            .fold(0, |mask, object| mask | MapDef::group_bit(object.group()));
+        if mask == 0 {
+            self.say("Only objects in a group can be locked. Ctrl+G makes one.");
+            return;
+        }
+        self.apply(|editor| editor.doc.locked |= mask);
+        self.selection.clear();
+        self.say(format!(
+            "Locked {}. Ctrl+Shift+L unlocks every group.",
+            group_list(mask)
+        ));
+    }
+    fn unlock_all(&mut self) {
+        if self.doc.locked == 0 {
+            self.say("No groups are locked.");
+            return;
+        }
+        self.apply(|editor| editor.doc.locked = 0);
+        self.say("Every group is unlocked.");
     }
     fn copy_style(&mut self) {
         if let Some(object) = self.selection.first().and_then(|&key| self.doc.object(key)) {
@@ -493,10 +600,13 @@ impl Editor {
         self.apply(|editor| editor.doc.delete(&keys));
     }
     fn check(&mut self) {
-        let problems = self.doc.problems();
+        let mut problems = self.doc.problems();
+        problems.extend(self.plugin_problems());
         self.say(match problems.iter().filter(|p| p.blocking).count() {
             0 if problems.is_empty() => "No problems found.".to_owned(),
+            0 if problems.len() == 1 => "1 note, nothing blocking.".to_owned(),
             0 => format!("{} notes, nothing blocking.", problems.len()),
+            1 => "1 problem to fix before playing.".to_owned(),
             n => format!("{n} problems to fix before playing."),
         });
         self.problems = Some(problems);
@@ -538,19 +648,6 @@ impl Editor {
             ..Default::default()
         }
     }
-    fn layout(s: f32) -> Layout {
-        let (w, h) = (screen_width(), screen_height());
-        let top = 54. * s;
-        let dock = 152. * s;
-        let right = (330. * s).min(w * 0.4);
-        Layout {
-            top: Rect::new(0., 0., w, top),
-            canvas: Rect::new(0., top, (w - right).max(80.), (h - top - dock).max(80.)),
-            dock: Rect::new(0., h - dock, w, dock),
-            inspector: Rect::new(w - right, top, right, (h - top - dock).max(80.)),
-            s,
-        }
-    }
     fn fit(&mut self, canvas: Rect) {
         self.view.center = V2::new(self.doc.map.width * 0.5, self.doc.map.height * 0.5);
         self.view.zoom = ((canvas.w - 48.) / self.doc.map.width)
@@ -570,12 +667,13 @@ impl Editor {
                 self.say(error);
             }
         }
+        self.ensure_plugins(settings);
         set_interactive(true);
         pointer_scope(0x45444954);
         let s = s
             .min((screen_width() / 1180.).min(screen_height() / 720.))
             .max(0.25);
-        let layout = Self::layout(s);
+        let layout = self.layout(s);
         if !self.fitted {
             self.fit(layout.canvas);
         }
@@ -589,22 +687,31 @@ impl Editor {
         // The click or key that ended a playtest must not also edit.
         let resumed = std::mem::take(&mut self.resumed);
         let mut action = Action::None;
+        let on_edge = self.panel_edges(&layout);
         if !resumed {
             action = self.keys(&layout);
-            self.canvas_input(&layout);
+            if !on_edge {
+                self.canvas_input(&layout);
+            }
         }
+        // Keys can hide the panels; the rest of the frame uses the new layout.
+        let layout = self.layout(s);
+        self.canvas_area = layout.canvas;
         self.run_preview(&layout, dt);
         let config = self.config();
         clear_background(bg_color());
         self.draw_canvas(&layout, settings, &config);
-        if self.help {
+        if self.help || on_edge {
             set_interactive(false);
         }
         if let Some(chosen) = self.top_bar(&layout) {
             action = chosen;
         }
-        self.dock(&layout, settings);
-        self.inspector(&layout);
+        if !self.prefs.hide_panels {
+            self.dock(&layout, settings);
+            self.inspector(&layout);
+        }
+        self.draw_edges(&layout);
         set_interactive(true);
         if self.help {
             self.help_overlay(s);
@@ -614,6 +721,10 @@ impl Editor {
         }
         if !self.typing() && !is_mouse_button_down(MouseButton::Left) {
             self.property_edit = false;
+        }
+        self.keep_prefs();
+        if !matches!(action, Action::None) {
+            self.release_cursor();
         }
         if self.revision != self.draft_revision && get_time() - self.last_autosave > 3. {
             self.last_autosave = get_time();
@@ -716,6 +827,13 @@ impl Editor {
             if pressed(KeyCode::D) {
                 self.duplicate();
             }
+            if pressed(KeyCode::L) {
+                if shift() {
+                    self.unlock_all();
+                } else {
+                    self.lock_selection();
+                }
+            }
             if pressed(KeyCode::A) {
                 let keys = self
                     .doc
@@ -731,6 +849,10 @@ impl Editor {
             }
             if pressed(KeyCode::S) {
                 self.save();
+            }
+            if pressed(KeyCode::R) {
+                let at = over_canvas.then(|| self.view.world(pointer));
+                self.repeat_tool(at);
             }
             return Action::None;
         }
@@ -766,7 +888,21 @@ impl Editor {
             self.order(false);
         }
         if pressed(KeyCode::F) {
-            self.fitted = false;
+            if shift() {
+                self.frame_selection(layout.canvas);
+            } else {
+                self.fitted = false;
+            }
+        }
+        if any && pressed(KeyCode::M) {
+            self.mirror_copy(if shift() {
+                Transform::FlipY
+            } else {
+                Transform::FlipX
+            });
+        }
+        if pressed(KeyCode::Backslash) {
+            self.toggle_panels();
         }
         if pressed(KeyCode::H) {
             self.show_hidden = !self.show_hidden;
@@ -959,7 +1095,7 @@ impl Editor {
     fn help_overlay(&mut self, s: f32) {
         draw_rectangle(0., 0., screen_width(), screen_height(), alpha(BLACK, 0.45));
         let w = (960. * s).min(screen_width() - 40.);
-        let h = (520. * s).min(screen_height() - 40.);
+        let h = (600. * s).min(screen_height() - 40.);
         let r = Rect::new(
             (screen_width() - w) * 0.5,
             (screen_height() - h) * 0.5,
@@ -985,24 +1121,29 @@ impl Editor {
                 ("Shift-click", "Add to or remove from the selection"),
                 ("Double-click", "Select the object's whole group"),
                 ("Alt-drag", "Copy the selection as you move it"),
+                ("Shift / Alt handle", "Resize: keep shape, or from center"),
                 ("WASD, arrows", "Nudge; Shift for one unit"),
                 ("Q  E", "Turn left, turn right"),
                 ("X  Y", "Flip across, flip up and down"),
+                ("M,  Shift M", "Mirror a copy to the far side"),
                 ("[  ]", "Send to back, bring to front"),
                 ("Delete", "Delete the selection"),
                 ("Esc", "Deselect, or cancel a drag"),
             ],
             &[
                 ("Ctrl C  X  V", "Copy, cut, paste at the pointer"),
-                ("Ctrl D", "Duplicate"),
+                ("Ctrl D", "Duplicate; repeats your last move"),
                 ("Ctrl Shift C  V", "Copy and paste settings"),
                 ("Ctrl G", "Put the selection in a new group"),
+                ("Ctrl L,  Shift L", "Lock its groups, unlock them all"),
                 ("Ctrl A", "Select everything shown"),
                 ("Ctrl Z  Y", "Undo, redo"),
                 ("Ctrl S", "Save the project"),
+                ("Ctrl R", "Run the last plugin tool again"),
                 ("Wheel,  +  −", "Zoom"),
                 ("Space-drag", "Move the view, as middle-drag does"),
-                ("F", "Fit the arena"),
+                ("F,  Shift F", "Fit the arena, frame the selection"),
+                ("\\", "Hide or show the panels"),
                 ("H  G  L", "Hidden groups, group labels, links"),
                 ("P,  Shift P", "Run or pause logic, restart it"),
                 ("Hold T", "Test tank at the pointer"),
@@ -1010,7 +1151,7 @@ impl Editor {
             ],
         ];
         let col_w = (w - 66. * s) * 0.5;
-        let keys_w = 128. * s;
+        let keys_w = 150. * s;
         for (c, entries) in columns.into_iter().enumerate() {
             let x = r.x + 22. * s + c as f32 * (col_w + 22. * s);
             let mut y = r.y + 70. * s;
@@ -1023,7 +1164,7 @@ impl Editor {
                     13. * s,
                     text_color(),
                 );
-                y += 30. * s;
+                y += 28. * s;
             }
         }
         if button(
@@ -1154,6 +1295,18 @@ impl Editor {
             "Map imported. Save keeps your own editable copy.",
         );
         Ok(())
+    }
+}
+
+/// "group 3" or "groups 2, 5".
+fn group_list(mask: u32) -> String {
+    let groups: Vec<String> = (1..=MAP_GROUPS)
+        .filter(|&g| MapDef::group_bit(g) & mask != 0)
+        .map(|g| g.to_string())
+        .collect();
+    match groups.as_slice() {
+        [one] => format!("group {one}"),
+        many => format!("groups {}", many.join(", ")),
     }
 }
 

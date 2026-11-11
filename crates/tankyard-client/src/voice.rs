@@ -18,6 +18,25 @@ use tankyard_server::NetworkClient;
 
 const MAX_SPEAKERS: usize = 16;
 const MAX_BUFFER: usize = VOICE_FRAME_SAMPLES * 10;
+/// Audio gathered before a speaker starts playing: at least two frames, up
+/// to six when their packets keep turning up late.
+const MIN_CUSHION: usize = VOICE_FRAME_SAMPLES * 2;
+const MAX_CUSHION: usize = VOICE_FRAME_SAMPLES * 6;
+/// Running dry and refilling within this was lateness, not a pause.
+const LATE: Duration = Duration::from_millis(200);
+/// A cushion shrinks a frame after this long without lateness.
+const SETTLED: Duration = Duration::from_secs(10);
+/// Per-sample steps for fading in, and for letting go when audio runs out.
+const FADE_IN: f32 = 1. / 96.;
+const RELEASE: f32 = 0.94;
+/// Mean square level that counts as speech, about -50 dBFS.
+const SPEECH: f32 = 0.000_009;
+/// Frames still sent after speech stops, so word endings are kept.
+const HANGOVER: u8 = 15;
+/// One-pole high-pass coefficient: about 75 Hz at 48 kHz, below any voice.
+const HIGH_PASS: f32 = 0.99;
+/// Where mixed voices start being compressed instead of clipped.
+const KNEE: f32 = 0.8;
 
 pub struct VoiceChat {
     muted: bool,
@@ -230,8 +249,9 @@ impl VoiceChat {
         // Codec work runs on the game thread, outside the audio callback lock.
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.volume = volume.clamp(0., 1.);
+            // A speaker's cushion carries over between sentences.
             mixer.voices.retain(|player, voice| {
-                !muted_players.contains(player) && voice.received.elapsed() < Duration::from_secs(1)
+                !muted_players.contains(player) && voice.received.elapsed() < SETTLED
             });
             for (player, samples) in decoded {
                 mixer.voices.entry(player).or_default().push(samples);
@@ -501,6 +521,7 @@ fn voice_encoder() -> Result<opus::Encoder, opus::Error> {
         opus::Application::Voip,
     )?;
     encoder.set_bitrate(opus::Bitrate::Bits(VOICE_BITRATE))?;
+    encoder.set_signal(opus::Signal::Voice)?;
     encoder.set_max_bandwidth(opus::Bandwidth::Fullband)?;
     encoder.set_complexity(10)?;
     encoder.set_vbr(true)?;
@@ -584,16 +605,25 @@ impl VoiceDecoder {
     }
 }
 
+/// The microphone's way to the encoder: resampled to 48 kHz, cleared of DC
+/// and rumble, and gated to speech.
 struct Capture {
     rate: u32,
     phase: u32,
     sum: f32,
     count: u32,
     frame: [f32; VOICE_FRAME_SAMPLES],
+    /// The last frame left unsent, which goes first when speech starts in
+    /// the next one so its first sound is not cut off.
+    lead: Option<[f32; VOICE_FRAME_SAMPLES]>,
     previous: f32,
     index: usize,
     energy: f32,
     hangover: u8,
+    /// High-pass filter memory: its last input and output. A microphone's DC
+    /// offset would otherwise hold the gate open and send noise nonstop.
+    filter_in: Option<f32>,
+    filter_out: f32,
 }
 
 impl Capture {
@@ -604,10 +634,13 @@ impl Capture {
             sum: 0.,
             count: 0,
             frame: [0.; VOICE_FRAME_SAMPLES],
+            lead: None,
             previous: 0.,
             index: 0,
             energy: 0.,
             hangover: 0,
+            filter_in: None,
+            filter_out: 0.,
         }
     }
     fn reset(&mut self) {
@@ -618,6 +651,9 @@ impl Capture {
         self.energy = 0.;
         self.hangover = 0;
         self.previous = 0.;
+        self.lead = None;
+        self.filter_in = None;
+        self.filter_out = 0.;
     }
     fn push(&mut self, sample: f32, sender: &SyncSender<[f32; VOICE_FRAME_SAMPLES]>) {
         let sample = if sample.is_finite() {
@@ -638,16 +674,29 @@ impl Capture {
             };
             self.sum = 0.;
             self.count = 0;
-            self.energy += mono * mono;
-            self.frame[self.index] = mono;
+            // The first sample primes the filter, so an offset does not
+            // open the gate with a step when the microphone starts.
+            let last = *self.filter_in.get_or_insert(mono);
+            let filtered = mono - last + HIGH_PASS * self.filter_out;
+            self.filter_in = Some(mono);
+            self.filter_out = filtered;
+            self.energy += filtered * filtered;
+            self.frame[self.index] = filtered;
             self.index += 1;
             if self.index == VOICE_FRAME_SAMPLES {
-                if self.energy / VOICE_FRAME_SAMPLES as f32 > 0.000009 {
-                    self.hangover = 15;
+                if self.energy / VOICE_FRAME_SAMPLES as f32 > SPEECH {
+                    if self.hangover == 0
+                        && let Some(lead) = self.lead.take()
+                    {
+                        let _ = sender.try_send(lead);
+                    }
+                    self.hangover = HANGOVER;
                 }
                 if self.hangover > 0 {
                     let _ = sender.try_send(self.frame);
                     self.hangover -= 1;
+                } else {
+                    self.lead = Some(self.frame);
                 }
                 self.index = 0;
                 self.energy = 0.;
@@ -657,10 +706,22 @@ impl Capture {
     }
 }
 
+/// One speaker's audio waiting to play. Packets reach the game a render
+/// frame at a time and the network adds its own jitter, so playback waits
+/// for a cushion, grows it when the queue runs dry mid-speech, and fades in
+/// and out so neither starting nor running dry clicks.
 struct Playback {
     queue: VecDeque<f32>,
     started: bool,
     received: Instant,
+    /// Samples gathered before playing starts.
+    cushion: usize,
+    /// When the queue last ran dry, until audio arrives again.
+    starved: Option<Instant>,
+    /// When the cushion last changed size.
+    resized: Instant,
+    fade: f32,
+    last: f32,
 }
 impl Default for Playback {
     fn default() -> Self {
@@ -668,29 +729,67 @@ impl Default for Playback {
             queue: VecDeque::with_capacity(MAX_BUFFER),
             started: false,
             received: Instant::now(),
+            cushion: MIN_CUSHION,
+            starved: None,
+            resized: Instant::now(),
+            fade: 0.,
+            last: 0.,
         }
     }
 }
 impl Playback {
     fn push(&mut self, samples: Vec<f32>) {
-        if self.queue.len() + samples.len() > MAX_BUFFER {
-            self.queue.clear();
-            self.started = false;
+        let now = Instant::now();
+        if self
+            .starved
+            .take()
+            .is_some_and(|at| now.duration_since(at) < LATE)
+        {
+            self.cushion = (self.cushion + VOICE_FRAME_SAMPLES).min(MAX_CUSHION);
+            self.resized = now;
+        } else if self.cushion > MIN_CUSHION && now.duration_since(self.resized) > SETTLED {
+            self.cushion -= VOICE_FRAME_SAMPLES;
+            self.resized = now;
         }
-        self.queue.extend(samples.into_iter().take(MAX_BUFFER));
-        self.received = Instant::now();
+        let samples = &samples[samples.len().saturating_sub(MAX_BUFFER)..];
+        if self.queue.len() + samples.len() > MAX_BUFFER {
+            // Fallen behind: skip the oldest audio, back to the cushion,
+            // rather than dropping everything and starting over.
+            let excess = (self.queue.len() + samples.len()).saturating_sub(self.cushion);
+            self.queue.drain(..excess.min(self.queue.len()));
+        }
+        self.queue.extend(samples);
+        self.received = now;
     }
     fn sample(&mut self) -> f32 {
-        if !self.started && self.queue.len() >= VOICE_FRAME_SAMPLES * 2 {
+        if !self.started && self.queue.len() >= self.cushion {
             self.started = true;
         }
-        if !self.started {
-            return 0.;
+        let next = if self.started {
+            self.queue.pop_front()
+        } else {
+            None
+        };
+        match next {
+            Some(sample) => {
+                self.fade = (self.fade + FADE_IN).min(1.);
+                self.last = sample * self.fade;
+            }
+            None => {
+                if self.started {
+                    self.started = false;
+                    self.starved = Some(Instant::now());
+                }
+                self.fade = 0.;
+                // Settle on zero rather than decay into slow subnormals.
+                self.last = if self.last.abs() < 1e-6 {
+                    0.
+                } else {
+                    self.last * RELEASE
+                };
+            }
         }
-        self.queue.pop_front().unwrap_or_else(|| {
-            self.started = false;
-            0.
-        })
+        self.last
     }
 }
 
@@ -717,9 +816,18 @@ impl Mixer {
         if self.volume == 0. && self.alarm.is_empty() {
             0.
         } else {
-            sample.clamp(-1., 1.)
+            soft_clip(sample)
         }
     }
+}
+
+/// Several loud voices at once round off smoothly instead of clipping.
+fn soft_clip(sample: f32) -> f32 {
+    let size = sample.abs();
+    if size <= KNEE || !size.is_finite() {
+        return if size.is_finite() { sample } else { 0. };
+    }
+    sample.signum() * (KNEE + (1. - KNEE) * ((size - KNEE) / (1. - KNEE)).tanh())
 }
 
 #[cfg(test)]
@@ -741,15 +849,75 @@ mod tests {
                     &tx,
                 );
             }
+            let frames: Vec<_> = rx.try_iter().collect();
+            // A second of speech, led in by the quiet frame before it.
             assert_eq!(
-                rx.try_iter().count(),
-                50,
+                frames.len(),
+                51,
                 "{rate} Hz capture must yield 50 frames/second"
             );
+            assert!(frames[0].iter().all(|v| v.abs() < 1e-6));
+            assert!(frames[1].iter().any(|v| v.abs() > 0.2));
             capture.reset();
             assert_eq!(capture.index, 0);
             assert_eq!(capture.hangover, 0);
+            assert!(capture.lead.is_none());
         }
+    }
+
+    #[test]
+    fn a_microphone_offset_does_not_hold_the_gate_open() {
+        let (tx, rx) = mpsc::sync_channel(256);
+        let mut capture = Capture::new(48_000);
+        // Two seconds of a steady offset, and a little rumble under voice.
+        for index in 0..96_000 {
+            let rumble = (index as f32 / 48_000. * 20. * std::f32::consts::TAU).sin() * 0.002;
+            capture.push(0.3 + rumble, &tx);
+        }
+        assert_eq!(rx.try_iter().count(), 0);
+    }
+
+    #[test]
+    fn playback_waits_longer_after_late_packets_and_never_clicks() {
+        let mut voice = Playback::default();
+        voice.push(vec![0.5; MIN_CUSHION]);
+        let first = voice.sample();
+        assert!(first > 0. && first < 0.05, "fades in from {first}");
+        let mut last = first;
+        for _ in 1..MIN_CUSHION {
+            last = voice.sample();
+        }
+        assert!((last - 0.5).abs() < 1e-6);
+        // Running dry lets go gradually instead of dropping to silence.
+        let after = voice.sample();
+        assert!(after > 0.4 && after < 0.5, "{after}");
+        assert!(voice.starved.is_some());
+        for _ in 0..200 {
+            voice.sample();
+        }
+        assert!(voice.sample().abs() < 1e-4);
+        // The next packet came straight after: it was late, so wait longer.
+        voice.push(vec![0.5; VOICE_FRAME_SAMPLES]);
+        assert_eq!(voice.cushion, MIN_CUSHION + VOICE_FRAME_SAMPLES);
+        assert!(!voice.started);
+        for _ in 0..10 {
+            voice.push(vec![0.5; VOICE_FRAME_SAMPLES]);
+        }
+        // Falling behind skips back to the cushion rather than emptying.
+        assert!(voice.queue.len() >= voice.cushion && voice.queue.len() <= MAX_BUFFER);
+    }
+
+    #[test]
+    fn loud_mixes_round_off_below_full_scale() {
+        assert_eq!(soft_clip(0.5), 0.5);
+        assert_eq!(soft_clip(-0.8), -0.8);
+        let loud = soft_clip(1.2);
+        assert!(loud > 0.95 && loud < 1., "{loud}");
+        assert_eq!(soft_clip(-1.2), -loud);
+        assert!(soft_clip(30.) <= 1.);
+        assert!(soft_clip(0.9) < 0.9 && soft_clip(0.9) > soft_clip(0.85));
+        assert_eq!(soft_clip(f32::NAN), 0.);
+        assert_eq!(soft_clip(f32::INFINITY), 0.);
     }
 
     fn packet(sequence: u32) -> VoicePacket {

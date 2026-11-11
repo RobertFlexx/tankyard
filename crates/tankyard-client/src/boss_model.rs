@@ -184,7 +184,15 @@ pub fn boss_model_geometry(
                 mount(emit, aim + side * 0.36, 0.34, 1.0, 1.);
             }
             hull(emit, p, 6, r, aim, color, edge);
-            plate(emit, p, vec2(r * 0.54, r * 0.28), aim, tint(color, 0.68));
+            hull(emit, p, 6, r * 0.6, aim, tint(color, 0.9), edge * 0.45);
+            // A visor across the front, turned where it watches.
+            plate(
+                emit,
+                p + direction(aim) * r * 0.22,
+                vec2(r * 0.15, r * 0.5),
+                aim,
+                tint(color, 0.55),
+            );
         }
         BossKind::Prism => {
             for n in 0..3 {
@@ -241,21 +249,26 @@ pub fn boss_model_geometry(
             });
         }
         BossKind::Bastion => {
-            mount(emit, aim, 0.48, 1.05, 1.);
+            // A square keep with round towers at its corners; the gun turns
+            // on a ring in the middle.
             hull(emit, p, 4, r, FRAC_PI_4, color, edge);
+            hull(
+                emit,
+                p,
+                4,
+                r * 0.7,
+                FRAC_PI_4,
+                tint(color, 0.86),
+                edge * 0.45,
+            );
             for n in 0..4 {
-                let corner = p + direction(FRAC_PI_4 + n as f32 * FRAC_PI_2) * r * 0.70;
-                hull(
-                    emit,
-                    corner,
-                    4,
-                    r * 0.23,
-                    FRAC_PI_4,
-                    tint(color, 0.72),
-                    edge * 0.65,
-                );
+                let corner = p + direction(FRAC_PI_4 + n as f32 * FRAC_PI_2) * r * 0.76;
+                hull(emit, corner, 0, r * 0.25, 0., tint(color, 0.78), edge * 0.7);
+                poly(emit, corner, 0, r * 0.1, 0., tint(color, 0.62));
             }
-            plate(emit, p, vec2(r * 0.44, r * 0.44), 0., tint(color, 0.56));
+            cannon_profile(emit, p, aim, r * 1.52, r * 0.46, color, 0., 1., Some(edge));
+            hull(emit, p, 0, r * 0.34, 0., tint(color, 0.95), edge * 0.8);
+            poly(emit, p, 4, r * 0.13, aim + FRAC_PI_4, tint(color, 0.6));
         }
         BossKind::Eclipse => {
             mount(emit, aim + 0.8, 0.24, 0.82, 1.);
@@ -325,12 +338,20 @@ pub fn boss_model_geometry(
                 );
             }
             hull(emit, p, 3, r, aim, color, edge);
+            poly(
+                emit,
+                p - direction(aim) * r * 0.08,
+                3,
+                r * 0.52,
+                aim,
+                tint(color, 0.88),
+            );
             plate(
                 emit,
-                p - direction(aim) * r * 0.16,
-                vec2(r * 0.45, r * 0.28),
+                p - direction(aim) * r * 0.12,
+                vec2(r * 0.3, r * 0.17),
                 aim,
-                tint(color, 0.6),
+                tint(color, 0.58),
             );
         }
         BossKind::Trapper => {
@@ -338,8 +359,9 @@ pub fn boss_model_geometry(
                 mount(emit, aim + side * 0.55, 0.40, 0.83, 1.4);
             }
             hull(emit, p, 6, r, aim, color, edge);
+            hull(emit, p, 6, r * 0.3, aim, tint(color, 0.82), edge * 0.5);
             for side in [-1., 1.] {
-                let cassette = p + direction(aim + side * FRAC_PI_2) * r * 0.49;
+                let cassette = p + direction(aim + side * FRAC_PI_2) * r * 0.55;
                 hull(
                     emit,
                     cassette,

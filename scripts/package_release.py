@@ -41,7 +41,7 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
             (payload / directory_name).mkdir()
         for filename in ("server.toml", "official.toml", "central.toml"):
             shutil.copy2(ROOT / "configs" / filename, payload / "configs" / filename)
-        for mod in ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler"):
+        for mod in ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler", "workshop_toolkit", "logic_kit"):
             shutil.copytree(ROOT / "mods" / mod, payload / "mods" / mod)
         shutil.copytree(ROOT / "docs", payload / "docs")
         shutil.copytree(ROOT / "licenses", payload / "licenses", dirs_exist_ok=True)

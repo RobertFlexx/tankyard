@@ -1,0 +1,9 @@
+{
+  "api_version": 2,
+  "id": "workshop_toolkit",
+  "name": "Workshop Toolkit",
+  "version": "1.0",
+  "author": "Tank Yard",
+  "description": "Arena Workshop tools: repeat a selection, rings, arena frames, grid snapping, four-way mirrors, and a check for gaps too narrow to drive through.",
+  "editor": ["tools.lua"]
+}

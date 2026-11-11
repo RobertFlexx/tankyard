@@ -255,7 +255,8 @@ impl Editor {
             let picture = Rect::new(t.x, t.y, t.w, t.h - 14. * s);
             let brush = &self.brushes[self.category][i];
             brushes::thumbnail(brush, picture, &self.doc.map, settings, self.time);
-            let size = 10. * s;
+            // Two rows of smaller tiles get a smaller name to fit it whole.
+            let size = if rows > 1 { 8.8 * s } else { 10. * s };
             center_label(
                 &fitted_label(brush.name, size, t.w - 4. * s),
                 t.center().x,
@@ -498,13 +499,14 @@ impl Editor {
     }
 }
 
+/// Grid sizes in world units.
+pub const GRIDS: [f32; 6] = [10., 20., 40., 80., 160., 320.];
 pub fn next_grid(grid: f32, back: bool) -> f32 {
-    const SIZES: [f32; 6] = [10., 20., 40., 80., 160., 320.];
-    let index = SIZES.iter().position(|&g| g == grid).unwrap_or(2);
-    SIZES[if back {
-        (index + SIZES.len() - 1) % SIZES.len()
+    let index = GRIDS.iter().position(|&g| g == grid).unwrap_or(2);
+    GRIDS[if back {
+        (index + GRIDS.len() - 1) % GRIDS.len()
     } else {
-        (index + 1) % SIZES.len()
+        (index + 1) % GRIDS.len()
     }]
 }
 
@@ -528,6 +530,15 @@ fn brush_hint(category: usize, index: usize) -> Option<&'static str> {
         (3, 8) => "Drops shapes in its area on a timer",
         (3, 9) => "Brings a boss partway through the round",
         (3, 10) => "Toggles a group half of the time",
+        (3, 11) => "Counts each second a tank holds it",
+        (3, 12) => "Gives points to the first tank here",
+        (3, 13) => "Repairs tanks, then rests 15 seconds",
+        (3, 14) => "Hurts tanks a moment after they step on",
+        (3, 15) => "Sends one of three signals at random",
+        (3, 16) => "Sets a counter back to 0 when emptied",
+        (3, 17) => "Passes a signal on only while counter 1 is 1 or more",
+        (3, 18) => "Flips counter 1 between 0 and 1 when entered",
+        (3, 19) => "Raises a script event for script packs",
         (4, 0) => "Where tanks enter the arena",
         (4, 3) | (4, 4) => "A team's home base",
         (4, 5) => "A point for objective modes",

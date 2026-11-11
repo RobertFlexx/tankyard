@@ -73,6 +73,9 @@ function tankyard.shapes(x, y, radius)
   return read("shapes", check("number", x, "shapes", "x"), check("number", y, "shapes", "y"),
     check("number", radius, "shapes", "radius"))
 end
+-- Map logic: counters 1-8 and whether group 1-32 is shown.
+function tankyard.map_counter(counter) return read("map_counter", check("number", counter, "map_counter", "counter")) end
+function tankyard.map_group(group) return read("map_group", check("number", group, "map_group", "group")) end
 function tankyard.projectiles(x, y, radius)
   return read("projectiles", check("number", x, "projectiles", "x"),
     check("number", y, "projectiles", "y"), check("number", radius, "projectiles", "radius"))
@@ -165,6 +168,20 @@ function tankyard.announce(text) emit("announce", tostring(text)) end
 function tankyard.finish_round(team, reason)
   emit("finish_round", optional("number", team, "finish_round", "team") or 0,
     reason == nil and "Round over" or tostring(reason))
+end
+-- Map logic requests take effect at the start of the next tick.
+function tankyard.map_signal(channel) emit("map_signal", number("map_signal", channel, "channel")) end
+function tankyard.set_map_counter(counter, value)
+  emit("set_map_counter", number("set_map_counter", counter, "counter"), number("set_map_counter", value, "value"))
+end
+function tankyard.add_map_counter(counter, value)
+  emit("add_map_counter", number("add_map_counter", counter, "counter"), number("add_map_counter", value, "value"))
+end
+function tankyard.show_map_group(group, shown)
+  if shown ~= nil and type(shown) ~= "boolean" then
+    error("tankyard.show_map_group: shown must be true or false", 2)
+  end
+  emit("show_map_group", number("show_map_group", group, "group"), shown ~= false)
 end
 function tankyard.set_score(tank, score) emit("set_score", id("set_score", tank), number("set_score", score, "score")) end
 function tankyard.set_team_score(team, score)

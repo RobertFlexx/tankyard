@@ -9,6 +9,12 @@ pub struct Document {
     pub format: u32,
     pub map: MapDef,
     pub rules: GameRules,
+    /// Groups the editor will not select, as a mask. Editing only.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub locked: u32,
+}
+fn is_zero(mask: &u32) -> bool {
+    *mask == 0
 }
 /// An object's place in the document. Keys order as the editor draws:
 /// walls, blocks, pads, decorations, triggers, then markers.
@@ -210,6 +216,7 @@ impl Default for Document {
             format: 1,
             map,
             rules: Default::default(),
+            locked: 0,
         }
     }
 }
@@ -227,8 +234,18 @@ impl Document {
             return Err("Editor document exceeds 2 MiB.".into());
         }
         let doc: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-        if doc.format != 1
-            || doc.map.id.len() > 48
+        if doc.format != 1 {
+            return Err("Unsupported editor format or document limits exceeded.".into());
+        }
+        doc.check_draft()?;
+        Ok(doc)
+    }
+    /// The limits every draft keeps, playable or not: sizes, counts,
+    /// coordinates, rules and drawn features. Imports and plugin tools pass
+    /// through here; full validation runs on playtest and export.
+    pub fn check_draft(&self) -> Result<(), String> {
+        let doc = self;
+        if doc.map.id.len() > 48
             || doc.map.name.len() > 64
             || doc.map.description.len() > 2048
             || !(900. ..=16000.).contains(&doc.map.width)
@@ -261,8 +278,7 @@ impl Document {
         // behavior at export/playtest, and validate drawn features on import.
         let mut preview_map = doc.map.clone();
         preview_map.triggers.clear();
-        validate_map_features(&preview_map)?;
-        Ok(doc)
+        validate_map_features(&preview_map)
     }
     pub fn validate(&self) -> Result<(), String> {
         self.rules.validate()?;
@@ -438,7 +454,52 @@ impl Document {
             return;
         };
         let (w, h) = (self.map.width, self.map.height);
-        let center = [(b[0] + b[2] * 0.5) * w, (b[1] + b[3] * 0.5) * h];
+        self.transform_about(
+            keys,
+            transform,
+            [(b[0] + b[2] * 0.5) * w, (b[1] + b[3] * 0.5) * h],
+        );
+    }
+    /// Copies of the objects of `keys` mirrored across the arena's middle
+    /// line (FlipX) or its horizon (FlipY); turns mirror like flips. Returns
+    /// the copies' keys, which stop at a limit.
+    pub fn mirror_copy(&mut self, keys: &[Key], axis: Transform) -> Vec<Key> {
+        let objects: Vec<Object> = keys.iter().filter_map(|&key| self.object(key)).collect();
+        let copies: Vec<Key> = objects
+            .into_iter()
+            .filter_map(|object| self.insert(object))
+            .collect();
+        let center = [self.map.width * 0.5, self.map.height * 0.5];
+        self.transform_about(&copies, axis, center);
+        copies
+    }
+    /// Stretch the objects of `originals` from the bounds `from` to `to`.
+    /// Points move with the stretch but keep their size.
+    pub fn stretch(&mut self, originals: &[(Key, Object)], from: [f32; 4], to: [f32; 4]) {
+        let scale = [to[2] / from[2].max(1e-6), to[3] / from[3].max(1e-6)];
+        for (key, original) in originals {
+            let r = original.rect();
+            let mut object = original.clone();
+            if object.is_point() {
+                let mid = [
+                    to[0] + (r[0] + r[2] * 0.5 - from[0]) * scale[0],
+                    to[1] + (r[1] + r[3] * 0.5 - from[1]) * scale[1],
+                ];
+                object.set_rect([mid[0] - r[2] * 0.5, mid[1] - r[3] * 0.5, r[2], r[3]]);
+            } else {
+                object.set_rect([
+                    to[0] + (r[0] - from[0]) * scale[0],
+                    to[1] + (r[1] - from[1]) * scale[1],
+                    r[2] * scale[0],
+                    r[3] * scale[1],
+                ]);
+            }
+            self.replace(*key, object);
+        }
+    }
+    /// Turn or mirror the objects of `keys` about `center`, in world units.
+    fn transform_about(&mut self, keys: &[Key], transform: Transform, center: [f32; 2]) {
+        let (w, h) = (self.map.width, self.map.height);
         let mirror = !transform.turns();
         self.edit_each(keys, |object, r| {
             let mid = transform.point([(r[0] + r[2] * 0.5) * w, (r[1] + r[3] * 0.5) * h], center);
@@ -676,14 +737,17 @@ impl Document {
                 );
             }
             let senders = |channel: u8| {
-                m.triggers
-                    .iter()
-                    .any(|t| t.action == TriggerAction::Signal && t.group == channel)
+                m.triggers.iter().any(|t| match t.action {
+                    TriggerAction::Signal => t.group == channel,
+                    TriggerAction::Random => (i32::from(t.group)..i32::from(t.group) + t.amount)
+                        .contains(&i32::from(channel)),
+                    _ => false,
+                })
             };
             let counted = |counter: u8| {
                 m.triggers
                     .iter()
-                    .any(|t| t.action == TriggerAction::Count && t.group == counter)
+                    .any(|t| t.action.targets_counter() && t.group == counter)
             };
             match trigger.when {
                 TriggerWhen::Signal if !senders(trigger.source) => note(
@@ -703,6 +767,22 @@ impl Document {
                     false,
                 ),
                 _ => {}
+            }
+            if let Some(test) = &trigger.only_if
+                && test.kind == TestKind::Counter
+            {
+                let other = (test.against != test.index).then_some(test.against);
+                for counter in [Some(test.index), other].into_iter().flatten() {
+                    if counter > 0 && !counted(counter) {
+                        note(
+                            key,
+                            format!(
+                                "{name} checks counter {counter}, which nothing changes, so its gate never moves."
+                            ),
+                            false,
+                        );
+                    }
+                }
             }
             if trigger.action == TriggerAction::Signal
                 && !m
@@ -963,7 +1043,20 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         TriggerWhen::Start => "When the round starts".into(),
         TriggerWhen::Signal => format!("On signal {}", t.source),
         TriggerWhen::Counter => format!("When counter {} reaches {}", t.source, t.threshold),
+        TriggerWhen::Occupied if t.threshold > 1 => format!(
+            "Every {} while {} tanks{team} are inside",
+            seconds(t.seconds),
+            t.threshold
+        ),
+        TriggerWhen::Occupied => {
+            format!("Every {} while {who}{team} is inside", seconds(t.seconds))
+        }
+        TriggerWhen::Cleared => format!("When the last {}{team} leaves", &who[2..]),
+        TriggerWhen::Destroyed => format!("When {who}{team} is destroyed here"),
     };
+    if let Some(test) = &t.only_if {
+        text += &format!(", if {}", describe_test(test));
+    }
     if t.chance < 100 {
         text += &format!(", {}% of the time", t.chance);
     }
@@ -980,6 +1073,17 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         }
         TriggerAction::Count => format!("add {} to counter {}", t.amount, t.group),
         TriggerAction::Shapes => format!("spawn {} shapes here", t.amount),
+        TriggerAction::Set => format!("set counter {} to {}", t.group, t.amount),
+        TriggerAction::Random => format!(
+            "send one of signals {} to {}",
+            t.group,
+            i32::from(t.group) + t.amount - 1
+        ),
+        TriggerAction::Heal => format!("repair {}% of health here", t.amount),
+        TriggerAction::Hurt => format!("deal {}% of health here", t.amount),
+        TriggerAction::Award => format!("award {} points here", t.amount),
+        TriggerAction::Calculate => describe_math(t),
+        TriggerAction::Script => format!("raise script event \u{201c}{}\u{201d}", t.text.trim()),
     };
     if t.action.targets_group() && t.duration > 0. {
         text += &format!(" for {}", seconds(t.duration));
@@ -988,7 +1092,7 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         text += &format!(", {} later", seconds(t.delay));
     }
     text.push('.');
-    if t.when.watches_area() && t.seconds > 0. {
+    if t.when.watches_area() && t.when != TriggerWhen::Occupied && t.seconds > 0. {
         text += &format!(" Rests {} after acting.", seconds(t.seconds));
     }
     if t.once {
@@ -999,6 +1103,59 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
     }
     text
 }
+/// A gate in words: "counter 1 is at least 3".
+pub fn describe_test(test: &TriggerTest) -> String {
+    match test.kind {
+        TestKind::Counter if test.against > 0 => format!(
+            "counter {} {} counter {}",
+            test.index,
+            test.compare.words(),
+            test.against
+        ),
+        TestKind::Counter => format!(
+            "counter {} {} {}",
+            test.index,
+            test.compare.words(),
+            test.value
+        ),
+        TestKind::Shown => format!("group {} is shown", test.index),
+        TestKind::Hidden => format!("group {} is hidden", test.index),
+    }
+}
+/// A gate in a few characters: "#1≥3", "G4 on".
+fn test_tag(test: &TriggerTest) -> String {
+    match test.kind {
+        TestKind::Counter if test.against > 0 => {
+            format!("#{}{}#{}", test.index, test.compare.symbol(), test.against)
+        }
+        TestKind::Counter => format!("#{}{}{}", test.index, test.compare.symbol(), test.value),
+        TestKind::Shown => format!("G{} on", test.index),
+        TestKind::Hidden => format!("G{} off", test.index),
+    }
+}
+/// What Calculate does, in words.
+fn describe_math(t: &MapTrigger) -> String {
+    let (c, x) = (
+        t.group,
+        if t.operand > 0 {
+            format!("counter {}", t.operand)
+        } else {
+            t.amount.to_string()
+        },
+    );
+    match t.math {
+        MathOp::Add => format!("add {x} to counter {c}"),
+        MathOp::Subtract => format!("take {x} from counter {c}"),
+        MathOp::Multiply => format!("multiply counter {c} by {x}"),
+        MathOp::Divide => format!("divide counter {c} by {x}, rounding down"),
+        MathOp::Remainder => format!("keep counter {c}'s remainder after dividing by {x}"),
+        MathOp::Lowest => format!("lower counter {c} to {x} if it is above"),
+        MathOp::Highest => format!("raise counter {c} to {x} if it is below"),
+        MathOp::Copy => format!("set counter {c} to {x}"),
+        MathOp::Random => format!("set counter {c} to a random number from 0 below {x}"),
+        MathOp::Flip => format!("flip counter {c} between 0 and 1"),
+    }
+}
 /// A trigger in a few characters, for its badge on the canvas.
 pub fn trigger_tag(t: &MapTrigger) -> String {
     let when = match t.when {
@@ -1008,6 +1165,9 @@ pub fn trigger_tag(t: &MapTrigger) -> String {
         TriggerWhen::Start => "Start".into(),
         TriggerWhen::Signal => format!("Signal {}", t.source),
         TriggerWhen::Counter => format!("#{} = {}", t.source, t.threshold),
+        TriggerWhen::Occupied => format!("Inside {}", seconds(t.seconds).replace(' ', "")),
+        TriggerWhen::Cleared => "Empty".into(),
+        TriggerWhen::Destroyed => "Destroy".into(),
     };
     let action = match t.action {
         TriggerAction::Toggle => format!("Toggle {}", t.group),
@@ -1018,8 +1178,40 @@ pub fn trigger_tag(t: &MapTrigger) -> String {
         TriggerAction::Signal => format!("Send {}", t.group),
         TriggerAction::Count => format!("#{} {:+}", t.group, t.amount),
         TriggerAction::Shapes => format!("{} shapes", t.amount),
+        TriggerAction::Set => format!("#{} = {}", t.group, t.amount),
+        TriggerAction::Random => format!(
+            "Send {}\u{2013}{}",
+            t.group,
+            i32::from(t.group) + t.amount - 1
+        ),
+        TriggerAction::Heal => format!("+{}%", t.amount),
+        TriggerAction::Hurt => format!("\u{2212}{}%", t.amount),
+        TriggerAction::Award => format!("+{} pts", t.amount),
+        TriggerAction::Calculate => {
+            let x = if t.operand > 0 {
+                format!("#{}", t.operand)
+            } else {
+                t.amount.to_string()
+            };
+            match t.math {
+                MathOp::Add => format!("#{} += {x}", t.group),
+                MathOp::Subtract => format!("#{} \u{2212}= {x}", t.group),
+                MathOp::Multiply => format!("#{} \u{d7}= {x}", t.group),
+                MathOp::Divide => format!("#{} \u{f7}= {x}", t.group),
+                MathOp::Remainder => format!("#{} %= {x}", t.group),
+                MathOp::Lowest => format!("#{} min {x}", t.group),
+                MathOp::Highest => format!("#{} max {x}", t.group),
+                MathOp::Copy => format!("#{} = {x}", t.group),
+                MathOp::Random => format!("#{} = rnd {x}", t.group),
+                MathOp::Flip => format!("#{} flip", t.group),
+            }
+        }
+        TriggerAction::Script => format!("Script {}", t.text.trim()),
     };
-    format!("{when} \u{2192} {action}")
+    match &t.only_if {
+        Some(test) => format!("{when} if {} \u{2192} {action}", test_tag(test)),
+        None => format!("{when} \u{2192} {action}"),
+    }
 }
 
 #[cfg(test)]

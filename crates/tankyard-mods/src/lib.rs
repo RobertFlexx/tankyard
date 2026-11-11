@@ -207,6 +207,10 @@ pub struct Manifest {
     /// Lua entry scripts, run in order inside the sandbox (API version 2).
     #[serde(default)]
     pub scripts: Vec<String>,
+    /// Lua entry scripts for the Arena Workshop: tools and checks that run
+    /// in the same sandbox while a map is edited (API version 2).
+    #[serde(default)]
+    pub editor: Vec<String>,
     #[serde(default)]
     pub dependencies: Vec<String>,
     #[serde(default)]
@@ -234,6 +238,25 @@ pub struct Manifest {
     pub staff: Option<staff::StaffSection>,
 }
 
+impl Manifest {
+    /// Workshop plugins and nothing a match would load: such packs stay out
+    /// of games so enabling them never marks a match as modded.
+    pub fn editor_only(&self) -> bool {
+        !self.editor.is_empty()
+            && self.scripts.is_empty()
+            && self.classes.is_empty()
+            && self.maps.is_empty()
+            && self.rules.is_none()
+            && self.hooks.is_empty()
+            && self.mode_name.is_none()
+            && self.textures.is_empty()
+            && self.menu.is_none()
+            && self.theme.is_none()
+            && self.text.is_empty()
+            && self.staff.is_none()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Trigger {
@@ -249,9 +272,11 @@ pub enum Trigger {
     RoundEnd,
     /// A tank lost health; the actor is the victim and the target its attacker.
     Damage,
+    /// A map trigger's Script event action.
+    MapEvent,
 }
 impl Trigger {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Tick,
         Self::Spawn,
         Self::Kill,
@@ -263,6 +288,7 @@ impl Trigger {
         Self::RoundStart,
         Self::RoundEnd,
         Self::Damage,
+        Self::MapEvent,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -277,6 +303,7 @@ impl Trigger {
             Self::RoundStart => "round_start",
             Self::RoundEnd => "round_end",
             Self::Damage => "damage",
+            Self::MapEvent => "map_event",
         }
     }
     pub fn from_name(name: &str) -> Option<Self> {
@@ -424,6 +451,22 @@ pub enum Effect {
         #[serde(default)]
         widget: Option<HudWidget>,
     },
+    /// Fire the map's On signal triggers on `channel` (1 to 32).
+    MapSignal {
+        channel: u8,
+    },
+    /// Set map counter `counter` (1 to 8) to `value`, or add `value` to it.
+    MapCounter {
+        counter: u8,
+        value: i32,
+        #[serde(default)]
+        add: bool,
+    },
+    /// Show or hide map group `group` (1 to 32).
+    MapGroup {
+        group: u8,
+        shown: bool,
+    },
 }
 /// Widgets one pack may show to one player (or to everyone).
 pub const MAX_HUD_WIDGETS: usize = 16;
@@ -546,6 +589,13 @@ impl Effect {
             Self::Hud { id, widget } => {
                 identifier(id) && widget.as_ref().is_none_or(HudWidget::valid)
             }
+            Self::MapSignal { channel } => (1..=tankyard_content::MAP_GROUPS).contains(channel),
+            Self::MapCounter { counter, value, .. } => {
+                (1..=tankyard_content::MAP_COUNTERS).contains(counter)
+                    && (-tankyard_content::COUNTER_LIMIT..=tankyard_content::COUNTER_LIMIT)
+                        .contains(value)
+            }
+            Self::MapGroup { group, .. } => (1..=tankyard_content::MAP_GROUPS).contains(group),
         };
         if !valid {
             return Err("invalid hook action or class reference".into());
@@ -683,13 +733,16 @@ pub fn parse_manifest(pack: &PackFiles) -> Result<Manifest, String> {
             .is_some_and(|text| !display_text(text, 64))
         || manifest.dependencies.len() > MAX_MODS
         || manifest.dependencies.iter().any(|d| !identifier(d))
-        || (!manifest.scripts.is_empty() && !scripts_allowed)
-        || manifest.scripts.len() > MAX_SCRIPTS
-        || manifest.scripts.iter().collect::<HashSet<_>>().len() != manifest.scripts.len()
-        || manifest
-            .scripts
-            .iter()
-            .any(|script| !script.ends_with(".lua") || !pack.contains(script))
+        || ((!manifest.scripts.is_empty() || !manifest.editor.is_empty()) && !scripts_allowed)
+        || [&manifest.scripts, &manifest.editor]
+            .into_iter()
+            .any(|entries| {
+                entries.len() > MAX_SCRIPTS
+                    || entries.iter().collect::<HashSet<_>>().len() != entries.len()
+                    || entries
+                        .iter()
+                        .any(|script| !script.ends_with(".lua") || !pack.contains(script))
+            })
     {
         return Err("invalid, duplicate, or incompatible mod manifest".into());
     }
@@ -1083,6 +1136,17 @@ mod tests {
     #[test]
     fn invalid_hook_actions_and_deep_conditions_are_rejected() {
         let c = Content::builtin();
+        for value in [i32::MIN, i32::MAX] {
+            assert!(
+                Effect::MapCounter {
+                    counter: 1,
+                    value,
+                    add: false,
+                }
+                .validate(&c)
+                .is_err()
+            );
+        }
         assert!(
             Effect::Teleport {
                 position: [-1.0, 0.0]

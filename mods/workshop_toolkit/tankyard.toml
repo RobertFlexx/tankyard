@@ -1,0 +1,17 @@
+# Storefront details shown on the Mods page. The tools live in tools.lua.
+[mod]
+name = "Workshop Toolkit"
+version = "1.0"
+description = "Tools for the Arena Workshop: repeat, ring, frame, snap to grid and four-way mirror, plus a narrow-gap check."
+license = "MIT OR Apache-2.0"
+icon = "icon.svg"
+tags = ["editor", "lua", "example"]
+
+[creator]
+name = "Tank Yard"
+url = "https://github.com/RobertFlexx/tankyard"
+
+[links]
+source = "https://github.com/RobertFlexx/tankyard/tree/main/mods/workshop_toolkit"
+download = "https://github.com/RobertFlexx/tankyard/releases/latest"
+issues = "https://github.com/RobertFlexx/tankyard/issues"

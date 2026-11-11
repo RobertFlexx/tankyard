@@ -71,6 +71,36 @@ impl Form<'_> {
         );
         self.y += 32. * self.s;
     }
+    /// How much of a budget is used, as a labelled bar.
+    pub fn meter(&mut self, title: &str, used: usize, limit: usize) {
+        let s = self.s;
+        let share = (used as f32 / limit.max(1) as f32).clamp(0., 1.);
+        label(title, self.x, self.y + 14. * s, 12.5 * s, text_color());
+        right_label(
+            &format!("{used} / {limit}"),
+            self.x + self.w,
+            self.y + 14. * s,
+            12. * s,
+            muted_color(),
+        );
+        let bar = Rect::new(self.x, self.y + 21. * s, self.w, 5. * s);
+        draw_rectangle(
+            bar.x,
+            bar.y,
+            bar.w,
+            bar.h,
+            mix(surface_color(), bg_color(), 0.5),
+        );
+        let color = if share >= 1. {
+            RED
+        } else if share > 0.85 {
+            AMBER
+        } else {
+            accent()
+        };
+        draw_rectangle(bar.x, bar.y, bar.w * share, bar.h, color);
+        self.y += 34. * s;
+    }
     pub fn note(&mut self, text: &str) {
         self.y = wrap(
             text,
@@ -405,6 +435,10 @@ enum Request {
     Reveal,
     Check,
     Restart,
+    /// Carry out one trigger in the preview now.
+    Fire(usize),
+    RunTool(usize, usize),
+    ReloadPlugins,
     Notice(String),
 }
 
@@ -434,6 +468,7 @@ impl Editor {
             ("Check", Tab::Check),
             ("Rules", Tab::Rules),
             ("Files", Tab::Files),
+            ("Tools", Tab::Tools),
         ];
         let w = (r.w - 16. * s) / tabs.len() as f32;
         for (i, (title, tab)) in tabs.into_iter().enumerate() {
@@ -481,6 +516,7 @@ impl Editor {
                 Tab::Check => self.check_tab(x, y, width, s),
                 Tab::Rules => self.rules_tab(x, y, width, s),
                 Tab::Files => self.files_tab(x, y, width, s),
+                Tab::Tools => self.tools_tab(x, y, width, s),
             }
         };
         self.content_height = (end - clip.y + 22. * s).max(0.);
@@ -516,6 +552,12 @@ impl Editor {
             Request::Check => self.check(),
             Request::Restart => {
                 self.preview.restart(&self.doc.map);
+            }
+            Request::RunTool(plugin, tool) => self.run_tool(plugin, tool, None),
+            Request::ReloadPlugins => self.reload_plugins(),
+            Request::Fire(index) => {
+                let config = self.config();
+                self.preview.fire(&self.doc.map, &config, index, self.probe);
             }
             Request::Notice(text) => self.say(text),
         }
@@ -650,6 +692,7 @@ impl Editor {
         let free = self.doc.next_free_group();
         let (map_w, map_h) = (self.doc.map.width, self.doc.map.height);
         let mut hidden = self.doc.map.hidden_groups.clone();
+        let mut locked = self.doc.locked;
         let salt = 100 + key_salt(key);
         let mut request = Request::None;
         let mut f = self.form(x, y, w, s, salt);
@@ -684,6 +727,11 @@ impl Editor {
                         hidden.push(group);
                         hidden.sort_unstable();
                     }
+                }
+                let bit = MapDef::group_bit(group);
+                let mut lock = locked & bit != 0;
+                if f.toggle(&format!("Lock group {group} in the editor"), &mut lock) {
+                    locked = if lock { locked | bit } else { locked & !bit };
                 }
             }
             if matches!(object, Object::Trigger(_)) && group > 0 {
@@ -804,6 +852,16 @@ impl Editor {
         let end = f.y;
         if hidden != self.doc.map.hidden_groups {
             self.edit_property(|doc| doc.map.hidden_groups = hidden);
+        }
+        if locked != self.doc.locked {
+            self.edit_property(|doc| doc.locked = locked);
+            if locked & MapDef::group_bit(object.group()) != 0 {
+                self.selection.clear();
+                return (
+                    end,
+                    Request::Notice("Locked. Clicks now pass through this group; Ctrl+Shift+L unlocks every group.".into()),
+                );
+            }
         }
         if object != before {
             if let (Object::Base(a), Object::Base(b)) = (&object, &before)
@@ -1077,10 +1135,12 @@ impl Editor {
                 13. * s,
                 text_color(),
             );
+            let fire = Rect::new(r.right() - 50. * s, r.y + 4. * s, 44. * s, 19. * s);
+            let firing = small_button(fire, "Fire", s * 0.62);
             if !status.is_empty() {
                 right_label(
                     status,
-                    r.right() - 8. * s,
+                    fire.x - 8. * s,
                     r.y + 17. * s,
                     11. * s,
                     muted_color(),
@@ -1095,7 +1155,9 @@ impl Editor {
                     muted_color(),
                 );
             }
-            if over && is_mouse_button_pressed(MouseButton::Left) {
+            if firing {
+                request = Request::Fire(i);
+            } else if over && !contains(fire) && is_mouse_button_pressed(MouseButton::Left) {
                 request = Request::Locate(Key::Trigger(i));
             }
             f.y += h + 5. * s;
@@ -1114,6 +1176,20 @@ impl Editor {
         let mut request = Request::None;
         let problems = self.problems.clone().unwrap_or_default();
         let checked = self.problems.is_some();
+        let m = &self.doc.map;
+        let emitters = m
+            .decor
+            .iter()
+            .filter(|d| d.kind == DecorKind::Emitter)
+            .count();
+        let budgets = [
+            ("Walls and blocks", m.walls.len() + m.blocks.len(), 2048),
+            ("Pads", m.zones.len(), 256),
+            ("Decor", m.decor.len(), 1024),
+            ("Particle emitters", emitters, 48),
+            ("Triggers", m.triggers.len(), 128),
+            ("Spawn regions", m.spawn_regions.len(), 32),
+        ];
         let mut f = self.form(x, y, w, s, 6);
         if f.buttons(&["Check again"], true).is_some() {
             request = Request::Check;
@@ -1171,6 +1247,10 @@ impl Editor {
             f.y += 4. * s;
             f.note("Amber notes are worth a look but do not stop anything.");
         }
+        f.heading("Room left");
+        for (title, used, limit) in budgets {
+            f.meter(title, used, limit);
+        }
         (f.y, request)
     }
 
@@ -1201,6 +1281,157 @@ impl Editor {
             self.edit_property(|doc| doc.rules = rules);
         }
         (end, Request::None)
+    }
+
+    fn tools_tab(&mut self, x: f32, y: f32, w: f32, s: f32) -> (f32, Request) {
+        use tankyard_lua::editor::{Param, ParamValue, Tool};
+        let mut request = Request::None;
+        let (packs, errors) = match &self.workshop.plugins {
+            Some(plugins) => (
+                plugins
+                    .plugins
+                    .iter()
+                    .map(|p| {
+                        let checks = p.checks.join(", ");
+                        (
+                            p.id.clone(),
+                            format!("{}  {}", p.name, p.version),
+                            p.tools.clone(),
+                            checks,
+                            p.stopped.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                plugins.errors.clone(),
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
+        let held = self.workshop.held.clone();
+        let report = self.workshop.report.clone();
+        let values: Vec<Vec<Vec<ParamValue>>> = packs
+            .iter()
+            .enumerate()
+            .map(|(p, (_, _, tools, _, _))| {
+                (0..tools.len()).map(|t| self.tool_values(p, t)).collect()
+            })
+            .collect();
+        let mut f = self.form(x, y, w, s, 7);
+        f.heading("Plugins");
+        if f.buttons(&["Reload plugins"], true).is_some() {
+            request = Request::ReloadPlugins;
+        }
+        if packs.is_empty() {
+            f.note("No workshop plugins are on. Enable a pack with editor tools in Mods, such as Workshop Toolkit, then press Reload.");
+        }
+        for line in held.iter().chain(&errors) {
+            f.note(line);
+        }
+        if !report.is_empty() {
+            f.heading("Last run");
+            for line in report.iter().take(8) {
+                f.note(line);
+            }
+        }
+        let mut y = f.y;
+        let mut changed = Vec::new();
+        let mut fold = None;
+        for (p, (id, title, tools, checks, stopped)) in packs.iter().enumerate() {
+            let folded = self.prefs.folded.contains(id);
+            let mut f = self.form(x, y, w, s, 800 + p as u64 * 64);
+            let toggle = Rect::new(x + w - 64. * s, f.y + 2. * s, 64. * s, 22. * s);
+            if button(
+                toggle,
+                if folded { "Show" } else { "Hide" },
+                false,
+                true,
+                s * 0.62,
+            ) {
+                fold = Some(id.clone());
+            }
+            f.heading(title);
+            if let Some(reason) = stopped {
+                f.note(&format!(
+                    "Stopped: {reason}. Reload plugins to start it again."
+                ));
+            }
+            if folded {
+                f.note(&match tools.len() {
+                    1 => "1 tool put away.".to_owned(),
+                    n => format!("{n} tools put away."),
+                });
+                y = f.y;
+                continue;
+            }
+            if !checks.is_empty() {
+                f.note(&format!("Adds checks to Check: {checks}."));
+            }
+            y = f.y;
+            for (
+                t,
+                Tool {
+                    id: tool_id,
+                    name,
+                    description,
+                    params,
+                },
+            ) in tools.iter().enumerate()
+            {
+                let mut f = self.form(x, y, w, s, 801 + p as u64 * 64 + t as u64);
+                f.y += 8. * s;
+                draw_rectangle(x, f.y, 3. * s, 18. * s, accent());
+                label(name, x + 10. * s, f.y + 14. * s, 14. * s, text_color());
+                f.y += 32. * s;
+                if !description.is_empty() {
+                    f.note(description);
+                }
+                let mut current = values[p][t].clone();
+                for (spec, value) in params.iter().zip(current.iter_mut()) {
+                    match (&spec.kind, value) {
+                        (Param::Number { min, max, step, .. }, ParamValue::Number(v)) => {
+                            f.number(&spec.name, v, [*min, *max], *step);
+                        }
+                        (Param::Integer { min, max, .. }, ParamValue::Integer(v)) => {
+                            f.integer(&spec.name, v, [*min, *max]);
+                        }
+                        (Param::Toggle(_), ParamValue::Toggle(v)) => {
+                            f.toggle(&spec.name, v);
+                        }
+                        (Param::Choice { options, .. }, ParamValue::Choice(v)) => {
+                            let indices: Vec<usize> = (0..options.len()).collect();
+                            f.cycle(&spec.name, v, &indices, |i| options[i].clone());
+                        }
+                        (Param::Text { limit, .. }, ParamValue::Text(v)) => {
+                            f.text(&spec.name, v, *limit);
+                        }
+                        _ => {}
+                    }
+                }
+                if f.buttons(&[&format!("Run {name}")], stopped.is_none())
+                    .is_some()
+                {
+                    request = Request::RunTool(p, t);
+                }
+                if current != values[p][t] {
+                    changed.push(((id.clone(), tool_id.clone()), current));
+                }
+                y = f.y + 6. * s;
+            }
+        }
+        let mut f = self.form(x, y, w, s, 9);
+        f.note("Ctrl+R runs the last tool again. A tool's changes undo as one step.");
+        let end = f.y;
+        for (key, value) in changed {
+            self.workshop.values.insert(key, value);
+        }
+        if let Some(id) = fold {
+            match self.prefs.folded.iter().position(|known| *known == id) {
+                Some(at) => {
+                    self.prefs.folded.remove(at);
+                }
+                None => self.prefs.folded.push(id),
+            }
+        }
+        (end, request)
     }
 
     fn files_tab(&mut self, x: f32, y: f32, w: f32, s: f32) -> (f32, Request) {
@@ -1384,17 +1615,31 @@ fn trigger_form(f: &mut Form, t: &mut MapTrigger) {
     f.pick("", &mut t.when, &TriggerWhen::ALL, TriggerWhen::name, 3);
     match t.when {
         TriggerWhen::Every => {
+            t.seconds = t.seconds.max(0.5);
             f.number("Every (s)", &mut t.seconds, [0.5, 3600.], 0.5);
             f.number("First wait (s)", &mut t.offset, [0., 3600.], 0.5);
         }
         TriggerWhen::Start => {
             f.number("Seconds into the round", &mut t.seconds, [0., 3600.], 0.5);
         }
-        TriggerWhen::Enter | TriggerWhen::Exit => {
+        TriggerWhen::Enter | TriggerWhen::Exit | TriggerWhen::Cleared | TriggerWhen::Destroyed => {
             f.pick("Who", &mut t.who, &TriggerWho::ALL, TriggerWho::name, 3);
             f.stepper("Team (0 for any)", &mut t.team, [0, 4], None);
             f.number("Rest after acting (s)", &mut t.seconds, [0., 3600.], 0.5);
-            f.note("The dashed area on the canvas is what tanks cross.");
+            f.note(match t.when {
+                TriggerWhen::Cleared => "Acts when the last noticed tank leaves or is destroyed.",
+                TriggerWhen::Destroyed => "Acts when a noticed tank is destroyed in the area.",
+                _ => "The dashed area on the canvas is what tanks cross.",
+            });
+        }
+        TriggerWhen::Occupied => {
+            f.pick("Who", &mut t.who, &TriggerWho::ALL, TriggerWho::name, 3);
+            f.stepper("Team (0 for any)", &mut t.team, [0, 4], None);
+            t.threshold = t.threshold.clamp(1, TRIGGER_CROWD);
+            f.integer("Tanks needed", &mut t.threshold, [1, TRIGGER_CROWD]);
+            t.seconds = t.seconds.max(0.25);
+            f.number("Every (s)", &mut t.seconds, [0.25, 3600.], 0.25);
+            f.note("Acts as soon as enough tanks are inside, then again each period.");
         }
         TriggerWhen::Signal => {
             f.stepper("Signal channel", &mut t.source, [1, MAP_GROUPS], None);
@@ -1406,6 +1651,7 @@ fn trigger_form(f: &mut Form, t: &mut MapTrigger) {
         }
     }
     f.heading("Do");
+    let chosen = t.action;
     f.pick(
         "",
         &mut t.action,
@@ -1439,13 +1685,110 @@ fn trigger_form(f: &mut Form, t: &mut MapTrigger) {
             t.group = t.group.clamp(1, MAP_COUNTERS);
             f.stepper("Counter", &mut t.group, [1, MAP_COUNTERS], None);
             t.amount = t.amount.clamp(-COUNTER_LIMIT, COUNTER_LIMIT);
-            f.integer("Add (negative takes away)", &mut t.amount, [-1000, 1000]);
+            f.integer(
+                "Add (negative takes away)",
+                &mut t.amount,
+                [-COUNTER_LIMIT, COUNTER_LIMIT],
+            );
         }
         TriggerAction::Shapes => {
             t.amount = t.amount.clamp(1, TRIGGER_SHAPES);
             f.integer("Shapes", &mut t.amount, [1, TRIGGER_SHAPES]);
             f.note("Shapes appear at random inside this trigger's area.");
         }
+        TriggerAction::Set => {
+            t.group = t.group.clamp(1, MAP_COUNTERS);
+            f.stepper("Counter", &mut t.group, [1, MAP_COUNTERS], None);
+            t.amount = t.amount.clamp(-COUNTER_LIMIT, COUNTER_LIMIT);
+            f.integer("Value", &mut t.amount, [-COUNTER_LIMIT, COUNTER_LIMIT]);
+        }
+        TriggerAction::Random => {
+            t.group = t.group.clamp(1, MAP_GROUPS - 1);
+            f.stepper("First channel", &mut t.group, [1, MAP_GROUPS - 1], None);
+            let most = i32::from(MAP_GROUPS - t.group) + 1;
+            t.amount = t.amount.clamp(2, most);
+            f.integer("Channels", &mut t.amount, [2, most]);
+            f.note("Sends on one channel, picked at random each time.");
+        }
+        TriggerAction::Heal | TriggerAction::Hurt => {
+            t.amount = t.amount.clamp(1, 100);
+            f.integer("Percent of health", &mut t.amount, [1, 100]);
+        }
+        TriggerAction::Award => {
+            t.amount = t.amount.clamp(1, TRIGGER_AWARD);
+            f.integer("Points", &mut t.amount, [1, TRIGGER_AWARD]);
+        }
+        TriggerAction::Calculate => {
+            t.group = t.group.clamp(1, MAP_COUNTERS);
+            f.stepper("Counter", &mut t.group, [1, MAP_COUNTERS], None);
+            f.pick("", &mut t.math, &MathOp::ALL, MathOp::name, 3);
+            if t.math.uses_operand() {
+                let mut other = t.operand > 0;
+                f.toggle("With another counter", &mut other);
+                if other {
+                    t.operand = t.operand.clamp(1, MAP_COUNTERS);
+                    f.stepper("Other counter", &mut t.operand, [1, MAP_COUNTERS], None);
+                } else {
+                    t.operand = 0;
+                    f.integer("Number", &mut t.amount, [-COUNTER_LIMIT, COUNTER_LIMIT]);
+                }
+            }
+            f.note("Results stay within \u{b1}99,999. Dividing by zero changes nothing.");
+        }
+        TriggerAction::Script => {
+            // Picked just now: turn whatever text it had into a name.
+            if chosen != TriggerAction::Script && !script_event_name(t.text.trim()) {
+                t.text = script_name(&t.text);
+                if t.text.is_empty() {
+                    t.text = "event".into();
+                }
+            }
+            if f.text("Event name", &mut t.text, 32) {
+                t.text = script_name(&t.text);
+            }
+            f.note("A script pack hears it with tankyard.on(\"map_event\", ...); event.name is this name. Without such a pack it does nothing.");
+        }
+    }
+    let script = t.action == TriggerAction::Script;
+    if t.action.affects_tanks() || script {
+        if !t.when.watches_area() {
+            f.pick("Who", &mut t.who, &TriggerWho::ALL, TriggerWho::name, 3);
+            f.stepper("Team (0 for any)", &mut t.team, [0, 4], None);
+        }
+        f.note(if script {
+            "event.tanks lists the noticed tanks inside the trigger's area."
+        } else {
+            "Acts on every noticed tank inside the trigger's area."
+        });
+    }
+    f.heading("Only if");
+    let mut gated = t.only_if.is_some();
+    if f.toggle("Check a condition first", &mut gated) {
+        t.only_if = gated.then(TriggerTest::default);
+    }
+    if let Some(test) = &mut t.only_if {
+        f.pick("", &mut test.kind, &TestKind::ALL, TestKind::name, 3);
+        match test.kind {
+            TestKind::Counter => {
+                test.index = test.index.clamp(1, MAP_COUNTERS);
+                f.stepper("Counter", &mut test.index, [1, MAP_COUNTERS], None);
+                f.pick("", &mut test.compare, &Compare::ALL, Compare::symbol, 6);
+                let mut other = test.against > 0;
+                f.toggle("Against another counter", &mut other);
+                if other {
+                    test.against = test.against.clamp(1, MAP_COUNTERS);
+                    f.stepper("Other counter", &mut test.against, [1, MAP_COUNTERS], None);
+                } else {
+                    test.against = 0;
+                    f.integer("Value", &mut test.value, [-COUNTER_LIMIT, COUNTER_LIMIT]);
+                }
+            }
+            TestKind::Shown | TestKind::Hidden => {
+                test.index = test.index.clamp(1, MAP_GROUPS);
+                f.stepper("Group", &mut test.index, [1, MAP_GROUPS], None);
+            }
+        }
+        f.note("Checked when the trigger fires. When it fails, nothing happens and the trigger waits for its next chance.");
     }
     f.heading("Timing");
     f.number("Delay before acting (s)", &mut t.delay, [0., 3600.], 0.5);
@@ -1453,6 +1796,28 @@ fn trigger_form(f: &mut Form, t: &mut MapTrigger) {
     f.number("Chance %", &mut chance, [1., 100.], 1.);
     t.chance = chance as u8;
     f.toggle("Once per round", &mut t.once);
+}
+
+/// Typed text made into a script event name: lowercase, `_` for anything
+/// else, starting with a letter.
+fn script_name(text: &str) -> String {
+    // No trimming: a space typed between words must become `_` at once.
+    let mut name: String = text
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(32)
+        .collect();
+    while name.starts_with(|c: char| !c.is_ascii_lowercase()) {
+        name.remove(0);
+    }
+    name
 }
 
 fn effect_form(f: &mut Form, e: &mut ParticleEffect) {

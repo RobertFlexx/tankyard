@@ -84,6 +84,10 @@ impl Entry {
     pub fn verdict(&self) -> Verdict {
         self.report.verdict()
     }
+    /// A pack of workshop plugins and nothing else.
+    pub fn editor_only(&self) -> bool {
+        self.manifest.as_ref().is_some_and(Manifest::editor_only)
+    }
     pub fn approved(&self, settings: &Settings) -> bool {
         !self.report.requires_confirmation() || settings.approved_mods.contains(&self.digest)
     }
@@ -390,7 +394,7 @@ fn ready_in(settings: &Settings, discover: impl FnOnce() -> Vec<Entry>) -> Ready
         // Packs named on the command line, for this run only.
         for path in paths {
             let entry = inspect(path);
-            if entry.staff.is_some() {
+            if entry.staff.is_some() || entry.editor_only() {
                 continue;
             }
             if let Some(error) = &entry.error {
@@ -425,8 +429,9 @@ fn ready_in(settings: &Settings, discover: impl FnOnce() -> Vec<Entry>) -> Ready
             ready.missing.push(id.clone());
             continue;
         };
-        if entry.staff.is_some() {
-            // Staff packs unlock tools; they never load into a match.
+        if entry.staff.is_some() || entry.editor_only() {
+            // Staff packs unlock tools and workshop plugins add editor
+            // tools; neither loads into a match.
             continue;
         }
         if !entry.approved(settings) {
@@ -436,6 +441,37 @@ fn ready_in(settings: &Settings, discover: impl FnOnce() -> Vec<Entry>) -> Ready
             ));
         } else {
             ready.paths.push(PathBuf::from(&entry.path));
+        }
+    }
+    ready
+}
+
+/// Enabled, reviewed packs with workshop plugins, and why others wait.
+pub fn editor_paths(settings: &Settings) -> Ready {
+    let mut ready = Ready::default();
+    let entries: Vec<Entry> = match &settings.session_mods {
+        Some(paths) => paths.iter().map(|path| inspect(path)).collect(),
+        None => discover()
+            .into_iter()
+            .filter(|entry| entry.enabled(settings))
+            .collect(),
+    };
+    for entry in entries {
+        if entry
+            .manifest
+            .as_ref()
+            .is_none_or(|manifest| manifest.editor.is_empty())
+        {
+            continue;
+        }
+        let trusted = settings.session_mods.is_some() && settings.session_mods_trusted;
+        if trusted || entry.approved(settings) {
+            ready.paths.push(PathBuf::from(&entry.path));
+        } else {
+            ready.held.push(format!(
+                "{} changed or was never reviewed; confirm it in Mods first.",
+                entry.name()
+            ));
         }
     }
     ready

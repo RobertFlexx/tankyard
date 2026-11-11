@@ -8,6 +8,7 @@
 //! extensions. Step, memory and command budgets stop runaway scripts;
 //! a failing pack is disabled without applying its partial batch.
 mod compat;
+pub mod editor;
 mod sandbox;
 
 use mlua::{Function, Lua, LuaSerdeExt, Table, Value, Variadic};
@@ -344,6 +345,17 @@ impl ServerPlugin for LuaPlugin {
             event_table.raw_set("x", event.position.x)?;
             event_table.raw_set("y", event.position.y)?;
             event_table.raw_set("tick", event.tick as f64)?;
+            if event.trigger == Trigger::MapEvent
+                && let Some(raised) = world.map_events.get(event.value as usize)
+            {
+                let tanks = lua.create_table_with_capacity(raised.tanks.len().min(256), 0)?;
+                for (index, id) in raised.tanks.iter().take(256).enumerate() {
+                    tanks.raw_set(index + 1, lua_id(*id))?;
+                }
+                event_table.raw_set("name", raised.name.as_str())?;
+                event_table.raw_set("tanks", tanks)?;
+                event_table.raw_set("value", raised.trigger + 1)?;
+            }
             let outcome = dispatch.call::<()>((event.trigger.name(), event_table));
             native.raw_set("read", Value::Nil)?;
             native.raw_set("emit", Value::Nil)?;
@@ -651,8 +663,45 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
             },
             hud(args)?,
         ),
+        "map_signal" => (
+            0,
+            Effect::MapSignal {
+                channel: whole(arg(0), "channel", 1, tankyard_content::MAP_GROUPS.into())? as u8,
+            },
+        ),
+        "set_map_counter" | "add_map_counter" => (
+            0,
+            Effect::MapCounter {
+                counter: whole(arg(0), "counter", 1, tankyard_content::MAP_COUNTERS.into())? as u8,
+                value: whole(
+                    arg(1),
+                    "value",
+                    -tankyard_content::COUNTER_LIMIT,
+                    tankyard_content::COUNTER_LIMIT,
+                )?,
+                add: op == "add_map_counter",
+            },
+        ),
+        "show_map_group" => (
+            0,
+            Effect::MapGroup {
+                group: whole(arg(0), "group", 1, tankyard_content::MAP_GROUPS.into())? as u8,
+                shown: !matches!(arg(1), Some(Value::Boolean(false))),
+            },
+        ),
         _ => return Err(rt(format!("unknown command {op:?}"))),
     })
+}
+
+/// A whole number from `lo` to `hi`.
+fn whole(value: Option<&Value>, what: &str, lo: i32, hi: i32) -> mlua::Result<i32> {
+    let n = number(value, what)?;
+    if n.fract() != 0. || n < f64::from(lo) || n > f64::from(hi) {
+        return Err(rt(format!(
+            "{what} must be a whole number from {lo} to {hi}"
+        )));
+    }
+    Ok(n as i32)
 }
 
 /// `tankyard.hud`'s arguments: tank, id, then the widget's fields (or none
@@ -811,6 +860,15 @@ fn read(
     Ok(match op {
         "tick" => Value::Number(world.tick as f64),
         "time" => Value::Number(f64::from(world.match_state.elapsed)),
+        "map_counter" => {
+            let counter = whole(Some(a), "counter", 1, tankyard_content::MAP_COUNTERS.into())?;
+            Value::Integer(world.match_state.counters[counter as usize - 1].into())
+        }
+        "map_group" => {
+            let group = whole(Some(a), "group", 1, tankyard_content::MAP_GROUPS.into())?;
+            let bit = tankyard_content::MapDef::group_bit(group as u8);
+            Value::Boolean(world.match_state.hidden_groups & bit == 0)
+        }
         "arena" => {
             let t = lua.create_table()?;
             t.raw_set("width", world.config.width)?;

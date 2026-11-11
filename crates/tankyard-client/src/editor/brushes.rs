@@ -177,7 +177,7 @@ pub fn catalog() -> Vec<Vec<Brush>> {
                 },
             ),
             logic(
-                "Exit plate",
+                "Exit pad",
                 [160., 160.],
                 MapTrigger {
                     when: TriggerWhen::Exit,
@@ -187,7 +187,7 @@ pub fn catalog() -> Vec<Vec<Brush>> {
                 },
             ),
             logic(
-                "Round start",
+                "Start",
                 small,
                 MapTrigger {
                     when: TriggerWhen::Start,
@@ -238,7 +238,7 @@ pub fn catalog() -> Vec<Vec<Brush>> {
                 },
             ),
             logic(
-                "Shape drop",
+                "Shapes",
                 area,
                 MapTrigger {
                     when: TriggerWhen::Every,
@@ -249,7 +249,7 @@ pub fn catalog() -> Vec<Vec<Brush>> {
                 },
             ),
             logic(
-                "Boss call",
+                "Boss",
                 area,
                 MapTrigger {
                     when: TriggerWhen::Start,
@@ -266,6 +266,105 @@ pub fn catalog() -> Vec<Vec<Brush>> {
                     when: TriggerWhen::Every,
                     seconds: 5.,
                     chance: 50,
+                    ..Default::default()
+                },
+            ),
+            logic(
+                "Capture",
+                area,
+                MapTrigger {
+                    when: TriggerWhen::Occupied,
+                    action: TriggerAction::Count,
+                    seconds: 1.,
+                    ..Default::default()
+                },
+            ),
+            logic(
+                "Bonus",
+                [120., 120.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Award,
+                    once: true,
+                    amount: 500,
+                    ..Default::default()
+                },
+            ),
+            logic(
+                "Medic",
+                [200., 200.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Heal,
+                    seconds: 15.,
+                    amount: 50,
+                    ..Default::default()
+                },
+            ),
+            logic(
+                "Trap",
+                [160., 160.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Hurt,
+                    seconds: 3.,
+                    amount: 25,
+                    delay: 0.5,
+                    ..Default::default()
+                },
+            ),
+            logic(
+                "Dice",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Every,
+                    action: TriggerAction::Random,
+                    seconds: 15.,
+                    amount: 3,
+                    ..Default::default()
+                },
+            ),
+            logic(
+                "Reset",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Cleared,
+                    action: TriggerAction::Set,
+                    seconds: 0.,
+                    amount: 0,
+                    ..Default::default()
+                },
+            ),
+            logic(
+                "Gate",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Signal,
+                    action: TriggerAction::Signal,
+                    group: 2,
+                    only_if: Some(TriggerTest::default()),
+                    ..Default::default()
+                },
+            ),
+            logic(
+                "Lever",
+                [120., 120.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Calculate,
+                    math: MathOp::Flip,
+                    seconds: 1.,
+                    ..Default::default()
+                },
+            ),
+            logic(
+                "Script",
+                [160., 160.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Script,
+                    seconds: 1.,
+                    text: "door".into(),
                     ..Default::default()
                 },
             ),
@@ -320,7 +419,11 @@ pub fn catalog() -> Vec<Vec<Brush>> {
 /// than just where its badge sits.
 pub fn trigger_area(trigger: &MapTrigger) -> bool {
     trigger.when.watches_area()
-        || matches!(trigger.action, TriggerAction::Boss | TriggerAction::Shapes)
+        || trigger.action.affects_tanks()
+        || matches!(
+            trigger.action,
+            TriggerAction::Boss | TriggerAction::Shapes | TriggerAction::Script
+        )
 }
 
 pub const LOGIC: Color = Color::new(0.93, 0.70, 0.27, 1.0);
@@ -382,7 +485,99 @@ pub fn trigger_badge(action: TriggerAction, r: Rect, lit: f32) {
                 ink,
             );
         }
+        TriggerAction::Set => {
+            for y in [-0.3, 0.3] {
+                draw_line(
+                    c.x - u * 0.6,
+                    c.y + u * y,
+                    c.x + u * 0.6,
+                    c.y + u * y,
+                    line * 1.3,
+                    ink,
+                );
+            }
+            draw_rectangle_lines(
+                c.x - u,
+                c.y - u,
+                u * 2.,
+                u * 2.,
+                line * 0.7,
+                alpha(ink, 0.5),
+            );
+        }
+        TriggerAction::Random => {
+            draw_rectangle_lines(c.x - u, c.y - u, u * 2., u * 2., line, ink);
+            for (x, y) in [(-0.45, -0.45), (0., 0.), (0.45, 0.45)] {
+                draw_circle(c.x + u * x, c.y + u * y, u * 0.18, ink);
+            }
+        }
+        TriggerAction::Heal => {
+            let arm = u * 0.32;
+            draw_rectangle(c.x - arm, c.y - u, arm * 2., u * 2., ink);
+            draw_rectangle(c.x - u, c.y - arm, u * 2., arm * 2., ink);
+        }
+        TriggerAction::Hurt => {
+            for (dx, dy) in [(-0.95, -0.1), (-0.05, -0.1), (0.85, -0.1)] {
+                draw_triangle(
+                    vec2(c.x + u * dx, c.y + u * 0.8),
+                    vec2(c.x + u * (dx + 0.25), c.y + u * (dy - 0.9)),
+                    vec2(c.x + u * (dx + 0.5), c.y + u * 0.8),
+                    ink,
+                );
+            }
+        }
+        TriggerAction::Award => {
+            draw_circle(c.x, c.y, u, ink);
+            draw_circle_lines(
+                c.x,
+                c.y,
+                u * 0.62,
+                line * 0.8,
+                Color::new(0.13, 0.12, 0.10, 1.),
+            );
+        }
+        TriggerAction::Calculate => {
+            // A division sign in a box: arithmetic on a counter.
+            draw_line(c.x - u * 0.6, c.y, c.x + u * 0.6, c.y, line * 1.3, ink);
+            for y in [-0.45, 0.45] {
+                draw_circle(c.x, c.y + u * y, u * 0.16, ink);
+            }
+            draw_rectangle_lines(
+                c.x - u,
+                c.y - u,
+                u * 2.,
+                u * 2.,
+                line * 0.7,
+                alpha(ink, 0.5),
+            );
+        }
+        TriggerAction::Script => {
+            // Angle brackets: something a script answers.
+            for side in [-1., 1.] {
+                let (tip, back) = (c.x + side * u, c.x + side * u * 0.35);
+                draw_line(back, c.y - u * 0.7, tip, c.y, line, ink);
+                draw_line(tip, c.y, back, c.y + u * 0.7, line, ink);
+            }
+            draw_line(
+                c.x + u * 0.15,
+                c.y - u * 0.75,
+                c.x - u * 0.15,
+                c.y + u * 0.75,
+                line * 0.8,
+                ink,
+            );
+        }
     }
+}
+
+/// The corner mark of a trigger that only acts when its gate is open.
+pub fn gate_mark(r: Rect, lit: f32) {
+    let ink = mix(LOGIC, WHITE, lit * 0.6);
+    // On the corner, clear of the action's mark.
+    let size = r.w.min(r.h) * 0.24;
+    let c = vec2(r.right(), r.y);
+    draw_poly(c.x, c.y, 4, size, 0., Color::new(0.13, 0.12, 0.10, 1.));
+    draw_poly_lines(c.x, c.y, 4, size, 0., (size * 0.25).max(1.), ink);
 }
 
 /// A spawn region on the canvas and in the palette.

@@ -79,13 +79,9 @@ impl Preview {
             self.restart(map);
         }
     }
-    /// Advance by `dt` seconds of wall time, with a test tank at `probe`.
-    pub fn advance(&mut self, map: &MapDef, config: &WorldConfig, dt: f32, probe: Option<V2>) {
-        if !self.running {
-            return;
-        }
-        self.carry += dt.clamp(0., 0.1) * self.speed;
-        let tanks: Vec<Occupant> = probe
+    /// The test tank, when it is on the canvas.
+    fn tanks(&self, probe: Option<V2>) -> Vec<Occupant> {
+        probe
             .map(|pos| Occupant {
                 id: 1,
                 pos,
@@ -93,7 +89,37 @@ impl Preview {
                 team: self.probe_team,
             })
             .into_iter()
-            .collect();
+            .collect()
+    }
+    /// Carry out trigger `index` now, whatever its timing, and start the
+    /// preview so its results play out.
+    pub fn fire(&mut self, map: &MapDef, config: &WorldConfig, index: usize, probe: Option<V2>) {
+        self.follow(map);
+        // Time zero counts as untouched; acting there would be undone.
+        self.time = self.time.max(DT);
+        self.running = true;
+        let tanks = self.tanks(probe);
+        let seed = &mut self.seed;
+        self.logic.act_now(
+            index,
+            map,
+            config,
+            self.time,
+            &mut self.hidden,
+            &tanks,
+            &mut || next_random(seed),
+            &mut self.effects,
+        );
+        self.record();
+        self.counters = self.logic.counters;
+    }
+    /// Advance by `dt` seconds of wall time, with a test tank at `probe`.
+    pub fn advance(&mut self, map: &MapDef, config: &WorldConfig, dt: f32, probe: Option<V2>) {
+        if !self.running {
+            return;
+        }
+        self.carry += dt.clamp(0., 0.1) * self.speed;
+        let tanks = self.tanks(probe);
         // A bounded number of fixed steps keeps slow frames from spiralling.
         let mut steps = 0;
         while self.carry >= DT && steps < 64 {
@@ -107,13 +133,7 @@ impl Preview {
                 self.time,
                 &mut self.hidden,
                 &tanks,
-                &mut || {
-                    *seed = seed.wrapping_add(0x9e3779b97f4a7c15);
-                    let mut z = *seed;
-                    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-                    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-                    ((z ^ (z >> 31)) >> 40) as f32 / (1u32 << 24) as f32
-                },
+                &mut || next_random(seed),
                 &mut self.effects,
             );
             self.record();
@@ -141,6 +161,44 @@ impl Preview {
                     format!("{count} shapes appear"),
                     Some(V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5)),
                 ),
+                LogicEffect::Repair {
+                    tanks,
+                    percent,
+                    area,
+                } => (
+                    format!("Repairs {percent}%{}", tank_count(tanks.len())),
+                    Some(V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5)),
+                ),
+                LogicEffect::Damage {
+                    tanks,
+                    percent,
+                    area,
+                } => (
+                    format!("Deals {percent}% damage{}", tank_count(tanks.len())),
+                    Some(V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5)),
+                ),
+                LogicEffect::Award {
+                    tanks,
+                    points,
+                    area,
+                } => (
+                    format!("Awards {points} points{}", tank_count(tanks.len())),
+                    Some(V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5)),
+                ),
+                // Scripts run on servers; the preview only says it happened.
+                LogicEffect::Script {
+                    name, tanks, area, ..
+                } => (
+                    format!(
+                        "Script event \u{201c}{name}\u{201d}{}",
+                        match tanks.len() {
+                            0 => String::new(),
+                            1 => " with the test tank".to_owned(),
+                            n => format!(" with {n} tanks"),
+                        }
+                    ),
+                    Some(V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5)),
+                ),
             };
             self.events.push(Event {
                 at: self.time,
@@ -156,4 +214,21 @@ impl Preview {
     pub fn next_at(&self, index: usize) -> Option<f32> {
         self.logic.next_at(index).filter(|&at| at > 0.)
     }
+}
+
+fn tank_count(count: usize) -> String {
+    match count {
+        0 => ", but no tank is inside".into(),
+        1 => " to the test tank".into(),
+        n => format!(" to {n} tanks"),
+    }
+}
+
+/// A splitmix step: the preview's own repeatable dice.
+fn next_random(seed: &mut u64) -> f32 {
+    *seed = seed.wrapping_add(0x9e3779b97f4a7c15);
+    let mut z = *seed;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+    ((z ^ (z >> 31)) >> 40) as f32 / (1u32 << 24) as f32
 }

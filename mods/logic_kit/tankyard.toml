@@ -1,0 +1,17 @@
+# Storefront details shown on the Mods page. The tools live in tools.lua.
+[mod]
+name = "Logic Kit"
+version = "1.0"
+description = "Tools for the Arena Workshop that build switch doors, countdowns and sequences out of triggers, and a check for signal loops."
+license = "MIT OR Apache-2.0"
+icon = "icon.svg"
+tags = ["editor", "lua", "logic", "example"]
+
+[creator]
+name = "Tank Yard"
+url = "https://github.com/RobertFlexx/tankyard"
+
+[links]
+source = "https://github.com/RobertFlexx/tankyard/tree/main/mods/logic_kit"
+download = "https://github.com/RobertFlexx/tankyard/releases/latest"
+issues = "https://github.com/RobertFlexx/tankyard/issues"

@@ -573,3 +573,83 @@ fn scripts_show_hud_widgets_to_everyone_or_one_player() {
         assert!(world.hud.is_empty(), "{source}");
     }
 }
+
+#[test]
+fn map_events_reach_scripts_and_scripts_drive_map_logic() {
+    use tankyard_content::{MapDef, MapTrigger, TriggerAction, TriggerWhen};
+    let source = r#"
+        tankyard.on("map_event", function(e)
+          assert(e.name == "door", "name " .. tostring(e.name))
+          assert(e.value == 1, "trigger " .. tostring(e.value))
+          assert(#e.tanks == 1 and e.tanks[1] == e.actor, "tanks")
+          tankyard.add_map_counter(2, 5)
+          tankyard.show_map_group(7, false)
+          tankyard.map_signal(4)
+        end)
+        tankyard.on("tick", function()
+          if tankyard.map_counter(2) == 5 and not tankyard.map_group(7) then
+            tankyard.announce("seen")
+          end
+        end)
+    "#;
+    let mut world = world();
+    let pilot = world.add_player("Pilot", false);
+    let middle = [0.4, 0.4, 0.2, 0.2];
+    world.map.triggers = vec![
+        MapTrigger {
+            when: TriggerWhen::Start,
+            action: TriggerAction::Script,
+            rect: [0., 0., 1., 1.],
+            seconds: 0.,
+            text: "door".into(),
+            ..Default::default()
+        },
+        MapTrigger {
+            when: TriggerWhen::Signal,
+            action: TriggerAction::Count,
+            rect: middle,
+            source: 4,
+            group: 3,
+            ..Default::default()
+        },
+    ];
+    let mut runtime = ModRuntime::default();
+    runtime
+        .install(Box::new(
+            LuaPlugin::new(&info("test"), &pack(source), &Content::builtin(), 7).unwrap(),
+        ))
+        .unwrap();
+    for _ in 0..4 {
+        world.step_with(|w| runtime.before_step(w));
+        runtime.after_step(&mut world);
+    }
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    assert!(world.tanks.iter().any(|t| t.id == pilot));
+    assert_eq!(world.match_state.counters[1..3], [5, 1]);
+    assert_ne!(world.match_state.hidden_groups & MapDef::group_bit(7), 0);
+    assert_eq!(world.match_state.announcement, "seen");
+
+    for (call, error) in [
+        (
+            "tankyard.map_signal(33)",
+            "channel must be a whole number from 1 to 32",
+        ),
+        (
+            "tankyard.set_map_counter(0, 1)",
+            "counter must be a whole number",
+        ),
+        (
+            "tankyard.add_map_counter(1, 1.5)",
+            "value must be a whole number",
+        ),
+        (
+            "tankyard.show_map_group(2, 'yes')",
+            "shown must be true or false",
+        ),
+        ("tankyard.map_counter(9)", "counter must be a whole number"),
+    ] {
+        let (_, runtime) = run(&format!("tankyard.on('tick', function() {call} end)"), 1);
+        let errors = runtime.errors.join(" | ");
+        assert!(errors.contains(error), "{call}: {errors}");
+    }
+}

@@ -10,6 +10,7 @@ Tank Yard mods are packs: a folder or `.zip` with a `mod.json` at its root. A pa
 - [How a script runs](#how-a-script-runs)
 - [Script API reference](#script-api-reference)
 - [Sandbox and limits](#sandbox-and-limits)
+- [Workshop plugins](#workshop-plugins)
 - [Data packs and JSON hooks](#data-packs-and-json-hooks)
 - [Content reference: tanks, maps, textures](#content-reference-tanks-maps-textures)
 - [Recipes](#recipes)
@@ -69,6 +70,7 @@ Or open **Mods** in the game, press **Browse for a pack…** and pick the folder
 | Kind | `api_version` | What it can do |
 | --- | --- | --- |
 | **Script pack** (recommended) | `2` | Everything: Luau scripts react to events, read the world, change the match, define tanks and maps, and show HUD widgets. It can also carry the data that data packs carry. |
+| **Workshop plugin** | `2` with `editor` | Tools and checks for the [Arena Workshop](map-editor.md#workshop-plugins). It runs only in the editor, and a pack with nothing else never loads into a match. See [Workshop plugins](#workshop-plugins). |
 | **Data pack** | `1` | Tanks, maps, rules, textures, menu styling and bounded JSON behavior hooks, with no code. Good for balance mods, skins and simple rules. |
 | **Staff credential pack** | `1` with a `staff` section | Unlocks moderation tools in the game client for Tank Yard staff. It carries no game content and never loads into a match. See [Creator administration](creator-administration.md#staff-credential-packs). |
 
@@ -81,6 +83,7 @@ Or open **Mods** in the game, press **Browse for a pack…** and pick the folder
 | `name`, `version` | all | Shown in the Mods page and server lists. Required (64 and 32 characters at most). |
 | `author`, `description` | all | Optional. |
 | `scripts` | 2 | Entry files, run in order (16 at most). |
+| `editor` | 2 | [Workshop plugin](#workshop-plugins) files, run in order in the map editor (16 at most). |
 | `dependencies` | all | IDs of packs that must load first. A missing dependency or a cycle stops the pack. |
 | `classes`, `maps` | all | Tank and map definitions ([reference](#content-reference-tanks-maps-textures)). |
 | `rules` | all | A complete [rule profile](#rules). |
@@ -290,6 +293,9 @@ tankyard.every(60 * 30, function(tick) … end)   -- every 30 seconds; up to 64 
 | `evolve` | the tank | 0 | 0 |
 | `capture` | the scorer | 0 | team |
 | `round_start`, `round_end` | 0 | 0 | 0 |
+| `map_event` | the first noticed tank in the trigger's area (0 if none) | 0 | the trigger's number, from 1 |
+
+A `map_event` comes from a map trigger whose action is **Script event**. Its table also has `name` (the event name set on the trigger) and `tanks` (the IDs of the noticed tanks inside the trigger's area). See [Map logic](#map-logic).
 
 Every event table also has `type` (the event name), `x`, `y` (where it happened) and `tick`. `tankyard.every(n, f)` calls `f(tick)` every `n` ticks, from 1 to 216,000 (an hour). Kills count only tanks; boss kills are announced but don't fire `kill`. Shots are delivered after every other event in a tick, so a flood of shots can't delay a kill.
 
@@ -310,6 +316,8 @@ Every event table also has `type` (the event name), `x`, `y` (where it happened)
 | `tankyard.base(team)` | a team's base rectangle, or `nil` |
 | `tankyard.classes()` | every tank class ID |
 | `tankyard.class(id)` | `id`, `name`, `tier`, `level`, `ability`, `description`, `drones`, `upgrades`, `parents`; or `nil` |
+| `tankyard.map_counter(n)` | map counter `n` (1–8) |
+| `tankyard.map_group(group)` | whether map group 1–32 is shown |
 | `tankyard.tick()` | the current tick |
 | `tankyard.time()` | seconds since the round started (use it instead of `os.time`) |
 | `tankyard.distance(a, b)` | the distance between two tables with `x` and `y` |
@@ -358,8 +366,33 @@ All commands need a tank ID where they act on a tank. Values outside the bounds 
 | `announce(text)` | a message to everyone, up to 160 characters |
 | `finish_round(team, reason)` | ends the round; team 0–4 (0 or `nil` for no winner) |
 | `hud(widget_id, widget, id)` | see [HUD widgets](#hud-widgets) |
+| `map_signal(channel)` | fires the map's On signal triggers on channel 1–32 |
+| `set_map_counter(n, value)`, `add_map_counter(n, value)` | sets or adds to map counter 1–8; whole numbers, results within ±99,999 |
+| `show_map_group(group, shown)` | shows (`true`, the default) or hides map group 1–32 |
 
 Commands are capped at 512 per pack per tick.
+
+#### Map logic
+
+Scripts and map triggers can drive each other. A trigger with a **Script event** action raises `map_event`, and the script answers with the map commands above, which take effect at the start of the next tick, before the map's own timers and areas. Counters and groups changed this way behave exactly as if a trigger had changed them: On counter triggers fire, gates open, and hidden blocks stop colliding.
+
+```lua
+-- A door that opens for the team that holds the most points.
+tankyard.on("map_event", function(event)
+  if event.name ~= "vault" then return end
+  for _, id in ipairs(event.tanks) do
+    local tank = tankyard.tank(id)
+    if tank and tank.score >= 5000 then
+      tankyard.show_map_group(4, false)  -- group 4 is the vault door
+      tankyard.add_map_counter(1, 1)     -- a label shows {1} openings
+      return
+    end
+  end
+  tankyard.announce("The vault needs 5,000 points.")
+end)
+```
+
+A map pack made in the [Arena Workshop](map-editor.md) has no scripts of its own; put the script in a separate pack and enable both, or add a `scripts` list to the exported `mod.json`. [JSON hooks](#hooks) can use the same commands as `map_signal`, `map_counter` and `map_group` actions and listen for `map_event`, but they hear every script event alike; tell names apart in a script.
 
 ### HUD widgets
 
@@ -486,6 +519,90 @@ Packs as a whole:
 | `mod.json` and the combined data sent to players | 1 MiB each |
 | Tanks / maps / textures | 1,024 / 256 / 16 |
 
+## Workshop plugins
+
+A workshop plugin adds tools and checks to the map editor. List its files under `editor` in `mod.json`:
+
+```json
+{
+  "api_version": 2,
+  "id": "my_tools",
+  "name": "My Tools",
+  "version": "1.0",
+  "editor": ["tools.lua"]
+}
+```
+
+A pack can have both `scripts` and `editor` files; the editor files never run in a match, and the match scripts never run in the editor. A pack with only `editor` files is editor-only: it never loads into a match and never marks one as modded. Enable plugins on **Mods**. They follow the same review process as other packs, and packs held for review need approval before their tools appear.
+
+Editor files share the [sandbox](#sandbox-and-limits) and `require` of match scripts, but have none of the match API. They get one global, `editor`:
+
+```lua
+editor.tool {
+  id = "row",                      -- unique in the pack, up to 48 characters
+  name = "Row of blocks",          -- the button and heading
+  description = "Blocks in a row from the pointer.",  -- optional, up to 200
+  params = {
+    { id = "count", name = "Blocks", type = "integer", min = 1, max = 20, default = 5 },
+    { id = "gap", name = "Gap", type = "number", min = 0, max = 400, step = 10, default = 80 },
+  },
+  run = function(map, params, ctx)
+    local x, y = ctx.pointer.x, ctx.pointer.y
+    for i = 1, params.count do
+      table.insert(map.blocks, {
+        rect = editor.rect(map, x + (i - 1) * (40 + params.gap), y, 40, 40),
+        style = "slate",
+        group = 0,
+      })
+      ctx.select("blocks", #map.blocks)
+    end
+    ctx.say("Placed " .. params.count .. " blocks.")
+    return map
+  end,
+}
+
+editor.check {
+  id = "no_bosses",
+  name = "Boss calls",
+  run = function(map)
+    local found = {}
+    for i, trigger in ipairs(map.triggers) do
+      if trigger.action == "boss" then
+        found[#found + 1] = { text = "This map calls a boss.", list = "triggers", index = i }
+      end
+    end
+    return found
+  end,
+}
+```
+
+A tool's `run` receives a fresh copy of the map in the [map schema](#maps), its parameter values by `id`, and a context. It changes the map in place or returns a new one. The workshop runs the result through the same validation as an import before keeping it, as one undo step; if the run errors, runs out of budget or produces an invalid map, nothing changes and the Tools tab shows why.
+
+| Parameter `type` | Fields | Value in `params` |
+| --- | --- | --- |
+| `number` (default) | `min`, `max`, `step`, `default` | a number |
+| `integer` | `min`, `max`, `default` | a whole number |
+| `toggle` | `default` | `true` or `false` |
+| `choice` | `options` (1–24 names), `default` | the chosen name |
+| `text` | `limit` (1–200), `default` | a string |
+
+A tool has at most 12 parameters, and a pack at most 32 tools and 32 checks.
+
+| Context | Meaning |
+| --- | --- |
+| `ctx.selection` | the selected objects, as `{ list = "blocks", index = 3 }` |
+| `ctx.pointer` | `{ x = …, y = … }` in world units: the pointer, when Ctrl+R runs the tool over the canvas; otherwise where the canvas was last clicked, or the middle of the view |
+| `ctx.grid` | the editor's grid size in world units |
+| `ctx.view` | `{ x, y, w, h }`: the part of the arena the canvas shows, in world units |
+| `ctx.select(list, index)` | select an object when the tool finishes; without a call, the selection stays |
+| `ctx.say(text)` | a message for the editor, up to 8 per run |
+
+Lists are `walls`, `blocks`, `zones`, `decor`, `triggers`, `spawn_regions`, `team_bases` and `objective_positions`, and indexes start at 1. Map rectangles are fractions of the arena; `editor.rect(map, x, y, w, h)` and `editor.point(map, x, y)` convert from world units, and `editor.world(map, r)` converts back. `editor.free_group(map)`, `editor.free_channel(map)` and `editor.free_counter(map)` return the lowest group, signal channel or counter the map doesn't use yet, or `nil` when all are taken, so tools that build logic don't collide with what is there. `print` output appears under **Last run** in the Tools tab.
+
+A check's `run` receives the map and returns a list of findings: strings, or tables with `text` and optionally `list` and `index` to select an object when the note is clicked. The first 64 appear as amber notes in **Check**, prefixed with the pack's name. Checks advise; they never block a playtest or export.
+
+Each tool run, or a pack's checks together, has a 20,000,000-step budget. A plugin that runs out stops until **Reload plugins**, which also picks up edited files. A plugin's Luau state otherwise lasts until the editor reloads it. `tankyard-tools validate-mods` loads editor plugins too and reports their errors. See `mods/workshop_toolkit` and `mods/logic_kit` for complete packs.
+
 ## Data packs and JSON hooks
 
 A data pack is a `mod.json` with `api_version` 1. Definitions replace an existing ID or add a new one. Dependencies load first, then packs in the order given; later definitions win.
@@ -587,6 +704,9 @@ Actions take the same bounds as the [Lua commands](#changing-the-match):
 | `announce` | `message` |
 | `finish_round` | `team` (optional), `reason` |
 | `hud` | `id`, and `widget` (fields as [HUD widgets](#hud-widgets), colors as `[r, g, b]`); leave out `widget` to remove it. Shown to the event's tank, or to everyone for round events |
+| `map_signal` | `channel` (1–32) |
+| `map_counter` | `counter` (1–8), `value`, `add` (`true` adds, otherwise sets) |
+| `map_group` | `group` (1–32), `shown` |
 
 A pack has at most 64 hooks, 16 conditions and 16 actions per hook, conditions nested four deep, 10,000 condition checks per tick, 4,096 counters and 16,384 cooldown entries. Hooks don't trigger other hooks. A pack whose batch fails validation is disabled without applying it. Counters and cooldowns reset each round.
 
@@ -655,11 +775,15 @@ The [Arena Workshop](map-editor.md) creates these definitions without writing co
 - `blocks`: `{ "rect": [x,y,w,h], "style": "slate", "color": [r,g,b], "group": 0 }`. Color is optional; these are solid, axis-aligned rectangles.
 - `zones`: `{ "kind": "speed", "rect": [x,y,w,h], "strength": 1, "group": 0, "angle": 0, "exit": [x,y] }`. Kinds are `speed`, `mud`, `repair`, `hazard`, `shelter`, and (protocol 25) `conveyor` and `portal`; strength is 0.25–2. A conveyor pushes along `angle` in degrees (0 right, 90 down) at `150 × strength` units a second. A portal sends tanks to `exit`, a map-relative point that must be open floor. See the [pad formulas](map-editor.md#objects).
 - `decor`: `{ "kind": "tile", "rect": [x,y,w,h], "color": [120,160,190], "alpha": 255, "rotation": 0, "pulse": 0, "spin": 0, "above": false, "text": "", "effect": null, "group": 0 }`. Kinds: `tile`, `stripes`, `light`, `ring`, `arrow`, `label`, `emitter`. Rotation/spin are degrees; pulse is cycles/second. Text has at most 64 characters.
-- `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`, and (protocol 25) `exit`, `signal`, `counter`. Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`), and (protocol 25) `signal` (channel `group`), `count` (adds `amount` to counter `group`) and `shapes` (`amount` shapes, 1–24, inside `rect`). Protocol 25 fields, all optional:
+- `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`, (protocol 25) `exit`, `signal`, `counter`, and (0.15.1) `occupied` (every `seconds`, at least 0.25, while `threshold` tanks, 1–64, are inside), `cleared` (the last noticed tank leaves or dies) and `destroyed` (a noticed tank dies inside). Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`), (protocol 25) `signal` (channel `group`), `count` (adds `amount` to counter `group`) and `shapes` (`amount` shapes, 1–24, inside `rect`), and (0.15.1) `set` (puts counter `group` at `amount`), `random` (signals one of `amount` channels, at least 2, starting at `group`), `heal` and `hurt` (`amount` percent of health, 1–100) and `award` (`amount` points, 1–100,000) for the noticed tanks inside `rect`, `calculate` (changes counter `group` with `math` and `amount`, or with counter `operand`) and `script` (raises the [`map_event`](#map-logic) script event named `text`: lowercase letters, digits and `_`, starting with a letter, up to 32). Protocol 25 fields, all optional:
   - `member`: the trigger's own group; it is off while that group is hidden.
-  - `who` (`anyone`, `players`, `bots`) and `team` (0–4): which tanks an enter or exit trigger notices.
+  - `who` (`anyone`, `players`, `bots`) and `team` (0–4): which tanks an area trigger notices, or which tanks a `heal`, `hurt` or `award` action reaches.
   - `source`: the signal channel (1–32) or counter (1–8) a trigger waits for. `threshold`: the counter value it waits for.
   - `chance`: 1–100 percent, default 100. `delay`: seconds between firing and acting, 0–3600.
+  - (0.15.1) `only_if`: a gate checked when the trigger fires; it acts only if the gate holds. `{ "kind": "counter", "index": 1, "compare": "at_least", "value": 3, "against": 0 }` compares counter `index` with `value`, or with counter `against` when that is 1–8. `compare` is `equal`, `not_equal`, `below`, `above`, `at_most` or `at_least`. `{ "kind": "shown", "index": 4 }` and `{ "kind": "hidden", "index": 4 }` test a group.
+  - (0.15.1) `math`: how `calculate` changes its counter: `add`, `subtract`, `multiply`, `divide` (rounds down), `remainder` (never negative), `lowest`, `highest`, `copy`, `random` (0 up to one less than the other value) or `flip` (0 becomes 1, anything else 0). Dividing by zero changes nothing. `operand`: use counter 1–8 instead of `amount`.
+
+  Fields added in 0.15.1 are left out of exported maps when unused, so maps that do without them still load in 0.15.0.
 
   Counters 1–8 start at 0 each round and stay within ±99,999. Announcements and decor labels replace `{1}`–`{8}` with counter values. The [logic guide](map-editor.md#groups-and-logic) explains schedules, entry edges, chains and restoration.
 - `hidden_groups`: groups 1–32 hidden at round start. Group 0 is always visible. Blocks, zones and decor sharing a group change together.
@@ -774,11 +898,14 @@ See `mods/gravity_wells` for a pack built this way.
 | `mods/sprinkler` | a new tank attached to the upgrade tree from Luau |
 | `mods/fast_arena` | a data pack that changes the rules |
 | `mods/vampire` | a data pack with a JSON hook |
+| `mods/workshop_toolkit` | workshop plugin tools and a map check |
+| `mods/logic_kit` | workshop tools that build triggers, and a signal-loop check |
 
 ## Tools for pack authors
 
 ```sh
-# Load and validate packs the way a server does, running their load phase.
+# Load and validate packs the way a server does, running their load phase and
+# loading any workshop plugins.
 tankyard-tools validate-mods --mod mods/bounty_hunt --mod path/to/pack.zip
 
 # The safety review, from the command line. Exits 1 for review findings, 2 for danger.

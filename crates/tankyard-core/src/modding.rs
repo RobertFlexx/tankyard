@@ -272,6 +272,23 @@ impl ModRuntime {
                 })
             })
             .collect();
+        if wants(Trigger::MapEvent) {
+            // `value` is the event's place in `world.map_events`.
+            events.extend(
+                world
+                    .map_events
+                    .iter()
+                    .enumerate()
+                    .map(|(index, event)| HookEvent {
+                        trigger: Trigger::MapEvent,
+                        actor: event.tanks.first().copied().unwrap_or(0),
+                        position: event.at,
+                        tick: world.tick,
+                        target: 0,
+                        value: index as f32,
+                    }),
+            );
+        }
         if wants(Trigger::Damage) {
             events.extend(world.damage_log.iter().take(1024).map(|record| HookEvent {
                 trigger: Trigger::Damage,
@@ -748,6 +765,17 @@ fn apply(world: &mut World, actor: EntityId, effect: Effect) {
         }
         // Per-pack state, kept by the dispatcher.
         Effect::Counter { .. } | Effect::Hud { .. } => {}
+        Effect::MapSignal { channel } => world.map_input(LogicInput::Signal(channel)),
+        Effect::MapCounter {
+            counter,
+            value,
+            add,
+        } => world.map_input(if add {
+            LogicInput::AddCounter(counter, value)
+        } else {
+            LogicInput::SetCounter(counter, value)
+        }),
+        Effect::MapGroup { group, shown } => world.map_input(LogicInput::Group(group, shown)),
     }
 }
 

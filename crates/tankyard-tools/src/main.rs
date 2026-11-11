@@ -180,8 +180,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::ValidateMods { mods } => {
             let loaded = tankyard_lua::load(&mods)?;
+            let plugins = tankyard_lua::editor::Plugins::load(&mods);
+            if let Some(error) = plugins.errors.first() {
+                return Err(error.clone().into());
+            }
             println!(
-                "Validated {} mods, {} tanks, {} maps, {} hooks, {} textures",
+                "Validated {} mods, {} tanks, {} maps, {} hooks, {} textures, {} workshop tools",
                 loaded.bundle.mods.len(),
                 loaded.bundle.content.classes.len(),
                 loaded.bundle.maps.len(),
@@ -190,7 +194,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .map(|m| m.hooks.len())
                     .sum::<usize>(),
-                loaded.bundle.textures.len()
+                loaded.bundle.textures.len(),
+                plugins.plugins.iter().map(|p| p.tools.len()).sum::<usize>()
             );
         }
         Command::Validate { content } => {

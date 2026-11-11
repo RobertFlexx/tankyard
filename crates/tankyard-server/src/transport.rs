@@ -9,6 +9,9 @@ use std::{
 use tankyard_core::{DT, EntityId, EventKind, GameEvent, Mode, PlayerInput, TICK_RATE, V2};
 use tankyard_protocol::*;
 
+/// Snapshots in a row that carry walls after they change.
+const WALL_REPEATS: f64 = 4.;
+
 #[derive(Debug)]
 pub(crate) struct Peer {
     pub entity: Option<EntityId>,
@@ -176,8 +179,7 @@ impl UdpServer {
         if let Some(rules) = settings.rules_override {
             session.world.set_rules(rules).map_err(NetError)?;
         }
-        let content_hash = session.bundle.fingerprint();
-        let game_data = encode_game_data_message(&session.bundle)?;
+        let (content_hash, game_data) = player_game_data(&session.bundle)?;
         let socket = UdpSocket::bind(&settings.bind)?;
         crate::sockets::tune_udp(&socket, 1024 * 1024);
         let address = socket.local_addr()?;
@@ -653,6 +655,9 @@ impl UdpServer {
     }
 
     fn receive_voice(&mut self, client: u64) {
+        // Who hears this speaker, and how loudly: positions hold still for
+        // every frame that arrived together, so it is worked out once.
+        let mut heard_by: Option<Vec<(u64, u8)>> = None;
         for _ in 0..16 {
             let Some(bytes) = self.server.receive_message(client, VOICE_CHANNEL) else {
                 break;
@@ -686,38 +691,40 @@ impl UdpServer {
             if self.access.muted(client, unix_time().as_secs()) {
                 continue;
             }
-            let world = &self.arenas[arena].session.world;
-            let Some(speaker) = world
-                .tanks
-                .iter()
-                .find(|t| t.id == player && t.alive && t.health > 0.)
-            else {
-                continue;
-            };
-            let position = speaker.pos;
-            // Voice position and sender identity come exclusively from the server.
-            // Dead players cannot relay scouting information to living players.
-            let recipients: Vec<_> = self
-                .peers
-                .iter()
-                .filter_map(|(&id, peer)| {
-                    if id == client || peer.disconnect_at.is_some() || peer.arena != arena {
-                        return None;
-                    }
-                    let listener = world
+            let recipients = heard_by.get_or_insert_with(|| {
+                let world = &self.arenas[arena].session.world;
+                let alive = |id: EntityId| {
+                    world
                         .tanks
                         .iter()
-                        .find(|t| Some(t.id) == peer.entity && t.alive && t.health > 0.)?;
-                    let volume = (voice_gain(position.distance(listener.pos)) * 255.).round() as u8;
-                    (volume > 0).then_some((id, volume))
-                })
-                .collect();
-            for (recipient, volume) in recipients {
-                let packet = VoicePacket {
-                    player,
-                    volume,
-                    frame: frame.clone(),
+                        .find(|t| t.id == id && t.alive && t.health > 0.)
+                        .map(|t| t.pos)
                 };
+                // Voice position and sender identity come exclusively from the
+                // server. Dead players cannot relay scouting information to
+                // living players.
+                let Some(position) = alive(player) else {
+                    return Vec::new();
+                };
+                self.peers
+                    .iter()
+                    .filter_map(|(&id, peer)| {
+                        if id == client || peer.disconnect_at.is_some() || peer.arena != arena {
+                            return None;
+                        }
+                        let listener = alive(peer.entity?)?;
+                        let volume = (voice_gain(position.distance(listener)) * 255.).round() as u8;
+                        (volume > 0).then_some((id, volume))
+                    })
+                    .collect()
+            });
+            let mut packet = VoicePacket {
+                player,
+                volume: 0,
+                frame,
+            };
+            for &(recipient, volume) in recipients.iter() {
+                packet.volume = volume;
                 if let Ok(bytes) = encode(&packet, MAX_VOICE_BYTES)
                     && self
                         .server
@@ -1304,8 +1311,8 @@ impl UdpServer {
         for factory in &self.native_plugins {
             candidate.install_plugin(factory()).map_err(NetError)?;
         }
-        let data = encode_game_data_message(&candidate.bundle)?;
-        self.content_hash = candidate.bundle.fingerprint();
+        let (hash, data) = player_game_data(&candidate.bundle)?;
+        self.content_hash = hash;
         self.loaded_mods = loaded;
         self.game_data = data;
         self.restart_round();
@@ -1503,8 +1510,7 @@ impl UdpServer {
         for arena in &mut self.arenas {
             arena.session.install_plugin(factory()).map_err(NetError)?;
         }
-        self.game_data = encode_game_data_message(&self.arenas[0].session.bundle)?;
-        self.content_hash = self.arenas[0].session.bundle.fingerprint();
+        (self.content_hash, self.game_data) = player_game_data(&self.arenas[0].session.bundle)?;
         self.native_plugins.push(factory);
         Ok(())
     }
@@ -1605,6 +1611,11 @@ impl UdpServer {
         // motion, cursor or weapon state: enough for the leaderboard and the
         // minimap, too coarse for a radar or aim overlay.
         let detail_radius = (self.settings.interest_radius + 400.).powi(2);
+        // Changed walls ride in the next few snapshots, so one lost packet
+        // costs nothing; the two-second resend covers worse links. Doors that
+        // map logic opens and shuts no longer resend every wall for a second.
+        let wall_repeats =
+            Duration::from_secs_f64(WALL_REPEATS / f64::from(self.settings.snapshot_rate.max(1)));
         for arena in &mut self.arenas {
             arena
                 .walls
@@ -1659,7 +1670,7 @@ impl UdpServer {
             }
             let walls = &arena.walls;
             let include_walls = peer.walls_revision != Some(walls.revision)
-                || elapsed.saturating_sub(walls.changed_at) < Duration::from_secs(1)
+                || elapsed.saturating_sub(walls.changed_at) < wall_repeats
                 || elapsed.saturating_sub(peer.walls_sent_at) >= Duration::from_secs(2);
             snapshot.wall_revision = walls.revision;
             snapshot.walls_included = include_walls;
@@ -1952,9 +1963,8 @@ impl UdpServer {
 
     fn after_restart(&mut self) {
         self.party_roster_checked_at = None;
-        self.content_hash = self.arenas[0].session.bundle.fingerprint();
-        self.game_data =
-            encode_game_data_message(&self.arenas[0].session.bundle).expect("validated game data");
+        (self.content_hash, self.game_data) =
+            player_game_data(&self.arenas[0].session.bundle).expect("validated game data");
         for peer in self.peers.values_mut() {
             peer.walls_revision = None;
             peer.party_ready = false;
@@ -2075,11 +2085,26 @@ fn bounded_snapshot(
     }
 }
 
-fn encode_game_data_message(bundle: &tankyard_mods::GameBundle) -> Result<Bytes, NetError> {
+/// The game data players receive and the hash their welcome carries. Map
+/// triggers run only on the server, so they stay here: players need none of
+/// them, and newer trigger kinds then never reach clients that predate them.
+fn player_game_data(bundle: &tankyard_mods::GameBundle) -> Result<(u64, Bytes), NetError> {
+    let shared;
+    let bundle = if bundle.maps.iter().any(|map| !map.triggers.is_empty()) {
+        let mut stripped = bundle.clone();
+        for map in &mut stripped.maps {
+            map.triggers.clear();
+        }
+        shared = stripped;
+        &shared
+    } else {
+        bundle
+    };
     let message = game_data(bundle).map_err(|e| NetError(e.to_string()))?;
-    encode(&message, MAX_SERVER_CONTROL_BYTES)
+    let bytes = encode(&message, MAX_SERVER_CONTROL_BYTES)
         .map(Bytes::from)
-        .map_err(|e| NetError(e.to_string()))
+        .map_err(|e| NetError(e.to_string()))?;
+    Ok((bundle.fingerprint(), bytes))
 }
 impl Drop for UdpServer {
     fn drop(&mut self) {
@@ -2090,6 +2115,27 @@ impl Drop for UdpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn players_get_maps_without_triggers_and_a_matching_hash() {
+        use tankyard_content::{MapTrigger, TriggerAction, TriggerWhen};
+        let mut bundle = tankyard_mods::GameBundle::builtin();
+        bundle.maps[0].triggers.push(MapTrigger {
+            when: TriggerWhen::Occupied,
+            action: TriggerAction::Award,
+            rect: [0.4, 0.4, 0.2, 0.2],
+            ..Default::default()
+        });
+        let (hash, bytes) = player_game_data(&bundle).unwrap();
+        let ServerControl::GameData { compressed } =
+            decode(&bytes, MAX_SERVER_CONTROL_BYTES).unwrap()
+        else {
+            panic!("game data message");
+        };
+        let received = decode_game_data(&compressed).unwrap();
+        assert!(received.maps.iter().all(|map| map.triggers.is_empty()));
+        assert_eq!(received.fingerprint(), hash);
+        assert_eq!(bundle.maps[0].triggers.len(), 1, "the server keeps them");
+    }
     #[test]
     fn large_reliable_event_bursts_are_batched_without_losing_order() {
         let events: Vec<_> = (0..2048)

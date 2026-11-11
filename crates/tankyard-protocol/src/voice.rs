@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 
 pub const VOICE_SAMPLE_RATE: u32 = 48_000;
 pub const VOICE_FRAME_SAMPLES: usize = 960;
-pub const VOICE_BITRATE: i32 = 96_000;
+/// Opus speech target. Each nearby listener receives a copy of each frame.
+pub const VOICE_BITRATE: i32 = 48_000;
 pub const MAX_VOICE_PAYLOAD: usize = 400;
 pub const MAX_VOICE_BYTES: usize = 512;
 pub const VOICE_RADIUS: f32 = 900.;
