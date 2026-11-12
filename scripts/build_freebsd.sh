@@ -56,7 +56,10 @@ if command -v Xvfb >/dev/null 2>&1; then
     env DISPLAY=:97 LIBGL_ALWAYS_SOFTWARE=1 XDG_CONFIG_HOME="$smoke/config" \
         "$binaries/tankyard" --offline --bots 4 --smoke-frames 120 --screenshot "$smoke/smoke.png" || status=$?
     kill "$xvfb" 2>/dev/null || true
-    [ "$status" -eq 0 ] && [ -s "$smoke/smoke.png" ] || { echo "The game did not render on FreeBSD" >&2; exit 1; }
+    if [ "$status" -ne 0 ] || [ ! -s "$smoke/smoke.png" ]; then
+        echo "The game did not render on FreeBSD" >&2
+        exit 1
+    fi
     rm -rf "$smoke"
     echo "The game renders on FreeBSD"
 fi
