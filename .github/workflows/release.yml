@@ -58,7 +58,7 @@ jobs:
           cargo test --locked --workspace
       - name: Check installers
         run: |
-          shellcheck install.sh install-macos.sh scripts/build_linux_compatible.sh scripts/link_linux_compatible.sh scripts/compile_linux_compatible.sh scripts/compile_linux_compatible_cxx.sh
+          shellcheck install.sh install-macos.sh configs/tankyard.rc scripts/build_freebsd.sh scripts/freebsd_vm.sh scripts/build_linux_compatible.sh scripts/link_linux_compatible.sh scripts/compile_linux_compatible.sh scripts/compile_linux_compatible_cxx.sh
           python -m unittest discover -s scripts/tests -v
       - name: Validate content and render offline
         run: |
@@ -169,32 +169,7 @@ jobs:
       - name: Check native binaries
         env:
           BUILD_PLATFORM: ${{ matrix.platform }}
-        run: |
-          python - <<'PY'
-          import os, subprocess
-          from pathlib import Path
-          suffix = ".exe" if os.name == "nt" else ""
-          for name in ("tankyard", "tankyard-server", "tankyard-relay", "tankyard-load", "tankyard-tools"):
-              executable = Path(os.environ["BINARY_DIR"]) / (name + suffix)
-              result = subprocess.run([str(executable), "--version"], check=True, text=True, capture_output=True)
-              assert os.environ["RELEASE_TAG"][1:] in result.stdout, result.stdout
-              print(result.stdout.strip())
-          if os.environ["BUILD_PLATFORM"] in ("linux-x86_64", "windows-x86_64"):
-              game = (Path(os.environ["BINARY_DIR"]) / ("tankyard" + suffix)).read_bytes()
-              assert b"libnvidia-ngx-dlss.so" in game or b"nvngx_dlss.dll" in game, "DLSS is missing"
-              print("DLSS is linked")
-          tools = Path(os.environ["BINARY_DIR"]) / ("tankyard-tools" + suffix)
-          packs = ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler", "workshop_toolkit", "logic_kit")
-          subprocess.run([str(tools), "validate-mods", *(arg for pack in packs for arg in ("--mod", f"mods/{pack}"))], check=True)
-          # A script error must unwind through the linked Luau (C++) into a reported failure.
-          broken = Path(os.environ["RUNNER_TEMP"]) / "unwind_check"
-          broken.mkdir(exist_ok=True)
-          (broken / "mod.json").write_text('{"api_version": 2, "id": "unwind_check", "name": "Unwind check", "version": "1", "scripts": ["main.lua"]}', encoding="utf-8")
-          (broken / "main.lua").write_text('local ok, err = pcall(error, "caught")\nassert(not ok and tostring(err):find("caught"))\nerror("expected failure")\n', encoding="utf-8")
-          result = subprocess.run([str(tools), "validate-mods", "--mod", str(broken)], text=True, capture_output=True)
-          assert result.returncode == 1 and "expected failure" in result.stdout + result.stderr, (result.returncode, result.stdout, result.stderr)
-          print("Lua scripts load, and script errors are reported")
-          PY
+        run: python scripts/check_release_binaries.py --binary-dir "$BINARY_DIR" --version "$RELEASE_TAG" --platform "$BUILD_PLATFORM"
       - name: Check compatible Linux ABI
         if: matrix.platform == 'linux-x86_64'
         run: python scripts/check_linux_abi.py "$BINARY_DIR"
@@ -279,9 +254,17 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+  freebsd:
+    name: Build freebsd-x86_64
+    needs: verify
+    uses: ./.github/workflows/freebsd.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+      version: ${{ inputs.tag || github.ref_name }}
+
   publish:
     name: Publish complete release
-    needs: [verify, build]
+    needs: [verify, build, freebsd]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
@@ -311,7 +294,8 @@ jobs:
           tag = os.environ["RELEASE_TAG"]
           names = [f"tankyard-{tag}-{platform}.{extension}" for platform, extension in
               (("linux-x86_64", "tar.gz"), ("linux-aarch64", "tar.gz"),
-               ("macos-universal", "tar.gz"), ("windows-x86_64", "zip"))]
+               ("macos-universal", "tar.gz"), ("windows-x86_64", "zip"),
+               ("freebsd-x86_64", "tar.gz"))]
           names.append(f"tankyard-{tag}-windows-x86_64-setup.exe")
           names.append(f"tankyard-{tag}-macos-universal.pkg")
           for name in ("install.sh", "install-macos.sh", "install.ps1"):
@@ -405,3 +389,31 @@ jobs:
           }
           & "$Destination/tankyard.exe" --version
           if ($LASTEXITCODE -ne 0) { throw "Server install replaced the game." }
+
+  install-freebsd:
+    name: Install on FreeBSD
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: Install published FreeBSD build
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
+        with:
+          release: "15"
+          envs: RELEASE_TAG
+          copyback: false
+          # Without curl, as on a fresh FreeBSD, the installer uses fetch(1).
+          prepare: |
+            pkg install -y alsa-plugins
+            if pkg info -e curl; then pkg delete -fy curl; fi
+          run: |
+            set -e
+            sh install.sh --version "$RELEASE_TAG" --bin-dir /tmp/tankyard-installed --no-desktop
+            /tmp/tankyard-installed/tankyard --version
+            sh install.sh --version "$RELEASE_TAG" --bin-dir /tmp/tankyard-installed --server
+            /tmp/tankyard-installed/tankyard-server --version
+            /tmp/tankyard-installed/tankyard-relay --version

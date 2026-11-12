@@ -14,7 +14,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 BINARIES = ("tankyard", "tankyard-server", "tankyard-relay", "tankyard-load", "tankyard-tools")
-PLATFORMS = ("linux-x86_64", "linux-aarch64", "macos-universal", "windows-x86_64")
+PLATFORMS = ("linux-x86_64", "linux-aarch64", "macos-universal", "windows-x86_64", "freebsd-x86_64")
 
 
 def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path:
@@ -39,14 +39,9 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
             shutil.copy2(ROOT / filename, payload)
         for directory_name in ("configs", "mods", "licenses"):
             (payload / directory_name).mkdir()
-        for filename in (
-            "server.toml",
-            "official.toml",
-            "central.toml",
-            "tankyard.service",
-            "tankyard@.service",
-            "Caddyfile.example",
-        ):
+        # FreeBSD runs the server through rc.d; the others get systemd units.
+        services = ("tankyard.rc",) if platform.startswith("freebsd") else ("tankyard.service", "tankyard@.service")
+        for filename in ("server.toml", "official.toml", "central.toml", *services, "Caddyfile.example"):
             shutil.copy2(ROOT / "configs" / filename, payload / "configs" / filename)
         if not platform.startswith("windows"):
             shutil.copy2(ROOT / "scripts/host_server.sh", payload / "host-server.sh")

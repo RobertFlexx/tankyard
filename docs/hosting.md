@@ -31,6 +31,8 @@ curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/inst
 
 This puts `tankyard-server` and `tankyard-relay` in `~/.local/bin` and doesn't touch an installed game. Run the same command to update. On Windows, download the Windows ZIP from the [latest release](https://github.com/RobertFlexx/tankyard/releases/latest) and extract it; `tankyard-server.exe` is inside. Every release archive also contains the server and sample configs. Linux and macOS archives include a `host-server.sh` launcher, so extracting one is enough too.
 
+On FreeBSD 15 or newer (amd64), use the base system's `fetch` instead of curl: `fetch -o - https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh | sh -s -- --server`.
+
 Linux builds need glibc 2.31 or newer on x86-64 and 2.35 or newer on ARM64. 32-bit ARM and musl systems such as Alpine need a [source build](#from-the-command-line).
 
 ### 2. Configure it
@@ -81,6 +83,7 @@ Type `help` in the same window for the administration commands; `status` shows p
   - Fedora and others with firewalld: `sudo firewall-cmd --permanent --add-port=5000/udp && sudo firewall-cmd --reload`
   - Windows (PowerShell as administrator): `New-NetFirewallRule -DisplayName "Tank Yard" -Direction Inbound -Protocol UDP -LocalPort 5000 -Action Allow`
   - macOS asks to allow incoming connections the first time; choose Allow.
+  - FreeBSD with pf: add `pass in proto udp to port 5000` to `/etc/pf.conf`, then `service pf reload`.
 - **Over the internet:** in your router's settings, forward **UDP** port 5000 to this machine's local address, and give the machine a reserved address so it doesn't change. Players join your public address, such as `203.0.113.7:5000`. IPv6 addresses use brackets: `[2001:db8::1234]:5000`.
 - **Can't forward ports?** Some connections share one public address between many homes (carrier-grade NAT): the address your router shows differs from the one websites report. Use a [Cloudflare Tunnel](hosting-domain.md#option-b-a-cloudflare-tunnel) instead, which needs no open ports.
 
@@ -117,6 +120,45 @@ The unit is also in every release archive as `configs/tankyard.service`. Relativ
 
 Under a service there is no console; edit the settings file and restart instead, or use the in-game **Server** panel as an owner. Back up `/var/lib/tankyard` before updates.
 
+### On FreeBSD
+
+The release's `configs/tankyard.rc` is an rc.d script. It runs the server as its own `tankyard` user, supervised by `daemon(8)`, which restarts it three seconds after it stops. The program goes in `/usr/local/bin`, its settings, bans and mods in `/var/db/tankyard`, and its log in `/var/log/tankyard/server.log`. As root:
+
+```sh
+# A user for the server, and the program.
+pw useradd tankyard -d /var/db/tankyard -s /usr/sbin/nologin -c "Tank Yard server"
+fetch https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh
+sh install.sh --server --bin-dir /usr/local/bin
+
+# Its settings, owned by that user.
+install -d -o tankyard -m 750 /var/db/tankyard
+su -m tankyard -c 'tankyard-server --write-config /var/db/tankyard/server.toml --name "My arena"'
+vi /var/db/tankyard/server.toml
+
+# The service.
+fetch -o /usr/local/etc/rc.d/tankyard https://raw.githubusercontent.com/RobertFlexx/tankyard/main/configs/tankyard.rc
+chmod 555 /usr/local/etc/rc.d/tankyard
+sysrc tankyard_enable=YES
+service tankyard start
+```
+
+Relative paths in the settings are inside `/var/db/tankyard`. Useful commands:
+
+| Command | Does |
+| --- | --- |
+| `service tankyard status` | Whether it's running |
+| `tail -f /var/log/tankyard/server.log` | Follow its log, including the status line |
+| `service tankyard restart` | Restart after editing the settings |
+| `sh install.sh --server --bin-dir /usr/local/bin && service tankyard restart` | Update to the latest release |
+
+`sysrc` changes the defaults: `tankyard_dir`, `tankyard_config`, `tankyard_user`, `tankyard_server` (the program) and `tankyard_args` (more `tankyard-server` options, such as `"--port 5001"`). To run several servers, name them, such as `sysrc tankyard_profiles="ffa teams"`. Each reads `/var/db/tankyard/<name>.toml` and logs to `/var/log/tankyard/<name>.log`, so give each file its own port. Stop the service before you change `tankyard_profiles`, so no server is left running under the old setting. `service tankyard restart ffa` acts on one of them.
+
+To rotate the log, add this line to `/etc/newsyslog.conf.d/tankyard.conf`. `daemon(8)` then reopens the log file without restarting the server:
+
+```text
+/var/log/tankyard/server.log  tankyard:tankyard  600  7  1000  *  J  /var/run/tankyard/server.pid
+```
+
 ### Raspberry Pi and small machines
 
 Use a Raspberry Pi 4 or 5 with 64-bit Raspberry Pi OS and the ARM64 build. Start with the defaults, then watch `status` (or the journal) while people play: the `tick average/p95/p99/max` figures should stay well under 16,667 µs, the time one tick has at 60 ticks a second. If p99 creeps above about half of that, lower `bot_count`, `[world] target_count` (shapes) or `max_players`, or keep `snapshot_rate` at 20. Maze maps and boss modes cost the most. Run one server per machine at first and add arenas once you know there is headroom.
@@ -132,7 +174,7 @@ Use a Raspberry Pi 4 or 5 with 64-bit Raspberry Pi OS and the ARM64 build. Start
 | A mod or map is refused when the server starts | The log says why. Maps that use newer workshop logic need a server at least as new as the workshop that made them |
 | The game stutters for everyone | Check `status`. High tick times or dropped catch-up ticks mean the machine is overloaded: lower bots, shapes or players. Many skipped snapshots with low tick times mean connections are congested, often the host's upload: lower `snapshot_rate` or `max_players` |
 | Roles and bans are forgotten after a restart | Set a `server_id` and make sure the server can write its `access_file` and `ban_file` |
-| The service won't start | `journalctl -u tankyard -e` shows the error. Check that `/var/lib/tankyard/server.toml` exists and belongs to the `tankyard` user |
+| The service won't start | `journalctl -u tankyard -e` shows the error. Check that `/var/lib/tankyard/server.toml` exists and belongs to the `tankyard` user. On FreeBSD, `service tankyard start` and `/var/log/tankyard/server.log` say why |
 
 For a public hostname such as `play.example.com`, follow the [domain, DNS and HTTPS guide](hosting-domain.md). The server includes an optional WebSocket listener, so a separate relay process is not needed.
 

@@ -238,7 +238,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     print_addresses(&server);
-    println!("Type help for local administration.");
+    if !args.no_console {
+        println!("Type help for local administration.");
+    }
     let stopping = Arc::new(AtomicBool::new(false));
     let signal_flag = stopping.clone();
     ctrlc::set_handler(move || {

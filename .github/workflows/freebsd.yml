@@ -1,0 +1,78 @@
+name: FreeBSD
+
+# Builds the freebsd-x86_64 release in a FreeBSD VM on GitHub's Linux runners.
+# The release workflow calls it; run it by hand to check FreeBSD before tagging,
+# and download the package from the run's artifacts to try it.
+on:
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: Run the workspace tests on FreeBSD first
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build
+        required: true
+        type: string
+      version:
+        description: Release tag the binaries must report
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build freebsd-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      RELEASE_TAG: ${{ inputs.version }}
+      RUN_TESTS: ${{ inputs.tests && 'yes' || 'no' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - name: Use the source version
+        if: env.RELEASE_TAG == ''
+        run: |
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import tomllib
+          with open("Cargo.toml", "rb") as source:
+              print("RELEASE_TAG=v" + tomllib.load(source)["workspace"]["package"]["version"])
+          PY
+      - name: Build, check and package on FreeBSD
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
+        with:
+          # The newest 15.x. Binaries built there run on FreeBSD 15.0 and later.
+          release: "15"
+          cpu: 4
+          mem: 12288
+          envs: RELEASE_TAG RUN_TESTS CARGO_TERM_COLOR
+          prepare: |
+            pkg install -y bash curl cmake pkgconf git python3 alsa-lib alsa-plugins libX11 libXi libXcursor libxkbcommon mesa-libs mesa-dri xorg-vfbserver
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          run: |
+            set -e
+            . "$HOME/.cargo/env"
+            freebsd-version
+            rustc --version
+            export CARGO_TARGET_DIR="$HOME/tankyard-target"
+            if [ "$RUN_TESTS" = yes ]; then
+              cargo test --locked --workspace
+            fi
+            sh scripts/build_freebsd.sh "$RELEASE_TAG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-freebsd-x86_64
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

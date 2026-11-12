@@ -1,0 +1,95 @@
+#!/bin/sh
+# shellcheck disable=SC1091,SC2034 # rc.subr reads the settings below.
+#
+# PROVIDE: tankyard
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# A Tank Yard server for FreeBSD that starts with the machine and restarts if
+# it stops. docs/hosting.md#on-freebsd explains the setup: the server in
+# /usr/local/bin, its settings, bans and mods in /var/db/tankyard, its log in
+# /var/log/tankyard/server.log.
+#
+# Install as /usr/local/etc/rc.d/tankyard, then: sysrc tankyard_enable=YES
+#
+# tankyard_enable    YES starts the server with the machine. Default: NO
+# tankyard_user      The account it runs as. Default: tankyard
+# tankyard_dir       Settings and data. Relative paths in the config, such as
+#                    bans.json and mods/, are read and written here.
+#                    Default: /var/db/tankyard
+# tankyard_config    The settings file. Default: ${tankyard_dir}/server.toml
+# tankyard_args      More tankyard-server options. Default: none
+# tankyard_server    The program. Default: /usr/local/bin/tankyard-server
+# tankyard_profiles  Names for several servers, such as "ffa teams". Each
+#                    reads ${tankyard_dir}/<name>.toml, which needs its own
+#                    port, and logs to /var/log/tankyard/<name>.log.
+#                    "service tankyard restart ffa" acts on one of them.
+
+. /etc/rc.subr
+
+name=tankyard
+rcvar=tankyard_enable
+desc="Tank Yard game server"
+
+load_rc_config $name
+
+: "${tankyard_enable:=NO}"
+: "${tankyard_user:=tankyard}"
+: "${tankyard_dir:=/var/db/tankyard}"
+: "${tankyard_config:=${tankyard_dir}/server.toml}"
+: "${tankyard_args:=}"
+: "${tankyard_server:=/usr/local/bin/tankyard-server}"
+
+instance=server
+if [ -n "$2" ]; then
+	instance=$2
+	case " ${tankyard_profiles} " in
+	*" ${instance} "*) ;;
+	*)
+		echo "${instance} is not listed in tankyard_profiles."
+		exit 1
+		;;
+	esac
+	tankyard_config=${tankyard_dir}/${instance}.toml
+elif [ -n "${tankyard_profiles}" ] && [ -n "$1" ]; then
+	status=0
+	for profile in ${tankyard_profiles}; do
+		echo "===> Tank Yard server ${profile}"
+		"$0" "$1" "${profile}" || status=1
+	done
+	exit ${status}
+fi
+
+# rc.subr runs the command as tankyard_user from tankyard_dir. The daemon(8)
+# supervisor restarts the server three seconds after it stops, and reopens the
+# log when newsyslog(8) rotates it.
+pidfile=/var/run/tankyard/${instance}.pid
+log=/var/log/tankyard/${instance}.log
+tankyard_chdir=${tankyard_dir}
+: "${tankyard_env:=HOME=${tankyard_dir}}"
+procname=/usr/sbin/daemon
+command=/usr/sbin/daemon
+command_args="-f -H -r -R 3 -P ${pidfile} -o ${log} \
+	${tankyard_server} --config ${tankyard_config} --no-console ${tankyard_args}"
+required_files=${tankyard_config}
+start_precmd=tankyard_prestart
+
+tankyard_prestart()
+{
+	if ! id "${tankyard_user}" >/dev/null 2>&1; then
+		echo "Create the ${tankyard_user} account first:"
+		echo "  pw useradd ${tankyard_user} -d ${tankyard_dir} -s /usr/sbin/nologin -c 'Tank Yard server'"
+		return 1
+	fi
+	if [ ! -x "${tankyard_server}" ]; then
+		echo "${tankyard_server} is missing; see docs/hosting.md#on-freebsd."
+		return 1
+	fi
+	install -d -o "${tankyard_user}" -m 750 "${tankyard_dir}" /var/run/tankyard /var/log/tankyard
+	# --write-config run as root leaves a file only root can read.
+	if [ "$(stat -f %Su "${tankyard_config}")" != "${tankyard_user}" ]; then
+		chown "${tankyard_user}" "${tankyard_config}"
+	fi
+}
+
+run_rc_command "$1"

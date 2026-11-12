@@ -15,7 +15,7 @@ cargo build --locked --release --workspace
 cargo run --locked -p tankyard-tools -- validate
 ```
 
-If the machine allows UDP sockets, run the network integration tests rather than relying only on the in-process unit suite. Check release binaries on Solus/FreeBSD/macOS/Windows individually where supported; a Linux-only build doesn't prove the others.
+If the machine allows UDP sockets, run the network integration tests rather than relying only on the in-process unit suite. Check release binaries on Solus/FreeBSD/macOS/Windows individually where supported; a Linux-only build doesn't prove the others. For FreeBSD without a FreeBSD machine, `scripts/freebsd_vm.sh test` and `scripts/freebsd_vm.sh package` run the tests and the release build in a local VM, or run the **FreeBSD** workflow from the Actions tab ([details](freebsd.md#for-maintainers)).
 
 ## The visual stuff
 

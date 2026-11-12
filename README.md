@@ -28,6 +28,14 @@ Install or update on Linux and macOS:
 curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh | sh
 ```
 
+FreeBSD 15+ (amd64): run `pkg install alsa-plugins` as root, then:
+
+```sh
+fetch -o - https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh | sh
+```
+
+[Tank Yard on FreeBSD](docs/freebsd.md) covers NVIDIA, sound and running a server.
+
 Build from source with Rust 1.88 or newer:
 
 ```sh
@@ -35,7 +43,7 @@ cargo build --locked --release --workspace
 ./target/release/tankyard
 ```
 
-See [Linux build requirements](docs/linux-builds.md) and [third-party notices](NOTICE.md).
+See [Linux build requirements](docs/linux-builds.md), [building on FreeBSD](docs/freebsd.md#building-from-source) and [third-party notices](NOTICE.md).
 
 ## Tank you!
 

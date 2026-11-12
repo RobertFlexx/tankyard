@@ -32,6 +32,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Netcode keepalives flow several times per second, so silence this long
 /// means the game or the remote side has gone away.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a stopping bridge waits for its client's final datagrams.
+/// Loopback packets can land a moment after the send returns: FreeBSD hands
+/// them to a network thread instead of delivering them during the call.
+const FINAL_BATCH_WAIT: Duration = Duration::from_millis(50);
 const PUMP_BATCH: usize = 32;
 const WRITE_BUDGET: usize = 64 * 1024;
 // Well above normal snapshots, inputs, and simultaneous voice streams. Each
@@ -255,9 +259,12 @@ fn pump<S: Read + Write>(
     let mut ws_budget = DatagramBudget::new();
     let mut pending_ws = None;
     let mut pending_udp: Option<tungstenite::Bytes> = None;
+    let mut finish_by = None;
+    let mut forwarded_final = false;
     loop {
         // Dropping a client queues its netcode disconnect immediately before
-        // dropping this bridge. Give that final UDP batch one bounded pass.
+        // dropping this bridge. Forward that final batch, waiting a bounded
+        // moment for it to arrive, then close.
         let finishing = stop.load(Ordering::Relaxed);
         let mut active = false;
         // Bound each direction's work, and stop reading UDP under TCP
@@ -355,7 +362,11 @@ fn pump<S: Read + Write>(
             }
         }
         if finishing {
-            break;
+            let deadline = *finish_by.get_or_insert_with(|| Instant::now() + FINAL_BATCH_WAIT);
+            if (forwarded_final && !active) || Instant::now() >= deadline {
+                break;
+            }
+            forwarded_final |= active;
         }
         // Both sides must stay alive. Ping/text spam or one-way junk cannot
         // occupy a relay slot indefinitely after the game transport closes.

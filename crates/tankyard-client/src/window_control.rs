@@ -1,13 +1,14 @@
 //! Operations target this process's window only. Native coordinates are pixels
-//! on X11/Windows and desktop points on macOS; rendering stays in Macroquad units.
+//! on X11 (Linux, FreeBSD) and Windows, and desktop points on macOS; rendering
+//! stays in Macroquad units.
 use std::sync::OnceLock;
 pub type Area = (i32, i32, u32, u32);
 static TITLE: OnceLock<String> = OnceLock::new();
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 static BOOTSTRAP: OnceLock<String> = OnceLock::new();
 pub fn bootstrap_title(title: &str) -> String {
     TITLE.get_or_init(|| title.to_owned());
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
         use std::hash::BuildHasher;
         BOOTSTRAP
@@ -19,13 +20,13 @@ pub fn bootstrap_title(title: &str) -> String {
             })
             .clone()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     {
         title.to_owned()
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod platform {
     use super::*;
     use xcb::{Xid, x};
@@ -467,7 +468,7 @@ impl WindowControl {
             return area;
         }
         let (width, height) = macroquad::miniquad::window::screen_size();
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
         let (x, y) = macroquad::miniquad::window::get_window_position();
         #[cfg(target_os = "macos")]
         let (x, y) = (0u32, 0u32);
@@ -482,7 +483,7 @@ impl WindowControl {
         if let Some(native) = &self.native {
             native.geometry(area);
         } else {
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
             macroquad::miniquad::window::set_window_position(area.0 as u32, area.1 as u32);
             macroquad::miniquad::window::set_window_size(area.2, area.3);
         }

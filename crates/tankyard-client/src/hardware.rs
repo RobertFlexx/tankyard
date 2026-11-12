@@ -2,8 +2,8 @@
 //!
 //! Before the window opens: laptops with two GPUs are steered to the
 //! discrete one (Optimus and PowerXpress exports on Windows, PRIME render
-//! offload on Linux), and NVIDIA's Linux driver is told to queue only one
-//! frame ahead, which cuts input latency. If a launch with these changes
+//! offload on Linux), and NVIDIA's Linux and FreeBSD driver is told to queue
+//! only one frame ahead, which cuts input latency. If a launch with these changes
 //! never reaches its first frame, the next launch leaves them out.
 //!
 //! After it opens: the GPU, driver and video memory are read for the
@@ -132,7 +132,7 @@ fn marker() -> PathBuf {
 /// Tune the driver environment. Call first thing in `main`, before any
 /// thread starts or the window opens.
 pub fn prepare(settings: &Settings, safe_graphics: bool) {
-    if !cfg!(target_os = "linux") {
+    if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
         return;
     }
     let marker = marker();
@@ -155,7 +155,11 @@ pub fn prepare(settings: &Settings, safe_graphics: bool) {
         }
     };
     let mut changed = false;
-    if std::path::Path::new("/proc/driver/nvidia/version").exists() {
+    // Linux's driver lists itself in /proc; FreeBSD's makes its control device.
+    if ["/proc/driver/nvidia/version", "/dev/nvidiactl"]
+        .iter()
+        .any(|path| std::path::Path::new(path).exists())
+    {
         // One frame queued instead of up to three: input reaches the
         // screen a frame or two sooner, at no cost at these frame rates.
         changed |= set("__GL_MaxFramesAllowed", "1");

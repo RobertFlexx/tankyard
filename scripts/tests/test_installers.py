@@ -78,13 +78,77 @@ shutil.copyfile(source, args[args.index("--output") + 1])
         curl.chmod(0o755)
         uname = self.shims / "uname"
         uname.write_text("""#!/bin/sh
-case "$1" in -s) printf '%s\\n' Linux ;; -m) printenv TANKYARD_TEST_ARCH ;; esac
+case "$1" in -s) printf '%s\\n' "${TANKYARD_TEST_SYSTEM:-Linux}" ;; -m) printenv TANKYARD_TEST_ARCH ;; -r) echo 15.1-RELEASE ;; esac
 """)
         uname.chmod(0o755)
         self.env = dict(os.environ,
             PATH=str(self.shims) + os.pathsep + os.environ["PATH"],
             TANKYARD_FIXTURES=str(self.release), TANKYARD_TEST_ARCH="x86_64",
             XDG_DATA_HOME=str(self.root / "data"))
+
+    def use_freebsd(self):
+        """Runs the installer as on a fresh FreeBSD: fetch(1) and sha256(1), no curl."""
+        base = self.root / "base"
+        freebsd = self.root / "freebsd"
+        base.mkdir()
+        freebsd.mkdir()
+        hidden = {"curl", "sha256sum", "shasum", "uname", "ldd", "fetch", "sha256", "freebsd-version"}
+        for directory in ("/usr/bin", "/bin"):
+            for entry in Path(directory).iterdir():
+                if entry.name not in hidden and not os.path.lexists(base / entry.name):
+                    (base / entry.name).symlink_to(entry)
+        shutil.copy2(self.shims / "uname", freebsd / "uname")
+        scripts = {
+            "fetch": """#!/usr/bin/env python3
+import os, shutil, sys
+from pathlib import Path
+args = sys.argv[1:]
+url, output = args[-1], Path(args[args.index("-o") + 1])
+assert url.startswith("https://")
+fixtures = Path(os.environ["TANKYARD_FIXTURES"])
+def fail(message):
+    print(f"fetch: {url}: {message}", file=sys.stderr)
+    sys.exit(1)
+accept = os.environ.get("HTTP_ACCEPT", "")
+if url.startswith("https://api.github.com/"):
+    names = sorted(path.name for path in fixtures.iterdir())
+    if "/releases/assets/" in url:
+        assert accept == "application/octet-stream", accept
+        source = fixtures / names[int(url.rsplit("/", 1)[-1])]
+    else:
+        assert accept == "application/vnd.github+json", accept
+        assets = ",".join(
+            f'{{"url": "https://api.github.com/repos/RobertFlexx/tankyard/releases/assets/{index}", '
+            f'"id": {index}, "name": "{name}"}}' for index, name in enumerate(names))
+        output.write_text(f'{{"name": "Tank Yard v1.2.3", "assets": [{assets}]}}')
+        sys.exit(0)
+elif os.environ.get("TANKYARD_GITHUB_DOWN"):
+    fail("Gateway Time-out")
+else:
+    source = fixtures / url.rsplit("/", 1)[-1]
+if not source.is_file():
+    fail("Not Found")
+shutil.copyfile(source, output)
+""",
+            "sha256": """#!/usr/bin/env python3
+import hashlib, sys
+assert sys.argv[1] == "-q"
+print(hashlib.sha256(open(sys.argv[2], "rb").read()).hexdigest())
+""",
+            "freebsd-version": """#!/bin/sh
+printf '%s\\n' "${TANKYARD_TEST_RELEASE:-15.1-RELEASE}"
+""",
+            "ldd": """#!/bin/sh
+printf '%s:\\n' "$1"
+printf '%b' "${TANKYARD_TEST_LDD:-\\tlibc.so.7 => /lib/libc.so.7 (0x1)\\n}"
+""",
+        }
+        for name, text in scripts.items():
+            (freebsd / name).write_text(text)
+            (freebsd / name).chmod(0o755)
+        packaging.package(self.binaries, self.release, "freebsd-x86_64", "v1.2.3")
+        self.write_checksums()
+        self.env.update(PATH=f"{freebsd}{os.pathsep}{base}", TANKYARD_TEST_SYSTEM="FreeBSD", TANKYARD_TEST_ARCH="amd64")
 
     def write_checksums(self):
         lines = []
@@ -194,6 +258,36 @@ case "$1" in -s) printf '%s\\n' Linux ;; -m) printenv TANKYARD_TEST_ARCH ;; esac
         self.run_installer("--no-desktop")
         self.assertTrue((self.destination / "tankyard").is_file())
 
+    def test_freebsd_installs_with_fetch_and_sha256(self):
+        self.use_freebsd()
+        result = self.run_installer("--no-desktop")
+        self.assertIn("for freebsd-x86_64", result.stdout)
+        installed = subprocess.run([str(self.destination / "tankyard"), "--version"], text=True, capture_output=True, check=True)
+        self.assertEqual(installed.stdout.strip(), "tankyard 1.2.3")
+        result = self.run_installer("--server")
+        self.assertIn("hosting.md#on-freebsd", result.stdout)
+        self.assertTrue((self.destination / "tankyard-relay").is_file())
+
+    def test_freebsd_switches_to_the_api_with_fetch(self):
+        self.use_freebsd()
+        self.env["TANKYARD_GITHUB_DOWN"] = "1"
+        result = self.run_installer("--no-desktop")
+        self.assertIn("through the GitHub API", result.stderr)
+        self.assertTrue((self.destination / "tankyard").is_file())
+
+    def test_freebsd_missing_sound_libraries_name_the_package(self):
+        self.use_freebsd()
+        self.env["TANKYARD_TEST_LDD"] = "\\tlibasound.so.2 => not found (0)\\n"
+        result = self.run_installer("--no-desktop", success=False)
+        self.assertIn("pkg install alsa-plugins", result.stderr)
+        self.assertFalse(self.destination.exists())
+
+    def test_freebsd_14_is_sent_to_the_source_build(self):
+        self.use_freebsd()
+        self.env["TANKYARD_TEST_RELEASE"] = "14.3-RELEASE-p4"
+        result = self.run_installer("--no-desktop", success=False)
+        self.assertIn("FreeBSD 15.0 or newer", result.stderr)
+
     def test_desktop_shortcut_quotes_custom_paths(self):
         self.run_installer()
         shortcut = (self.root / "data/applications/tankyard.desktop").read_text()
@@ -239,6 +333,12 @@ case "$1" in -s) printf '%s\\n' Linux ;; -m) printenv TANKYARD_TEST_ARCH ;; esac
             self.assertTrue(any(name.endswith("/configs/tankyard.service") for name in names))
             self.assertTrue(any(name.endswith("/host-server.sh") for name in names))
             self.assertFalse(any("/.git/" in name or "private" in name for name in names))
+        archive = packaging.package(self.binaries, self.release, "freebsd-x86_64", "v1.2.3")
+        with tarfile.open(archive) as bundle:
+            names = bundle.getnames()
+            self.assertTrue(any(name.endswith("/configs/tankyard.rc") for name in names))
+            self.assertFalse(any(name.endswith(".service") for name in names))
+            self.assertTrue(any(name.endswith("/host-server.sh") for name in names))
         for binary in packaging.BINARIES:
             shutil.copyfile(self.binaries / binary, self.binaries / (binary + ".exe"))
         archive = packaging.package(self.binaries, self.release, "windows-x86_64", "v1.2.3")

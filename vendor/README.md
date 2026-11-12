@@ -33,6 +33,9 @@ The Metal backend changes:
 - Integer arguments to Metal calls are passed as 64-bit values (upstream
   passed some as 32-bit, leaving garbage in the upper bits on ARM64).
 
+The X11, Wayland and EGL backends, `dlopen` loading and `window_position`
+also build on FreeBSD, which upstream gates to Linux; the code is unchanged.
+
 The macOS window changes: `Platform::apple_low_power_gpu` picks the
 integrated GPU on Macs with two (Metal) or allows it (OpenGL), and windows
 nobody can see draw at 30 fps instead of 60 with even pacing.

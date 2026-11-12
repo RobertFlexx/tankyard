@@ -321,7 +321,8 @@ pub mod window {
 
     /// Get the position of the window.
     /// TODO: implement for other platforms
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    // Tank Yard: FreeBSD's X11 backend tracks the position too.
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
     pub fn get_window_position() -> (u32, u32) {
         let d = native_display().lock().unwrap();
         d.screen_position
@@ -476,7 +477,8 @@ pub fn start<F>(conf: conf::Conf, f: F)
 where
     F: 'static + FnOnce() -> Box<dyn EventHandler>,
 {
-    #[cfg(target_os = "linux")]
+    // Tank Yard: FreeBSD desktops use the same X11 and Wayland backends.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
         let mut f = Some(f);
         let f = &mut f;

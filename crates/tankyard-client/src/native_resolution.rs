@@ -19,7 +19,7 @@ struct Monitor {
     pixels: (u32, u32),
     scale: f32,
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn displays() -> Vec<Monitor> {
     use xcb::{Xid, randr};
     let Ok((conn, index)) = xcb::Connection::connect(None) else {
@@ -56,7 +56,7 @@ fn displays() -> Vec<Monitor> {
         })
         .collect()
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn displays() -> Vec<Monitor> {
     display_info::DisplayInfo::all()
         .unwrap_or_default()

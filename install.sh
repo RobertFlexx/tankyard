@@ -34,28 +34,49 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$bin_dir" ] || die "Choose an installation directory."
 case "$bin_dir" in /*) ;; *) die "--bin-dir must be an absolute path." ;; esac
-for tool in curl tar awk mktemp install; do
-    command -v "$tool" >/dev/null 2>&1 || die "$tool is required."
-done
 system=$(uname -s)
 machine=$(uname -m)
+for tool in tar awk mktemp install; do
+    command -v "$tool" >/dev/null 2>&1 || die "$tool is required."
+done
+# FreeBSD's own fetch(1) stands in for curl, which a fresh FreeBSD lacks.
+if command -v curl >/dev/null 2>&1; then
+    downloader=curl
+elif [ "$system" = FreeBSD ] && command -v fetch >/dev/null 2>&1; then
+    downloader=fetch
+else
+    die "curl is required."
+fi
 case "$system/$machine" in
     Linux/x86_64|Linux/amd64) platform=linux-x86_64 ;;
     Linux/aarch64|Linux/arm64) platform=linux-aarch64 ;;
     Darwin/x86_64|Darwin/arm64) platform=macos-universal ;;
+    FreeBSD/amd64|FreeBSD/x86_64) platform=freebsd-x86_64 ;;
+    FreeBSD/*) die "The FreeBSD build is for amd64; on $machine, build from source (docs/freebsd.md)." ;;
     *) die "No build for $system/$machine. Windows builds are on the Releases page." ;;
 esac
+needs="Linux needs glibc 2.31+ on x86-64, glibc 2.35+ on ARM64, and desktop graphics libraries."
 if [ "$system" = Linux ] && ldd --version 2>&1 | awk '/musl/ { found=1 } END { exit !found }'; then
     die "This Linux build needs glibc 2.31 or newer; musl is not supported."
+fi
+if [ "$system" = FreeBSD ]; then
+    needs="FreeBSD needs version 15.0 or newer on amd64."
+    release=$(freebsd-version -u 2>/dev/null || uname -r)
+    case "${release%%.*}" in
+        ''|*[!0-9]*) ;;
+        *) [ "${release%%.*}" -ge 15 ] || die "This build needs FreeBSD 15.0 or newer; this is $release. Build from source instead (docs/freebsd.md)." ;;
+    esac
 fi
 if command -v sha256sum >/dev/null 2>&1; then
     checksum() { sha256sum "$1" | awk '{print $1}'; }
 elif command -v shasum >/dev/null 2>&1; then
     checksum() { shasum -a 256 "$1" | awk '{print $1}'; }
+elif command -v sha256 >/dev/null 2>&1; then
+    checksum() { sha256 -q "$1"; }
 else
     die "Install sha256sum or shasum to verify the download."
 fi
-# fetch URL FILE [progress] [ATTEMPTS] [HEADER]: download over HTTPS only. GitHub's release
+# download URL FILE [progress] [ATTEMPTS] [HEADER]: download over HTTPS only. GitHub's release
 # servers sometimes answer 502/503/504 or drop connections under load, so
 # those are retried with growing pauses and partial downloads resume.
 # Missing files (404) fail at once. Stalled transfers are abandoned after
@@ -64,7 +85,7 @@ attempts=$(printenv TANKYARD_DOWNLOAD_ATTEMPTS || true)
 case "$attempts" in ''|*[!0-9]*) attempts=6 ;; esac
 # Optional: a GitHub token raises the API's rate limit for the fallback below.
 token=$(printenv TANKYARD_GITHUB_TOKEN || true)
-fetch() {
+download() {
     try=1
     pause=2
     tries=${4:-$attempts}
@@ -75,11 +96,16 @@ fetch() {
     while :; do
         resume=
         if [ -s "$2" ]; then resume='--continue-at -'; fi
-        # shellcheck disable=SC2086
-        code=$(curl --fail --location --connect-timeout 10 --speed-limit 1024 --speed-time 30 \
-            --proto '=https' --proto-redir '=https' --tlsv1.2 $meter --show-error \
-            ${5:+--header} ${5:+"$5"} ${auth:+--header} ${auth:+"$auth"} $resume --write-out '%{http_code}' --output "$2" "$1") && return 0
-        status=$?
+        if [ "$downloader" = fetch ]; then
+            fetch_once "$1" "$2" "$meter" "${5:-}" && return 0
+            status=$?
+        else
+            # shellcheck disable=SC2086
+            code=$(curl --fail --location --connect-timeout 10 --speed-limit 1024 --speed-time 30 \
+                --proto '=https' --proto-redir '=https' --tlsv1.2 $meter --show-error \
+                ${5:+--header} ${5:+"$5"} ${auth:+--header} ${auth:+"$auth"} $resume --write-out '%{http_code}' --output "$2" "$1") && return 0
+            status=$?
+        fi
         fetch_code=$code
         case "$code" in
             416) rm -f "$2" ;;    # A stale partial file; start again.
@@ -87,7 +113,7 @@ fetch() {
             *) return "$status" ;; # 404 and other permanent answers.
         esac
         # curl reports HTTP errors as 22; without a status it never connected.
-        if [ -z "$code" ] && [ "$status" = 22 ]; then return "$status"; fi
+        if [ "$downloader" = curl ] && [ -z "$code" ] && [ "$status" = 22 ]; then return "$status"; fi
         [ "$try" -lt "$tries" ] || return "$status"
         printf 'Tank Yard: the download server is busy (%s); retrying in %ss…\n' \
             "${code:-no response}" "$pause" >&2
@@ -96,6 +122,35 @@ fetch() {
         pause=$((pause * 2))
         [ "$pause" -le 30 ] || pause=30
     done
+}
+# fetch_once URL FILE METER [HEADER]: one try with FreeBSD's fetch(1), setting
+# $code from its message. It can send an Accept header but not a token, and it
+# resumes partial files itself. A download showing progress keeps its message
+# on screen, so its failures count as busy answers.
+fetch_once() {
+    accept=
+    case "${4:-}" in "Accept: "*) accept=${4#Accept: } ;; esac
+    restart=
+    if [ -s "$2" ]; then restart=-r; fi
+    code=
+    if [ "$3" = --progress-bar ]; then
+        # shellcheck disable=SC2086
+        env ${accept:+"HTTP_ACCEPT=$accept"} fetch -T 30 $restart -o "$2" "$1"
+        return
+    fi
+    # shellcheck disable=SC2086
+    message=$(env ${accept:+"HTTP_ACCEPT=$accept"} fetch -q -T 30 $restart -o "$2" "$1" 2>&1) && return 0
+    case "$message" in
+        *"Not Found"*) code=404 ;;
+        *Forbidden*) code=403 ;;
+        *Unauthorized*) code=401 ;;
+        *"Not Satisfiable"*) code=416 ;;
+        *"Too Many Requests"*) code=429 ;;
+        *"Bad Gateway"*) code=502 ;;
+        *"Service Unavailable"*) code=503 ;;
+        *"Gateway Time"*) code=504 ;;
+    esac
+    return 1
 }
 if [ -t 1 ] && [ -z "$(printenv NO_COLOR || true)" ]; then
     printf '\033[1;36mTank Yard\033[0m\n'
@@ -111,9 +166,9 @@ via_api=no
 release_file() {
     if [ "$via_api" = no ]; then
         if [ "$version" = latest ]; then
-            fetch "$base/latest/download/$1" "$2" "${3:-}" 2 && return 0
+            download "$base/latest/download/$1" "$2" "${3:-}" 2 && return 0
         else
-            fetch "$base/download/$version/$1" "$2" "${3:-}" 2 && return 0
+            download "$base/download/$version/$1" "$2" "${3:-}" 2 && return 0
         fi
         case "$fetch_code" in ''|000|408|429|5??) ;; *) return 1 ;; esac
         printf 'Tank Yard: downloading through the GitHub API instead.\n' >&2
@@ -122,7 +177,7 @@ release_file() {
     if [ ! -s "$work_dir/release.json" ]; then
         release=latest
         [ "$version" = latest ] || release="tags/$version"
-        fetch "https://api.github.com/repos/$repository/releases/$release" "$work_dir/release.json" \
+        download "https://api.github.com/repos/$repository/releases/$release" "$work_dir/release.json" \
             "" "" 'Accept: application/vnd.github+json' || { rm -f "$work_dir/release.json"; return 1; }
     fi
     # Each asset lists its API address before its name.
@@ -135,7 +190,7 @@ release_file() {
         value("name") == name && url != "" { print url; exit }')
     [ -n "$asset" ] || return 1
     rm -f "$2"
-    fetch "$asset" "$2" "${3:-}" "" 'Accept: application/octet-stream'
+    download "$asset" "$2" "${3:-}" "" 'Accept: application/octet-stream'
 }
 case "$version" in latest|v[0-9]*) ;; *) die "Use a release tag such as v0.2.8." ;; esac
 case "$version" in *[!a-zA-Z0-9.-]*) die "Invalid release tag." ;; esac
@@ -197,7 +252,15 @@ fi
 for binary in $binaries; do
     [ -f "$payload/$binary" ] || die "The archive is missing $binary."
 done
-reported=$("$payload/$first" --version) || die "This build cannot run here. Linux needs glibc 2.31+ on x86-64, glibc 2.35+ on ARM64, and desktop graphics libraries."
+if [ "$system" = FreeBSD ]; then
+    # The game links ALSA, which reaches FreeBSD's sound through alsa-plugins.
+    missing=$(ldd "$payload/$first" 2>/dev/null | awk '/not found/ { print $1 }' | tr '\n' ' ')
+    case "$missing" in
+        *libasound*) die "Install the game's sound libraries first, as root: pkg install alsa-plugins" ;;
+        ?*) die "Missing libraries: $missing. $needs" ;;
+    esac
+fi
+reported=$("$payload/$first" --version) || die "This build cannot run here. $needs"
 printf '%s\n' "$reported"
 mkdir -p "$bin_dir"
 for binary in $binaries; do
@@ -266,4 +329,17 @@ To host, make a folder for the server's settings and start it there:
   "$command_name" --config server.toml
 It prints the addresses players join. Guide: https://github.com/$repository/blob/main/docs/hosting.md
 NEXT
+    if [ "$system" = FreeBSD ]; then
+        printf 'To start it with the machine, use the rc.d script in the release: https://github.com/%s/blob/main/docs/hosting.md#on-freebsd\n' "$repository"
+    fi
+elif [ "$system" = FreeBSD ]; then
+    if [ ! -e /usr/local/lib/alsa-lib/libasound_module_pcm_oss.so ]; then
+        printf 'For sound and voice chat, install the ALSA plugins as root: pkg install alsa-plugins\n'
+    fi
+    for library in libX11.so.6 libXi.so.6 libGL.so.1; do
+        if [ ! -e "/usr/local/lib/$library" ]; then
+            printf 'Tank Yard needs a desktop with X11 and OpenGL: pkg install xorg, then mesa-libs or your NVIDIA driver. See docs/freebsd.md.\n'
+            break
+        fi
+    done
 fi

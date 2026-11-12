@@ -32,7 +32,6 @@ log.workspace = true
 env_logger.workspace = true
 cpal = "0.16"
 opus = "0.4"
-display-info = "0.5.9"
 arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 zeroize = "1"
 ureq = { version = "3.1", default-features = false, features = ["rustls"] }
@@ -49,10 +48,13 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2-zli
 # Vulkan, loaded at runtime, hosts NVIDIA DLSS beside the OpenGL renderer.
 ash = { version = "0.38", default-features = false, features = ["loaded", "std"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 # Load the desktop's XCB ABI at runtime, matching Miniquad's display handling.
 xcb = { version = "1.7", features = ["dl", "randr"] }
 libloading = "0.8"
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+display-info = "0.5.9"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }

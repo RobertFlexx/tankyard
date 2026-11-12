@@ -65,7 +65,8 @@ version = "0.2"
 [target.'cfg(target_os = "android")'.dependencies.ndk-sys]
 version = "0.2"
 
-[target.'cfg(target_os = "linux")'.dependencies.libc]
+# Tank Yard: FreeBSD's X11 backend needs libc as Linux's does.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.libc]
 version = "0.2"
 
 [target."cfg(windows)".dependencies.winapi]

@@ -8,6 +8,14 @@ curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/inst
 
 The installer downloads a precompiled build, checks its SHA-256 checksum, installs it for your user, and adds an application shortcut with the Tank Yard icon. Run the same command to update. Your settings and progress stay where they are.
 
+FreeBSD 15 and newer (amd64): install the sound plugins once as root with `pkg install alsa-plugins`, then run the installer with the base system's `fetch`:
+
+~~~sh
+fetch -o - https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh | sh
+~~~
+
+[Tank Yard on FreeBSD](freebsd.md) covers NVIDIA, sound and hosting.
+
 macOS: download the **macOS installer (.pkg)** from [Releases](https://github.com/RobertFlexx/tankyard/releases/latest) and open it. The installer places **Tank Yard.app** in Applications; the dedicated server, bundled mods and documentation are inside the app. It runs natively on Apple silicon and Intel Macs with macOS 11 or newer. The package is not notarized by Apple yet, so macOS blocks it when it was downloaded in a browser. Either use the fetch script, which downloads it with `curl`, verifies it against the release's `SHA256SUMS`, and opens the normal visual installer without the warning (`--cli` installs from the terminal instead):
 
 ~~~sh
@@ -43,7 +51,7 @@ Use --server to install the dedicated server and WebSocket relay; it prints the 
 
 PowerShell accepts -Version, -InstallDir, -NoShortcut, -NoPath, and -Server.
 
-Linux x86-64 builds need glibc 2.31 or newer; ARM64 builds need glibc 2.35 or newer. The game uses your system's X11 and OpenGL libraries. macOS has a universal build for Intel and Apple Silicon, including a **Tank Yard.app** bundle; the installer places it in your Applications folder. Windows has an x86-64 build with the C runtime included.
+Linux x86-64 builds need glibc 2.31 or newer; ARM64 builds need glibc 2.35 or newer. The game uses your system's X11 and OpenGL libraries. FreeBSD builds need FreeBSD 15.0 or newer on amd64, `alsa-plugins`, and an X11 desktop. macOS has a universal build for Intel and Apple Silicon, including a **Tank Yard.app** bundle; the installer places it in your Applications folder. Windows has an x86-64 build with the C runtime included.
 
 ## Playing
 
@@ -51,6 +59,6 @@ Linux x86-64 builds need glibc 2.31 or newer; ARM64 builds need glibc 2.35 or ne
 
 ## Release builds
 
-Pushing a tag matching Cargo's version, such as v0.2.8, runs the Release workflow. It checks the source and installers, builds all four platform archives and the graphical Windows setup, generates SHA256SUMS, and publishes the release after every package is ready. Each archive includes the game, server, relay, command-line tools, example configs, bundled mods, and licenses. Windows CI compiles the NSIS graphical installer and tests silent install, update, and uninstall against the real game before publication.
+Pushing a tag matching Cargo's version, such as v0.2.8, runs the Release workflow. It checks the source and installers, builds all five platform archives (FreeBSD's in a FreeBSD VM) and the graphical Windows setup, generates SHA256SUMS, and publishes the release after every package is ready. Each archive includes the game, server, relay, command-line tools, example configs, bundled mods, and licenses. Windows CI compiles the NSIS graphical installer and tests silent install, update, and uninstall against the real game before publication.
 
-The workflow then installs the published game into a temporary directory on Linux, macOS, and Windows. This checks the same downloads and installer paths players use. A failed build leaves the release unpublished. To retry an interrupted run, use Re-run jobs or dispatch Release with the existing tag. Use a new version tag to change an already published release.
+The workflow then installs the published game into a temporary directory on Linux, macOS, Windows and FreeBSD. This checks the same downloads and installer paths players use. A failed build leaves the release unpublished. To retry an interrupted run, use Re-run jobs or dispatch Release with the existing tag. Use a new version tag to change an already published release.
