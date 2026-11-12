@@ -33,6 +33,27 @@ fn pump(server: &mut UdpServer, clients: &mut [&mut NetworkClient], ticks: usize
         thread::sleep(Duration::from_millis(1));
     }
 }
+/// Lets the server receive a flushed input before the next tick, as Linux does
+/// during the send. FreeBSD hands loopback datagrams to a network thread, so
+/// they can land a moment later; a zero-length update receives without
+/// moving the world.
+fn deliver_input(server: &mut UdpServer, client: &NetworkClient, sequence: u32) {
+    let id = client.player_id.unwrap();
+    for _ in 0..2000 {
+        server.update(Duration::ZERO).unwrap();
+        let tank = server.arenas[0]
+            .session
+            .world
+            .tanks
+            .iter()
+            .find(|t| t.id == id);
+        if tank.is_some_and(|tank| tank.last_input == sequence) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    panic!("input {sequence} never reached the server");
+}
 fn ready(server: &mut UdpServer, clients: &mut [&mut NetworkClient]) {
     for _ in 0..240 {
         pump(server, clients, 1);
@@ -467,6 +488,7 @@ fn delayed_click_and_ability_taps_survive_input_coalescing() {
         ..Default::default()
     }));
     client.flush().unwrap();
+    deliver_input(&mut server, &client, 2);
     pump(&mut server, &mut [&mut client], 1);
     let tank = server.arenas[0]
         .session
@@ -947,6 +969,8 @@ fn bastion_accepts_resumed_sequence_gaps_without_advancing_movement_or_weapon_ti
             fire: true,
             ..Default::default()
         }));
+        client.flush().unwrap();
+        deliver_input(&mut server, &client, sequence);
         pump(&mut server, &mut [&mut client], 2);
         let tank = server.arenas[0]
             .session
