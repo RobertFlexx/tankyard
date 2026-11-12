@@ -19,6 +19,15 @@ pub(crate) struct Navigation {
     costs: Vec<u32>,
     parents: Vec<usize>,
     open: BinaryHeap<Reverse<(u32, usize)>>,
+    /// The walls the grid was built for, and which of them touch each cell,
+    /// so a short line only tests the walls beside it.
+    walls: Vec<Rect>,
+    wall_cells: Vec<Vec<u32>>,
+    /// `seen[wall] == stamp` once a line has tested that wall.
+    seen: Vec<u32>,
+    stamp: u32,
+    /// Whether this route's walls are the indexed ones.
+    indexed: bool,
 }
 
 impl Default for Navigation {
@@ -34,6 +43,11 @@ impl Default for Navigation {
             costs: vec![],
             parents: vec![],
             open: BinaryHeap::new(),
+            walls: vec![],
+            wall_cells: vec![],
+            seen: vec![],
+            stamp: 0,
+            indexed: false,
         }
     }
 }
@@ -68,6 +82,67 @@ impl Navigation {
                 best.min((p - nearest).length_squared())
             });
         }
+        self.walls.clear();
+        self.walls.extend_from_slice(walls);
+        self.wall_cells.resize_with(self.cols * self.rows, Vec::new);
+        for cell in &mut self.wall_cells {
+            cell.clear();
+        }
+        for (index, wall) in walls.iter().enumerate() {
+            let (x0, y0, x1, y1) = self.cell_span(
+                V2::new(wall.x, wall.y),
+                V2::new(wall.x + wall.w, wall.y + wall.h),
+                0.,
+            );
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    self.wall_cells[y * self.cols + x].push(index as u32);
+                }
+            }
+        }
+        self.seen.clear();
+        self.seen.resize(walls.len(), 0);
+        self.stamp = 0;
+    }
+
+    /// The columns and rows a box from `a` to `b`, grown by `pad`, covers.
+    fn cell_span(&self, a: V2, b: V2, pad: f32) -> (usize, usize, usize, usize) {
+        let col = |x: f32| ((x / self.cell).max(0.) as usize).min(self.cols - 1);
+        let row = |y: f32| ((y / self.cell).max(0.) as usize).min(self.rows - 1);
+        (
+            col(a.x.min(b.x) - pad),
+            row(a.y.min(b.y) - pad),
+            col(a.x.max(b.x) + pad),
+            row(a.y.max(b.y) + pad),
+        )
+    }
+
+    /// [`clear_line`], testing only the walls in the cells the line passes.
+    fn clear(&mut self, start: V2, end: V2, clearance: f32, walls: &[Rect]) -> bool {
+        if !self.indexed {
+            return clear_line(start, end, clearance, walls);
+        }
+        self.stamp = self.stamp.wrapping_add(1);
+        if self.stamp == 0 {
+            self.seen.fill(0);
+            self.stamp = 1;
+        }
+        let (x0, y0, x1, y1) = self.cell_span(start, end, clearance + 1.);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                for &index in &self.wall_cells[y * self.cols + x] {
+                    let index = index as usize;
+                    if self.seen[index] == self.stamp {
+                        continue;
+                    }
+                    self.seen[index] = self.stamp;
+                    if sweep_rect(start, end, clearance, walls[index]).is_some() {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
     }
 
     pub fn cell_of(&self, p: V2) -> usize {
@@ -84,18 +159,19 @@ impl Navigation {
     }
 
     fn nearest_free(
-        &self,
+        &mut self,
         p: V2,
         clearance: f32,
         walls: &[Rect],
         require_connection: bool,
     ) -> Option<usize> {
         let cell = self.cell_of(p);
-        let reachable = |index| {
-            self.clearance_squared[index] > clearance * clearance
-                && (!require_connection || clear_line(p, self.center(index), clearance, walls))
+        let reachable = |navigation: &mut Self, index| {
+            navigation.clearance_squared[index] > clearance * clearance
+                && (!require_connection
+                    || navigation.clear(p, navigation.center(index), clearance, walls))
         };
-        if reachable(cell) {
+        if reachable(self, cell) {
             return Some(cell);
         }
         let x = (cell % self.cols) as isize;
@@ -112,7 +188,7 @@ impl Navigation {
                         continue;
                     }
                     let index = ny as usize * self.cols + nx as usize;
-                    if reachable(index) {
+                    if reachable(self, index) {
                         let distance = (self.center(index) - p).length_squared();
                         if best.is_none_or(|(previous, _)| distance < previous) {
                             best = Some((distance, index));
@@ -136,19 +212,16 @@ impl Navigation {
     /// Returns an empty route if the bounded search cannot reach the goal.
     /// No unbounded pathfinding or exponential recursive searches are used.
     pub fn route(&mut self, start: V2, goal: V2, walls: &[Rect], clearance: f32) -> Vec<V2> {
-        if clear_line(start, goal, clearance, walls) {
+        self.indexed = self.cols > 0 && self.walls == walls;
+        if self.clear(start, goal, clearance, walls) {
             return vec![goal];
         }
+        let goal_clear = self.clear(goal, goal, clearance, walls);
         let (Some(from), Some(to)) = (
             self.nearest_free(start, clearance, walls, true),
             // Exploration and combat spacing can place a goal inside a wall.
             // In that case approach a free cell beside it instead of stalling.
-            self.nearest_free(
-                goal,
-                clearance,
-                walls,
-                clear_line(goal, goal, clearance, walls),
-            ),
+            self.nearest_free(goal, clearance, walls, goal_clear),
         ) else {
             return vec![];
         };
@@ -202,7 +275,7 @@ impl Navigation {
                 }
                 let cost = self.costs[index] + if dx != 0 && dy != 0 { 14 } else { 10 };
                 if cost < self.costs[next]
-                    && clear_line(self.center(index), self.center(next), clearance, walls)
+                    && self.clear(self.center(index), self.center(next), clearance, walls)
                 {
                     self.costs[next] = cost;
                     self.parents[next] = index;
@@ -225,7 +298,7 @@ impl Navigation {
         }
         points.push(self.center(from));
         points.reverse();
-        if clear_line(*points.last().unwrap_or(&start), goal, clearance, walls) {
+        if self.clear(*points.last().unwrap_or(&start), goal, clearance, walls) {
             points.push(goal);
         }
         points
@@ -342,5 +415,33 @@ mod tests {
         }
         assert!(previous.distance(goal) < 1.);
         assert!(nav.route(start, goal, &walls, 34.).is_empty());
+    }
+
+    #[test]
+    fn indexed_lines_agree_with_testing_every_wall() {
+        let mut walls = Vec::new();
+        for n in 0..120 {
+            let f = n as f32;
+            walls.push(Rect {
+                x: (f * 137.) % 3400. - 40.,
+                y: (f * 251.) % 2500. - 30.,
+                w: 10. + (f * 7.) % 300.,
+                h: 10. + (f * 13.) % 260.,
+            });
+        }
+        let mut nav = Navigation::default();
+        nav.refresh(3600., 2600., &walls);
+        nav.indexed = true;
+        for n in 0..6000 {
+            let f = n as f32;
+            let start = V2::new((f * 61.) % 3700. - 50., (f * 97.) % 2700. - 50.);
+            let end = start + V2::from_angle(f * 0.37) * ((f * 31.) % 900.);
+            let clearance = 2. + (f * 0.7) % 60.;
+            assert_eq!(
+                nav.clear(start, end, clearance, &walls),
+                clear_line(start, end, clearance, &walls),
+                "line {n}"
+            );
+        }
     }
 }

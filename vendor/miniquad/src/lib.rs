@@ -351,6 +351,11 @@ pub mod window {
         d.fullscreen_transition
     }
 
+    /// Tank Yard: whether scroll events use logical pixels rather than wheel steps.
+    pub fn mouse_wheel_in_pixels() -> bool {
+        native_display().lock().unwrap().mouse_wheel_pixels
+    }
+
     /// Get current OS clipboard value
     pub fn clipboard_get() -> Option<String> {
         let mut d = native_display().lock().unwrap();

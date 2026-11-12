@@ -1,7 +1,14 @@
 //! Logic preview: the arena's triggers run in the editor with the same rule
 //! engine servers use, with a test tank at the pointer for area triggers.
 use tankyard_content::{MAP_COUNTERS, MapDef, MapTrigger};
-use tankyard_core::{DT, LogicEffect, MapLogic, Occupant, V2, WorldConfig};
+use tankyard_core::{DT, LogicEffect, LogicInput, MapLogic, Occupant, V2, WorldConfig};
+
+/// A trigger's gate as the preview sees it now.
+pub struct GateView {
+    /// Whether each condition holds, in order.
+    pub holds: Vec<bool>,
+    pub open: bool,
+}
 
 /// Something the preview did, kept briefly for the canvas and the log.
 pub struct Event {
@@ -24,6 +31,8 @@ pub struct Preview {
     pub banner: Option<(f32, String)>,
     pub probe_team: u8,
     pub probe_bot: bool,
+    /// Where the test tank was last, for gates that count tanks inside.
+    probe: Option<V2>,
     logic: MapLogic,
     acted: Vec<u32>,
     triggers: Vec<MapTrigger>,
@@ -45,6 +54,7 @@ impl Preview {
             banner: None,
             probe_team: 0,
             probe_bot: false,
+            probe: None,
             logic: MapLogic::default(),
             acted: Vec::new(),
             triggers: Vec::new(),
@@ -115,6 +125,7 @@ impl Preview {
     }
     /// Advance by `dt` seconds of wall time, with a test tank at `probe`.
     pub fn advance(&mut self, map: &MapDef, config: &WorldConfig, dt: f32, probe: Option<V2>) {
+        self.probe = probe;
         if !self.running {
             return;
         }
@@ -125,23 +136,73 @@ impl Preview {
         while self.carry >= DT && steps < 64 {
             self.carry -= DT;
             steps += 1;
-            self.time += DT;
-            let seed = &mut self.seed;
-            self.logic.step(
-                map,
-                config,
-                self.time,
-                &mut self.hidden,
-                &tanks,
-                &mut || next_random(seed),
-                &mut self.effects,
-            );
-            self.record();
+            self.tick(map, config, &tanks);
         }
         if steps == 64 {
             self.carry = 0.;
         }
         self.counters = self.logic.counters;
+    }
+    fn tick(&mut self, map: &MapDef, config: &WorldConfig, tanks: &[Occupant]) {
+        self.time += DT;
+        let seed = &mut self.seed;
+        self.logic.step(
+            map,
+            config,
+            self.time,
+            &mut self.hidden,
+            tanks,
+            &mut || next_random(seed),
+            &mut self.effects,
+        );
+        self.record();
+    }
+    /// One step of logic, running or paused.
+    pub fn step_once(&mut self, map: &MapDef, config: &WorldConfig) {
+        self.follow(map);
+        let tanks = self.tanks(self.probe);
+        self.tick(map, config, &tanks);
+        self.counters = self.logic.counters;
+    }
+    /// Send a signal, change a counter or switch a group as a script would,
+    /// and take one step so it shows at once, even while paused.
+    pub fn send(&mut self, map: &MapDef, config: &WorldConfig, input: LogicInput) {
+        self.follow(map);
+        self.logic.input(input);
+        self.step_once(map, config);
+    }
+    /// The gate of trigger `index` against the preview's counters, groups,
+    /// time and test tank, when it has conditions.
+    pub fn gate_view(&self, trigger: &MapTrigger, config: &WorldConfig) -> Option<GateView> {
+        trigger.only_if.as_ref()?;
+        let tanks = self.tanks(self.probe);
+        let state = tankyard_core::gate_state(
+            trigger,
+            config,
+            &self.counters,
+            self.time,
+            self.hidden,
+            &tanks,
+        );
+        Some(GateView {
+            holds: trigger
+                .conditions()
+                .map(|test| test.holds(&state))
+                .collect(),
+            open: trigger.gate_open(&state),
+        })
+    }
+    /// Whether trigger `index` has used its one action this round.
+    pub fn spent(&self, index: usize) -> bool {
+        self.logic.spent(index)
+    }
+    /// The channel a sequence sends on next, from 0.
+    pub fn sequence_step(&self, index: usize) -> u8 {
+        self.logic.sequence_step(index)
+    }
+    /// How many delayed actions are waiting.
+    pub fn waiting(&self) -> usize {
+        self.logic.waiting()
     }
     fn record(&mut self) {
         for (index, &count) in self.logic.acted.iter().enumerate() {

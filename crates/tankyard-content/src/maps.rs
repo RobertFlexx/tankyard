@@ -337,9 +337,18 @@ pub enum TriggerWhen {
     Cleared,
     /// When a tank is destroyed inside `rect`; `seconds` is the cooldown.
     Destroyed,
+    /// Whenever counter `source` changes value.
+    Changed,
+    /// When group `source` is shown after being hidden.
+    Shown,
+    /// When group `source` is hidden after being shown.
+    Hidden,
+    /// When a boss is defeated: boss `source` of [`BOSS_IDS`], counting from
+    /// 1, or any boss for 0.
+    Defeated,
 }
 impl TriggerWhen {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 13] = [
         Self::Every,
         Self::Enter,
         Self::Exit,
@@ -349,6 +358,10 @@ impl TriggerWhen {
         Self::Occupied,
         Self::Cleared,
         Self::Destroyed,
+        Self::Changed,
+        Self::Shown,
+        Self::Hidden,
+        Self::Defeated,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -361,6 +374,10 @@ impl TriggerWhen {
             Self::Occupied => "While inside",
             Self::Cleared => "On empty",
             Self::Destroyed => "On destroy",
+            Self::Changed => "On change",
+            Self::Shown => "On shown",
+            Self::Hidden => "On hidden",
+            Self::Defeated => "On boss down",
         }
     }
     /// Whether the trigger watches its rectangle for tanks.
@@ -368,6 +385,18 @@ impl TriggerWhen {
         matches!(
             self,
             Self::Enter | Self::Exit | Self::Occupied | Self::Cleared | Self::Destroyed
+        )
+    }
+    /// Whether something else in the map wakes it, rather than time or an area.
+    pub fn is_event(self) -> bool {
+        matches!(
+            self,
+            Self::Signal
+                | Self::Counter
+                | Self::Changed
+                | Self::Shown
+                | Self::Hidden
+                | Self::Defeated
         )
     }
 }
@@ -406,9 +435,16 @@ pub enum TriggerAction {
     Calculate,
     /// Raises the `map_event` script event named `text`, for script packs.
     Script,
+    /// Signals the next channel of `group` to `group + amount - 1` in turn,
+    /// starting again after the last.
+    Sequence,
+    /// Starts the triggers of group `group` (every trigger for 0) afresh:
+    /// waiting delays are dropped, Once per round ones can act again, timers
+    /// count from now and sequences start at their first channel.
+    Reset,
 }
 impl TriggerAction {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 17] = [
         Self::Toggle,
         Self::Show,
         Self::Hide,
@@ -416,6 +452,7 @@ impl TriggerAction {
         Self::Boss,
         Self::Signal,
         Self::Random,
+        Self::Sequence,
         Self::Count,
         Self::Set,
         Self::Calculate,
@@ -424,6 +461,7 @@ impl TriggerAction {
         Self::Hurt,
         Self::Award,
         Self::Script,
+        Self::Reset,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -442,6 +480,8 @@ impl TriggerAction {
             Self::Award => "Award points",
             Self::Calculate => "Calculate",
             Self::Script => "Script event",
+            Self::Sequence => "Sequence",
+            Self::Reset => "Reset triggers",
         }
     }
     /// Whether `group` names a map group, as opposed to a channel or counter.
@@ -455,6 +495,23 @@ impl TriggerAction {
     /// Whether it acts on the tanks standing in the trigger's area.
     pub fn affects_tanks(self) -> bool {
         matches!(self, Self::Heal | Self::Hurt | Self::Award)
+    }
+    /// Whether it sends on a run of `amount` channels from `group`.
+    pub fn sends_range(self) -> bool {
+        matches!(self, Self::Random | Self::Sequence)
+    }
+    /// The signal channels it can send on.
+    pub fn channels(self, group: u8, amount: i32) -> std::ops::RangeInclusive<u8> {
+        match self {
+            Self::Signal => group..=group,
+            Self::Random | Self::Sequence => {
+                let last = (i64::from(group) + i64::from(amount.max(1)) - 1)
+                    .clamp(0, i64::from(MAP_GROUPS));
+                group..=last as u8
+            }
+            #[allow(clippy::reversed_empty_ranges)]
+            _ => 1..=0,
+        }
     }
 }
 
@@ -604,17 +661,98 @@ pub enum TestKind {
     Shown,
     /// Group `index` is hidden.
     Hidden,
+    /// How many noticed tanks are inside the trigger's area, against `value`
+    /// or counter `against`.
+    Inside,
+    /// Whole seconds since the round started, against `value` or counter
+    /// `against`.
+    Time,
 }
 impl TestKind {
-    pub const ALL: [Self; 3] = [Self::Counter, Self::Shown, Self::Hidden];
+    pub const ALL: [Self; 5] = [
+        Self::Counter,
+        Self::Shown,
+        Self::Hidden,
+        Self::Inside,
+        Self::Time,
+    ];
     pub fn name(self) -> &'static str {
         match self {
             Self::Counter => "Counter",
             Self::Shown => "Group shown",
             Self::Hidden => "Group hidden",
+            Self::Inside => "Tanks inside",
+            Self::Time => "Round time",
+        }
+    }
+    /// Whether it compares a number, rather than looking at a group.
+    pub fn compares(self) -> bool {
+        !matches!(self, Self::Shown | Self::Hidden)
+    }
+}
+
+/// How a trigger's conditions combine into one gate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateMode {
+    /// Every condition holds: AND.
+    #[default]
+    All,
+    /// At least one holds: OR.
+    Any,
+    /// At least one fails: NAND.
+    NotAll,
+    /// None holds: NOR.
+    NoneOf,
+    /// Exactly one holds: XOR.
+    One,
+}
+impl GateMode {
+    pub const ALL: [Self; 5] = [Self::All, Self::Any, Self::NotAll, Self::NoneOf, Self::One];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::All => "All (AND)",
+            Self::Any => "Any (OR)",
+            Self::NotAll => "Not all (NAND)",
+            Self::NoneOf => "None (NOR)",
+            Self::One => "Just one (XOR)",
+        }
+    }
+    /// The logic-gate name, for badges.
+    pub fn short(self) -> &'static str {
+        match self {
+            Self::All => "AND",
+            Self::Any => "OR",
+            Self::NotAll => "NAND",
+            Self::NoneOf => "NOR",
+            Self::One => "XOR",
+        }
+    }
+    /// Whether the gate opens when `passed` of `total` conditions hold.
+    pub fn open(self, passed: usize, total: usize) -> bool {
+        match self {
+            Self::All => passed == total,
+            Self::Any => passed > 0,
+            Self::NotAll => passed < total,
+            Self::NoneOf => passed == 0,
+            Self::One => passed == 1,
         }
     }
 }
+
+/// What a gate can see when it is checked.
+#[derive(Clone, Copy, Debug)]
+pub struct GateState<'a> {
+    pub counters: &'a [i32; MAP_COUNTERS as usize],
+    pub hidden: u32,
+    /// Seconds since the round started.
+    pub time: f32,
+    /// Noticed tanks inside the trigger's area.
+    pub inside: usize,
+}
+
+/// Most conditions one trigger checks.
+pub const TRIGGER_CONDITIONS: usize = 4;
 
 /// A gate: when a trigger fires, it acts only if this holds at that moment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -644,28 +782,38 @@ impl Default for TriggerTest {
     }
 }
 impl TriggerTest {
-    /// Whether the gate is open, given the counters and the hidden groups.
+    /// Whether the condition holds, given the counters and the hidden groups.
     pub fn passes(&self, counters: &[i32; MAP_COUNTERS as usize], hidden: u32) -> bool {
+        self.holds(&GateState {
+            counters,
+            hidden,
+            time: 0.,
+            inside: 0,
+        })
+    }
+    /// Whether the condition holds in `state`.
+    pub fn holds(&self, state: &GateState) -> bool {
         let counter = |n: u8| {
             usize::from(n)
                 .checked_sub(1)
-                .and_then(|slot| counters.get(slot).copied())
+                .and_then(|slot| state.counters.get(slot).copied())
         };
-        match self.kind {
-            TestKind::Counter => {
-                let Some(a) = counter(self.index) else {
-                    return false;
-                };
-                let b = if self.against > 0 {
-                    counter(self.against).unwrap_or(0)
-                } else {
-                    self.value
-                };
-                self.compare.holds(a, b)
-            }
-            TestKind::Shown => hidden & MapDef::group_bit(self.index) == 0,
-            TestKind::Hidden => hidden & MapDef::group_bit(self.index) != 0,
-        }
+        let a = match self.kind {
+            TestKind::Counter => match counter(self.index) {
+                Some(a) => a,
+                None => return false,
+            },
+            TestKind::Inside => state.inside.min(COUNTER_LIMIT as usize) as i32,
+            TestKind::Time => state.time.max(0.).floor().min(COUNTER_LIMIT as f32) as i32,
+            TestKind::Shown => return state.hidden & MapDef::group_bit(self.index) == 0,
+            TestKind::Hidden => return state.hidden & MapDef::group_bit(self.index) != 0,
+        };
+        let b = if self.against > 0 {
+            counter(self.against).unwrap_or(0)
+        } else {
+            self.value
+        };
+        self.compare.holds(a, b)
     }
 }
 
@@ -727,8 +875,9 @@ pub struct MapTrigger {
     /// any team.
     #[serde(default)]
     pub team: u8,
-    /// The channel a Signal trigger listens on, or the counter a Counter
-    /// trigger watches.
+    /// The channel a Signal trigger listens on, the counter a Counter or
+    /// Changed trigger watches, the group a Shown or Hidden trigger watches,
+    /// or the boss a Defeated trigger waits for (see [`TriggerWhen`]).
     #[serde(default)]
     pub source: u8,
     /// The value a Counter trigger waits for, or how many tanks a While
@@ -759,6 +908,16 @@ pub struct MapTrigger {
     /// uses `amount`.
     #[serde(default, skip_serializing_if = "is_default")]
     pub operand: u8,
+    // Added in 0.16.0, and likewise left out when unused.
+    /// More conditions after `only_if`, up to four in all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also_if: Vec<TriggerTest>,
+    /// How the conditions combine.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub gate: GateMode,
+    /// A signal channel sent instead when the gate stays shut; 0 sends none.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub otherwise: u8,
 }
 fn always() -> u8 {
     100
@@ -798,7 +957,39 @@ impl Default for MapTrigger {
             only_if: None,
             math: MathOp::Add,
             operand: 0,
+            also_if: Vec::new(),
+            gate: GateMode::All,
+            otherwise: 0,
         }
+    }
+}
+impl MapTrigger {
+    /// Every condition, in order.
+    pub fn conditions(&self) -> impl Iterator<Item = &TriggerTest> {
+        self.only_if.iter().chain(&self.also_if)
+    }
+    /// Replace the conditions; with none left, the gate settings go too.
+    pub fn set_conditions(&mut self, tests: Vec<TriggerTest>) {
+        let mut tests = tests.into_iter().take(TRIGGER_CONDITIONS);
+        self.only_if = tests.next();
+        self.also_if = tests.collect();
+        if self.only_if.is_none() {
+            self.gate = GateMode::All;
+            self.otherwise = 0;
+        }
+    }
+    /// Whether the gate lets the trigger act in `state`. No conditions is open.
+    pub fn gate_open(&self, state: &GateState) -> bool {
+        let (mut passed, mut total) = (0, 0);
+        for test in self.conditions() {
+            total += 1;
+            passed += usize::from(test.holds(state));
+        }
+        total == 0 || self.gate.open(passed, total)
+    }
+    /// Whether a condition counts the tanks inside the trigger's area.
+    pub fn counts_inside(&self) -> bool {
+        self.conditions().any(|test| test.kind == TestKind::Inside)
     }
 }
 
@@ -1221,6 +1412,18 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         TriggerWhen::Occupied if !(1..=TRIGGER_CROWD).contains(&trigger.threshold) => {
             return Err(format!("wait for 1 to {TRIGGER_CROWD} tanks inside"));
         }
+        TriggerWhen::Changed if !(1..=MAP_COUNTERS).contains(&trigger.source) => {
+            return Err(format!("watch a counter from 1 to {MAP_COUNTERS}"));
+        }
+        TriggerWhen::Shown | TriggerWhen::Hidden if !(1..=MAP_GROUPS).contains(&trigger.source) => {
+            return Err(format!("watch a group from 1 to {MAP_GROUPS}"));
+        }
+        TriggerWhen::Defeated if usize::from(trigger.source) > BOSS_IDS.len() => {
+            return Err(format!(
+                "wait for boss 1 to {}, or 0 for any boss",
+                BOSS_IDS.len()
+            ));
+        }
         _ => {}
     }
     match trigger.action {
@@ -1252,7 +1455,7 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
                 "set a counter from 1 to {MAP_COUNTERS} within ±{COUNTER_LIMIT}"
             ));
         }
-        TriggerAction::Random
+        TriggerAction::Random | TriggerAction::Sequence
             if !(1..=MAP_GROUPS).contains(&trigger.group)
                 || !(2..=i32::from(MAP_GROUPS)).contains(&trigger.amount)
                 || i32::from(trigger.group) + trigger.amount - 1 > i32::from(MAP_GROUPS) =>
@@ -1284,22 +1487,42 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
                 "name the script event with lowercase letters, digits and _ (32 at most)".into(),
             );
         }
+        TriggerAction::Reset if trigger.group > MAP_GROUPS => {
+            return Err(format!(
+                "reset a group from 1 to {MAP_GROUPS}, or 0 for every trigger"
+            ));
+        }
         _ => {}
     }
-    if let Some(test) = &trigger.only_if {
+    if trigger.only_if.is_none() && !trigger.also_if.is_empty() {
+        return Err("more conditions need a first one".into());
+    }
+    if trigger.conditions().count() > TRIGGER_CONDITIONS {
+        return Err(format!("check at most {TRIGGER_CONDITIONS} conditions"));
+    }
+    for test in trigger.conditions() {
         let fits = match test.kind {
             TestKind::Counter => {
                 (1..=MAP_COUNTERS).contains(&test.index)
                     && test.against <= MAP_COUNTERS
                     && (-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&test.value)
             }
+            TestKind::Inside | TestKind::Time => {
+                test.against <= MAP_COUNTERS
+                    && (-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&test.value)
+            }
             TestKind::Shown | TestKind::Hidden => (1..=MAP_GROUPS).contains(&test.index),
         };
         if !fits {
             return Err(format!(
-                "a gate looks at a counter from 1 to {MAP_COUNTERS} (within ±{COUNTER_LIMIT}) or a group from 1 to {MAP_GROUPS}"
+                "a condition looks at a counter from 1 to {MAP_COUNTERS} (within ±{COUNTER_LIMIT}) or a group from 1 to {MAP_GROUPS}"
             ));
         }
+    }
+    if trigger.otherwise > MAP_GROUPS {
+        return Err(format!(
+            "send the otherwise signal on a channel from 1 to {MAP_GROUPS}, or 0 for none"
+        ));
     }
     if !range(trigger.offset, 0., 3600.)
         || !range(trigger.duration, 0., 3600.)
@@ -1572,5 +1795,102 @@ mod tests {
         let json = serde_json::to_string(&catalog).unwrap();
         let maps = maps_from_json(&json).unwrap();
         assert_eq!(maps.len(), 8);
+    }
+
+    #[test]
+    fn newer_logic_round_trips_and_older_maps_keep_their_shape() {
+        let test = |kind, index| TriggerTest {
+            kind,
+            index,
+            ..Default::default()
+        };
+        let mut t = MapTrigger {
+            when: TriggerWhen::Signal,
+            action: TriggerAction::Signal,
+            ..Default::default()
+        };
+        let plain = serde_json::to_value(&t).unwrap();
+        for key in ["also_if", "gate", "otherwise"] {
+            assert!(plain.get(key).is_none(), "{key} is left out when unused");
+        }
+        t.set_conditions(vec![test(TestKind::Counter, 1), test(TestKind::Shown, 3)]);
+        t.gate = GateMode::One;
+        t.otherwise = 4;
+        validate_trigger(&t).unwrap();
+        let json = serde_json::to_string(&t).unwrap();
+        let back: MapTrigger = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, t);
+        assert!(json.contains("\"gate\":\"one\""), "{json}");
+        t.set_conditions(Vec::new());
+        assert_eq!(
+            (t.gate, t.otherwise),
+            Default::default(),
+            "no gate, no settings"
+        );
+    }
+
+    #[test]
+    fn gates_reject_impossible_conditions() {
+        let base = MapTrigger::default();
+        let mut too_many = base.clone();
+        too_many.only_if = Some(TriggerTest::default());
+        too_many.also_if = vec![TriggerTest::default(); TRIGGER_CONDITIONS];
+        assert!(validate_trigger(&too_many).is_err());
+        let mut orphan = base.clone();
+        orphan.also_if = vec![TriggerTest::default()];
+        assert!(
+            validate_trigger(&orphan).is_err(),
+            "more conditions need a first"
+        );
+        let mut channel = base.clone();
+        channel.otherwise = MAP_GROUPS + 1;
+        assert!(validate_trigger(&channel).is_err());
+        let mut sequence = MapTrigger {
+            action: TriggerAction::Sequence,
+            group: 31,
+            amount: 3,
+            ..base.clone()
+        };
+        assert!(validate_trigger(&sequence).is_err(), "runs past channel 32");
+        sequence.group = 30;
+        validate_trigger(&sequence).unwrap();
+        let boss = MapTrigger {
+            when: TriggerWhen::Defeated,
+            source: BOSS_IDS.len() as u8 + 1,
+            ..base
+        };
+        assert!(validate_trigger(&boss).is_err());
+    }
+
+    #[test]
+    fn gate_modes_count_conditions_like_logic_gates() {
+        let table = [
+            (GateMode::All, [false, false, false, true]),
+            (GateMode::Any, [false, true, true, true]),
+            (GateMode::NotAll, [true, true, true, false]),
+            (GateMode::NoneOf, [true, false, false, false]),
+            (GateMode::One, [false, true, true, false]),
+        ];
+        for (mode, outputs) in table {
+            for (inputs, expected) in [(0, 2), (1, 2), (1, 2), (2, 2)].iter().zip(outputs) {
+                assert_eq!(
+                    mode.open(inputs.0, inputs.1),
+                    expected,
+                    "{mode:?} {inputs:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn senders_name_the_channels_they_reach() {
+        assert_eq!(TriggerAction::Signal.channels(4, 9), 4..=4);
+        assert_eq!(TriggerAction::Sequence.channels(4, 3), 4..=6);
+        assert!(TriggerAction::Count.channels(4, 3).is_empty());
+        for action in [TriggerAction::Random, TriggerAction::Sequence] {
+            assert_eq!(action.channels(4, i32::MAX), 4..=MAP_GROUPS);
+            assert_eq!(action.channels(4, i32::MIN), 4..=4);
+            assert!(action.channels(u8::MAX, i32::MAX).is_empty());
+        }
     }
 }

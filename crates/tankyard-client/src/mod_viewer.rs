@@ -526,7 +526,7 @@ impl Viewer {
         let top = r.y + 8.0 * s;
         let visible = ((r.bottom() - top - 8.0 * s) / row_h).floor().max(1.0) as usize;
         if contains(r) {
-            self.tree_scroll -= mouse_wheel().1.clamp(-3.0, 3.0);
+            self.tree_scroll -= crate::ui_layout::wheel_lines().y.clamp(-3.0, 3.0);
         }
         let max = self.rows.len().saturating_sub(visible) as f32;
         self.tree_scroll = self.tree_scroll.clamp(0.0, max);
@@ -791,7 +791,8 @@ impl Viewer {
         let cols = ((area.right() - text_x - 14.0 * s) / cell).floor().max(1.0) as usize;
 
         if contains(area) {
-            let (wheel_x, wheel_y) = mouse_wheel();
+            let wheel = crate::ui_layout::wheel_lines();
+            let (wheel_x, wheel_y) = (wheel.x, wheel.y);
             let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
             if shift {
                 self.hscroll -= wheel_y.clamp(-3.0, 3.0) * 6.0;
@@ -1012,7 +1013,7 @@ impl Viewer {
         // `scroll` counts steps of 20 px, like lines in the code view.
         let step = 20.0 * s;
         if contains(area) {
-            self.scroll -= mouse_wheel().1.clamp(-3.0, 3.0) * 3.0;
+            self.scroll -= crate::ui_layout::wheel_lines().y.clamp(-3.0, 3.0) * 3.0;
         }
         let max = ((layout.height + pad * 2.0 - area.h) / step).max(0.0);
         self.scroll = self.scroll.clamp(0.0, max);

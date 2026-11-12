@@ -255,6 +255,15 @@ DESKTOP
 fi
 printf 'Installed to %s\n' "$bin_dir"
 case ":$PATH:" in
-    *":$bin_dir:"*) printf 'Ready. Run %s to start.\n' "$first" ;;
-    *) printf 'Run "%s/%s", or add "%s" to your PATH.\n' "$bin_dir" "$first" "$bin_dir" ;;
+    *":$bin_dir:"*) command_name=$first; printf 'Ready. Run %s to start.\n' "$first" ;;
+    *) command_name="$bin_dir/$first"; printf 'Run "%s/%s", or add "%s" to your PATH.\n' "$bin_dir" "$first" "$bin_dir" ;;
 esac
+if [ "$component" = server ]; then
+    cat <<NEXT
+To host, make a folder for the server's settings and start it there:
+  mkdir -p ~/tankyard-server && cd ~/tankyard-server
+  "$command_name" --write-config server.toml --name "My arena"
+  "$command_name" --config server.toml
+It prints the addresses players join. Guide: https://github.com/$repository/blob/main/docs/hosting.md
+NEXT
+fi

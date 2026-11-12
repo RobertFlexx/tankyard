@@ -88,7 +88,7 @@ impl Tree {
         let pointer = ui_layout::pointer();
         let hovered = viewport.contains(pointer);
         if hovered && !pointer_captured() {
-            let wheel = mouse_wheel().1;
+            let wheel = ui_layout::wheel_lines().y;
             if wheel != 0. {
                 let old = self.zoom;
                 self.zoom = (self.zoom * (wheel * 0.12).exp()).clamp(0.05 * s, 2.4 * s);

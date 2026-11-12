@@ -73,6 +73,19 @@ local function lowest_free(used, last)
   return nil
 end
 
+-- Every condition of a trigger: only_if, then also_if.
+local function conditions(trigger)
+  local list = {}
+  if trigger.only_if then
+    list[1] = trigger.only_if
+    for _, test in ipairs(trigger.also_if or {}) do
+      list[#list + 1] = test
+    end
+  end
+  return list
+end
+editor.conditions = conditions
+
 -- A group (1-32) no object or trigger uses yet.
 function editor.free_group(map)
   local used = {}
@@ -83,8 +96,17 @@ function editor.free_group(map)
   end
   for _, trigger in ipairs(map.triggers or {}) do
     used[trigger.member or 0] = true
-    if trigger.action == "toggle" or trigger.action == "show" or trigger.action == "hide" then
+    local action = trigger.action
+    if action == "toggle" or action == "show" or action == "hide" or action == "reset" then
       used[trigger.group or 0] = true
+    end
+    if trigger.when == "shown" or trigger.when == "hidden" then
+      used[trigger.source or 0] = true
+    end
+    for _, test in ipairs(conditions(trigger)) do
+      if test.kind == "shown" or test.kind == "hidden" then
+        used[test.index or 0] = true
+      end
     end
   end
   for _, group in ipairs(map.hidden_groups or {}) do
@@ -102,11 +124,12 @@ function editor.free_channel(map)
     end
     if trigger.action == "signal" then
       used[trigger.group or 0] = true
-    elseif trigger.action == "random" then
+    elseif trigger.action == "random" or trigger.action == "sequence" then
       for n = trigger.group or 0, (trigger.group or 0) + (trigger.amount or 1) - 1 do
         used[n] = true
       end
     end
+    used[trigger.otherwise or 0] = true
   end
   return lowest_free(used, 32)
 end
@@ -115,16 +138,17 @@ end
 function editor.free_counter(map)
   local used = {}
   for _, trigger in ipairs(map.triggers or {}) do
-    if trigger.when == "counter" then
+    if trigger.when == "counter" or trigger.when == "changed" then
       used[trigger.source or 0] = true
     end
     if trigger.action == "count" or trigger.action == "set" or trigger.action == "calculate" then
       used[trigger.group or 0] = true
       used[trigger.operand or 0] = true
     end
-    local test = trigger.only_if
-    if test and (test.kind or "counter") == "counter" then
-      used[test.index or 0] = true
+    for _, test in ipairs(conditions(trigger)) do
+      if (test.kind or "counter") == "counter" then
+        used[test.index or 0] = true
+      end
       used[test.against or 0] = true
     end
   end

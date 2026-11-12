@@ -630,13 +630,10 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
     extern "C" fn scroll_wheel(this: &Object, _sel: Sel, event: ObjcId) {
         let payload = get_window_payload(this);
         unsafe {
-            let mut dx: f64 = msg_send![event, scrollingDeltaX];
-            let mut dy: f64 = msg_send![event, scrollingDeltaY];
-
-            if !msg_send![event, hasPreciseScrollingDeltas] {
-                dx *= 10.0;
-                dy *= 10.0;
-            }
+            let dx: f64 = msg_send![event, scrollingDeltaX];
+            let dy: f64 = msg_send![event, scrollingDeltaY];
+            let precise: bool = msg_send![event, hasPreciseScrollingDeltas];
+            native_display().lock().unwrap().mouse_wheel_pixels = precise;
             if let Some(event_handler) = payload.context() {
                 event_handler.mouse_wheel_event(dx as f32, dy as f32);
             }

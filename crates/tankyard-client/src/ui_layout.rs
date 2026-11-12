@@ -32,6 +32,61 @@ pub fn pointer() -> Vec2 {
 pub fn position(p: Vec2) -> Vec2 {
     vec2(p.x, p.y - CANVAS.with(|c| c.get().map_or(0., |c| c.offset)))
 }
+
+/// Whether this frame's scroll came from a trackpad or another precise
+/// source rather than a wheel's steps. Windows has no flag for it, but its
+/// wheels move in whole notches of 120.
+pub fn precise_scroll() -> bool {
+    if macroquad::miniquad::window::mouse_wheel_in_pixels() {
+        return true;
+    }
+    let (x, y) = mouse_wheel();
+    cfg!(target_os = "windows") && (x % 120. != 0. || y % 120. != 0.)
+}
+
+/// Scroll in consistent wheel steps, preserving high-resolution deltas.
+/// One step moves an ordinary list by 56 logical pixels.
+pub fn wheel_lines() -> Vec2 {
+    let (x, y) = mouse_wheel();
+    if x == 0. && y == 0. {
+        return Vec2::ZERO;
+    }
+    let pixels = macroquad::miniquad::window::mouse_wheel_in_pixels();
+    let unit = if pixels {
+        1. / 56.
+    } else if cfg!(target_os = "windows") {
+        1. / 120.
+    } else {
+        1.
+    };
+    // Windows reports positive horizontal movement to the right; every other
+    // backend reports it to the left.
+    let horizontal = if cfg!(target_os = "windows") {
+        -unit
+    } else {
+        unit
+    };
+    normalize_scroll(vec2(x, y), vec2(horizontal, unit))
+}
+
+fn normalize_scroll(raw: Vec2, units: Vec2) -> Vec2 {
+    let axis = |value: f32| {
+        if value.is_finite() {
+            value.clamp(-8., 8.)
+        } else {
+            0.
+        }
+    };
+    vec2(axis(raw.x * units.x), axis(raw.y * units.y))
+}
+
+/// Carry fractional movement between frames for lists with discrete rows.
+pub fn scroll_steps(remainder: &mut f32, delta: f32) -> i32 {
+    *remainder += delta;
+    let steps = remainder.trunc() as i32;
+    *remainder -= steps as f32;
+    steps
+}
 /// A list that scrolls itself keeps the wheel from also scrolling the page
 /// while the pointer is over it. The claim holds for the next frame.
 pub fn claim_wheel(rect: Rect) {
@@ -124,7 +179,7 @@ impl ScrollPanel {
             .is_some_and(|rect| rect.contains(vec2(mx, my)));
         if interactive && !claimed && clip.contains(vec2(mx, my)) && !crate::ui::pointer_captured()
         {
-            self.offset -= mouse_wheel().1 * 56. * s;
+            self.offset -= wheel_lines().y * 56. * s;
         }
         self.offset = self.offset.clamp(0., maximum);
         if maximum > 0. {
@@ -248,6 +303,37 @@ impl Drop for Scissor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scroll_units_preserve_precision_and_reject_nonfinite_axes() {
+        let windows = normalize_scroll(vec2(15., 30.), vec2(-1. / 120., 1. / 120.));
+        assert_eq!(windows, vec2(-0.125, 0.25));
+        let pixels = normalize_scroll(vec2(2.8, 5.6), Vec2::splat(1. / 56.));
+        assert!((pixels.x - 0.05).abs() < 0.00001);
+        assert!((pixels.y - 0.1).abs() < 0.00001);
+        assert_eq!(
+            normalize_scroll(vec2(f32::NAN, 1.), Vec2::ONE),
+            vec2(0., 1.)
+        );
+        assert_eq!(
+            normalize_scroll(vec2(1000., -1000.), Vec2::ONE),
+            vec2(8., -8.)
+        );
+    }
+
+    #[test]
+    fn small_scrolls_accumulate_into_rows_without_rounding_up_every_frame() {
+        let mut remainder = 0.;
+        for _ in 0..3 {
+            assert_eq!(scroll_steps(&mut remainder, 0.25), 0);
+        }
+        assert_eq!(scroll_steps(&mut remainder, 0.25), 1);
+        assert_eq!(remainder, 0.);
+        assert_eq!(scroll_steps(&mut remainder, -1.25), -1);
+        assert_eq!(scroll_steps(&mut remainder, -0.75), -1);
+        assert_eq!(remainder, 0.);
+        assert_eq!(scroll_steps(&mut remainder, 3.), 3);
+    }
     #[test]
     fn staff_toggle_fits_between_a_full_leaderboard_and_the_minimap() {
         for (w, h) in [(800., 600.), (1280., 800.), (1920., 1080.), (3840., 2160.)] {

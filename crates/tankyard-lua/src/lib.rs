@@ -689,6 +689,12 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
                 shown: !matches!(arg(1), Some(Value::Boolean(false))),
             },
         ),
+        "reset_map_triggers" => (
+            0,
+            Effect::MapReset {
+                group: whole(arg(0), "group", 0, tankyard_content::MAP_GROUPS.into())? as u8,
+            },
+        ),
         _ => return Err(rt(format!("unknown command {op:?}"))),
     })
 }

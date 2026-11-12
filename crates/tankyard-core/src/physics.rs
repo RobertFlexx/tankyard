@@ -183,6 +183,12 @@ pub fn move_tank(
     if !tank.alive {
         return;
     }
+    steer_tank(tank, content, config, dt);
+    slide_tank(tank, config, walls, dt);
+}
+
+/// The velocity half of [`move_tank`]: acceleration, coasting and their limits.
+pub fn steer_tank(tank: &mut Tank, content: &Content, config: &WorldConfig, dt: f32) {
     let speed = tank_speed(tank, content)
         * config.rules.movement_multiplier
         * tank.terrain.clamp(0.3, 2.5)
@@ -212,6 +218,18 @@ pub fn move_tank(
         } else {
             speed * 3.
         });
+}
+
+/// How far [`slide_tank`] can carry a tank this step, before walls stop it.
+pub fn slide_reach(tank: &Tank, dt: f32) -> f32 {
+    tank.vel.length() * dt.clamp(0.0, 0.1)
+}
+
+/// The movement half of [`move_tank`]: walls, sliding and the arena's edge.
+/// Only walls within the tank's radius plus [`slide_reach`] can change the
+/// result once it overlaps none, so callers with a wall index may pass those
+/// alone, in map order.
+pub fn slide_tank(tank: &mut Tank, config: &WorldConfig, walls: &[Rect], dt: f32) {
     // Resolve initial penetrations first (spawns, map edits, remote correction).
     // Keeping the simulation finite prevents one bad collision from affecting
     // all clients and makes prediction use identical authoritative rules.
@@ -543,6 +561,26 @@ pub(crate) enum Body {
     Boss(usize),
     Deployable(usize),
 }
+/// A body as the grid saw it when it was built: where it was and its radius.
+/// Queries can turn away distant candidates without reading the body itself,
+/// which for thousands of projectiles is mostly cache misses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Spot {
+    pub body: Body,
+    pub pos: V2,
+    pub radius: f32,
+}
+/// Squared distance from `point` to the segment from `a` to `b`.
+pub(crate) fn segment_distance_squared(point: V2, a: V2, b: V2) -> f32 {
+    let d = b - a;
+    let length = d.length_squared();
+    let t = if length > 1e-10 {
+        ((point - a).dot(d) / length).clamp(0., 1.)
+    } else {
+        0.
+    };
+    (a + d * t - point).length_squared()
+}
 pub(crate) struct SpatialGrid<T = Body> {
     cols: usize,
     rows: usize,
@@ -620,6 +658,17 @@ impl<T: Copy> SpatialGrid<T> {
     }
 }
 
+impl SpatialGrid<Spot> {
+    pub fn insert_body(&mut self, pos: V2, radius: f32, body: Body) {
+        self.insert(pos, Spot { body, pos, radius });
+    }
+    /// The bodies [`Self::query`] would find, in the same order.
+    pub fn query_bodies(&self, a: V2, b: V2, pad: f32, out: &mut Vec<Body>) {
+        out.clear();
+        self.for_each_in(a, b, pad, |spot| out.push(spot.body));
+    }
+}
+
 /// Cover indexed by cell for projectile and shape collisions. A long wall
 /// occupies several cells; queries return each wall once, in map order, so
 /// earliest-hit ties resolve exactly as a full scan of the wall list would.
@@ -627,6 +676,7 @@ pub(crate) struct WallIndex {
     grid: SpatialGrid<usize>,
     walls: Vec<Rect>,
     nearby: Vec<usize>,
+    near: Vec<Rect>,
 }
 impl WallIndex {
     pub fn new(width: f32, height: f32) -> Self {
@@ -634,6 +684,7 @@ impl WallIndex {
             grid: SpatialGrid::new(width, height),
             walls: Vec::new(),
             nearby: Vec::with_capacity(16),
+            near: Vec::with_capacity(16),
         }
     }
     /// Walls are public world state; rebuild whenever their geometry differs.
@@ -647,6 +698,15 @@ impl WallIndex {
         for (index, &wall) in walls.iter().enumerate() {
             self.grid.insert_rect(wall, index);
         }
+    }
+    /// The walls a circle of `radius` around `pos` could touch, in map order,
+    /// so collision code that walks every wall in order gives the same result.
+    pub fn near(&mut self, pos: V2, radius: f32) -> &[Rect] {
+        self.query(pos, pos, radius);
+        self.near.clear();
+        self.near
+            .extend(self.nearby.iter().map(|&index| self.walls[index]));
+        &self.near
     }
     /// Every wall that can touch a circle of `pad` radius swept from `start`
     /// to `end`. The one-unit margin absorbs floating-point edge cases.
@@ -665,6 +725,61 @@ impl WallIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_tank_motion_matches_full_wall_prediction() {
+        let content = Content::builtin();
+        let config = WorldConfig::default();
+        let mut world = crate::World::new(config.clone(), content.clone());
+        world.add_player("wall parity", false);
+        let template = world.tanks[0].clone();
+        let walls: Vec<_> = (0..120)
+            .map(|n| {
+                let n = n as f32;
+                Rect {
+                    x: (n * 137.) % config.width,
+                    y: (n * 251.) % config.height,
+                    w: 10. + (n * 7.) % 300.,
+                    h: 10. + (n * 13.) % 260.,
+                }
+            })
+            .collect();
+        let mut index = WallIndex::new(config.width, config.height);
+        index.sync(&walls);
+        for n in 0..2400 {
+            let seed = n as f32;
+            let mut predicted = template.clone();
+            predicted.pos = V2::new(
+                (seed * 61.) % (config.width + 100.) - 50.,
+                (seed * 97.) % (config.height + 100.) - 50.,
+            );
+            predicted.radius = 10. + seed % 60.;
+            predicted.vel = V2::from_angle(seed * 0.37) * (seed * 31. % 2000.);
+            predicted.input.movement = V2::from_angle(seed * 0.23);
+            predicted.input.aim = seed * 0.13;
+            predicted.knockback = if n % 2 == 0 { 1. } else { 0. };
+            let mut authoritative = predicted.clone();
+            let dt = if n % 3 == 0 { 0.1 } else { crate::DT };
+            move_tank(&mut predicted, &content, &config, &walls, dt);
+            steer_tank(&mut authoritative, &content, &config, dt);
+            let near = index.near(
+                authoritative.pos,
+                authoritative.radius + slide_reach(&authoritative, dt) + 2.,
+            );
+            let candidates = if near
+                .iter()
+                .any(|&wall| circle_rect(authoritative.pos, authoritative.radius, wall).is_some())
+            {
+                &walls
+            } else {
+                near
+            };
+            slide_tank(&mut authoritative, &config, candidates, dt);
+            assert_eq!(authoritative.pos, predicted.pos, "position at case {n}");
+            assert_eq!(authoritative.vel, predicted.vel, "velocity at case {n}");
+            assert_eq!(authoritative.aim, predicted.aim, "aim at case {n}");
+        }
+    }
 
     #[test]
     fn indexed_wall_queries_find_every_wall_a_full_scan_would_hit() {

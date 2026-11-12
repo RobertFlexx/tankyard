@@ -647,9 +647,52 @@ fn map_events_reach_scripts_and_scripts_drive_map_logic() {
             "shown must be true or false",
         ),
         ("tankyard.map_counter(9)", "counter must be a whole number"),
+        (
+            "tankyard.reset_map_triggers(33)",
+            "group must be a whole number from 0 to 32",
+        ),
     ] {
         let (_, runtime) = run(&format!("tankyard.on('tick', function() {call} end)"), 1);
         let errors = runtime.errors.join(" | ");
         assert!(errors.contains(error), "{call}: {errors}");
     }
+}
+
+#[test]
+fn scripts_rearm_once_only_map_triggers() {
+    use tankyard_content::{MapTrigger, TriggerAction, TriggerWhen};
+    // A once-only Start trigger counts at once; the script resets it a few
+    // ticks later and it counts again.
+    let source = r#"
+        local rearmed = false
+        tankyard.on("tick", function()
+          if not rearmed and tankyard.map_counter(1) == 1 then
+            rearmed = true
+            tankyard.reset_map_triggers(5)
+          end
+        end)
+    "#;
+    let mut world = world();
+    world.map.triggers = vec![MapTrigger {
+        when: TriggerWhen::Start,
+        action: TriggerAction::Count,
+        rect: [0.4, 0.4, 0.2, 0.2],
+        seconds: 0.,
+        once: true,
+        member: 5,
+        group: 1,
+        ..Default::default()
+    }];
+    let mut runtime = ModRuntime::default();
+    runtime
+        .install(Box::new(
+            LuaPlugin::new(&info("test"), &pack(source), &Content::builtin(), 7).unwrap(),
+        ))
+        .unwrap();
+    for _ in 0..6 {
+        world.step_with(|w| runtime.before_step(w));
+        runtime.after_step(&mut world);
+    }
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    assert_eq!(world.match_state.counters[0], 2);
 }

@@ -327,6 +327,9 @@ struct PointerContext {
     locked_pointer: *mut extensions::cursor::zwp_locked_pointer_v1,
     relative_pointer_manager: *mut extensions::cursor::zwp_relative_pointer_manager_v1,
     relative_pointer: *mut extensions::cursor::zwp_relative_pointer_v1,
+    /// Tank Yard: wheel notches announced for the next axis event, by axis.
+    /// A wheel scrolls in these steps; anything else scrolls in pixels.
+    wheel_steps: [Option<f32>; 2],
 }
 impl PointerContext {
     fn new() -> Self {
@@ -334,6 +337,7 @@ impl PointerContext {
             pointer: std::ptr::null_mut(),
             enter_serial: None,
             position: (0., 0.),
+            wheel_steps: [None; 2],
             cursor_icon: Some(crate::CursorIcon::Default),
             queued_cursor_icon: None,
             cursor_shape_manager: std::ptr::null_mut(),
@@ -478,6 +482,7 @@ unsafe extern "C" fn seat_handle_capabilities(
         assert!(!display.pointer_context.pointer.is_null());
         POINTER_LISTENER.enter = pointer_handle_enter;
         POINTER_LISTENER.axis = pointer_handle_axis;
+        POINTER_LISTENER.axis_discrete = pointer_handle_axis_discrete;
         POINTER_LISTENER.motion = pointer_handle_motion;
         POINTER_LISTENER.button = pointer_handle_button;
         POINTER_LISTENER.leave = pointer_handle_leave;
@@ -536,7 +541,8 @@ enum WaylandEvent {
     PointerMotion(f32, f32),
     RawMotion(f32, f32),
     PointerButton(MouseButton, bool),
-    PointerAxis(f32, f32),
+    /// Scroll on each axis, and whether it is in pixels rather than steps.
+    PointerAxis(f32, f32, bool),
     Touch(crate::TouchPhase, u64, f32, f32),
     FilesDropped(String),
     Resize(f32, f32),
@@ -753,15 +759,41 @@ unsafe extern "C" fn pointer_handle_axis(
 ) {
     let display: &mut WaylandPayload = &mut *(data as *mut _);
     let mut value = wl_fixed_to_double(value);
+    // Tank Yard: a wheel announced its notches first; report those as steps.
+    let steps = display
+        .pointer_context
+        .wheel_steps
+        .get_mut(axis as usize)
+        .and_then(Option::take);
+    let pixels = steps.is_none();
+    if let Some(steps) = steps {
+        value = steps;
+    }
     // https://wayland-book.com/seat/pointer.html
     if axis == 0 {
         // Vertical scroll
         // Wayland defines the direction differently to miniquad so lets flip it
         value = -value;
-        display.events.push(WaylandEvent::PointerAxis(0.0, value));
+        display
+            .events
+            .push(WaylandEvent::PointerAxis(0.0, value, pixels));
     } else if axis == 1 {
-        // Horizontal scroll
-        display.events.push(WaylandEvent::PointerAxis(value, 0.0));
+        // Horizontal scroll; Tank Yard: positive is leftward, as on X11 and macOS.
+        display
+            .events
+            .push(WaylandEvent::PointerAxis(-value, 0.0, pixels));
+    }
+}
+/// Tank Yard: sent before the axis event of a wheel notch (seat version 5).
+unsafe extern "C" fn pointer_handle_axis_discrete(
+    data: *mut ::core::ffi::c_void,
+    _wl_pointer: *mut wl_pointer,
+    axis: u32,
+    discrete: core::ffi::c_int,
+) {
+    let display: &mut WaylandPayload = &mut *(data as *mut _);
+    if let Some(slot) = display.pointer_context.wheel_steps.get_mut(axis as usize) {
+        *slot = Some(discrete as f32);
     }
 }
 
@@ -987,7 +1019,8 @@ unsafe extern "C" fn registry_add_object(
                     as _;
         }
         "wl_seat" => {
-            let seat_version = 4.min(version);
+            // Tank Yard: version 5 announces wheel notches with axis_discrete.
+            let seat_version = 5.min(version);
             display.seat = display.client.wl_registry_bind(
                 registry,
                 name,
@@ -1284,7 +1317,10 @@ where
                             event_handler.mouse_button_up_event(button, x, y);
                         }
                     }
-                    WaylandEvent::PointerAxis(x, y) => event_handler.mouse_wheel_event(x, y),
+                    WaylandEvent::PointerAxis(x, y, pixels) => {
+                        crate::native_display().lock().unwrap().mouse_wheel_pixels = pixels;
+                        event_handler.mouse_wheel_event(x, y);
+                    }
                     WaylandEvent::Touch(phase, id, x, y) => {
                         event_handler.touch_event(phase, id, x, y)
                     }

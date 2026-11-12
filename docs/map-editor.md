@@ -1,6 +1,6 @@
 # Arena Workshop
 
-[Watch the tutorial](arena-workshop-tutorial.mp4) (2 min 37 s) for building, editing, map logic, plugin tools and playtesting in the workshop. Plugin authors can start with the [editor plugin guide](editor-plugins.md).
+[Watch the tutorial](arena-workshop-tutorial.mp4) (2 min 37 s) for building, editing, map logic, plugin tools and playtesting in the workshop. The [logic gates video](logic-gates-tutorial.mp4) (1 min 42 s) shows the new gate editor and live preview. The [written logic tutorial](logic-gates-tutorial.md) builds its lever puzzle step by step with conditions, gates, watchers and sequences. Plugin authors can start with the [editor plugin guide](editor-plugins.md).
 
 Open **Map editor** on the main menu. The workshop builds maps for local games and community servers using the same validated map-pack format as scripted mods. The canvas fills the middle of the screen. The **dock** along the bottom changes with the mode, and the **inspector** on the right has seven tabs: Map, Object, Logic, Check, Rules, Files and Tools.
 
@@ -19,6 +19,16 @@ The workshop writes a recovery draft a few seconds after each change and restore
 
 ## Modes
 
+**Pan** (key **4**) moves the view with a click and drag. Its dock contains the **Scroll** setting, pan and zoom speed controls, and **100% zoom**. Navigation preferences are remembered between editor sessions.
+
+**Scroll** has three settings; click it to move to the next, Shift-click to go back:
+
+- **Auto** (the default) uses the scroll events themselves: precise scrolling pans and wheel clicks zoom. macOS and Wayland identify precise events; Windows fractional wheel events are treated as precise. X11 reports both as wheel clicks. Choose Trackpad or Mouse explicitly if Auto does not match your device.
+- **Trackpad**: scrolling always pans. Hold Ctrl (Command on macOS) to zoom around the pointer instead, and Shift to pan sideways.
+- **Mouse**: vertical scrolling always zooms and horizontal scrolling pans.
+
+Ctrl/Cmd-scroll zooms in every setting. Space-drag and middle-drag also pan in any mode.
+
 **Build** places the chosen palette item:
 
 - **Click** places one item.
@@ -29,6 +39,7 @@ The workshop writes a recovery draft a few seconds after each change and restore
 **Edit** selects and changes objects:
 
 - **Click** selects an object; **Shift-click** adds or removes one.
+- **Tab** cycles through overlapping objects under the pointer; **Shift+Tab** cycles backwards. Locked and hidden groups follow the same selection filters as clicking.
 - **Dragging empty floor** selects everything in the box.
 - **Double-click** selects the object's whole group.
 - **Drag** moves the selection, and the handles resize it. With several objects selected, the handles stretch the whole selection: positions and sizes scale together, and markers keep their size.
@@ -46,7 +57,7 @@ Press **F1** for the in-editor list. Ctrl means Cmd on a Mac.
 
 | Keys | Action |
 | --- | --- |
-| 1, 2, 3 | Build, Edit, Delete |
+| 1, 2, 3, 4 | Build, Edit, Delete, Pan |
 | WASD, arrows | Nudge by the step (Shift: one unit); pan when nothing is selected |
 | Q, E (or R) | Turn left, turn right |
 | X, Y | Flip across, flip up and down |
@@ -63,12 +74,18 @@ Press **F1** for the in-editor list. Ctrl means Cmd on a Mac.
 | Ctrl+Z, Ctrl+Y (or Ctrl+Shift+Z) | Undo, redo (48 steps) |
 | Ctrl+S | Save the project |
 | Ctrl+R | Run the last plugin tool again |
-| Wheel, +, − | Zoom around the pointer |
+| Tab, Shift+Tab | Cycle overlapping objects under the pointer |
+| Mouse wheel | Zoom around the pointer (Auto and Mouse scroll) |
+| +, − | Zoom around the canvas center |
+| Two-finger scroll | Pan (Auto and Trackpad scroll) |
+| Ctrl/Cmd+scroll | Zoom around the pointer |
+| Shift+scroll | Pan sideways |
 | Middle-drag, Space-drag | Pan |
 | F, Shift+F | Fit the arena, frame the selection |
 | \\ | Hide or show the panels |
 | H, G, L | Show hidden groups, group labels, logic links |
 | P, Shift+P | Run or pause the logic preview, restart it |
+| Logic tab: click, Shift-click, right-click a counter | Add 1, take 1 away, clear it while the preview runs |
 | Hold T | Test tank at the pointer for the preview |
 | F5, Shift+F5 | Playtest, or start at the pointer |
 
@@ -82,7 +99,7 @@ Click any slider's value to type an exact number, then press Enter (Esc cancels)
 
 - **Map:** name, id, description, size, recommended players, wall style, floor, and the groups hidden when a round starts. Objects keep their relative place when the size changes.
 - **Object:** position, size, group and the settings for the selected kind. A group's *starts hidden* switch is available here, so a gate needs no trip to Map.
-- **Logic:** preview controls, the test tank's team, the eight counters, a log of what happened, and every trigger with its summary. Click a trigger to find it, or press its **Fire** button to make it act once right now, as if its moment had come.
+- **Logic:** preview controls, the test tank's team, the eight counters, the groups the logic uses, a panel to send signals and defeat bosses by hand, a log of what happened, and every trigger with its summary and live state. Click a trigger to find it, or press its **Fire** button to make it act once right now, as if its moment had come. See [Logic preview](#logic-preview).
 - **Check:** runs the map checks. Red items stop playtests and exports; amber items are advice, such as a signal nobody listens to, a group with no objects, or a note from a plugin. Click an item to select it. **Room left** shows how much of each object budget the map uses.
 - **Rules:** the movement, damage, health and score multipliers used by the playtest and the exported pack.
 - **Files:** saved projects, pack import, the workshop folder, and built-in arenas to copy as templates.
@@ -110,51 +127,127 @@ Overlapping speed and mud pads multiply, and the final factor is clamped to 0.3�
 
 ## Groups and logic
 
-Every block, pad, decor item and trigger can belong to a group from 1 to 32. Group 0 is always on. A hidden group's blocks stop colliding, its pads stop working, its decor disappears, and its triggers switch off. The dock's **Group** chooser puts newly built objects in a group; **Free** picks an unused one. Newly built Toggle, Show and Hide triggers act on that group instead of joining it. **G** shows group numbers on the canvas, and **L** draws arrows from each trigger to what it affects.
+Every block, pad, decor item and trigger can belong to a group from 1 to 32. Group 0 is always on. A hidden group's blocks stop colliding, its pads stop working, its decor disappears, and its triggers switch off. The dock's **Group** chooser puts newly built objects in a group; **Free** picks an unused one. Newly built triggers that act on a group (Toggle, Show, Hide, Reset triggers) or watch one (On shown, On hidden) use that group instead of joining it. **G** shows group numbers on the canvas, and **L** draws the logic links (see [Links](#links)).
 
-A trigger has four parts: **when** it fires, the **filters** that apply, an optional **gate**, and the **action** it takes.
+A trigger has four parts: **when** it fires, the **filters** that apply, an optional **gate** of conditions, and the **action** it takes.
 
-When:
+### When
 
-- **Every:** repeats every *Seconds*, starting after *Start offset*.
-- **On enter / On exit:** a tank crosses into or out of the trigger's area. *Seconds* is the cooldown. Who and Team pick which tanks count: anyone, players only, bots only, and any team or teams 1–4. A tank that dies inside does not count as leaving.
-- **While inside:** acts as soon as *Tanks needed* noticed tanks are in the area, then again every *Seconds* while they stay. Good for capture points.
+- **Every:** repeats every *Every (s)* seconds, starting after *First wait*.
+- **On enter / On exit:** a tank crosses into or out of the trigger's area. *Rest after acting* is the cooldown. Who and Team pick which tanks count: anyone, players only, bots only, and any team or teams 1–4. A tank that dies inside does not count as leaving.
+- **While inside:** acts as soon as *Tanks needed* noticed tanks are in the area, then again every *Every (s)* seconds while they stay. Good for capture points.
 - **On empty:** the last noticed tank leaves the area or is destroyed.
 - **On destroy:** a noticed tank is destroyed inside the area.
-- **At start:** once, *Seconds* after the round starts.
+- **At start:** once, *Seconds into the round* after it starts.
 - **On signal:** another trigger sent a signal on its channel (1–32).
 - **On counter:** its counter (1–8) reaches the threshold, from either direction.
+- **On change:** its counter changes value at all, by any trigger or script. Setting a counter to the value it already has is not a change.
+- **On shown / On hidden:** its group is shown or hidden, however that happened: a trigger, an *Undo after* timer or a script. The groups a round starts with don't count, so a group hidden from the start doesn't fire On hidden.
+- **On boss down:** a boss is defeated anywhere in the arena. Pick one boss, or *Any boss*.
 
-Actions:
+### Actions
 
-- **Toggle, Show, Hide:** change a group. *Restore after* puts the group back after that many seconds; 0 keeps the change.
+- **Toggle, Show, Hide:** change a group. *Undo after* puts the group back after that many seconds; 0 keeps the change.
 - **Announce:** shows text to everyone, up to 96 characters. `{1}`–`{8}` insert counters.
 - **Boss:** brings the chosen boss to the trigger. A crowded map or the 16-boss limit can prevent it.
 - **Signal:** fires every *On signal* trigger on that channel.
 - **Random signal:** sends on one channel picked at random from a run of 2 or more, starting at *First channel*.
+- **Sequence:** sends on the next channel of a run each time it acts, then starts over: with *First channel* 5 and 3 channels it sends 5, 6, 7, 5, 6…
 - **Count:** adds an amount (negative subtracts) to a counter. Counters stay within ±99,999 and reset each round.
 - **Set counter:** puts a counter at an exact value. Goals watching that value act as if it had been counted to.
+- **Calculate:** changes a counter with a number or with another counter: add, subtract, multiply, divide (rounding down), remainder, lowest, highest, copy, a random number below the other value, or flip between 0 and 1. Dividing by zero changes nothing.
 - **Shapes:** drops 1–24 shapes inside the trigger's area.
 - **Repair tanks, Damage tanks:** restore or take 1–100% of maximum health from every noticed tank inside the area. Damage goes through normal damage protection.
 - **Award points:** gives 1–100,000 points to every noticed tank inside the area.
-- **Calculate:** changes a counter with a number or with another counter: add, subtract, multiply, divide (rounding down), remainder, lowest, highest, copy, a random number below the other value, or flip between 0 and 1. Dividing by zero changes nothing.
-- **Script event:** raises a named event for script packs (see [Modding](modding.md#map-logic)). Scripts can answer by sending signals, changing counters and showing or hiding groups. Without a script pack it does nothing, and the preview only logs it.
+- **Script event:** raises a named event for script packs (see [Modding](modding.md#map-logic)). Scripts can answer by sending signals, changing counters, showing or hiding groups and resetting triggers. Without a script pack it does nothing, and the preview only logs it.
+- **Reset triggers:** makes every trigger in a group start afresh, as at the start of a round: *Once per round* triggers can act again, rest times and cooldowns end, delayed actions still waiting are dropped, timers start counting again from now and sequences go back to their first channel. Group 0 resets every trigger in the map. Counters and groups keep their state; set those with their own actions.
 
-The tank actions act on tanks inside the trigger's own area. On a timer, signal or counter trigger, *Who* and *Team* appear under the action to choose those tanks.
+The tank actions act on tanks inside the trigger's own area. On a timer, signal, counter, group or boss trigger, *Who* and *Team* appear under the action to choose those tanks.
 
-**Only if** adds a gate: when the trigger fires, it acts only if a counter compares as chosen (=, ≠, <, >, ≤ or ≥ against a number or another counter), or a group is shown or hidden. A failed gate does nothing and doesn't use up *Once per round* or the rest time. Gates make logic gates out of plain triggers: an AND is two gates in a row, an OR is two senders on one channel, and a NOT is a gate that checks for 0. Gated triggers show a small diamond on their badge.
+### Conditions and gates
+
+**Only if** gives a trigger a gate. When the trigger fires, it checks its conditions and acts only if the gate is open. Press **Add a condition** to start one, and **Add another condition** for up to four. Each condition is a card with its own kind:
+
+- **Counter:** a counter compares as chosen (=, ≠, <, >, ≤ or ≥) against a number, or with **Against a counter**, against another counter.
+- **Group shown / Group hidden:** a group is currently shown or hidden.
+- **Tanks inside:** the number of noticed tanks inside the trigger's own area, using its *Who* and *Team* filters. A Plate with *Tanks inside ≥ 2* only works for two tanks at once.
+- **Round time:** whole seconds since the round started, such as *Round time ≥ 300* for overtime.
+
+Tanks inside and Round time compare like counters, so they can also be held against a counter. **Remove** deletes a card, and **↑** moves it up one place.
+
+With two or more conditions, **Combine** chooses how they make the gate:
+
+| Combine | Opens when | Gate |
+| --- | --- | --- |
+| All | every condition holds | AND |
+| Any | at least one holds | OR |
+| Not all | at least one fails | NAND |
+| None | none of them holds | NOR |
+| Just one | exactly one holds | XOR |
+
+With one condition, *Not all* and *None* both open when it fails, which makes a NOT gate.
+
+A shut gate does nothing by default, and doesn't use up *Once per round*, the rest time or *Chance*. Switch on **Otherwise send a signal** to send on the *Otherwise channel* instead (it starts at the lowest channel nothing uses), which makes an if/else: the trigger acts when the gate is open and signals when it's shut. If all 32 channels are in use, free one before adding an otherwise signal. Otherwise signals count toward the 256 chained actions a tick, so they can't loop forever.
+
+While the preview runs, every card shows **holds** or **fails**, and the gate shows how many hold and whether it is **open** or **shut**, updated live. Gated triggers show a small diamond on their canvas badge, and their tag reads like `AND of 2 → Hide` or `#1≥3 → Signal 4`. The Logic tab's trigger list spells each gate out in full.
+
+### Timing
 
 For every trigger:
 
 - *Chance* is the percent chance it acts when it fires, and can make a coin flip.
-- *Delay* waits before acting.
-- *Once per round* stops it after its first action.
+- *Delay before acting* waits that long after the trigger fires.
+- *Once per round* stops it after its first action, until a Reset triggers action rearms it.
 
-Signals and counters can chain. Each tick allows 256 chained actions, so a loop stops instead of freezing the server. Map changes and new rounds reset the logic.
+Signals, counters and group changes can chain: a Show action can set off an On shown watcher, which counts, which sets off a Goal. Each tick allows 256 chained actions, so a loop stops instead of freezing the server. Map changes and new rounds reset the logic.
+
+Triggers keep their listeners in lookup tables built when a round starts, so a signal or counter change only visits the triggers listening for it. A map with all 128 triggers costs no more per tick than the triggers that actually fire.
+
+### Links
+
+With **L** on, the canvas draws a wire between every pair of linked triggers, and from triggers to the objects they act on:
+
+- **Violet:** a signal. A thinner violet wire is an otherwise signal.
+- **Amber:** a counter one trigger changes and another watches or checks.
+- **The group's color:** a group one trigger switches and another watches or checks, or the group's objects.
+- **Red:** a Reset triggers action and the triggers it rearms.
 
 ### Logic preview
 
-Press **P** to run the map's triggers in the editor with the same engine servers use. Timers count, groups switch on the canvas, and triggers flash when they act. Counters, announcements, bosses, shapes, repairs, damage and points show up in the Logic tab. **Fire** on a trigger's row starts the preview if needed and makes that trigger act once, along with anything its signals and counters set off. **Hold T** to drive a test tank at the pointer through plates and exits; the Logic tab sets its team and whether it counts as a bot. **Shift+P** restarts. Editing a trigger restarts the preview by itself.
+Press **P** to run the map's triggers in the editor with the same engine servers use. Timers count, groups switch on the canvas, and triggers flash when they act. The Logic tab shows everything:
+
+- **Play/Pause**, **Step** (one tick, 1/60 s, while paused), **Restart** and a speed of ×0.25 to ×4. Slow motion helps to follow a fast chain.
+- How many delayed actions are waiting.
+- **Counters:** click one to add 1, Shift-click to take 1 away and right-click to clear it. Watchers and goals hear the change as if a trigger made it.
+- **Groups:** every group the logic uses. Lit groups are shown; click one to show or hide it, as a script would. Watchers and gates see the change.
+- **Send:** pick a *Signal channel* and press **Send signal**. If any trigger waits for a boss, **Defeat** pretends the chosen boss was just defeated.
+- **What happened:** counters, announcements, bosses, shapes, repairs, damage, points and script events.
+- **Triggers:** each trigger's summary with live chips: *spent* for a once-per-round trigger that acted, *next 4.2 s* for a timer, *next sends 7* for a sequence, *open* or *shut* for a gate. **Fire** makes a trigger act once right now, starting the preview if needed.
+
+**Hold T** to drive a test tank at the pointer through plates and exits; the Logic tab sets its team and whether it counts as a bot. **Shift+P** restarts. Editing a trigger restarts the preview by itself.
+
+### The Gates palette
+
+The **Gates** tab in Build holds ready-made logic. Each piece starts on counters 1 and 2, signal 1 and group 1; change them in the Object tab, or pick a group in the dock first. Hover a tile to see what it does.
+
+| Piece | What it does |
+| --- | --- |
+| Gate | Passes signal 1 on as signal 2 while counter 1 is at least 1 |
+| AND, OR, XOR | Pass signal 1 on as signal 3 while counters 1 and 2 are both on, either is on, or just one is on |
+| If/else | On signal 1, sends signal 2 if counter 1 is on, otherwise signal 3 |
+| Lever | Flips counter 1 between 0 and 1 when a tank enters |
+| Coin flip | Toggles a group half of the time, every 5 seconds |
+| Dice | Sends one of signals 1–3 at random every 15 seconds |
+| Sequence | Sends signals 1, 2 and 3 in turn, one every 3 seconds |
+| Display | Announces counter 1 every time it changes |
+| Alarm | Announces when group 1 is hidden, however it happened |
+| Reward | Hides group 1 when any boss is defeated |
+| Reset | Puts counter 1 back to 0 when the area empties |
+| Rearm | On signal 1, makes group 1's triggers start afresh |
+| Crowd | Hides group 1 for 8 seconds once two tanks stand on it together |
+| Clock | Announces every 30 seconds once the round passes 5 minutes |
+
+The **Logic** tab keeps the single-step pieces: Timer, Plate, Exit pad, Start, Sender, Receiver, Counter, Goal, Shapes, Boss, Capture, Bonus, Medic, Trap and Script.
 
 ### Recipes
 
@@ -162,36 +255,66 @@ A pressure gate:
 
 1. Choose a free group in the dock (**Free**), then draw a wall. Switch on *Group N starts hidden* in Object.
 2. From **Logic**, place a **Plate** beside it. It already shows that group for 5 seconds when a tank enters.
-3. Press **L** to check the arrow, then hold **T** over the plate with the preview running.
+3. Press **L** to check the wire, then hold **T** over the plate with the preview running.
 
-The Logic palette also has ready-made triggers: **Capture** (counts while a tank holds the area), **Bonus** (points for the first tank there), **Medic** and **Trap** (repair or damage on entry), **Dice** (a random signal every 15 seconds), **Reset** (puts a counter back to 0 when the area empties), **Gate** (passes signal 1 on as signal 2 while counter 1 is at least 1), **Lever** (flips counter 1 between 0 and 1) and **Script** (raises the script event `door`).
+A lever door, with one gate:
 
-A three-switch door:
+1. Choose a free group and draw the door. From **Gates**, place two **Levers**; set the second one's counter to 2.
+2. Place an **On change** watcher for each counter (When: *On change*, Action: *Signal*, channel 1). Any lever moving now sends signal 1.
+3. Place an **AND** from Gates. Change its action from Signal to *Hide*, targeting the door's group.
+4. Switch on **Otherwise send a signal** with channel 2, and add a Receiver on 2 that shows the door. Now the door opens only while both levers are on, and closes again when either turns off.
+5. Try *Any (OR)* or *Just one (XOR)* in Combine for different puzzles, and add labels reading `Lever {1}` and `Lever {2}`.
 
-1. Place three **Counter** triggers from Logic. Each adds 1 to counter 1 when a tank enters; switch on *Once per round* for each.
-2. Place a **Goal**, which watches counter 1. Set its threshold to 3 and its action to Hide, targeting the door's group.
-3. Add a label reading `Switches {1}/3` above the door.
+The bundled Logic Kit's **Lever bank** tool builds this whole circuit for two to four levers in one step.
 
 A capture point:
 
 1. Place a **Capture** trigger over the point. While a tank is inside, it adds 1 to counter 1 every second.
 2. Place a **Goal** watching counter 1 with a threshold of 10 and an Announce action, such as `Point taken!`.
-3. Add a **Reset** over the same area so leaving it starts the count again, and a label reading `Hold {1}/10`.
+3. Add a **Reset** from Gates over the same area so leaving it starts the count again, and a label reading `Hold {1}/10`.
 
-A lever-operated gate:
+A two-tank vault:
 
-1. Place a **Lever** on one side of the arena. Each time a tank enters, counter 1 flips between 0 and 1.
-2. Place a **Goal** watching counter 1 with a threshold of 1 and a Hide action on the gate's group, so the gate opens when the lever turns on.
-3. Duplicate the Goal, set its threshold to 0 and its action to Show, so the gate closes when the lever turns off.
-4. Add a label reading `Lever {1}` so players can see its state.
+1. Draw the vault wall in its own group. Place a **Crowd** plate from Gates in front of it and set it to hide the vault's group.
+2. Two tanks must stand on the plate together to open it for 8 seconds. Raise *Tanks inside* to 3 for a team of three, or set *Team* so only one side counts.
+3. Add an **Alarm** from Gates that announces when the vault's group is hidden.
+
+A repeating wave:
+
+1. Place a **Sequence** from Gates. Every 3 seconds it sends 1, 2, 3, then starts over.
+2. Add a Receiver for each channel: Shapes on 1, Toggle a hazard pad's group on 2, and Announce `Wave {1}` on 3 with a Count on counter 1 beside it.
+3. Add a **Clock** that announces overtime, and a gate on the Shapes receiver with *Round time < 300* so shapes stop late in the round.
+
+A boss reward:
+
+1. Place a **Boss** from Logic to bring a boss partway through the round.
+2. Place a **Reward** from Gates. Pick the boss in *Boss*, and target the group of the wall around a bonus area.
+3. In the preview, press **Defeat** in the Logic tab to test it without a fight.
+
+A puzzle that resets:
+
+1. Put a puzzle's once-per-round switches in their own group, say group 5, by choosing it in the dock before placing them.
+2. Place a **Rearm** from Gates and set its group to 5. When signal 1 arrives, every switch in the group can be pressed again.
+3. Send signal 1 from a reset plate or a timer, and add a Set counter action to put the puzzle's counter back to 0.
 
 Avoid closing solid cover on spawns or objectives. Map checks cover the starting layout and connectivity; they can't prove that every combination of groups stays passable.
+
+### Logic checks
+
+The Check tab notes logic that can never work as built:
+
+- a trigger waits for a signal nothing sends, or sends signals nothing receives (including otherwise signals and every channel of a Random signal or Sequence);
+- a watcher or condition reads a counter nothing changes, or a group nothing shows or hides;
+- a Reset triggers action targets a group with no triggers;
+- triggers signal each other in a loop with no delay, gate or chance, which the arena cuts short every tick.
+
+Notes never block a playtest; scripts can send signals and change counters and groups the checks can't see.
 
 ## Workshop plugins
 
 Packs can add tools and checks to the workshop. Enable a plugin pack on **Mods**, review any findings, then open the **Tools** tab. Each tool shows its settings and a Run button. A run changes the map as one undo step and usually selects what it made; **Ctrl+R** runs the last tool again with the same settings. Plugin checks add amber notes to the Check tab and never block a playtest or export.
 
-The bundled **Workshop Toolkit** adds Repeat, Ring of blocks, Arena frame, Snap to grid and Four-way mirror, and a check for gaps too narrow to drive through. The bundled **Logic Kit** builds logic for you: **Switch door** turns the selected blocks into a door with switches that open it when all or any are pressed, **Countdown** counts a free counter down from the start of the round and announces a message at zero, and **Sequence** makes the selected triggers act one after another when a tank enters a new plate. It also notes signal loops that would run until the arena cuts them short. Plugin packs only change the editor, so enabling one never marks a match as modded. After editing a plugin's scripts, press **Reload plugins**. A tool's result passes the same checks as an import before the workshop keeps it, and a tool that errors or runs too long changes nothing. The full plugin guide covers pack creation, installation, tools, parameters, checks, helpers and debugging. [Editor plugin guide](editor-plugins.md)
+The bundled **Workshop Toolkit** adds Repeat, Ring of blocks, Arena frame, Snap to grid and Four-way mirror, and a check for gaps too narrow to drive through. The bundled **Logic Kit** builds logic for you: **Switch door** turns the selected blocks into a door with switches that open it when all or any are pressed, **Lever bank** wires two to four levers to an AND, OR or XOR gate that opens the selected blocks, **Countdown** counts a free counter down from the start of the round and announces a message at zero, and **Sequence** makes the selected triggers act one after another when a tank enters a new plate. Its **Unread counters** check notes counters that change but that nothing reads. Plugin packs only change the editor, so enabling one never marks a match as modded. After editing a plugin's scripts, press **Reload plugins**. A tool's result passes the same checks as an import before the workshop keeps it, and a tool that errors or runs too long changes nothing. The full plugin guide covers pack creation, installation, tools, parameters, checks, helpers and debugging. [Editor plugin guide](editor-plugins.md)
 
 ## Particle generator
 
@@ -214,7 +337,7 @@ The workshop folder is `workshop/` inside Tank Yard's data directory. **Files �
 - `exports/<map-id>-<timestamp>.zip`: portable exports.
 - `prefs.json`: panel sizes and canvas switches.
 
-Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, gates and the tank actions) need 0.15.1 to host a map or play it offline. Servers never send triggers to players, so 0.15.0 players can still join.
+Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Servers never send triggers to players, so players on any 0.15 build can still join. Maps that don't use the new logic save exactly as before.
 
 For a dedicated server, put the ZIP in persistent storage, add its path to the top-level `mods` list, and run `reload-mods`. Then `maps` lists it and `map my_arena` selects it. Joining clients receive the checked map data automatically. See [Hosting](hosting.md) and [domain setup](hosting-domain.md).
 

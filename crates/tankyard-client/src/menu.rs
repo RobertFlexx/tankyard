@@ -131,6 +131,7 @@ pub struct Menu {
     mod_viewer: Option<crate::mod_viewer::Viewer>,
     mod_trust: bool,
     mod_scroll: usize,
+    mod_scroll_fraction: f32,
     /// The pack shown in the Mods page's detail pane.
     mod_selected: usize,
     mod_icons: std::collections::HashMap<String, Texture2D>,
@@ -171,6 +172,7 @@ pub struct Menu {
     lobbies_open_amount: f32,
     /// The page of the lobby list on show.
     lobby_page: usize,
+    lobby_scroll_fraction: f32,
 }
 impl Menu {
     pub fn new() -> Self {
@@ -224,6 +226,7 @@ impl Menu {
             mod_viewer: None,
             mod_trust: false,
             mod_scroll: 0,
+            mod_scroll_fraction: 0.,
             mod_selected: 0,
             mod_icons: Default::default(),
             mod_chooser: None,
@@ -249,6 +252,7 @@ impl Menu {
             lobbies_open: false,
             lobbies_open_amount: 0.0,
             lobby_page: 0,
+            lobby_scroll_fraction: 0.,
         }
     }
     pub fn clear_focus(&mut self) {
@@ -1340,11 +1344,14 @@ impl Menu {
             crate::ui_layout::claim_wheel(area);
         }
         if pages > 1 && contains(area) {
-            let wheel = mouse_wheel().1;
-            if wheel < 0.0 {
-                self.lobby_page = (self.lobby_page + 1).min(pages - 1);
-            } else if wheel > 0.0 {
-                self.lobby_page = self.lobby_page.saturating_sub(1);
+            let steps = crate::ui_layout::scroll_steps(
+                &mut self.lobby_scroll_fraction,
+                crate::ui_layout::wheel_lines().y,
+            );
+            if steps < 0 {
+                self.lobby_page = (self.lobby_page + steps.unsigned_abs() as usize).min(pages - 1);
+            } else if steps > 0 {
+                self.lobby_page = self.lobby_page.saturating_sub(steps as usize);
             }
         }
         let first = self.lobby_page * LOBBIES_PER_PAGE;
@@ -3717,11 +3724,14 @@ impl Menu {
             crate::ui_layout::claim_wheel(list);
         }
         if list_scrolls && contains(list) && self.mod_review.is_none() {
-            let wheel = mouse_wheel().1;
-            if wheel < 0. {
-                self.mod_scroll += 1;
-            } else if wheel > 0. {
-                self.mod_scroll = self.mod_scroll.saturating_sub(1);
+            let steps = crate::ui_layout::scroll_steps(
+                &mut self.mod_scroll_fraction,
+                crate::ui_layout::wheel_lines().y,
+            );
+            if steps < 0 {
+                self.mod_scroll += steps.unsigned_abs() as usize;
+            } else if steps > 0 {
+                self.mod_scroll = self.mod_scroll.saturating_sub(steps as usize);
             }
         }
         self.mod_scroll = self

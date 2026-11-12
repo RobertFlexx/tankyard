@@ -7,13 +7,14 @@ use crate::{
 };
 use macroquad::prelude::*;
 // The inspector scrolls, so shapes go through the helpers that follow it.
+use super::preview::GateView;
 use crate::ui::{
     ui_circle as draw_circle, ui_line as draw_line, ui_rectangle as draw_rectangle,
     ui_rectangle_lines as draw_rectangle_lines,
 };
 use std::hash::{Hash, Hasher};
 use tankyard_client::editor_document::{
-    Document, Key, Object, describe_trigger, map_id, trigger_tag,
+    Document, Key, Object, defeated_boss, describe_trigger, map_id, trigger_tag,
 };
 use tankyard_content::*;
 use tankyard_core::BossKind;
@@ -46,6 +47,11 @@ pub(super) struct Form<'a> {
 }
 
 impl Form<'_> {
+    /// Use `salt` for the ids of the controls that follow, so repeated
+    /// titles in a list stay apart; returns the previous salt.
+    pub fn set_salt(&mut self, salt: u64) -> u64 {
+        std::mem::replace(&mut self.salt, salt)
+    }
     fn id(&self, title: &str) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         title.hash(&mut hasher);
@@ -501,7 +507,7 @@ impl Editor {
         }
         let clip = Rect::new(r.x + 6. * s, r.y + 46. * s, r.w - 12. * s, r.h - 52. * s);
         if clip.contains(ui_layout::pointer()) && !pointer_captured() {
-            self.scroll = (self.scroll - mouse_wheel().1 * 56. * s)
+            self.scroll = (self.scroll - ui_layout::wheel_lines().y * 56. * s)
                 .clamp(0., (self.content_height - clip.h).max(0.));
         }
         let (end, request) = {
@@ -690,11 +696,19 @@ impl Editor {
         };
         let mut object = before.clone();
         let free = self.doc.next_free_group();
+        let free_channel = self.doc.next_free_channel();
         let (map_w, map_h) = (self.doc.map.width, self.doc.map.height);
         let mut hidden = self.doc.map.hidden_groups.clone();
         let mut locked = self.doc.locked;
         let salt = 100 + key_salt(key);
         let mut request = Request::None;
+        // The gate as the preview sees it, once the preview has run.
+        let live = match &object {
+            Object::Trigger(t) if self.preview.running || !self.preview.at_start() => {
+                self.preview.gate_view(t, &self.config())
+            }
+            _ => None,
+        };
         let mut f = self.form(x, y, w, s, salt);
         let title = match &object {
             Object::Block(b) => format!("{} block", b.style.name()),
@@ -838,7 +852,7 @@ impl Editor {
                     f.color(&mut d.color);
                 }
             }
-            Object::Trigger(t) => trigger_form(&mut f, t),
+            Object::Trigger(t) => trigger_form(&mut f, t, live.as_ref(), free_channel),
             Object::Spawn(region) => {
                 f.heading("Spawn region");
                 f.stepper("Team (0 for any)", &mut region.team, [0, 4], None);
@@ -1006,12 +1020,14 @@ impl Editor {
 
     fn logic_tab(&mut self, x: f32, y: f32, w: f32, s: f32) -> (f32, Request) {
         let mut request = Request::None;
+        let config = self.config();
         let preview = &self.preview;
-        let (running, speed, time, counters) = (
+        let (running, speed, time, counters, hidden) = (
             preview.running,
             preview.speed,
             preview.time,
             preview.counters,
+            preview.hidden,
         );
         let (mut probe_team, mut probe_bot) = (preview.probe_team, preview.probe_bot);
         let clock = |at: f32| {
@@ -1026,46 +1042,95 @@ impl Editor {
             .map(|e| format!("{}  {}", clock(e.at), e.text))
             .collect();
         let started = running || !preview.at_start();
-        let rows: Vec<(String, String, String, bool)> = self
-            .doc
-            .map
+        let waiting = preview.waiting();
+        let map = &self.doc.map;
+        // Groups worth showing: anything placed in one, switched or watched.
+        let groups = self.doc.used_groups();
+        let watches_bosses = map.triggers.iter().any(|t| t.when == TriggerWhen::Defeated);
+        // The boss Defeat pretends to beat: the one picked, else the first a
+        // trigger watches for.
+        let watched_boss = map
+            .triggers
+            .iter()
+            .filter(|t| t.when == TriggerWhen::Defeated)
+            .find_map(|t| defeated_boss(t).and_then(BossKind::from_id))
+            .unwrap_or(BossKind::ALL[0]);
+        struct LogicRow {
+            tag: String,
+            summary: String,
+            state: Vec<(String, Option<bool>)>,
+            chosen: bool,
+        }
+        let rows: Vec<_> = map
             .triggers
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let status = match preview.next_at(i) {
-                    Some(at) if started && at > time => format!("next {:.1} s", at - time),
-                    _ => String::new(),
-                };
-                (
-                    trigger_tag(t),
-                    describe_trigger(t),
-                    status,
-                    self.selected(Key::Trigger(i)),
-                )
+                let mut state = Vec::new();
+                if started {
+                    if preview.spent(i) {
+                        state.push(("spent".to_owned(), None));
+                    } else if let Some(at) = preview.next_at(i).filter(|&at| at > time) {
+                        state.push((format!("next {:.1} s", at - time), None));
+                    }
+                    if t.action == TriggerAction::Sequence {
+                        let channel = t.group.saturating_add(preview.sequence_step(i));
+                        state.push((format!("next sends {channel}"), None));
+                    }
+                    if let Some(view) = preview.gate_view(t, &config) {
+                        state.push((
+                            if view.open { "open" } else { "shut" }.to_owned(),
+                            Some(view.open),
+                        ));
+                    }
+                }
+                LogicRow {
+                    tag: trigger_tag(t),
+                    summary: describe_trigger(t),
+                    state,
+                    chosen: self.selected(Key::Trigger(i)),
+                }
             })
             .collect();
         let mut toggle_run = false;
+        let mut step = false;
         let mut new_speed = speed;
+        let mut send = None;
+        let mut channel = self.send_channel;
+        let mut boss = self.send_boss.unwrap_or(watched_boss);
         let mut f = self.form(x, y, w, s, 4);
         f.heading("Preview");
         label(&clock(time), x, f.y + 8. * s, 22. * s, text_color());
+        if waiting > 0 {
+            right_label(
+                &format!(
+                    "{waiting} delayed action{} waiting",
+                    if waiting == 1 { "" } else { "s" }
+                ),
+                x + w,
+                f.y + 6. * s,
+                11.5 * s,
+                muted_color(),
+            );
+        }
         f.y += 22. * s;
-        let speed_text = format!("Speed ×{speed}");
+        let speed_text = format!("\u{d7}{speed}");
         match f.buttons(
             &[
                 if running { "Pause  P" } else { "Play  P" },
+                "Step",
                 "Restart",
                 &speed_text,
             ],
             true,
         ) {
             Some(0) => toggle_run = true,
-            Some(1) => request = Request::Restart,
-            Some(_) => new_speed = if speed >= 4. { 1. } else { speed * 2. },
+            Some(1) => step = true,
+            Some(2) => request = Request::Restart,
+            Some(_) => new_speed = if speed >= 4. { 0.25 } else { speed * 2. },
             None => {}
         }
-        f.note("Hold T over the canvas to drive a test tank through area triggers.");
+        f.note("Hold T over the canvas to drive a test tank through area triggers. Step moves one tick while paused.");
         f.stepper("Test tank team", &mut probe_team, [0, 4], None);
         f.toggle("Test tank is a bot", &mut probe_bot);
         f.heading("Counters");
@@ -1077,7 +1142,18 @@ impl Editor {
                 cell,
                 34. * s,
             );
-            draw_rectangle(r.x, r.y, r.w, r.h, mix(surface_color(), bg_color(), 0.4));
+            let over = contains(r);
+            draw_rectangle(
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                if over {
+                    hover_color()
+                } else {
+                    mix(surface_color(), bg_color(), 0.4)
+                },
+            );
             label(
                 &format!("#{}", i + 1),
                 r.x + 5. * s,
@@ -1096,8 +1172,93 @@ impl Editor {
                     text_color()
                 },
             );
+            let counter = i as u8 + 1;
+            if over && is_mouse_button_pressed(MouseButton::Left) {
+                let add = if super::shift() { -1 } else { 1 };
+                send = Some(tankyard_core::LogicInput::AddCounter(counter, add));
+            } else if over && is_mouse_button_pressed(MouseButton::Right) {
+                send = Some(tankyard_core::LogicInput::SetCounter(counter, 0));
+            }
         }
         f.y += 84. * s;
+        f.note("Click a counter to add 1, Shift-click to take 1 away, right-click to clear it. Triggers watching it hear the change.");
+        if groups != 0 {
+            f.heading("Groups");
+            let size = 30. * s;
+            let per_row = ((w + 4. * s) / (size + 4. * s)).floor().max(1.) as usize;
+            let used: Vec<u8> = (1..=MAP_GROUPS)
+                .filter(|&g| groups & MapDef::group_bit(g) != 0)
+                .collect();
+            for (n, &group) in used.iter().enumerate() {
+                let r = Rect::new(
+                    x + (n % per_row) as f32 * (size + 4. * s),
+                    f.y + (n / per_row) as f32 * (size + 4. * s),
+                    size,
+                    size,
+                );
+                let shown = hidden & MapDef::group_bit(group) == 0;
+                let over = contains(r);
+                if shown {
+                    draw_rectangle(
+                        r.x,
+                        r.y,
+                        r.w,
+                        r.h,
+                        alpha(accent(), if over { 0.5 } else { 0.32 }),
+                    );
+                } else {
+                    draw_rectangle(
+                        r.x,
+                        r.y,
+                        r.w,
+                        r.h,
+                        if over {
+                            hover_color()
+                        } else {
+                            mix(surface_color(), bg_color(), 0.4)
+                        },
+                    );
+                    draw_line(
+                        r.x + 4. * s,
+                        r.bottom() - 4. * s,
+                        r.right() - 4. * s,
+                        r.y + 4. * s,
+                        1.,
+                        muted_color(),
+                    );
+                }
+                draw_rectangle_lines(r.x, r.y, r.w, r.h, 1., line_color());
+                center_label(
+                    &group.to_string(),
+                    r.center().x,
+                    r.y + size * 0.66,
+                    13. * s,
+                    if shown { text_color() } else { muted_color() },
+                );
+                if over && is_mouse_button_pressed(MouseButton::Left) {
+                    send = Some(tankyard_core::LogicInput::Group(group, !shown));
+                }
+            }
+            f.y += used.len().div_ceil(per_row) as f32 * (size + 4. * s) + 6. * s;
+            f.note("Lit groups are shown. Click one to show or hide it, as a script would; watchers and gates see it.");
+        }
+        f.heading("Send");
+        f.stepper("Signal channel", &mut channel, [1, MAP_GROUPS], None);
+        let mut labels = vec!["Send signal"];
+        let defeat = format!("Defeat {}", boss.name());
+        if watches_bosses {
+            labels.push(&defeat);
+        }
+        match f.buttons(&labels, true) {
+            Some(0) => send = Some(tankyard_core::LogicInput::Signal(channel)),
+            Some(_) => send = Some(tankyard_core::LogicInput::Defeated(boss)),
+            None => {}
+        }
+        if watches_bosses {
+            f.cycle("Boss to defeat", &mut boss, &BossKind::ALL, |b| {
+                b.name().to_owned()
+            });
+        }
         f.heading("What happened");
         if events.is_empty() {
             f.note("Nothing yet. Press Play to run the arena's triggers.");
@@ -1109,9 +1270,19 @@ impl Editor {
         if rows.is_empty() {
             f.note("No triggers yet. Build one from the Logic palette.");
         }
-        for (i, (tag, summary, status, chosen)) in rows.iter().enumerate() {
+        for (
+            i,
+            LogicRow {
+                tag,
+                summary,
+                state,
+                chosen,
+            },
+        ) in rows.iter().enumerate()
+        {
             let lines = wrapped_lines(summary, w - 16. * s, 12. * s);
-            let h = 26. * s + lines.len() as f32 * 16. * s;
+            let chips = if state.is_empty() { 0. } else { 22. * s };
+            let h = 26. * s + lines.len() as f32 * 16. * s + chips;
             let r = Rect::new(x, f.y, w, h);
             let over = contains(r);
             draw_rectangle(
@@ -1128,24 +1299,15 @@ impl Editor {
                 },
             );
             draw_rectangle(r.x, r.y, 3. * s, r.h, brushes::LOGIC);
+            let fire = Rect::new(r.right() - 50. * s, r.y + 4. * s, 44. * s, 19. * s);
             label(
-                &format!("{}  {tag}", i + 1),
+                &fitted_label(&format!("{}  {tag}", i + 1), 13. * s, fire.x - x - 16. * s),
                 x + 9. * s,
                 r.y + 17. * s,
                 13. * s,
                 text_color(),
             );
-            let fire = Rect::new(r.right() - 50. * s, r.y + 4. * s, 44. * s, 19. * s);
             let firing = small_button(fire, "Fire", s * 0.62);
-            if !status.is_empty() {
-                right_label(
-                    status,
-                    fire.x - 8. * s,
-                    r.y + 17. * s,
-                    11. * s,
-                    muted_color(),
-                );
-            }
             for (n, line) in lines.iter().enumerate() {
                 label(
                     line,
@@ -1154,6 +1316,25 @@ impl Editor {
                     12. * s,
                     muted_color(),
                 );
+            }
+            let mut right = r.right() - 6. * s;
+            for (text, gate) in state.iter().rev() {
+                let chip_y = r.bottom() - 21. * s;
+                match gate {
+                    Some(open) => status_pill(text, right, chip_y, *open, s),
+                    None => {
+                        let cw = label_width(text, 11. * s) + 12. * s;
+                        draw_rectangle(right - cw, chip_y, cw, 17. * s, alpha(line_color(), 0.35));
+                        label(
+                            text,
+                            right - cw + 6. * s,
+                            chip_y + 12.5 * s,
+                            11. * s,
+                            text_color(),
+                        );
+                    }
+                }
+                right -= label_width(text, 11. * s) + 18. * s;
             }
             if firing {
                 request = Request::Fire(i);
@@ -1166,8 +1347,18 @@ impl Editor {
         self.preview.probe_team = probe_team;
         self.preview.probe_bot = probe_bot;
         self.preview.speed = new_speed;
+        self.send_channel = channel;
+        if boss != self.send_boss.unwrap_or(watched_boss) {
+            self.send_boss = Some(boss);
+        }
         if toggle_run {
             self.preview.running = !self.preview.running;
+        }
+        if step {
+            self.preview.step_once(&self.doc.map, &config);
+        }
+        if let Some(input) = send {
+            self.preview.send(&self.doc.map, &config, input);
         }
         (end, request)
     }
@@ -1594,7 +1785,30 @@ fn carry_changes(before: &Object, after: &Object, target: &mut Object) {
     }
 }
 
-fn trigger_form(f: &mut Form, t: &mut MapTrigger) {
+/// Shown beside a condition that holds in the preview, and an open gate.
+const HOLDS: Color = Color::new(0.24, 0.66, 0.38, 1.0);
+
+/// A small status pill: "holds", "fails", "open", "shut".
+fn status_pill(text: &str, right: f32, y: f32, ok: bool, s: f32) {
+    let w = label_width(text, 11. * s) + 12. * s;
+    let color = if ok { HOLDS } else { RED };
+    draw_rectangle(right - w, y, w, 17. * s, alpha(color, 0.18));
+    draw_rectangle(right - w, y, 2. * s, 17. * s, color);
+    label(
+        text,
+        right - w + 7. * s,
+        y + 12.5 * s,
+        11. * s,
+        text_color(),
+    );
+}
+
+fn trigger_form(
+    f: &mut Form,
+    t: &mut MapTrigger,
+    live: Option<&GateView>,
+    free_channel: Option<u8>,
+) {
     let s = f.s;
     let summary = describe_trigger(t);
     let lines = wrapped_lines(&summary, f.w - 18. * s, 13. * s);
@@ -1642,12 +1856,44 @@ fn trigger_form(f: &mut Form, t: &mut MapTrigger) {
             f.note("Acts as soon as enough tanks are inside, then again each period.");
         }
         TriggerWhen::Signal => {
-            f.stepper("Signal channel", &mut t.source, [1, MAP_GROUPS], None);
+            t.source = t.source.clamp(1, MAP_GROUPS);
+            f.stepper("Listen on channel", &mut t.source, [1, MAP_GROUPS], None);
         }
         TriggerWhen::Counter => {
-            f.stepper("Counter", &mut t.source, [1, MAP_COUNTERS], None);
+            t.source = t.source.clamp(1, MAP_COUNTERS);
+            f.stepper("Watch counter", &mut t.source, [1, MAP_COUNTERS], None);
             f.integer("Reaches", &mut t.threshold, [-COUNTER_LIMIT, COUNTER_LIMIT]);
             f.note("Acts when the counter arrives at this value from either side.");
+        }
+        TriggerWhen::Changed => {
+            t.source = t.source.clamp(1, MAP_COUNTERS);
+            f.stepper("Watch counter", &mut t.source, [1, MAP_COUNTERS], None);
+            f.note("Acts every time the counter's value changes, up or down. Pair it with a gate to react to some values only.");
+        }
+        TriggerWhen::Shown | TriggerWhen::Hidden => {
+            t.source = t.source.clamp(1, MAP_GROUPS);
+            f.stepper("Watch group", &mut t.source, [1, MAP_GROUPS], None);
+            f.note(if t.when == TriggerWhen::Shown {
+                "Acts when a trigger, a restore timer or a script shows the group. The starting layout does not count."
+            } else {
+                "Acts when a trigger, a restore timer or a script hides the group. The starting layout does not count."
+            });
+        }
+        TriggerWhen::Defeated => {
+            let mut boss = defeated_boss(t).and_then(BossKind::from_id);
+            let options: Vec<Option<BossKind>> = std::iter::once(None)
+                .chain(BossKind::ALL.into_iter().map(Some))
+                .collect();
+            f.cycle("Boss", &mut boss, &options, |b| {
+                b.map_or("Any boss".to_owned(), |b| b.name().to_owned())
+            });
+            t.source = boss.map_or(0, |b| {
+                BOSS_IDS
+                    .iter()
+                    .position(|&id| id == b.id())
+                    .map_or(0, |i| i as u8 + 1)
+            });
+            f.note("Acts when that boss is destroyed anywhere in the arena, whether a Boss trigger or the mode brought it.");
         }
     }
     f.heading("Do");
@@ -1657,7 +1903,7 @@ fn trigger_form(f: &mut Form, t: &mut MapTrigger) {
         &mut t.action,
         &TriggerAction::ALL,
         TriggerAction::name,
-        2,
+        3,
     );
     match t.action {
         TriggerAction::Toggle | TriggerAction::Show | TriggerAction::Hide => {
@@ -1673,13 +1919,13 @@ fn trigger_form(f: &mut Form, t: &mut MapTrigger) {
         }
         TriggerAction::Boss => {
             let mut boss = BossKind::from_id(&t.boss).unwrap_or(BossKind::Sentinel);
-            f.cycle("Boss", &mut boss, &BossKind::ALL, |b| b.name().to_owned());
+            f.cycle("Bring", &mut boss, &BossKind::ALL, |b| b.name().to_owned());
             t.boss = boss.id().into();
             f.note("The boss arrives at the middle of this trigger's area.");
         }
         TriggerAction::Signal => {
             t.group = t.group.clamp(1, MAP_GROUPS);
-            f.stepper("Signal channel", &mut t.group, [1, MAP_GROUPS], None);
+            f.stepper("Send on channel", &mut t.group, [1, MAP_GROUPS], None);
         }
         TriggerAction::Count => {
             t.group = t.group.clamp(1, MAP_COUNTERS);
@@ -1702,13 +1948,17 @@ fn trigger_form(f: &mut Form, t: &mut MapTrigger) {
             t.amount = t.amount.clamp(-COUNTER_LIMIT, COUNTER_LIMIT);
             f.integer("Value", &mut t.amount, [-COUNTER_LIMIT, COUNTER_LIMIT]);
         }
-        TriggerAction::Random => {
+        TriggerAction::Random | TriggerAction::Sequence => {
             t.group = t.group.clamp(1, MAP_GROUPS - 1);
             f.stepper("First channel", &mut t.group, [1, MAP_GROUPS - 1], None);
             let most = i32::from(MAP_GROUPS - t.group) + 1;
             t.amount = t.amount.clamp(2, most);
             f.integer("Channels", &mut t.amount, [2, most]);
-            f.note("Sends on one channel, picked at random each time.");
+            f.note(if t.action == TriggerAction::Random {
+                "Sends on one channel, picked at random each time."
+            } else {
+                "Sends on the next channel each time it acts and starts over after the last. Reset triggers takes it back to the first."
+            });
         }
         TriggerAction::Heal | TriggerAction::Hurt => {
             t.amount = t.amount.clamp(1, 100);
@@ -1748,54 +1998,199 @@ fn trigger_form(f: &mut Form, t: &mut MapTrigger) {
             }
             f.note("A script pack hears it with tankyard.on(\"map_event\", ...); event.name is this name. Without such a pack it does nothing.");
         }
+        TriggerAction::Reset => {
+            t.group = t.group.min(MAP_GROUPS);
+            f.stepper("Group (0 for all)", &mut t.group, [0, MAP_GROUPS], None);
+            f.note("Starts that group's triggers afresh: waiting delays are dropped, Once per round triggers can act again, timers count from now and sequences go back to their first channel. A trigger's group is its Own group above.");
+        }
     }
     let script = t.action == TriggerAction::Script;
+    if (t.action.affects_tanks() || script || t.counts_inside()) && !t.when.watches_area() {
+        f.pick("Who", &mut t.who, &TriggerWho::ALL, TriggerWho::name, 3);
+        f.stepper("Team (0 for any)", &mut t.team, [0, 4], None);
+    }
     if t.action.affects_tanks() || script {
-        if !t.when.watches_area() {
-            f.pick("Who", &mut t.who, &TriggerWho::ALL, TriggerWho::name, 3);
-            f.stepper("Team (0 for any)", &mut t.team, [0, 4], None);
-        }
         f.note(if script {
             "event.tanks lists the noticed tanks inside the trigger's area."
         } else {
             "Acts on every noticed tank inside the trigger's area."
         });
     }
-    f.heading("Only if");
-    let mut gated = t.only_if.is_some();
-    if f.toggle("Check a condition first", &mut gated) {
-        t.only_if = gated.then(TriggerTest::default);
-    }
-    if let Some(test) = &mut t.only_if {
-        f.pick("", &mut test.kind, &TestKind::ALL, TestKind::name, 3);
-        match test.kind {
-            TestKind::Counter => {
-                test.index = test.index.clamp(1, MAP_COUNTERS);
-                f.stepper("Counter", &mut test.index, [1, MAP_COUNTERS], None);
-                f.pick("", &mut test.compare, &Compare::ALL, Compare::symbol, 6);
-                let mut other = test.against > 0;
-                f.toggle("Against another counter", &mut other);
-                if other {
-                    test.against = test.against.clamp(1, MAP_COUNTERS);
-                    f.stepper("Other counter", &mut test.against, [1, MAP_COUNTERS], None);
-                } else {
-                    test.against = 0;
-                    f.integer("Value", &mut test.value, [-COUNTER_LIMIT, COUNTER_LIMIT]);
-                }
-            }
-            TestKind::Shown | TestKind::Hidden => {
-                test.index = test.index.clamp(1, MAP_GROUPS);
-                f.stepper("Group", &mut test.index, [1, MAP_GROUPS], None);
-            }
-        }
-        f.note("Checked when the trigger fires. When it fails, nothing happens and the trigger waits for its next chance.");
-    }
+    gate_form(f, t, live, free_channel);
     f.heading("Timing");
     f.number("Delay before acting (s)", &mut t.delay, [0., 3600.], 0.5);
     let mut chance = f32::from(t.chance);
     f.number("Chance %", &mut chance, [1., 100.], 1.);
     t.chance = chance as u8;
     f.toggle("Once per round", &mut t.once);
+}
+
+/// The gate: up to four conditions, how they combine and what a shut gate
+/// sends instead, with what each one says in the preview right now.
+fn gate_form(f: &mut Form, t: &mut MapTrigger, live: Option<&GateView>, free_channel: Option<u8>) {
+    let s = f.s;
+    f.heading("Only if");
+    let mut tests: Vec<TriggerTest> = t.conditions().copied().collect();
+    let mut remove = None;
+    let mut raise = None;
+    for (i, test) in tests.iter_mut().enumerate() {
+        let salt = f.set_salt(0);
+        f.set_salt(salt ^ (0x51_7c_c1_b7 * (i as u64 + 1)));
+        let top = f.y;
+        label(
+            &format!("Condition {}", i + 1),
+            f.x + 10. * s,
+            f.y + 14. * s,
+            13. * s,
+            text_color(),
+        );
+        let close = Rect::new(f.x + f.w - 58. * s, f.y, 58. * s, 20. * s);
+        if small_button(close, "Remove", s * 0.6) {
+            remove = Some(i);
+        }
+        let mut right = close.x - 6. * s;
+        if i > 0 {
+            let up = Rect::new(right - 26. * s, f.y, 26. * s, 20. * s);
+            if small_button(up, "\u{2191}", s * 0.6) {
+                raise = Some(i);
+            }
+            right = up.x - 6. * s;
+        }
+        if let Some(holds) = live.and_then(|view| view.holds.get(i)) {
+            status_pill(
+                if *holds { "holds" } else { "fails" },
+                right,
+                f.y + 1.5 * s,
+                *holds,
+                s,
+            );
+        }
+        f.y += 28. * s;
+        let (x, w) = (f.x, f.w);
+        f.x += 10. * s;
+        f.w -= 10. * s;
+        f.pick("", &mut test.kind, &TestKind::ALL, TestKind::name, 3);
+        match test.kind {
+            TestKind::Shown | TestKind::Hidden => {
+                test.index = test.index.clamp(1, MAP_GROUPS);
+                f.stepper("Group", &mut test.index, [1, MAP_GROUPS], None);
+            }
+            kind => {
+                if kind == TestKind::Counter {
+                    test.index = test.index.clamp(1, MAP_COUNTERS);
+                    f.stepper("Counter", &mut test.index, [1, MAP_COUNTERS], None);
+                }
+                f.pick("", &mut test.compare, &Compare::ALL, Compare::symbol, 6);
+                let mut other = test.against > 0;
+                f.toggle("Against a counter", &mut other);
+                if other {
+                    test.against = test.against.clamp(1, MAP_COUNTERS);
+                    f.stepper("Other counter", &mut test.against, [1, MAP_COUNTERS], None);
+                } else {
+                    test.against = 0;
+                    let (title, limits) = match kind {
+                        TestKind::Inside => ("Tanks", [0, TRIGGER_CROWD]),
+                        TestKind::Time => ("Seconds", [0, COUNTER_LIMIT]),
+                        _ => ("Value", [-COUNTER_LIMIT, COUNTER_LIMIT]),
+                    };
+                    test.value = test.value.clamp(limits[0], limits[1]);
+                    f.integer(title, &mut test.value, limits);
+                }
+                match kind {
+                    TestKind::Inside => {
+                        f.note("Counts the noticed tanks (Who and Team) in this trigger's area.")
+                    }
+                    TestKind::Time => f.note("Whole seconds since the round started."),
+                    _ => {}
+                }
+            }
+        }
+        f.x = x;
+        f.w = w;
+        draw_rectangle(
+            f.x,
+            top,
+            3. * s,
+            f.y - top - 6. * s,
+            alpha(brushes::LOGIC, 0.8),
+        );
+        f.set_salt(salt);
+    }
+    if let Some(i) = remove {
+        tests.remove(i);
+    } else if let Some(i) = raise {
+        tests.swap(i - 1, i);
+    }
+    if tests.len() < TRIGGER_CONDITIONS
+        && f.buttons(
+            &[if tests.is_empty() {
+                "Add a condition"
+            } else {
+                "Add another condition"
+            }],
+            true,
+        )
+        .is_some()
+    {
+        // A copy of the last one is usually close to what comes next.
+        tests.push(tests.last().copied().unwrap_or_default());
+    }
+    let count = tests.len();
+    t.set_conditions(tests);
+    if count >= 2 {
+        f.y += 6. * s;
+        f.pick("Combine", &mut t.gate, &GateMode::ALL, GateMode::name, 2);
+    }
+    if count > 0 {
+        if let Some(view) = live {
+            let passed = view.holds.iter().filter(|&&h| h).count();
+            let text = format!(
+                "{passed} of {} hold{}",
+                view.holds.len(),
+                if passed == 1 && view.holds.len() == 1 {
+                    "s"
+                } else {
+                    ""
+                }
+            );
+            label(&text, f.x, f.y + 13. * s, 12.5 * s, muted_color());
+            status_pill(
+                if view.open { "open" } else { "shut" },
+                f.x + f.w,
+                f.y + 1.5 * s,
+                view.open,
+                s,
+            );
+            f.y += 26. * s;
+        }
+        if free_channel.is_some() || t.otherwise > 0 {
+            let mut otherwise = t.otherwise > 0;
+            if f.toggle("Otherwise send a signal", &mut otherwise) {
+                // A fresh channel; the trigger's own would feed back into it.
+                t.otherwise = if otherwise {
+                    free_channel.unwrap_or(t.otherwise)
+                } else {
+                    0
+                };
+            }
+        } else {
+            f.buttons(&["Otherwise signal: channels full"], false);
+            f.note("All 32 signal channels are in use. Free a channel before adding an otherwise signal.");
+        }
+        if t.otherwise > 0 {
+            f.stepper("Otherwise channel", &mut t.otherwise, [1, MAP_GROUPS], None);
+        }
+        f.note(match t.gate {
+            _ if count == 1 => "Checked when the trigger fires. While the gate is shut nothing happens, apart from the otherwise signal, and the trigger waits for its next chance.",
+            GateMode::All => "Acts only while every condition holds: an AND gate.",
+            GateMode::Any => "Acts while at least one condition holds: an OR gate.",
+            GateMode::NotAll => "Acts unless every condition holds: a NAND gate.",
+            GateMode::NoneOf => "Acts only while no condition holds: a NOR gate.",
+            GateMode::One => "Acts while exactly one condition holds: an XOR gate.",
+        });
+    } else {
+        f.note("Conditions look at counters, groups, the tanks inside or the round time when the trigger fires. Several make AND, OR, NAND, NOR and XOR gates.");
+    }
 }
 
 /// Typed text made into a script event name: lowercase, `_` for anything

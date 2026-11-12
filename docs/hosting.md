@@ -1,18 +1,144 @@
 # Hosting
 
-## The quick way: from the game
+Anyone can host a Tank Yard server: from the game in a few clicks, or as a dedicated server on a spare PC, a Raspberry Pi or a VPS. Pick the way that suits you:
 
-Open **Host server → Community server**. Name the server, pick a UDP port, maximum players, lobby size and bots per lobby, choose the mode and rules with **Configure arena**, and press **Start community server**. It runs as its own process, so it keeps going while you play anywhere, including on it (**Join**). The panel shows its live status (players, lobbies, mods and your connection to it), the address to share, and the server console. Your enabled mods load on the server; players download nothing.
+| You want | Use | Time |
+| --- | --- | --- |
+| To play with friends tonight | [From the game](#from-the-game) | 1 minute |
+| A server that runs without the game open | [A dedicated server](#a-dedicated-server) | 5 minutes |
+| It to start with the machine and restart if it stops | [Run it as a service](#run-it-as-a-service) | 10 minutes |
+| Players to join `play.example.com`, or no port forwarding | [Your own domain](hosting-domain.md) | 20 minutes |
+
+Players never install your mods: the server sends its checked mod data when they join. Clients and the server must use compatible protocol versions. Tank Yard 0.15.x and 0.16 use protocol 25; hosting maps with the new 0.16 logic requires a 0.16 server.
+
+## From the game
+
+Open **Host server → Community server**. Name the server, pick a UDP port, maximum players, lobby size and bots per lobby, choose the mode and rules with **Configure arena**, and press **Start community server**. It runs as its own process, so it keeps going while you play anywhere, including on it (**Join**). The panel shows its live status (players, lobbies, mods and your connection to it), the address to share, and the server console. Your enabled mods load on the server.
 
 **Copy command for an always-on machine** saves the configuration and copies the exact command that runs the same server without the game, for a spare PC, a VPS, or a Raspberry Pi.
 
 Servers answer status queries, so anyone who saves yours sees its name, player count, lobbies, mods, whether it needs a password, and a measured connection quality in **Join server**. Clicking the main server card on the title screen lists its lobbies; picking one joins that lobby.
 
-For a public hostname such as `play.example.com`, follow the [domain, DNS and HTTPS guide](hosting-domain.md). The server now includes an optional WebSocket listener, so a separate relay process is not needed.
+## A dedicated server
+
+### 1. Install it
+
+On Linux (x86-64, or 64-bit ARM such as a Raspberry Pi 4 or 5 on 64-bit Raspberry Pi OS) and macOS:
+
+```sh
+curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh | sh -s -- --server
+```
+
+This puts `tankyard-server` and `tankyard-relay` in `~/.local/bin` and doesn't touch an installed game. Run the same command to update. On Windows, download the Windows ZIP from the [latest release](https://github.com/RobertFlexx/tankyard/releases/latest) and extract it; `tankyard-server.exe` is inside. Every release archive also contains the server and sample configs. Linux and macOS archives include a `host-server.sh` launcher, so extracting one is enough too.
+
+Linux builds need glibc 2.31 or newer on x86-64 and 2.35 or newer on ARM64. 32-bit ARM and musl systems such as Alpine need a [source build](#from-the-command-line).
+
+### 2. Configure it
+
+Make a folder for the server's settings and write a complete settings file:
+
+```sh
+mkdir -p ~/tankyard-server && cd ~/tankyard-server
+tankyard-server --write-config server.toml --name "My arena"
+```
+
+On Windows, run `.\tankyard-server.exe --write-config server.toml --name "My arena"` in the extracted folder. Open `server.toml` in a text editor. The settings most hosts change:
+
+| Setting | What it does |
+| --- | --- |
+| `name` | The name in **Join server** |
+| `server_id` | A short unique id such as `"my-arena"`; needed before roles and bans can be saved |
+| `password` | Players must type it to join. It keeps strangers out; it doesn't encrypt anything |
+| `bind` | The UDP address and port, `"0.0.0.0:5000"` by default |
+| `max_players`, `arena_capacity` | Players in total, and per lobby; a full lobby opens another |
+| `bot_count`, `adaptive_bots`, `difficulty` | Bots per lobby, whether they leave as players join, and their skill |
+| `mods` | Mod pack folders or ZIPs to load, such as `["mods/my_arena.zip"]` |
+| `mode`, `map` under `[world]` | The game mode and map |
+
+Command-line options override the file for one run: `--port 5001`, `--mode maze`, `--bots 8`, `--mod mods/vampire`. `tankyard-server --help` lists them all.
+
+### 3. Start it
+
+```sh
+tankyard-server --config server.toml
+```
+
+It prints where players can join:
+
+```text
+My arena listening on UDP 0.0.0.0:5000 | Free For All | 60 Hz simulation, 20 Hz snapshots
+Players join: 127.0.0.1:5000 on this computer
+              192.168.1.20:5000 on your local network
+              your public address, port 5000, once UDP 5000 is forwarded to this machine
+```
+
+Type `help` in the same window for the administration commands; `status` shows players and tick times, `save` writes changed settings back, and `shutdown` stops it cleanly. Players join with **Join server → Add**, entering the address.
+
+### 4. Let players in
+
+- **Same network:** players use the local address. If they can't connect, allow UDP 5000 through this machine's firewall:
+  - Ubuntu and Debian with ufw: `sudo ufw allow 5000/udp`
+  - Fedora and others with firewalld: `sudo firewall-cmd --permanent --add-port=5000/udp && sudo firewall-cmd --reload`
+  - Windows (PowerShell as administrator): `New-NetFirewallRule -DisplayName "Tank Yard" -Direction Inbound -Protocol UDP -LocalPort 5000 -Action Allow`
+  - macOS asks to allow incoming connections the first time; choose Allow.
+- **Over the internet:** in your router's settings, forward **UDP** port 5000 to this machine's local address, and give the machine a reserved address so it doesn't change. Players join your public address, such as `203.0.113.7:5000`. IPv6 addresses use brackets: `[2001:db8::1234]:5000`.
+- **Can't forward ports?** Some connections share one public address between many homes (carrier-grade NAT): the address your router shows differs from the one websites report. Use a [Cloudflare Tunnel](hosting-domain.md#option-b-a-cloudflare-tunnel) instead, which needs no open ports.
+
+### Run it as a service
+
+On Linux with systemd, the server can start with the machine and restart if it ever stops. The bundled unit runs it as its own `tankyard` user, with the program in `/opt/tankyard` and its settings, bans and logs in `/var/lib/tankyard`:
+
+```sh
+# A user for the server, and the program.
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin tankyard
+curl -fsSLO https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh
+sudo sh install.sh --server --bin-dir /opt/tankyard
+
+# Its settings, owned by that user.
+sudo install -d -o tankyard -g tankyard /var/lib/tankyard
+sudo -u tankyard /opt/tankyard/tankyard-server --write-config /var/lib/tankyard/server.toml --name "My arena"
+sudoedit /var/lib/tankyard/server.toml
+
+# The service.
+sudo curl -fsSL -o /etc/systemd/system/tankyard.service \
+  https://raw.githubusercontent.com/RobertFlexx/tankyard/main/configs/tankyard.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now tankyard
+```
+
+The unit is also in every release archive as `configs/tankyard.service`. Relative paths in the settings, such as `bans.json` or `mods/my_arena.zip`, are inside `/var/lib/tankyard`. Useful commands:
+
+| Command | Does |
+| --- | --- |
+| `systemctl status tankyard` | Whether it's running |
+| `journalctl -u tankyard -f` | Follow its log, including the status line |
+| `sudo systemctl restart tankyard` | Restart after editing the settings |
+| `sudo sh install.sh --server --bin-dir /opt/tankyard && sudo systemctl restart tankyard` | Update to the latest release |
+
+Under a service there is no console; edit the settings file and restart instead, or use the in-game **Server** panel as an owner. Back up `/var/lib/tankyard` before updates.
+
+### Raspberry Pi and small machines
+
+Use a Raspberry Pi 4 or 5 with 64-bit Raspberry Pi OS and the ARM64 build. Start with the defaults, then watch `status` (or the journal) while people play: the `tick average/p95/p99/max` figures should stay well under 16,667 µs, the time one tick has at 60 ticks a second. If p99 creeps above about half of that, lower `bot_count`, `[world] target_count` (shapes) or `max_players`, or keep `snapshot_rate` at 20. Maze maps and boss modes cost the most. Run one server per machine at first and add arenas once you know there is headroom.
+
+### Troubleshooting
+
+| Problem | Try |
+| --- | --- |
+| Nobody can connect, even on the same network | Allow UDP on the server's port in its firewall (see above). Check the address and port the server printed |
+| Local players can join, internet players can't | Forward **UDP**, not TCP, to the server's local address. Check that your router's WAN address matches your public address; if not, use a [Cloudflare Tunnel](hosting-domain.md#option-b-a-cloudflare-tunnel) |
+| "Address already in use" | Another server uses that port. Stop it, or start this one with `--port 5001` |
+| Players see an update message | Check the compatibility note above. Update the older client or server when their protocol versions differ |
+| A mod or map is refused when the server starts | The log says why. Maps that use newer workshop logic need a server at least as new as the workshop that made them |
+| The game stutters for everyone | Check `status`. High tick times or dropped catch-up ticks mean the machine is overloaded: lower bots, shapes or players. Many skipped snapshots with low tick times mean connections are congested, often the host's upload: lower `snapshot_rate` or `max_players` |
+| Roles and bans are forgotten after a restart | Set a `server_id` and make sure the server can write its `access_file` and `ban_file` |
+| The service won't start | `journalctl -u tankyard -e` shows the error. Check that `/var/lib/tankyard/server.toml` exists and belongs to the `tankyard` user |
+
+For a public hostname such as `play.example.com`, follow the [domain, DNS and HTTPS guide](hosting-domain.md). The server includes an optional WebSocket listener, so a separate relay process is not needed.
 
 ## From the command line
 
-Build and start a community server:
+To build the server from source instead of downloading it:
 
 ```sh
 cargo build --locked --release -p tankyard-server --bin tankyard-server
@@ -78,7 +204,7 @@ Global staff authority is a separate trusted backend gateway, restricted to offi
 
 To publish a server behind an HTTP-only proxy such as a Cloudflare Tunnel hostname, set `websocket = "127.0.0.1:8080"` in the game server config and route the hostname to port 8080. The standalone `tankyard-relay` remains available for separate-process deployments. Players join `wss://host` or just `host`; the client carries netcode packets over the WebSocket. The server scopes loopback bans to a connection, so banning one proxied player cannot exclude everyone on that relay. Lasting individual bans for anonymous guests behind a shared proxy still need verified accounts. The relay log shows each player's original IP when Cloudflare forwards it.
 
-Use `scripts/host_server.sh` for a convenience launcher. `configs/tankyard.service` runs under a dedicated user at `/opt/tankyard`, restarts on failure, and handles SIGTERM. Adjust paths and allow that user to write the configuration directory. Use `--no-console` under a service manager. Logs use `RUST_LOG`.
+`host-server.sh` in a release folder (`scripts/host_server.sh` in the source) starts the server with that folder's `server.toml`, writing it from the sample on the first run. `configs/tankyard.service` runs the server as a service; see [Run it as a service](#run-it-as-a-service). It restarts on failure and stops cleanly on SIGTERM. Use `--no-console` under any service manager. Logs use `RUST_LOG`, such as `RUST_LOG=debug`.
 
 Check a running server on a machine with UDP access:
 
@@ -104,7 +230,7 @@ Occupied arenas step concurrently on up to four available CPU cores; one active 
 
 Start with the current 64-player room limit and measure on the hosting hardware before increasing it. At 60 ticks per second, each tick has 16.7 ms; snapshot batches and network work need CPU time too. Monitor `status` for tick percentiles, snapshot time, skipped snapshots, and dropped catch-up ticks. Add rooms while there is still CPU and network headroom. The configured player limit alone does not establish capacity.
 
-`configs/tankyard@.service` runs named arenas under systemd. For example, `tankyard@ffa-1` reads `/opt/tankyard/configs/ffa-1.toml`. Give each arena its own `server_id`, bind port, moderation files, and audit files. Set `public_addresses` and token issuance to match that arena. Install the template and prepare the `tankyard` user and paths as for the single-server unit, then start the required instances.
+`configs/tankyard@.service` runs named arenas under systemd. For example, `tankyard@ffa-1` reads `/var/lib/tankyard/ffa-1.toml`. Give each arena its own `server_id`, bind port, ban, access and audit files. Set `public_addresses` and token issuance to match that arena. Set up the `tankyard` user and `/opt/tankyard` as for the [single service](#run-it-as-a-service), install the template as `/etc/systemd/system/tankyard@.service`, write each arena's settings, and start them with `sudo systemctl enable --now tankyard@ffa-1 tankyard@maze-1`.
 
 Repeat these local workloads after server changes:
 

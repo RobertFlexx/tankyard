@@ -38,6 +38,7 @@ pub struct CommunityUi {
     cached_room: String,
     text_lines: Vec<String>,
     scroll: usize,
+    scroll_fraction: f32,
     docked: bool,
     compact_chat: bool,
 }
@@ -75,6 +76,7 @@ impl Default for CommunityUi {
             cached_room: String::new(),
             text_lines: vec![],
             scroll: 0,
+            scroll_fraction: 0.,
             docked: false,
             compact_chat: false,
         }
@@ -319,11 +321,14 @@ impl CommunityUi {
         let count = if self.typing { 8 } else { 5 };
         let maximum = self.text_lines.len().saturating_sub(count);
         if self.typing && contains(r) {
-            let wheel = mouse_wheel().1;
-            let amount = (wheel.abs().ceil() as usize).min(16) * 3;
-            if wheel > 0.0 {
+            let steps = crate::ui_layout::scroll_steps(
+                &mut self.scroll_fraction,
+                crate::ui_layout::wheel_lines().y * 3.,
+            );
+            let amount = steps.unsigned_abs() as usize;
+            if steps > 0 {
                 self.scroll = self.scroll.saturating_add(amount);
-            } else if wheel < 0.0 {
+            } else if steps < 0 {
                 self.scroll = self.scroll.saturating_sub(amount);
             }
         }

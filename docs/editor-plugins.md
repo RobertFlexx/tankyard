@@ -14,7 +14,7 @@ Plugins require Tank Yard 0.15.1 or later and use `api_version` 2. Save Luau sou
 
 The Tools tab shows load errors, packs waiting for review, and **Last run** messages. **Show/Hide** folds a pack's tools, and the editor remembers that choice. Plugin checks appear as amber notes when **Check** runs. Clicking a note can select the object it describes.
 
-Workshop Toolkit supplies Repeat, Ring of blocks, Arena frame, Snap to grid and Four-way mirror. Logic Kit supplies Switch door, Countdown and Sequence. Both are included with the game and can be enabled on Mods. [Workshop Toolkit source](../mods/workshop_toolkit/tools.lua) · [Logic Kit source](../mods/logic_kit/tools.lua)
+Workshop Toolkit supplies Repeat, Ring of blocks, Arena frame, Snap to grid and Four-way mirror. Logic Kit supplies Switch door, Countdown and Sequence; its 0.16 Lever bank tool builds a circuit with several levers, watchers and an AND, OR or XOR gate. Both packs are included with the game and can be enabled on Mods. The [logic gates tutorial](logic-gates-tutorial.md) explains the circuit. [Workshop Toolkit source](../mods/workshop_toolkit/tools.lua) · [Logic Kit source](../mods/logic_kit/tools.lua)
 
 ## Create a first tool
 
@@ -222,9 +222,11 @@ local px, py = editor.world(map, point)
 
 Use `editor.free_group(map)`, `editor.free_channel(map)` and `editor.free_counter(map)` to find the lowest unused number. They return `nil` when exhausted.
 
-- Groups range from 1 to 32. The helper checks block, zone, decoration and trigger memberships, visibility actions and starting hidden groups.
-- Signal channels range from 1 to 32. The helper checks signal listeners, signal actions and the ranges used by random-signal actions.
-- Counters range from 1 to 8. The helper checks counter listeners, Count, Set and Calculate actions, counter operands and counter conditions.
+- Groups range from 1 to 32. The helper checks block, zone, decoration and trigger memberships, visibility and Reset triggers actions, On shown and On hidden watchers, group conditions and starting hidden groups.
+- Signal channels range from 1 to 32. The helper checks signal listeners, signal actions, otherwise channels and the ranges used by Random signal and Sequence actions.
+- Counters range from 1 to 8. The helper checks On counter and On change listeners, Count, Set and Calculate actions, counter operands and every condition's counters.
+
+`editor.conditions(trigger)` returns a trigger's conditions as one list, `only_if` first and then `also_if`, or an empty list when it has no gate. Use it to read gates without handling the two fields apart. When you build a gate, set `only_if` to the first condition and `also_if` to the rest, at most three, and `gate` to how they combine; the [trigger schema](modding.md#maps) lists every field. Gates of several conditions, otherwise signals and the newer When kinds and actions need Tank Yard 0.16.0; the bundled Logic Kit's Lever bank tool shows them in use.
 
 Each helper reads the map as it exists at that call. Reserve an allocated number by adding its object or trigger before asking for another number of the same kind.
 

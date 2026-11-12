@@ -1,6 +1,6 @@
-//! The canvas: navigation, pointer gestures for the three modes, and the
+//! The canvas: navigation, pointer gestures for the editor modes, and the
 //! arena drawn with the editor's overlays.
-use super::{Editor, Layout, Mode, Tab, alt, brushes, shift};
+use super::{Editor, Layout, Mode, Tab, alt, brushes, command, shift};
 use crate::{
     scenery,
     settings::Settings,
@@ -9,7 +9,9 @@ use crate::{
 };
 use macroquad::prelude::*;
 use std::collections::HashSet;
-use tankyard_client::editor_document::{Key, Object, describe_trigger, trigger_tag};
+use tankyard_client::editor_document::{
+    Key, Link, Object, describe_trigger, link, trigger_badge_tag,
+};
 use tankyard_content::*;
 use tankyard_core::{V2, WorldConfig};
 
@@ -47,7 +49,7 @@ pub enum Gesture {
 }
 
 /// How near, in pixels, the pointer must be to grab a handle.
-const HANDLE_REACH: f32 = 9.;
+const HANDLE_REACH: f32 = 11.;
 /// A selection side shorter than this on screen has the handles across it
 /// stand outside the edge, so pressing in a thin selection still moves it.
 const HANDLE_ROOM: f32 = 40.;
@@ -115,6 +117,10 @@ fn resized(
 
 fn overlaps(a: Rect, b: Rect) -> bool {
     a.x <= b.right() && b.x <= a.right() && a.y <= b.bottom() && b.y <= a.bottom()
+}
+
+fn scroll_zoom(lines: f32, speed: f32) -> f32 {
+    (lines * 0.18 * speed).clamp(-0.35, 0.35).exp()
 }
 fn screen_area(a: Vec2, b: Vec2) -> Rect {
     Rect::new(
@@ -239,6 +245,32 @@ impl Editor {
             .map(|(key, _, _)| key)
     }
 
+    pub(super) fn cycle_pick(&mut self, pointer: Vec2, backwards: bool) {
+        let hits: Vec<Key> = self
+            .doc
+            .items()
+            .rev()
+            .filter(|&(key, r, group)| {
+                self.pickable(group) && self.hit_area(key, r).contains(pointer)
+            })
+            .map(|(key, _, _)| key)
+            .collect();
+        if hits.is_empty() {
+            return;
+        }
+        let current = hits.iter().position(|key| self.selected(*key));
+        let next = match current {
+            Some(index) if backwards => (index + hits.len() - 1) % hits.len(),
+            Some(index) => (index + 1) % hits.len(),
+            None if backwards => hits.len() - 1,
+            None => 0,
+        };
+        self.set_selection(vec![hits[next]]);
+        self.mode = Mode::Edit;
+        self.tab = Tab::Object;
+        self.last_click = None;
+    }
+
     /// The object and size, in world units, that a click places.
     pub(super) fn current_brush(&self) -> (&Object, [f32; 2]) {
         if let Some((object, size)) = &self.stamp {
@@ -299,10 +331,15 @@ impl Editor {
             match &mut object {
                 // A trigger built while a group is chosen acts on that group;
                 // joining it would switch the trigger off whenever it hides.
-                Object::Trigger(trigger) if trigger.action.targets_group() => {
-                    trigger.group = self.build_group;
+                // Watchers watch it, and a Rearm resets it.
+                Object::Trigger(trigger) => {
+                    if trigger.action.targets_group() || trigger.action == TriggerAction::Reset {
+                        trigger.group = self.build_group;
+                    }
+                    if matches!(trigger.when, TriggerWhen::Shown | TriggerWhen::Hidden) {
+                        trigger.source = self.build_group;
+                    }
                 }
-                Object::Trigger(_) => {}
                 object if object.groupable() => object.set_group(self.build_group),
                 _ => {}
             }
@@ -465,12 +502,23 @@ impl Editor {
             {
                 self.last_pointer = Some(self.view.world(pointer));
             }
-            let wheel = mouse_wheel().1;
-            if wheel != 0. {
-                self.zoom_at(pointer, (wheel.signum() * 0.18).exp());
+            let wheel = ui_layout::wheel_lines();
+            if self.gesture.is_none() && !is_mouse_button_down(MouseButton::Left) {
+                if command() || (!self.prefs.scroll.pans() && wheel.y != 0.) {
+                    self.zoom_at(pointer, scroll_zoom(wheel.y, self.prefs.zoom_speed));
+                } else {
+                    let movement = if shift() {
+                        vec2(wheel.x + wheel.y, 0.)
+                    } else {
+                        wheel
+                    };
+                    self.view.center -= V2::new(movement.x, movement.y)
+                        * (56. * layout.s * self.prefs.pan_speed / self.view.zoom);
+                }
             }
         }
         let pan = is_mouse_button_down(MouseButton::Middle)
+            || (self.mode == Mode::Pan && is_mouse_button_down(MouseButton::Left))
             || (is_key_down(KeyCode::Space)
                 && !self.typing()
                 && is_mouse_button_down(MouseButton::Left));
@@ -489,7 +537,11 @@ impl Editor {
         self.hover = (inside && self.gesture.is_none())
             .then(|| self.pick(pointer))
             .flatten();
-        if inside && self.gesture.is_none() && is_mouse_button_pressed(MouseButton::Right) {
+        if inside
+            && self.mode != Mode::Pan
+            && self.gesture.is_none()
+            && is_mouse_button_pressed(MouseButton::Right)
+        {
             self.eyedropper(pointer);
         }
         if inside && self.gesture.is_none() && is_mouse_button_pressed(MouseButton::Left) {
@@ -514,6 +566,7 @@ impl Editor {
     fn press(&mut self, pointer: Vec2) {
         let at = self.snapped(pointer);
         match self.mode {
+            Mode::Pan => {}
             Mode::Build if self.swipe => {
                 self.begin();
                 let mut cells = HashSet::new();
@@ -793,7 +846,7 @@ impl Editor {
                         settings.shape_quality,
                     );
                 }
-                Key::Trigger(i) => self.draw_trigger(i, rect, s),
+                Key::Trigger(i) => self.draw_trigger(i, rect),
                 Key::Spawn(i) => brushes::spawn_mark(map.spawn_regions[i].team, rect, s),
                 Key::Base(i) => brushes::base_mark(map.team_bases[i].team, point(20.)),
                 Key::Objective(_) => brushes::objective_mark(point(20.)),
@@ -829,6 +882,7 @@ impl Editor {
         }
         draw_rectangle_lines(arena.x, arena.y, arena.w, arena.h, 2., muted_color());
         self.draw_links();
+        self.draw_trigger_tags(view, s);
         if self.show_groups {
             self.draw_group_badges(view, s);
         }
@@ -886,7 +940,7 @@ impl Editor {
             Rect::new(c.x - size * 0.5, c.y - size * 0.5, size, size)
         }
     }
-    fn draw_trigger(&self, index: usize, rect: Rect, s: f32) {
+    fn draw_trigger(&self, index: usize, rect: Rect) {
         let trigger = &self.doc.map.triggers[index];
         let lit = self.preview.flashes.get(index).map_or(0., |&at| {
             (1. - (self.preview.time - at) / 0.7).clamp(0., 1.)
@@ -913,22 +967,73 @@ impl Editor {
         }
         brushes::trigger_badge(trigger.action, badge, lit);
         if trigger.only_if.is_some() {
-            brushes::gate_mark(badge, lit);
+            brushes::gate_mark(trigger, badge, lit);
         }
-        if badge.w >= 26. && self.view.zoom > 0.12 {
-            let tag = trigger_tag(trigger);
-            let size = 11. * s.max(0.8);
+    }
+    /// Each trigger's tag under its badge, or above it when that spot is
+    /// taken. A tag that fits neither is left out; the pointer shows it.
+    /// Selected and hovered triggers place theirs first, so they always show.
+    fn draw_trigger_tags(&self, view: Rect, s: f32) {
+        if self.view.zoom <= 0.12 {
+            return;
+        }
+        let map = &self.doc.map;
+        let ghost = self.ghost_mask();
+        let badges: Vec<Option<Rect>> = map
+            .triggers
+            .iter()
+            .map(|t| {
+                let rect = self.on_screen(t.rect);
+                let shown = self.show_hidden || MapDef::group_bit(t.member) & ghost == 0;
+                (shown && overlaps(view, rect)).then(|| Self::badge_rect(t, rect))
+            })
+            .collect();
+        let first = |index: &usize| {
+            let key = Key::Trigger(*index);
+            !(self.selection.contains(&key) || self.hover == Some(key))
+        };
+        let mut order: Vec<usize> = (0..map.triggers.len()).collect();
+        order.sort_by_key(first);
+        let size = 11. * s.max(0.8);
+        let height = size + 5.;
+        let mut placed: Vec<Rect> = Vec::new();
+        for index in order {
+            let Some(badge) = badges[index] else {
+                continue;
+            };
+            if badge.w < 26. {
+                continue;
+            }
+            let tag = trigger_badge_tag(&map.triggers[index]);
             let width = label_width(&tag, size) + 8.;
             let c = badge.center();
-            let y = badge.bottom() + 3.;
+            let below = Rect::new(c.x - width * 0.5, badge.bottom() + 3., width, height);
+            let above = Rect::new(c.x - width * 0.5, badge.y - 3. - height, width, height);
+            let free = |spot: &Rect| {
+                !placed.iter().any(|r| overlaps(*r, *spot))
+                    && !badges
+                        .iter()
+                        .enumerate()
+                        .any(|(i, b)| i != index && b.is_some_and(|b| overlaps(b, *spot)))
+            };
+            let spot = if free(&below) {
+                below
+            } else if free(&above) {
+                above
+            } else if !first(&index) {
+                below
+            } else {
+                continue;
+            };
             draw_rectangle(
-                c.x - width * 0.5,
-                y,
-                width,
-                size + 5.,
+                spot.x,
+                spot.y,
+                spot.w,
+                spot.h,
                 Color::new(0.13, 0.12, 0.10, 0.82),
             );
-            center_label(&tag, c.x, y + size, size, brushes::LOGIC);
+            center_label(&tag, c.x, spot.y + size, size, brushes::LOGIC);
+            placed.push(spot);
         }
     }
     fn trigger_point(&self, index: usize) -> Vec2 {
@@ -983,43 +1088,35 @@ impl Editor {
             if !outgoing {
                 continue;
             }
-            let listens = |other: &MapTrigger| match trigger.action {
-                TriggerAction::Signal => {
-                    other.when == TriggerWhen::Signal && other.source == trigger.group
-                }
-                TriggerAction::Count => {
-                    other.when == TriggerWhen::Counter && other.source == trigger.group
-                }
-                _ => false,
+            let color = |kind: Link| match kind {
+                Link::Signal | Link::Otherwise => VIOLET,
+                Link::Counter => AMBER,
+                Link::Group => group_color,
+                Link::Reset => RED,
             };
-            let color = if trigger.action == TriggerAction::Signal {
-                VIOLET
-            } else {
-                AMBER
-            };
-            for (other, listener) in map.triggers.iter().enumerate() {
-                if listens(listener) {
-                    arrow(from, self.trigger_point(other), 2., alpha(color, 0.85));
+            // What it sets off, and, when only it is watched, what sets it off.
+            for (other, target) in map.triggers.iter().enumerate() {
+                if other == index {
+                    continue;
                 }
-            }
-            // Senders into a watched listener, when only it is watched.
-            if !self.show_links
-                && matches!(trigger.when, TriggerWhen::Signal | TriggerWhen::Counter)
-            {
-                let action = if trigger.when == TriggerWhen::Signal {
-                    TriggerAction::Signal
-                } else {
-                    TriggerAction::Count
-                };
-                for (other, sender) in map.triggers.iter().enumerate() {
-                    if sender.action == action && sender.group == trigger.source && other != index {
-                        let color = if action == TriggerAction::Signal {
-                            VIOLET
-                        } else {
-                            AMBER
-                        };
-                        arrow(self.trigger_point(other), from, 1.5, alpha(color, 0.55));
-                    }
+                if let Some(kind) = link(trigger, target) {
+                    let width = if kind == Link::Otherwise { 1.3 } else { 2. };
+                    arrow(
+                        from,
+                        self.trigger_point(other),
+                        width,
+                        alpha(color(kind), 0.85),
+                    );
+                }
+                if !self.show_links
+                    && let Some(kind) = link(target, trigger)
+                {
+                    arrow(
+                        self.trigger_point(other),
+                        from,
+                        1.5,
+                        alpha(color(kind), 0.5),
+                    );
                 }
             }
         }
@@ -1213,6 +1310,7 @@ impl Editor {
                 n => format!("Edit · {n} selected"),
             },
             Mode::Delete => format!("Delete{}", if self.swipe { " · swipe" } else { "" }),
+            Mode::Pan => "Pan · drag to move the view".to_owned(),
         };
         let chip = |text: &str, x: f32, y: f32| {
             let width = label_width(text, size) + 14. * s;
@@ -1360,6 +1458,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn small_scroll_deltas_zoom_proportionally_without_frame_rate_dependence() {
+        assert!(scroll_zoom(0.05, 1.) < scroll_zoom(1., 1.));
+        let divided = (0..10).fold(1., |zoom, _| zoom * scroll_zoom(0.05, 1.));
+        assert!((divided - scroll_zoom(0.5, 1.)).abs() < 0.00001);
+        assert!((scroll_zoom(0.5, 1.) * scroll_zoom(-0.5, 1.) - 1.).abs() < 0.00001);
+        assert!(scroll_zoom(1000., 3.) < 1.5);
+    }
+
+    #[test]
     fn thin_selections_move_when_pressed_inside() {
         // Three blocks in a row at a zoomed-out view: 56 by 19 pixels.
         let r = Rect::new(100., 100., 56., 19.);
@@ -1377,7 +1484,7 @@ mod tests {
         }
         // The wide side keeps its handles on the edge; the thin one stands off.
         assert_eq!(Editor::handle_spot(r, (1, 0)), vec2(156., 109.5));
-        assert_eq!(Editor::handle_spot(r, (0, -1)), vec2(128., 91.));
+        assert_eq!(Editor::handle_spot(r, (0, -1)), vec2(128., 89.));
         // A roomy selection's handles sit on its corners.
         let big = Rect::new(0., 0., 200., 120.);
         assert_eq!(Editor::handle_spot(big, (1, 1)), vec2(200., 120.));

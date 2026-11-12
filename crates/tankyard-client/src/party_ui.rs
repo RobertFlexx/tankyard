@@ -20,6 +20,7 @@ pub struct PartyUi {
     scale: u32,
     lines: Vec<(String, String)>,
     scroll: usize,
+    scroll_fraction: f32,
     confirming_leave: bool,
     pub notice: String,
 }
@@ -484,11 +485,14 @@ impl PartyUi {
             crate::ui_layout::claim_wheel(transcript);
         }
         if contains(transcript) {
-            let wheel = mouse_wheel().1;
-            let amount = (wheel.abs().ceil() as usize).min(16) * 3;
-            if wheel > 0. {
+            let steps = crate::ui_layout::scroll_steps(
+                &mut self.scroll_fraction,
+                crate::ui_layout::wheel_lines().y * 3.,
+            );
+            let amount = steps.unsigned_abs() as usize;
+            if steps > 0 {
                 self.scroll = self.scroll.saturating_add(amount);
-            } else if wheel < 0. {
+            } else if steps < 0 {
                 self.scroll = self.scroll.saturating_sub(amount);
             }
         }

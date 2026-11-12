@@ -25,6 +25,8 @@ pub(crate) struct NativeDisplayData {
     pub blocking_event_loop: bool,
     /// Tank Yard: the window is moving into or out of full screen (macOS).
     pub fullscreen_transition: bool,
+    /// Tank Yard: the latest wheel event uses logical pixels.
+    pub mouse_wheel_pixels: bool,
 
     #[cfg(target_vendor = "apple")]
     pub view: crate::native::apple::frameworks::ObjcId,
@@ -59,6 +61,7 @@ impl NativeDisplayData {
             dropped_files: Default::default(),
             blocking_event_loop: false,
             fullscreen_transition: false,
+            mouse_wheel_pixels: cfg!(target_os = "macos"),
             #[cfg(target_vendor = "apple")]
             gfx_api: crate::conf::AppleGfxApi::OpenGl,
             #[cfg(target_vendor = "apple")]

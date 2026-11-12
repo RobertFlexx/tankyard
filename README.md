@@ -45,6 +45,8 @@ entirely made by one guy. (me! :D)
 
 > dual licensed, pick what you wanna abide by :D
 
-The [Arena Workshop](docs/map-editor.md) builds custom maps in the game, with pads, conveyors, portals, map logic you can test in place, and particle effects. Host a community on your own hostname with the [domain setup guide](docs/hosting-domain.md).
+The [Arena Workshop](docs/map-editor.md) builds custom maps in the game, with pads, conveyors, portals, particle effects, and map logic you can test in place: watchers, sequences and AND, OR and XOR gates. [Hosting](docs/hosting.md) covers a dedicated server in five minutes, running it as a service, and a community on your own hostname with the [domain setup guide](docs/hosting-domain.md).
 
-[Editor tutorial video](docs/arena-workshop-tutorial.mp4) · [Editor plugin API and full guide](docs/editor-plugins.md)
+[Editor tutorial video](docs/arena-workshop-tutorial.mp4) · [Logic gates video](docs/logic-gates-tutorial.mp4) · [Logic gates tutorial](docs/logic-gates-tutorial.md) · [Editor plugin API and full guide](docs/editor-plugins.md)
+
+The logic gates walkthrough previews the editor tools coming in 0.16.

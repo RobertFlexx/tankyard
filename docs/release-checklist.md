@@ -1,5 +1,4 @@
 # Pre-release checks
-# for maintainers
 
 Run these checks on the target platforms before tagging a release.
 

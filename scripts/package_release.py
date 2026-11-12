@@ -39,8 +39,18 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
             shutil.copy2(ROOT / filename, payload)
         for directory_name in ("configs", "mods", "licenses"):
             (payload / directory_name).mkdir()
-        for filename in ("server.toml", "official.toml", "central.toml"):
+        for filename in (
+            "server.toml",
+            "official.toml",
+            "central.toml",
+            "tankyard.service",
+            "tankyard@.service",
+            "Caddyfile.example",
+        ):
             shutil.copy2(ROOT / "configs" / filename, payload / "configs" / filename)
+        if not platform.startswith("windows"):
+            shutil.copy2(ROOT / "scripts/host_server.sh", payload / "host-server.sh")
+            (payload / "host-server.sh").chmod(0o755)
         for mod in ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler", "workshop_toolkit", "logic_kit"):
             shutil.copytree(ROOT / "mods" / mod, payload / "mods" / mod)
         # The tutorial video stays on GitHub; it would add 15 MB to every package.

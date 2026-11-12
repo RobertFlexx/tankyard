@@ -1,6 +1,6 @@
 //! Panel sizes and view switches the workshop remembers between sessions,
 //! and the panel edges that drag to resize the inspector and the dock.
-use super::{Editor, Layout, directory};
+use super::{Editor, Layout, Mode, directory};
 use crate::ui::*;
 use macroquad::{miniquad::CursorIcon, miniquad::window::set_mouse_cursor, prelude::*};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ pub const DOCK: [f32; 2] = [112., 300.];
 const INSPECTOR_DEFAULT: f32 = 352.;
 const DOCK_DEFAULT: f32 = 152.;
 /// How far from an edge, in pixels, the pointer can grab it.
-const GRAB: f32 = 5.;
+const GRAB: f32 = 7.;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -27,6 +27,41 @@ pub struct Prefs {
     pub show_links: bool,
     /// Plugins whose tools are put away in the Tools tab, by pack id.
     pub folded: Vec<String>,
+    /// What scrolling over the canvas does.
+    pub scroll: ScrollMode,
+    pub pan_speed: f32,
+    pub zoom_speed: f32,
+}
+
+/// Whether scrolling over the canvas pans or zooms.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollMode {
+    /// Pan with precise trackpad scrolling, zoom with a wheel's steps.
+    #[default]
+    Auto,
+    /// Scrolling pans; Ctrl or Cmd zooms.
+    Trackpad,
+    /// Scrolling zooms.
+    Mouse,
+}
+impl ScrollMode {
+    pub const ALL: [Self; 3] = [Self::Auto, Self::Trackpad, Self::Mouse];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Trackpad => "Trackpad",
+            Self::Mouse => "Mouse",
+        }
+    }
+    /// Whether this frame's scroll pans rather than zooms.
+    pub fn pans(self) -> bool {
+        match self {
+            Self::Auto => crate::ui_layout::precise_scroll(),
+            Self::Trackpad => true,
+            Self::Mouse => false,
+        }
+    }
 }
 impl Default for Prefs {
     fn default() -> Self {
@@ -40,6 +75,9 @@ impl Default for Prefs {
             show_groups: true,
             show_links: false,
             folded: Vec::new(),
+            scroll: ScrollMode::Auto,
+            pan_speed: 1.,
+            zoom_speed: 1.,
         }
     }
 }
@@ -55,6 +93,8 @@ impl Prefs {
         let fallback = Self::default();
         prefs.inspector = finite_in(prefs.inspector, INSPECTOR, fallback.inspector);
         prefs.dock = finite_in(prefs.dock, DOCK, fallback.dock);
+        prefs.pan_speed = finite_in(prefs.pan_speed, [0.25, 3.], 1.);
+        prefs.zoom_speed = finite_in(prefs.zoom_speed, [0.25, 3.], 1.);
         if !super::dock::GRIDS.contains(&prefs.grid) {
             prefs.grid = fallback.grid;
         }
@@ -76,6 +116,23 @@ fn finite_in(value: f32, [lo, hi]: [f32; 2], fallback: f32) -> f32 {
         value.clamp(lo, hi)
     } else {
         fallback
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_preferences_get_navigation_defaults() {
+        let prefs: Prefs =
+            serde_json::from_str(r#"{"inspector":300,"grid":80,"snap":false}"#).unwrap();
+        assert_eq!(prefs.inspector, 300.);
+        assert_eq!(prefs.grid, 80.);
+        assert!(!prefs.snap);
+        assert_eq!(prefs.scroll, ScrollMode::Auto);
+        assert_eq!(prefs.pan_speed, 1.);
+        assert_eq!(prefs.zoom_speed, 1.);
     }
 }
 
@@ -176,6 +233,7 @@ impl Editor {
         let cursor = match edge {
             Some(Edge::Inspector) => CursorIcon::EWResize,
             Some(Edge::Dock) => CursorIcon::NSResize,
+            None if self.mode == Mode::Pan && layout.canvas.contains(p) => CursorIcon::Move,
             None => CursorIcon::Default,
         };
         if self.cursor != cursor {

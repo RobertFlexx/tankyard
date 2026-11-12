@@ -38,6 +38,7 @@ enum Mode {
     Build,
     Edit,
     Delete,
+    Pan,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -129,6 +130,9 @@ pub struct Editor {
     focus: Option<u8>,
     preview: preview::Preview,
     probe: Option<V2>,
+    /// The Logic tab's signal channel and boss to send into the preview.
+    send_channel: u8,
+    send_boss: Option<tankyard_core::BossKind>,
     animate: bool,
     time: f32,
     view: View,
@@ -217,6 +221,8 @@ impl Editor {
             focus: None,
             preview,
             probe: None,
+            send_channel: 1,
+            send_boss: None,
             animate: true,
             time: 0.,
             view: View::new(),
@@ -260,7 +266,7 @@ impl Editor {
         editor.say(if restored {
             "Recovered your last draft. Press F1 for shortcuts."
         } else {
-            "Click to build, or press F1 for every shortcut."
+            "Choose a tool, or press F1 for every shortcut."
         });
         editor.refresh_library();
         editor
@@ -860,6 +866,7 @@ impl Editor {
             (KeyCode::Key1, Mode::Build),
             (KeyCode::Key2, Mode::Edit),
             (KeyCode::Key3, Mode::Delete),
+            (KeyCode::Key4, Mode::Pan),
         ] {
             if pressed(key) {
                 self.mode = mode;
@@ -867,6 +874,9 @@ impl Editor {
         }
         if pressed(KeyCode::Delete) || pressed(KeyCode::Backspace) {
             self.delete();
+        }
+        if over_canvas && pressed(KeyCode::Tab) {
+            self.cycle_pick(pointer, shift());
         }
         let any = !self.selection.is_empty();
         if any && pressed(KeyCode::Q) {
@@ -953,7 +963,7 @@ impl Editor {
             }
             return;
         }
-        if self.selection.is_empty() {
+        if self.selection.is_empty() || self.mode == Mode::Pan {
             let speed = 700. / self.view.zoom * get_frame_time().min(0.1);
             self.view.center += V2::new(held.x, held.y) * speed;
             return;
@@ -1113,13 +1123,14 @@ impl Editor {
         );
         let columns: [&[(&str, &str)]; 2] = [
             &[
-                ("1  2  3", "Build, Edit, Delete"),
+                ("1  2  3  4", "Build, Edit, Delete, Pan"),
                 ("Click", "Build one, select, or delete"),
                 ("Drag", "Draw a size, move, or sweep a region"),
                 ("Swipe", "Paint or erase as you drag"),
                 ("Right-click", "Build copies of that object"),
                 ("Shift-click", "Add to or remove from the selection"),
                 ("Double-click", "Select the object's whole group"),
+                ("Tab / Shift Tab", "Cycle objects under the pointer"),
                 ("Alt-drag", "Copy the selection as you move it"),
                 ("Shift / Alt handle", "Resize: keep shape, or from center"),
                 ("WASD, arrows", "Nudge; Shift for one unit"),
@@ -1140,7 +1151,9 @@ impl Editor {
                 ("Ctrl Z  Y", "Undo, redo"),
                 ("Ctrl S", "Save the project"),
                 ("Ctrl R", "Run the last plugin tool again"),
-                ("Wheel,  +  −", "Zoom"),
+                ("Wheel, Ctrl-scroll", "Zoom at the pointer"),
+                ("Trackpad scroll", "Pan (Scroll setting in Pan, 4)"),
+                ("+ / −", "Zoom around the canvas center"),
                 ("Space-drag", "Move the view, as middle-drag does"),
                 ("F,  Shift F", "Fit the arena, frame the selection"),
                 ("\\", "Hide or show the panels"),

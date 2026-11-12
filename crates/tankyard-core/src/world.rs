@@ -1,7 +1,8 @@
 use crate::drones::DroneContacts;
 use crate::physics::{
-    Body, SpatialGrid, WallIndex, circle_rect, constrain_tank, move_tank, polygon_vertices_into,
-    sweep_circle, sweep_polygon, sweep_rect,
+    Body, SpatialGrid, Spot, WallIndex, circle_rect, constrain_tank, polygon_vertices_into,
+    segment_distance_squared, slide_reach, slide_tank, steer_tank, sweep_circle, sweep_polygon,
+    sweep_rect,
 };
 use crate::*;
 use std::collections::BTreeMap;
@@ -51,7 +52,7 @@ pub struct World {
     pub events: Vec<GameEvent>,
     pub(crate) next_id: u64,
     pub(crate) rng: u64,
-    pub(crate) grid: SpatialGrid,
+    pub(crate) grid: SpatialGrid<Spot>,
     pub(crate) scratch: Vec<Body>,
     collision_hits: Vec<(f32, Body, EntityId)>,
     drone_contacts: DroneContacts,
@@ -675,7 +676,20 @@ impl World {
             .resolve(&mut self.projectiles, &self.config);
         self.resolve_contacts();
         self.resolve_boss_contacts();
+        let bounds = self.config.bounds();
+        self.wall_index.sync(&self.walls);
         for tank in self.tanks.iter_mut().filter(|tank| tank.alive) {
+            // Inside the arena and clear of every wall, constraining changes
+            // nothing; most tanks are, and checking only nearby walls is cheap.
+            if bounds.contains_circle(tank.pos, tank.radius)
+                && self
+                    .wall_index
+                    .near(tank.pos, tank.radius)
+                    .iter()
+                    .all(|&wall| circle_rect(tank.pos, tank.radius, wall).is_none())
+            {
+                continue;
+            }
             constrain_tank(tank, &self.config, &self.walls);
         }
         self.resolve_deaths();
@@ -721,6 +735,7 @@ impl World {
     }
     fn update_tanks(&mut self) {
         let mut respawns = vec![];
+        self.wall_index.sync(&self.walls);
         for tank in &mut self.tanks {
             if !tank.alive {
                 tank.respawn_timer = (tank.respawn_timer - DT).max(0.);
@@ -765,7 +780,20 @@ impl World {
                 tank.vel = V2::ZERO;
                 tank.input = PlayerInput::default();
             } else {
-                move_tank(tank, &self.content, &self.config, &self.walls, DT);
+                // move_tank, with only the walls this step can reach. A hull
+                // already in a wall may be pushed anywhere, so it gets them all.
+                steer_tank(tank, &self.content, &self.config, DT);
+                let reach = tank.radius + slide_reach(tank, DT) + 2.;
+                let near = self.wall_index.near(tank.pos, reach);
+                let walls = if near
+                    .iter()
+                    .any(|&wall| circle_rect(tank.pos, tank.radius, wall).is_some())
+                {
+                    &self.walls
+                } else {
+                    near
+                };
+                slide_tank(tank, &self.config, walls, DT);
             }
         }
         for id in respawns {
@@ -818,20 +846,20 @@ impl World {
         self.body_padding = 0.0;
         for (i, t) in self.tanks.iter().enumerate() {
             if t.alive {
-                self.grid.insert(t.pos, Body::Tank(i));
+                self.grid.insert_body(t.pos, t.radius, Body::Tank(i));
                 self.body_padding = self.body_padding.max(t.radius);
             }
         }
         for (i, t) in self.targets.iter().enumerate() {
             if t.health > 0. {
-                self.grid.insert(t.pos, Body::Target(i));
+                self.grid.insert_body(t.pos, t.radius, Body::Target(i));
                 self.body_padding = self.body_padding.max(t.radius);
             }
         }
         // Bosses are checked directly; their radius would inflate every query.
         for (i, p) in self.projectiles.iter().enumerate() {
             if p.lifetime > 0. && p.penetration > 0. {
-                self.grid.insert(p.pos, Body::Deployable(i));
+                self.grid.insert_body(p.pos, p.radius, Body::Deployable(i));
                 self.body_padding = self.body_padding.max(p.radius);
             }
         }
@@ -1273,7 +1301,16 @@ impl World {
             .filter(|b| b.health <= 0.)
             .map(|b| (b.id, b.pos, b.team, b.mothership, b.kind))
             .collect();
+        let watched = self
+            .map
+            .triggers
+            .iter()
+            .any(|trigger| trigger.when == tankyard_content::TriggerWhen::Defeated);
         for (id, pos, team, mother, kind) in dead_bosses {
+            if watched {
+                self.logic
+                    .input(crate::map_features::LogicInput::Defeated(kind));
+            }
             let killer = self
                 .contributions
                 .get(&id)
@@ -1346,7 +1383,7 @@ impl World {
             if !a.alive {
                 continue;
             }
-            self.grid.query(
+            self.grid.query_bodies(
                 a.pos,
                 a.pos,
                 a.radius + self.body_padding,
@@ -1607,13 +1644,22 @@ impl World {
                 // than testing it. Bosses are few and large, so they stay out of
                 // the grid instead of inflating every projectile's query.
                 let world = &*self;
+                // A body moves at most `moving_padding` this tick, and a
+                // parry can shift a projectile and widen it by about 22
+                // units more, so anything farther than this from the sweep
+                // can't touch it. Most candidates end here.
+                let slack = radius + moving_padding + 32.;
                 world.grid.for_each_in(
                     start,
                     end,
                     world.body_padding + radius + moving_padding,
-                    |body| {
+                    |spot| {
+                        let reach = spot.radius + slack;
+                        if segment_distance_squared(spot.pos, start, end) > reach * reach {
+                            return;
+                        }
                         if let Some(hit) =
-                            world.projectile_contact(i, body, start, end, radius, owner, team)
+                            world.projectile_contact(i, spot.body, start, end, radius, owner, team)
                         {
                             hits.push(hit);
                         }
@@ -2004,7 +2050,8 @@ impl World {
             .map(|p| (p - pos).angle())
     }
     pub(crate) fn explode(&mut self, pos: V2, radius: f32, damage: f32, owner: EntityId, team: u8) {
-        self.grid.query(pos, pos, radius + 160., &mut self.scratch);
+        self.grid
+            .query_bodies(pos, pos, radius + 160., &mut self.scratch);
         let mut bodies = std::mem::take(&mut self.scratch);
         bodies.extend((0..self.bosses.len()).map(Body::Boss));
         for &body in &bodies {

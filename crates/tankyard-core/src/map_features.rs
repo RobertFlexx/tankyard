@@ -6,8 +6,9 @@
 //! the server's arithmetic.
 use crate::*;
 use tankyard_content::{
-    CONVEYOR_SPEED, COUNTER_LIMIT, MAP_COUNTERS, MAP_GROUPS, MapDef, MapTrigger, MapZone, MathOp,
-    TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction, TriggerWhen, TriggerWho, ZoneKind,
+    CONVEYOR_SPEED, COUNTER_LIMIT, GateState, MAP_COUNTERS, MAP_GROUPS, MapDef, MapTrigger,
+    MapZone, MathOp, TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction, TriggerWhen, TriggerWho,
+    ZoneKind,
 };
 
 /// A normalized map rectangle in world units, following animated borders the
@@ -145,6 +146,10 @@ pub enum LogicInput {
     SetCounter(u8, i32),
     AddCounter(u8, i32),
     Group(u8, bool),
+    /// Start group `n`'s triggers afresh, every trigger for 0.
+    Reset(u8),
+    /// A boss was defeated; the arena reports it for On boss down triggers.
+    Defeated(BossKind),
 }
 
 /// A `map_event` raised this tick, for script packs.
@@ -166,6 +171,48 @@ const INBOX_LIMIT: usize = 256;
 /// Script events raised in one tick.
 pub const MAP_EVENT_LIMIT: usize = 64;
 
+/// Which triggers each event wakes, built once per trigger list so a signal
+/// or a counter change reaches its listeners without a search.
+#[derive(Clone, Debug, Default)]
+struct Listeners {
+    /// By signal channel, 1 to 32.
+    signal: Vec<Vec<usize>>,
+    /// By counter, 1 to 8: triggers waiting for a value, then those
+    /// waiting for any change.
+    reach: Vec<Vec<usize>>,
+    change: Vec<Vec<usize>>,
+    /// Triggers watching groups be shown or hidden.
+    groups: Vec<usize>,
+    defeated: Vec<usize>,
+    /// Triggers with a schedule or an area; event triggers never need the
+    /// per-step scan.
+    stepped: Vec<usize>,
+}
+impl Listeners {
+    fn new(map: &MapDef) -> Self {
+        let mut lists = Self {
+            signal: vec![Vec::new(); usize::from(MAP_GROUPS) + 1],
+            reach: vec![Vec::new(); usize::from(MAP_COUNTERS) + 1],
+            change: vec![Vec::new(); usize::from(MAP_COUNTERS) + 1],
+            ..Self::default()
+        };
+        for (index, trigger) in map.triggers.iter().enumerate() {
+            let slot = usize::from(trigger.source);
+            if let Some(list) = match trigger.when {
+                TriggerWhen::Signal => lists.signal.get_mut(slot),
+                TriggerWhen::Counter => lists.reach.get_mut(slot),
+                TriggerWhen::Changed => lists.change.get_mut(slot),
+                TriggerWhen::Shown | TriggerWhen::Hidden => Some(&mut lists.groups),
+                TriggerWhen::Defeated => Some(&mut lists.defeated),
+                _ => Some(&mut lists.stepped),
+            } {
+                list.push(index);
+            }
+        }
+        lists
+    }
+}
+
 /// Per-round trigger state. A new round, a map change or a different trigger
 /// list starts it afresh.
 #[derive(Clone, Debug, Default)]
@@ -176,6 +223,13 @@ pub struct MapLogic {
     spent: Vec<bool>,
     /// Sorted ids of the tanks inside each area trigger's rectangle.
     inside: Vec<Vec<EntityId>>,
+    /// The next channel of each sequence, from 0.
+    steps: Vec<u8>,
+    /// The hidden groups watchers last saw.
+    seen: u32,
+    listeners: Listeners,
+    /// Sorted ids of the living tanks this step.
+    alive: Vec<EntityId>,
     /// Groups to set back: when, which group, and whether it ends hidden.
     reverts: Vec<(f32, u8, bool)>,
     /// Delayed actions: when, and which trigger.
@@ -218,10 +272,13 @@ impl MapLogic {
 
     /// Carry out script requests. Groups change directly and set aside any
     /// pending restoration of that group.
-    fn take_inputs(&mut self, map: &MapDef, hidden: &mut u32) {
+    fn take_inputs(&mut self, map: &MapDef, now: f32, hidden: &mut u32) {
+        if self.inbox.is_empty() {
+            return;
+        }
         for input in std::mem::take(&mut self.inbox) {
             match input {
-                LogicInput::Signal(channel) => self.signal(map, channel),
+                LogicInput::Signal(channel) => self.signal(channel),
                 LogicInput::SetCounter(counter, value) => self.set_counter(map, counter, value),
                 LogicInput::AddCounter(counter, add) => {
                     let slot = usize::from(counter).wrapping_sub(1);
@@ -234,11 +291,48 @@ impl MapLogic {
                     self.reverts.retain(|&(_, g, _)| g != group);
                     *hidden = if shown { *hidden & !bit } else { *hidden | bit };
                 }
+                // Without triggers there is nothing to reset.
+                LogicInput::Reset(group) => {
+                    if self.ready {
+                        self.reset(map, group, now);
+                    }
+                }
+                LogicInput::Defeated(kind) => {
+                    let number = tankyard_content::BOSS_IDS
+                        .iter()
+                        .position(|&id| id == kind.id())
+                        .map_or(0, |i| i + 1);
+                    for &index in &self.listeners.defeated {
+                        let wanted = usize::from(map.triggers[index].source);
+                        if wanted == 0 || wanted == number {
+                            self.queue.push(index);
+                        }
+                    }
+                }
             }
         }
     }
 
-    fn prepare(&mut self, map: &MapDef, now: f32) {
+    /// Queue the triggers watching a group that was shown or hidden since
+    /// they last looked.
+    fn notice_groups(&mut self, map: &MapDef, hidden: u32) {
+        let changed = self.seen ^ hidden;
+        self.seen = hidden;
+        if changed == 0 {
+            return;
+        }
+        for &index in &self.listeners.groups {
+            let trigger = &map.triggers[index];
+            let bit = MapDef::group_bit(trigger.source);
+            if changed & bit != 0 && (hidden & bit != 0) == (trigger.when == TriggerWhen::Hidden) {
+                self.queue.push(index);
+            }
+        }
+    }
+
+    /// Start the round's state for `map`, unless it already has. The groups
+    /// hidden now are what watchers compare against.
+    fn prepare(&mut self, map: &MapDef, now: f32, hidden: u32) {
         let count = map.triggers.len();
         if self.ready && self.next.len() == count {
             return;
@@ -248,15 +342,14 @@ impl MapLogic {
         self.next = map
             .triggers
             .iter()
-            .map(|trigger| match trigger.when {
-                TriggerWhen::Every => started + trigger.offset + trigger.seconds,
-                TriggerWhen::Start => started + trigger.seconds,
-                _ => 0.,
-            })
+            .map(|trigger| schedule(trigger, started))
             .collect();
         self.spent = vec![false; count];
         self.inside = vec![Vec::new(); count];
+        self.steps = vec![0; count];
         self.acted = vec![0; count];
+        self.listeners = Listeners::new(map);
+        self.seen = hidden;
         self.reverts.clear();
         self.pending.clear();
         self.queue.clear();
@@ -284,13 +377,16 @@ impl MapLogic {
                 inbox: std::mem::take(&mut self.inbox),
                 ..Self::default()
             };
-            kept.take_inputs(map, hidden);
+            kept.take_inputs(map, now, hidden);
             *self = kept;
             return;
         }
-        self.prepare(map, now);
+        self.prepare(map, now, *hidden);
         self.budget = CHAIN_BUDGET;
-        self.take_inputs(map, hidden);
+        self.alive.clear();
+        self.alive.extend(tanks.iter().map(|tank| tank.id));
+        self.alive.sort_unstable();
+        self.take_inputs(map, now, hidden);
         self.reverts.retain(|&(at, group, hide)| {
             if now < at {
                 return true;
@@ -314,7 +410,8 @@ impl MapLogic {
                 self.act(index, map, config, now, hidden, tanks, random, effects);
             }
         }
-        for index in 0..map.triggers.len() {
+        for cursor in 0..self.listeners.stepped.len() {
+            let index = self.listeners.stepped[cursor];
             let trigger = &map.triggers[index];
             // Track every crossing, even while spent or cooling down, so a tank
             // already standing inside never counts as entering later.
@@ -347,7 +444,12 @@ impl MapLogic {
                 | TriggerWhen::Exit
                 | TriggerWhen::Cleared
                 | TriggerWhen::Destroyed => crossed,
-                TriggerWhen::Signal | TriggerWhen::Counter => false,
+                TriggerWhen::Signal
+                | TriggerWhen::Counter
+                | TriggerWhen::Changed
+                | TriggerWhen::Shown
+                | TriggerWhen::Hidden
+                | TriggerWhen::Defeated => false,
             };
             if fire
                 && self.fire(index, map, config, now, hidden, tanks, random, effects)
@@ -373,11 +475,19 @@ impl MapLogic {
         effects: &mut Vec<LogicEffect>,
     ) {
         let mut cursor = 0;
-        while cursor < self.queue.len() {
-            let index = self.queue[cursor];
-            cursor += 1;
-            if !self.spent[index] {
-                self.fire(index, map, config, now, hidden, tanks, random, effects);
+        loop {
+            while cursor < self.queue.len() {
+                let index = self.queue[cursor];
+                cursor += 1;
+                if !self.spent[index] {
+                    self.fire(index, map, config, now, hidden, tanks, random, effects);
+                }
+            }
+            // Group watchers wake after what changed the group, and may
+            // change more groups themselves.
+            self.notice_groups(map, *hidden);
+            if cursor == self.queue.len() {
+                break;
             }
         }
         self.queue.clear();
@@ -400,8 +510,11 @@ impl MapLogic {
         if index >= map.triggers.len() {
             return;
         }
-        self.prepare(map, now);
+        self.prepare(map, now, *hidden);
         self.budget = CHAIN_BUDGET;
+        self.alive.clear();
+        self.alive.extend(tanks.iter().map(|tank| tank.id));
+        self.alive.sort_unstable();
         self.act(index, map, config, now, hidden, tanks, random, effects);
         self.follow(map, config, now, hidden, tanks, random, effects);
     }
@@ -425,7 +538,7 @@ impl MapLogic {
         );
         self.scratch.sort_unstable();
         let previous = &self.inside[index];
-        let alive = |id: &EntityId| tanks.iter().any(|tank| tank.id == *id);
+        let alive = |id: &EntityId| self.alive.binary_search(id).is_ok();
         let crossed = match trigger.when {
             TriggerWhen::Enter => self
                 .scratch
@@ -462,9 +575,13 @@ impl MapLogic {
         if MapDef::group_bit(trigger.member) & *hidden != 0 {
             return false;
         }
-        if let Some(test) = &trigger.only_if
-            && !test.passes(&self.counters, *hidden)
-        {
+        if trigger.only_if.is_some() && !self.gate_open(trigger, config, now, *hidden, tanks) {
+            // The otherwise signal counts against the step's budget, so a
+            // shut gate signalling itself still stops.
+            if trigger.otherwise > 0 && self.budget > 0 {
+                self.budget -= 1;
+                self.signal(trigger.otherwise);
+            }
             return false;
         }
         if trigger.chance < 100 && random() * 100. >= f32::from(trigger.chance) {
@@ -483,11 +600,41 @@ impl MapLogic {
         true
     }
 
+    /// Whether `trigger`'s gate is open now.
+    fn gate_open(
+        &self,
+        trigger: &MapTrigger,
+        config: &WorldConfig,
+        now: f32,
+        hidden: u32,
+        tanks: &[Occupant],
+    ) -> bool {
+        trigger.gate_open(&gate_state(
+            trigger,
+            config,
+            &self.counters,
+            now,
+            hidden,
+            tanks,
+        ))
+    }
+
     /// Queue every trigger listening on signal channel `channel`.
-    fn signal(&mut self, map: &MapDef, channel: u8) {
-        for (other, listener) in map.triggers.iter().enumerate() {
-            if listener.when == TriggerWhen::Signal && listener.source == channel {
-                self.queue.push(other);
+    fn signal(&mut self, channel: u8) {
+        if let Some(listeners) = self.listeners.signal.get(usize::from(channel)) {
+            self.queue.extend_from_slice(listeners);
+        }
+    }
+
+    /// Start the triggers of `group` afresh (every trigger for 0).
+    fn reset(&mut self, map: &MapDef, group: u8, now: f32) {
+        let chosen = |index: usize| group == 0 || map.triggers[index].member == group;
+        self.pending.retain(|&(_, index)| !chosen(index));
+        for (index, trigger) in map.triggers.iter().enumerate() {
+            if chosen(index) {
+                self.spent[index] = false;
+                self.next[index] = schedule(trigger, now);
+                self.steps[index] = 0;
             }
         }
     }
@@ -504,13 +651,17 @@ impl MapLogic {
         let old = self.counters[slot];
         let new = value.clamp(-COUNTER_LIMIT, COUNTER_LIMIT);
         self.counters[slot] = new;
-        for (other, listener) in map.triggers.iter().enumerate() {
-            if listener.when == TriggerWhen::Counter
-                && listener.source == counter
-                && reached(old, new, listener.threshold)
-            {
+        // A map without triggers has no listener lists at all.
+        let counter = usize::from(counter);
+        for &other in self.listeners.reach.get(counter).into_iter().flatten() {
+            if reached(old, new, map.triggers[other].threshold) {
                 self.queue.push(other);
             }
+        }
+        if old != new
+            && let Some(listeners) = self.listeners.change.get(counter)
+        {
+            self.queue.extend_from_slice(listeners);
         }
     }
 
@@ -565,12 +716,19 @@ impl MapLogic {
                 count: trigger.amount.clamp(1, TRIGGER_SHAPES) as u32,
                 area: map_rect(config, trigger.rect),
             }),
-            TriggerAction::Signal => self.signal(map, trigger.group),
+            TriggerAction::Signal => self.signal(trigger.group),
             TriggerAction::Random => {
                 let choices = trigger.amount.clamp(1, i32::from(MAP_GROUPS)) as f32;
                 let pick = (random() * choices).floor().clamp(0., choices - 1.) as u8;
-                self.signal(map, trigger.group.saturating_add(pick));
+                self.signal(trigger.group.saturating_add(pick));
             }
+            TriggerAction::Sequence => {
+                let choices = trigger.amount.clamp(1, i32::from(MAP_GROUPS)) as u8;
+                let step = self.steps[index] % choices;
+                self.steps[index] = (step + 1) % choices;
+                self.signal(trigger.group.saturating_add(step));
+            }
+            TriggerAction::Reset => self.reset(map, trigger.group, now),
             TriggerAction::Count => {
                 let slot = usize::from(trigger.group).wrapping_sub(1);
                 if let Some(&value) = self.counters.get(slot) {
@@ -648,6 +806,54 @@ impl MapLogic {
         (self.ready && !self.spent.get(index).copied().unwrap_or(true))
             .then(|| self.next.get(index).copied())
             .flatten()
+    }
+    /// Whether trigger `index` has used up its one action this round.
+    pub fn spent(&self, index: usize) -> bool {
+        self.spent.get(index).copied().unwrap_or(false)
+    }
+    /// The channel a sequence sends on next, from 0.
+    pub fn sequence_step(&self, index: usize) -> u8 {
+        self.steps.get(index).copied().unwrap_or(0)
+    }
+    /// How many delayed actions are waiting.
+    pub fn waiting(&self) -> usize {
+        self.pending.len()
+    }
+}
+
+/// When a trigger first fires on its own, for rounds starting at `from`.
+fn schedule(trigger: &MapTrigger, from: f32) -> f32 {
+    match trigger.when {
+        TriggerWhen::Every => from + trigger.offset + trigger.seconds,
+        TriggerWhen::Start => from + trigger.seconds,
+        _ => 0.,
+    }
+}
+
+/// What `trigger`'s gate sees: the counters, the groups, the round time and
+/// the noticed tanks in its area, counted only when a condition asks.
+pub fn gate_state<'a>(
+    trigger: &MapTrigger,
+    config: &WorldConfig,
+    counters: &'a [i32; MAP_COUNTERS as usize],
+    now: f32,
+    hidden: u32,
+    tanks: &[Occupant],
+) -> GateState<'a> {
+    let inside = if trigger.counts_inside() {
+        let area = map_rect(config, trigger.rect);
+        tanks
+            .iter()
+            .filter(|tank| notices(trigger, tank) && contains(area, tank.pos))
+            .count()
+    } else {
+        0
+    };
+    GateState {
+        counters,
+        hidden,
+        time: now,
+        inside,
     }
 }
 
@@ -1685,5 +1891,257 @@ mod tests {
         assert_eq!(visit(&mut bench), (1, gate), "on: the gate opens");
         assert_eq!(visit(&mut bench), (0, 0), "off: it shuts");
         assert_eq!(visit(&mut bench), (1, gate), "and opens again");
+    }
+
+    fn test(kind: TestKind, index: u8, compare: Compare, value: i32) -> TriggerTest {
+        TriggerTest {
+            kind,
+            index,
+            compare,
+            value,
+            against: 0,
+        }
+    }
+
+    #[test]
+    fn gate_modes_combine_their_conditions_like_logic_gates() {
+        use tankyard_content::GateMode;
+        // Counter 1 is 1 and counter 2 is 0 throughout: one of two holds.
+        let gated = |group: u8, gate: GateMode| {
+            let mut t = MapTrigger {
+                seconds: 1.,
+                group,
+                gate,
+                ..trigger(TriggerWhen::Every, TriggerAction::Count)
+            };
+            t.set_conditions(vec![
+                test(TestKind::Counter, 8, Compare::AtLeast, 1),
+                test(TestKind::Counter, 7, Compare::AtLeast, 1),
+            ]);
+            t
+        };
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                group: 8,
+                amount: 1,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Set)
+            },
+            gated(1, GateMode::All),
+            gated(2, GateMode::Any),
+            gated(3, GateMode::NotAll),
+            gated(4, GateMode::NoneOf),
+            gated(5, GateMode::One),
+        ]);
+        bench.run(3.5, &[]);
+        assert_eq!(bench.logic.counters[..5], [0, 3, 3, 0, 3]);
+    }
+
+    #[test]
+    fn a_shut_gate_sends_its_otherwise_signal_and_loops_still_stop() {
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                seconds: 1.,
+                group: 1,
+                otherwise: 2,
+                only_if: counter_test(1, Compare::AtLeast, 3, 0),
+                ..trigger(TriggerWhen::Every, TriggerAction::Count)
+            },
+            MapTrigger {
+                source: 2,
+                group: 2,
+                ..trigger(TriggerWhen::Signal, TriggerAction::Count)
+            },
+            // A shut gate that answers its own signal: only the budget ends it.
+            MapTrigger {
+                source: 5,
+                otherwise: 5,
+                only_if: counter_test(3, Compare::Above, 0, 0),
+                ..trigger(TriggerWhen::Signal, TriggerAction::Count)
+            },
+        ]);
+        bench.run(2.5, &[]);
+        assert_eq!(
+            bench.logic.counters[..2],
+            [0, 2],
+            "two shut gates, two signals"
+        );
+        bench.logic.input(LogicInput::Signal(5));
+        bench.step(&[]);
+        assert_eq!(bench.logic.counters[2], 0);
+    }
+
+    #[test]
+    fn conditions_read_tanks_inside_and_round_time() {
+        let mut inside = MapTrigger {
+            seconds: 1.,
+            group: 1,
+            ..trigger(TriggerWhen::Every, TriggerAction::Count)
+        };
+        inside.set_conditions(vec![test(TestKind::Inside, 0, Compare::AtLeast, 2)]);
+        let mut late = MapTrigger {
+            seconds: 1.,
+            group: 2,
+            ..trigger(TriggerWhen::Every, TriggerAction::Count)
+        };
+        late.set_conditions(vec![test(TestKind::Time, 0, Compare::AtLeast, 3)]);
+        let mut bench = Bench::new(vec![inside, late]);
+        let center = bench.center();
+        bench.run(2.5, &[tank(1, center, false, 0)]);
+        assert_eq!(bench.logic.counters[..2], [0, 0]);
+        bench.run(2., &[tank(1, center, false, 0), tank(2, center, true, 0)]);
+        assert_eq!(
+            bench.logic.counters[..2],
+            [2, 2],
+            "two inside, and past 3 s"
+        );
+    }
+
+    #[test]
+    fn watchers_hear_counter_changes_groups_and_boss_defeats() {
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                seconds: 1.,
+                group: 1,
+                ..trigger(TriggerWhen::Every, TriggerAction::Count)
+            },
+            MapTrigger {
+                source: 1,
+                group: 2,
+                ..trigger(TriggerWhen::Changed, TriggerAction::Count)
+            },
+            MapTrigger {
+                seconds: 2.,
+                group: 6,
+                ..trigger(TriggerWhen::Every, TriggerAction::Toggle)
+            },
+            MapTrigger {
+                source: 6,
+                group: 3,
+                ..trigger(TriggerWhen::Hidden, TriggerAction::Count)
+            },
+            MapTrigger {
+                source: 6,
+                group: 4,
+                ..trigger(TriggerWhen::Shown, TriggerAction::Count)
+            },
+            MapTrigger {
+                source: 2,
+                group: 5,
+                ..trigger(TriggerWhen::Defeated, TriggerAction::Count)
+            },
+            MapTrigger {
+                source: 0,
+                group: 7,
+                ..trigger(TriggerWhen::Defeated, TriggerAction::Count)
+            },
+        ]);
+        bench.run(4.5, &[]);
+        // Counter 1 changed four times; group 6 hid at 2 s and came back at 4 s.
+        assert_eq!(bench.logic.counters[..4], [4, 4, 1, 1]);
+        bench.logic.input(LogicInput::Defeated(BossKind::Sentinel));
+        bench.step(&[]);
+        bench.logic.input(LogicInput::Defeated(BossKind::Prism));
+        bench.step(&[]);
+        assert_eq!(bench.logic.counters[4], 1, "only the prism counts for 5");
+        assert_eq!(bench.logic.counters[6], 2, "any boss counts for 7");
+    }
+
+    #[test]
+    fn group_watchers_chain_and_ignore_the_starting_layout() {
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                group: 2,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Show)
+            },
+            // Seeing group 2 appear hides group 3, which counts.
+            MapTrigger {
+                source: 2,
+                group: 3,
+                ..trigger(TriggerWhen::Shown, TriggerAction::Hide)
+            },
+            MapTrigger {
+                source: 3,
+                group: 1,
+                ..trigger(TriggerWhen::Hidden, TriggerAction::Count)
+            },
+        ]);
+        bench.map.hidden_groups = vec![2];
+        bench.hidden = bench.map.starting_mask();
+        bench.run(1., &[]);
+        assert_eq!(bench.logic.counters[0], 1);
+        assert_eq!(bench.hidden, MapDef::group_bit(3));
+    }
+
+    #[test]
+    fn sequences_step_through_their_channels_and_reset_starts_over() {
+        let listener = |channel: u8| MapTrigger {
+            source: channel,
+            group: channel,
+            ..trigger(TriggerWhen::Signal, TriggerAction::Count)
+        };
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                seconds: 1.,
+                group: 1,
+                amount: 3,
+                member: 9,
+                ..trigger(TriggerWhen::Every, TriggerAction::Sequence)
+            },
+            listener(1),
+            listener(2),
+            listener(3),
+            MapTrigger {
+                seconds: 0.5,
+                once: true,
+                member: 9,
+                group: 4,
+                ..trigger(TriggerWhen::Start, TriggerAction::Count)
+            },
+            MapTrigger {
+                source: 7,
+                group: 9,
+                ..trigger(TriggerWhen::Signal, TriggerAction::Reset)
+            },
+        ]);
+        bench.run(4.5, &[]);
+        assert_eq!(
+            bench.logic.counters[..4],
+            [2, 1, 1, 1],
+            "1, 2, 3, then 1 again"
+        );
+        assert_eq!(bench.logic.sequence_step(0), 1);
+        bench.logic.input(LogicInput::Signal(7));
+        bench.step(&[]);
+        assert_eq!(bench.logic.sequence_step(0), 0, "the sequence starts over");
+        assert!(!bench.logic.spent(4), "the start trigger can act again");
+        bench.run(1.1, &[]);
+        assert_eq!(bench.logic.counters[..4], [3, 1, 1, 2]);
+    }
+
+    #[test]
+    fn reset_drops_waiting_delays() {
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                seconds: 0.1,
+                delay: 2.,
+                member: 3,
+                group: 1,
+                ..trigger(TriggerWhen::Start, TriggerAction::Count)
+            },
+            MapTrigger {
+                seconds: 1.,
+                group: 3,
+                ..trigger(TriggerWhen::Start, TriggerAction::Reset)
+            },
+        ]);
+        bench.run(0.5, &[]);
+        assert_eq!(bench.logic.waiting(), 1);
+        bench.run(0.55, &[]);
+        assert_eq!(bench.logic.waiting(), 0, "the countdown was called off");
+        bench.run(4., &[]);
+        // Restarted at 1 s, it fires again at 1.1 s and acts 2 s later.
+        assert_eq!(bench.logic.counters[0], 1);
     }
 }

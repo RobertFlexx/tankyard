@@ -205,6 +205,30 @@ case "$1" in -s) printf '%s\\n' Linux ;; -m) printenv TANKYARD_TEST_ARCH ;; esac
         self.assertIn(f"Icon={icon}\n", shortcut)
         self.assertIn("StartupWMClass=tankyard\n", shortcut)
 
+    def test_packaged_host_launcher_creates_config_then_preserves_arguments(self):
+        extracted = self.root / "server folder with spaces"
+        with tarfile.open(self.archive) as archive:
+            archive.extractall(extracted, filter="data")
+        payload = extracted / "tankyard-v1.2.3-linux-x86_64"
+        server = payload / "tankyard-server"
+        server.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > invocation.txt\n')
+        launcher = payload / "host-server.sh"
+        env = dict(self.env, TANKYARD_CONFIG="custom arena.toml")
+        first = subprocess.run(
+            ["sh", str(launcher)], cwd=self.root, env=env,
+            text=True, capture_output=True, check=True)
+        self.assertIn("Wrote custom arena.toml", first.stdout)
+        self.assertEqual(
+            (payload / "custom arena.toml").read_bytes(),
+            (payload / "configs/server.toml").read_bytes())
+        self.assertFalse((payload / "invocation.txt").exists())
+        subprocess.run(
+            ["sh", str(launcher), "--name", "Friends arena", "--port", "5001"],
+            cwd=self.root, env=env, check=True)
+        self.assertEqual(
+            (payload / "invocation.txt").read_text().splitlines(),
+            ["--config", "custom arena.toml", "--name", "Friends arena", "--port", "5001"])
+
     def test_packages_have_licenses_examples_and_no_private_config(self):
         with tarfile.open(self.archive) as archive:
             names = archive.getnames()
@@ -212,6 +236,8 @@ case "$1" in -s) printf '%s\\n' Linux ;; -m) printenv TANKYARD_TEST_ARCH ;; esac
             self.assertTrue(any(name.endswith("/licenses/Lucide.txt") for name in names))
             self.assertTrue(any(name.endswith("/licenses/Opus.txt") for name in names))
             self.assertTrue(any(name.endswith("/configs/server.toml") for name in names))
+            self.assertTrue(any(name.endswith("/configs/tankyard.service") for name in names))
+            self.assertTrue(any(name.endswith("/host-server.sh") for name in names))
             self.assertFalse(any("/.git/" in name or "private" in name for name in names))
         for binary in packaging.BINARIES:
             shutil.copyfile(self.binaries / binary, self.binaries / (binary + ".exe"))

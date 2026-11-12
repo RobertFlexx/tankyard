@@ -1,3 +1,6 @@
+# A Tank Yard server that starts with the machine and restarts if it stops.
+# docs/hosting.md#run-it-as-a-service explains the setup: the server in
+# /opt/tankyard, its settings, bans and logs in /var/lib/tankyard.
 [Unit]
 Description=Tank Yard server
 After=network-online.target
@@ -7,8 +10,11 @@ Wants=network-online.target
 Type=simple
 User=tankyard
 Group=tankyard
-WorkingDirectory=/opt/tankyard
-ExecStart=/opt/tankyard/target/release/tankyard-server --config /opt/tankyard/configs/server.toml --no-console
+# systemd creates /var/lib/tankyard for the tankyard user; relative paths in
+# the config, such as bans.json and mods/, are read and written there.
+StateDirectory=tankyard
+WorkingDirectory=/var/lib/tankyard
+ExecStart=/opt/tankyard/tankyard-server --config /var/lib/tankyard/server.toml --no-console
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=10
@@ -16,7 +22,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/tankyard/configs
 StandardOutput=journal
 StandardError=journal
 

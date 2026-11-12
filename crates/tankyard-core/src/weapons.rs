@@ -562,12 +562,14 @@ impl World {
         self.grid.clear();
         for (i, t) in self.tanks.iter().enumerate() {
             if t.alive {
-                self.grid.insert(t.pos, crate::physics::Body::Tank(i));
+                self.grid
+                    .insert_body(t.pos, t.radius, crate::physics::Body::Tank(i));
             }
         }
         for (i, t) in self.targets.iter().enumerate() {
             if t.health > 0. {
-                self.grid.insert(t.pos, crate::physics::Body::Target(i));
+                self.grid
+                    .insert_body(t.pos, t.radius, crate::physics::Body::Target(i));
             }
         }
     }

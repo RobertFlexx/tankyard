@@ -984,21 +984,79 @@ editor.tool { id = "spin", name = "Spin", run = function() while true do end end
         let (_, hidden, _) = run(&built, &[plate, away, away], 2.6);
         assert_eq!(hidden, bits(&[1, 2, 3]));
 
-        let mut looped = map.clone();
-        looped.triggers.push(tankyard_content::MapTrigger {
-            when: TriggerWhen::Signal,
-            action: TriggerAction::Signal,
+        let lever = tool("lever_bank");
+        let outcome = plugins
+            .run(
+                0,
+                lever,
+                &map,
+                &defaults(lever),
+                &context(vec![("blocks", door)]),
+            )
+            .unwrap();
+        let levers = outcome.map;
+        tankyard_content::validate_map_features(&levers).unwrap();
+        let group = levers.blocks[door].group;
+        let gate = levers
+            .triggers
+            .iter()
+            .find(|t| t.only_if.is_some())
+            .expect("a gate");
+        assert_eq!(gate.conditions().count(), 3, "one condition per lever");
+        assert!(gate.otherwise > 0, "a shut gate closes the door");
+        // Levers are the triggers that flip counters, in order.
+        let lever_at: Vec<V2> = levers
+            .triggers
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.action == TriggerAction::Calculate)
+            .map(|(i, _)| centre(&levers, i))
+            .collect();
+        assert_eq!(lever_at.len(), 3);
+        let visit = |order: &[usize]| -> Vec<V2> {
+            order.iter().flat_map(|&i| [lever_at[i], away]).collect()
+        };
+        let open = |hidden: u32| hidden & MapDef::group_bit(group) != 0;
+        let (_, hidden, _) = run(&levers, &visit(&[0, 1]), 4.5);
+        assert!(!open(hidden), "two of three levers keep it shut");
+        let (_, hidden, _) = run(&levers, &visit(&[0, 1, 2]), 6.5);
+        assert!(open(hidden), "all three open it");
+        let (_, hidden, _) = run(&levers, &visit(&[0, 1, 2, 1]), 8.5);
+        assert!(!open(hidden), "turning one back shuts it again");
+        let mut values = defaults(lever);
+        values[1] = ParamValue::Choice(2);
+        let xor = plugins
+            .run(0, lever, &map, &values, &context(vec![("blocks", door)]))
+            .unwrap();
+        assert_eq!(
+            xor.messages,
+            vec![format!(
+                "Door is group {group}. 3 levers; it opens when just one is on."
+            )]
+        );
+        let (_, hidden, _) = run(&xor.map, &visit(&[1]), 2.5);
+        assert!(open(hidden), "one lever opens an XOR door");
+        let (_, hidden, _) = run(&xor.map, &visit(&[1, 2]), 4.5);
+        assert!(!open(hidden), "two shut it");
+
+        let mut unread = map.clone();
+        unread.triggers.push(tankyard_content::MapTrigger {
+            when: TriggerWhen::Every,
+            action: TriggerAction::Count,
             rect: [0.1, 0.1, 0.05, 0.05],
-            source: 5,
-            group: 5,
+            group: 6,
             ..Default::default()
         });
-        let found = plugins.check(&looped);
+        let found = plugins.check(&unread);
         assert!(
             found
                 .iter()
-                .any(|(_, f)| f.text.contains("Signal 5 sets itself off")),
+                .any(|(_, f)| f.text.contains("Counter 6 changes, but nothing reads it")),
             "{found:?}"
+        );
+        assert!(
+            plugins.check(&levers).is_empty(),
+            "levers read their counters"
         );
         assert!(plugins.check(&built).is_empty());
     }

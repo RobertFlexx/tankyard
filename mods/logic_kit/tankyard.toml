@@ -1,8 +1,8 @@
 # Storefront details shown on the Mods page. The tools live in tools.lua.
 [mod]
 name = "Logic Kit"
-version = "1.0"
-description = "Tools for the Arena Workshop that build switch doors, countdowns and sequences out of triggers, and a check for signal loops."
+version = "1.1"
+description = "Tools for the Arena Workshop that build switch doors, lever banks, countdowns and sequences out of triggers, and a check for counters nothing reads."
 license = "MIT OR Apache-2.0"
 icon = "icon.svg"
 tags = ["editor", "lua", "logic", "example"]

@@ -1,5 +1,4 @@
 # Signing and notarizing the macOS installer
-# for helpers/maintainers.
 
 Without these steps the release `.pkg` is unsigned, and macOS blocks it when it is downloaded in a browser ("Apple could not verify… is free of malware"). With them, the release workflow signs Tank Yard.app and the package with your Developer ID, has Apple notarize the package, and staples the result. The visual installer then opens with a double-click and no warning.
 
@@ -18,7 +17,7 @@ You need a paid [Apple Developer Program](https://developer.apple.com/programs/)
 | `APPLE_TEAM_ID` | the 10-character team ID shown at developer.apple.com → Membership |
 | `APPLE_APP_PASSWORD` | the app-specific password |
 
-The next release signs and notarizes automatically; the build fails rather than publishing a package Apple rejected. Without the secrets, releases stay unsigned and players use `install-macos.sh`.
+With these secrets configured, the release workflow signs and notarizes the app automatically. If Apple rejects the package, the workflow stops before publishing it. Unsigned releases can be installed with `install-macos.sh`.
 
 To sign locally, keep both certificates in your login keychain and run:
 

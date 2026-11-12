@@ -1,12 +1,12 @@
 # Linux builds and startup diagnostics
 
-The 0.2.5 client keeps Rust dependencies and built-in assets in one executable and uses the desktop's shared glibc, X11, and OpenGL libraries. The compatibility build targets glibc 2.31 and baseline x86-64 CPUs. Its current executables import no glibc symbol newer than 2.30. A user confirmed normal and safe graphics startup on Solus with NVIDIA, then verified text editing and closing with the first 0.2.4 fixes. Mint runtime verification remains pending.
-
-Build the release with Rust, Zig, and the locked Cargo dependencies available:
+The Linux client keeps Rust dependencies and built-in assets in one executable and uses the desktop's shared glibc, X11, and OpenGL libraries. The x86-64 compatibility build targets glibc 2.31 and baseline x86-64 CPUs. Release builds check executable imports against that compatibility target.
 
 Native voice uses ALSA. Install its development package (`libasound2-dev` on Debian/Ubuntu) to build the client; players need the shared `libasound.so.2` runtime. The headless server has no audio dependency. `--no-audio` disables device access while keeping gameplay available.
 
 Lua mod scripting compiles the vendored Luau sources (C++17) during the Cargo build, so a C++ compiler (`build-essential` on Debian/Ubuntu) is needed alongside the CMake used for Opus. The compatible build compiles Luau with `zig c++` and links Zig's bundled libc++ statically, so the binary needs no newer libstdc++ than the desktop has.
+
+Build the release with Rust, Zig, and the locked Cargo dependencies available:
 
 ```sh
 scripts/build_linux_compatible.sh

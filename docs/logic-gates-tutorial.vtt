@@ -1,0 +1,61 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:02.200
+A vault that opens while both levers are on.
+
+00:00:02.200 --> 00:00:05.500
+Each lever flips a counter between 0 and 1.
+
+00:00:05.500 --> 00:00:09.780
+A watcher sends signal 1 whenever its counter changes.
+
+00:00:09.780 --> 00:00:18.750
+Gates holds ready-made logic. Hover a tile to see what it does.
+
+00:00:18.750 --> 00:00:24.020
+Place an AND between the watchers and the wall.
+
+00:00:24.020 --> 00:00:31.440
+Set Do to Hide group, on group 1: the wall.
+
+00:00:31.440 --> 00:00:36.660
+Two conditions: counter 1 is on and counter 2 is on.
+
+00:00:36.660 --> 00:00:42.500
+Combine is All (AND): it acts only when both hold.
+
+00:00:42.500 --> 00:00:45.080
+Otherwise send a signal makes an if/else: a shut gate signals instead.
+
+00:00:45.080 --> 00:00:48.260
+Use signal 2, the receiver that closes the vault.
+
+00:00:48.260 --> 00:00:52.820
+A receiver on signal 2 shows the wall again.
+
+00:00:52.820 --> 00:00:56.350
+P runs the logic right in the editor.
+
+00:00:56.350 --> 00:00:58.910
+Click a counter to change it without driving.
+
+00:00:58.910 --> 00:01:05.950
+Both on: the wall hides, the alarm speaks and the lights cycle.
+
+00:01:05.950 --> 00:01:10.690
+Right-click clears a counter. The gate shuts and the wall comes back.
+
+00:01:10.690 --> 00:01:22.260
+Combine changes the gate. Just one (XOR) opens for exactly one lever.
+
+00:01:22.260 --> 00:01:28.340
+One lever on: open.
+
+00:01:28.340 --> 00:01:32.520
+Both on: shut again.
+
+00:01:32.520 --> 00:01:37.590
+Check looks the logic over too. This vault has nothing to fix.
+
+00:01:37.590 --> 00:01:41.633
+The written tutorial builds the whole vault, step by step.

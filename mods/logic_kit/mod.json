@@ -2,8 +2,8 @@
   "api_version": 2,
   "id": "logic_kit",
   "name": "Logic Kit",
-  "version": "1.0",
+  "version": "1.1",
   "author": "Tank Yard",
-  "description": "Arena Workshop tools that wire map logic for you: switch doors, countdowns and sequences, plus a check for signal loops.",
+  "description": "Arena Workshop tools that wire map logic for you: switch doors, lever banks, countdowns and sequences, plus a check for counters nothing reads.",
   "editor": ["tools.lua"]
 }

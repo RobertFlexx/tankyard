@@ -1,4 +1,4 @@
-//! The dock under the canvas: the three modes, the build palette, the edit
+//! The dock under the canvas: tool modes, the build palette, the edit
 //! buttons, delete tools and view switches.
 use super::{Editor, Layout, Mode, brushes, shift};
 use crate::{settings::Settings, ui::*};
@@ -44,11 +44,12 @@ impl Editor {
         draw_line(r.x, r.y, r.right(), r.y, 1.5, line_color());
         let pad = 10. * s;
         let modes = Rect::new(r.x + pad, r.y + pad, 104. * s, r.h - pad * 2.);
-        let h = (modes.h - 10. * s) / 3.;
+        let h = (modes.h - 15. * s) / 4.;
         for (i, (title, mode)) in [
             ("Build", Mode::Build),
             ("Edit", Mode::Edit),
             ("Delete", Mode::Delete),
+            ("Pan", Mode::Pan),
         ]
         .into_iter()
         .enumerate()
@@ -93,7 +94,76 @@ impl Editor {
             Mode::Build => self.palette(content, settings, s),
             Mode::Edit => self.edit_buttons(content, s),
             Mode::Delete => self.delete_tools(content, s),
+            Mode::Pan => self.navigation_controls(content, layout.canvas.center(), s),
         }
+    }
+
+    fn navigation_controls(&mut self, r: Rect, center: Vec2, s: f32) {
+        let h = ((r.h - 12. * s) / 3.).min(32. * s);
+        let half = (r.w - 10. * s) * 0.5;
+        let scroll = self.prefs.scroll;
+        if small_button(
+            Rect::new(r.x, r.y, half, h),
+            &format!("Scroll: {}   \u{203a}", scroll.name()),
+            s * 0.72,
+        ) {
+            let modes = super::panels::ScrollMode::ALL;
+            let at = modes.iter().position(|&m| m == scroll).unwrap_or(0);
+            let step = if shift() { modes.len() - 1 } else { 1 };
+            self.prefs.scroll = modes[(at + step) % modes.len()];
+        }
+        if small_button(
+            Rect::new(r.x + half + 10. * s, r.y, half, h),
+            "100% zoom",
+            s * 0.72,
+        ) {
+            self.zoom_at(center, 1. / self.view.zoom);
+        }
+        for (index, (title, value)) in [
+            ("Pan", &mut self.prefs.pan_speed),
+            ("Zoom", &mut self.prefs.zoom_speed),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let x = r.x + index as f32 * (half + 10. * s);
+            let y = r.y + h + 6. * s;
+            label(
+                &format!("{title} {:.2}×", *value),
+                x,
+                y + h * 0.7,
+                12. * s,
+                text_color(),
+            );
+            let button_w = (half * 0.22).min(40. * s);
+            if small_button(
+                Rect::new(x + half - button_w * 2. - 4. * s, y, button_w, h),
+                "−",
+                s * 0.7,
+            ) {
+                *value = (*value - 0.25).max(0.25);
+            }
+            if small_button(Rect::new(x + half - button_w, y, button_w, h), "+", s * 0.7) {
+                *value = (*value + 0.25).min(3.);
+            }
+        }
+        label(
+            match self.prefs.scroll {
+                super::panels::ScrollMode::Auto => {
+                    "Trackpads pan and wheels zoom. Ctrl/Cmd-scroll always zooms."
+                }
+                super::panels::ScrollMode::Trackpad => {
+                    "Two-finger scroll pans. Ctrl/Cmd-scroll zooms. Shift-scroll pans across."
+                }
+                super::panels::ScrollMode::Mouse => {
+                    "Scroll zooms. Drag with Pan or hold Space to move the view."
+                }
+            },
+            r.x,
+            r.y + (h + 6. * s) * 2. + h * 0.7,
+            11. * s,
+            muted_color(),
+        );
     }
     fn switches(&mut self, r: Rect, canvas_center: Vec2, s: f32) {
         let h = (r.h - 15. * s) / 4.;
@@ -271,7 +341,8 @@ impl Editor {
             }
         }
         if let Some(i) = hovered
-            && let Some(hint) = brush_hint(self.category, i)
+            && let hint = self.brushes[self.category][i].hint
+            && !hint.is_empty()
         {
             let size = 12. * s;
             let width = label_width(hint, size) + 16. * s;
@@ -508,40 +579,4 @@ pub fn next_grid(grid: f32, back: bool) -> f32 {
     } else {
         (index + 1) % GRIDS.len()
     }]
-}
-
-fn brush_hint(category: usize, index: usize) -> Option<&'static str> {
-    Some(match (category, index) {
-        (1, 0) => "Faster driving",
-        (1, 1) => "Slower driving",
-        (1, 2) => "Heals tanks standing on it",
-        (1, 3) => "Hurts tanks standing on it",
-        (1, 4) => "Less damage taken",
-        (1, 5) => "Carries tanks in its direction",
-        (1, 6) => "Sends tanks to its exit marker",
-        (3, 0) => "Toggles a group on a repeating timer",
-        (3, 1) => "Shows a group while tanks cross it",
-        (3, 2) => "Hides a group when a tank leaves",
-        (3, 3) => "Announces text when the round starts",
-        (3, 4) => "Sends a signal when entered",
-        (3, 5) => "Acts when a signal arrives",
-        (3, 6) => "Adds one to a counter when entered",
-        (3, 7) => "Acts when a counter reaches a value",
-        (3, 8) => "Drops shapes in its area on a timer",
-        (3, 9) => "Brings a boss partway through the round",
-        (3, 10) => "Toggles a group half of the time",
-        (3, 11) => "Counts each second a tank holds it",
-        (3, 12) => "Gives points to the first tank here",
-        (3, 13) => "Repairs tanks, then rests 15 seconds",
-        (3, 14) => "Hurts tanks a moment after they step on",
-        (3, 15) => "Sends one of three signals at random",
-        (3, 16) => "Sets a counter back to 0 when emptied",
-        (3, 17) => "Passes a signal on only while counter 1 is 1 or more",
-        (3, 18) => "Flips counter 1 between 0 and 1 when entered",
-        (3, 19) => "Raises a script event for script packs",
-        (4, 0) => "Where tanks enter the arena",
-        (4, 3) | (4, 4) => "A team's home base",
-        (4, 5) => "A point for objective modes",
-        _ => return None,
-    })
 }

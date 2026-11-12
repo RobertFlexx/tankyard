@@ -2,15 +2,15 @@
 
 Players can join `play.example.com` without remembering a port. Tank Yard runs the match and its WebSocket listener in one process; Caddy supplies HTTPS. You can use a subdomain of any domain you own, or the domain itself. You do not need to buy or operate a top-level domain.
 
-Use Tank Yard 0.15 or later and match the client and server versions. Map logic and the new pads use **protocol 25**, which cannot exchange snapshots with 0.14's protocol 24. Upgrade the server and players together.
+Use client and server releases with compatible protocols. Tank Yard 0.15.x uses **protocol 25**, which cannot exchange snapshots with 0.14's protocol 24. Upgrade older clients and servers together. Maps using the additional 0.16 gate tools need a 0.16 server; see the [workshop guide](map-editor.md#files-and-deployment).
 
 ## First, make a local server work
 
-Download the server for your platform from a release, or build it:
+Install the server as [Hosting](hosting.md#a-dedicated-server) describes, then write a settings file:
 
 ```sh
-cargo build --locked --release -p tankyard-server --bin tankyard-server
-./target/release/tankyard-server --write-config my-server.toml
+curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh | sh -s -- --server
+tankyard-server --write-config my-server.toml
 ```
 
 Edit the top-level settings in `my-server.toml`, before `[world]`:
@@ -27,12 +27,12 @@ adaptive_bots = true
 snapshot_rate = 20
 ```
 
-Keep the generated `[world]` section. On Windows, run `tankyard-server.exe` instead of the Unix path. In **Host server → Community server**, the **Domain listener** toggle enables the same loopback listener on TCP 8080.
+Keep the generated `[world]` section. On Windows, run `.\tankyard-server.exe` in the extracted release folder instead. In **Host server → Community server**, the **Domain listener** toggle enables the same loopback listener on TCP 8080.
 
 Start it from the directory containing the config:
 
 ```sh
-./target/release/tankyard-server --config my-server.toml
+tankyard-server --config my-server.toml
 ```
 
 On that machine, join `127.0.0.1:5000` to test UDP, then `ws://127.0.0.1:8080` to test the WebSocket listener. Both reach the same arenas. Leave the server open during the next steps. `--websocket 127.0.0.1:8080` also works as a command-line override; no separate `tankyard-relay` process is needed.
@@ -117,7 +117,7 @@ Do this only on your own host and include `--password` if required. The load too
 
 ## Keep a community server running
 
-Use the [systemd examples and capacity guidance](hosting.md#scaling-arenas) for an always-on Linux host. On other systems, use a service manager that restarts the process on failure. Keep the config, bans, audit log and mod packs in persistent storage; back them up before updates.
+Use the [systemd service](hosting.md#run-it-as-a-service) and the [capacity guidance](hosting.md#scaling-arenas) for an always-on Linux host. On other systems, use a service manager that restarts the process on failure. Keep the config, bans, audit log and mod packs in persistent storage; back them up before updates.
 
 Start with small arenas, adaptive bots and 20 snapshots/second. Watch the console's `status` timings and dropped ticks before raising limits. On multicore hosts, occupied arenas can step concurrently; one arena still runs on one simulation thread. A public server directory and account service are separate integrations, so publish your join address and matching game version to your community yourself.
 

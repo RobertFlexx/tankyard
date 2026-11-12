@@ -679,8 +679,18 @@ impl Document {
             mask |= MapDef::group_bit(group);
         }
         for trigger in &m.triggers {
-            if trigger.action.targets_group() {
+            if trigger.action.targets_group()
+                || (trigger.action == TriggerAction::Reset && trigger.group > 0)
+            {
                 mask |= MapDef::group_bit(trigger.group);
+            }
+            if matches!(trigger.when, TriggerWhen::Shown | TriggerWhen::Hidden) {
+                mask |= MapDef::group_bit(trigger.source);
+            }
+            for test in trigger.conditions() {
+                if !test.kind.compares() {
+                    mask |= MapDef::group_bit(test.index);
+                }
             }
         }
         mask
@@ -689,6 +699,20 @@ impl Document {
     pub fn next_free_group(&self) -> Option<u8> {
         let used = self.used_groups();
         (1..=MAP_GROUPS).find(|&group| MapDef::group_bit(group) & used == 0)
+    }
+    /// The lowest signal channel no trigger sends or listens on.
+    pub fn next_free_channel(&self) -> Option<u8> {
+        let mut used = 0u32;
+        for t in &self.map.triggers {
+            if t.when == TriggerWhen::Signal {
+                used |= MapDef::group_bit(t.source);
+            }
+            for channel in t.action.channels(t.group, t.amount) {
+                used |= MapDef::group_bit(channel);
+            }
+            used |= MapDef::group_bit(t.otherwise);
+        }
+        (1..=MAP_GROUPS).find(|&channel| MapDef::group_bit(channel) & used == 0)
     }
     /// Every object in `group`.
     pub fn in_group(&self, group: u8) -> Vec<Key> {
@@ -737,17 +761,22 @@ impl Document {
                 );
             }
             let senders = |channel: u8| {
-                m.triggers.iter().any(|t| match t.action {
-                    TriggerAction::Signal => t.group == channel,
-                    TriggerAction::Random => (i32::from(t.group)..i32::from(t.group) + t.amount)
-                        .contains(&i32::from(channel)),
-                    _ => false,
+                m.triggers.iter().any(|t| {
+                    t.action.channels(t.group, t.amount).contains(&channel)
+                        || (t.otherwise == channel && t.only_if.is_some())
                 })
             };
             let counted = |counter: u8| {
                 m.triggers
                     .iter()
                     .any(|t| t.action.targets_counter() && t.group == counter)
+            };
+            // Groups that can change during a round: what triggers show, hide
+            // or toggle. Scripts can too, so these stay notes.
+            let switched = |group: u8| {
+                m.triggers
+                    .iter()
+                    .any(|t| t.action.targets_group() && t.group == group)
             };
             match trigger.when {
                 TriggerWhen::Signal if !senders(trigger.source) => note(
@@ -758,7 +787,7 @@ impl Document {
                     ),
                     false,
                 ),
-                TriggerWhen::Counter if !counted(trigger.source) => note(
+                TriggerWhen::Counter | TriggerWhen::Changed if !counted(trigger.source) => note(
                     key,
                     format!(
                         "{name} watches counter {}, which nothing changes.",
@@ -766,34 +795,86 @@ impl Document {
                     ),
                     false,
                 ),
+                TriggerWhen::Shown | TriggerWhen::Hidden if !switched(trigger.source) => note(
+                    key,
+                    format!(
+                        "{name} watches group {}, which nothing shows or hides.",
+                        trigger.source
+                    ),
+                    false,
+                ),
                 _ => {}
             }
-            if let Some(test) = &trigger.only_if
-                && test.kind == TestKind::Counter
-            {
-                let other = (test.against != test.index).then_some(test.against);
-                for counter in [Some(test.index), other].into_iter().flatten() {
-                    if counter > 0 && !counted(counter) {
-                        note(
-                            key,
-                            format!(
-                                "{name} checks counter {counter}, which nothing changes, so its gate never moves."
-                            ),
-                            false,
-                        );
+            let mut quiet = Vec::new();
+            for test in trigger.conditions() {
+                match test.kind {
+                    TestKind::Counter => quiet.extend(
+                        [test.index, test.against]
+                            .into_iter()
+                            .filter(|&c| c > 0 && !counted(c))
+                            .map(|c| format!("counter {c}, which nothing changes")),
+                    ),
+                    TestKind::Inside | TestKind::Time if test.against > 0 => {
+                        if !counted(test.against) {
+                            quiet.push(format!("counter {}, which nothing changes", test.against));
+                        }
                     }
+                    TestKind::Shown | TestKind::Hidden if !switched(test.index) => quiet.push(
+                        format!("group {}, which nothing shows or hides", test.index),
+                    ),
+                    _ => {}
                 }
             }
-            if trigger.action == TriggerAction::Signal
-                && !m
-                    .triggers
+            quiet.dedup();
+            for what in quiet {
+                note(
+                    key,
+                    format!("{name} checks {what}, so that condition never moves."),
+                    false,
+                );
+            }
+            let receives = |channel: u8| {
+                m.triggers
                     .iter()
-                    .any(|t| t.when == TriggerWhen::Signal && t.source == trigger.group)
+                    .any(|t| t.when == TriggerWhen::Signal && t.source == channel)
+            };
+            let mut unheard: Vec<u8> = trigger
+                .action
+                .channels(trigger.group, trigger.amount)
+                .filter(|&channel| !receives(channel))
+                .collect();
+            if trigger.otherwise > 0 && trigger.only_if.is_some() && !receives(trigger.otherwise) {
+                unheard.push(trigger.otherwise);
+            }
+            unheard.sort_unstable();
+            unheard.dedup();
+            match unheard.as_slice() {
+                [] => {}
+                [one] => note(
+                    key,
+                    format!("{name} sends signal {one}, which nothing receives."),
+                    false,
+                ),
+                many => note(
+                    key,
+                    format!(
+                        "{name} sends signals {}, which nothing receives.",
+                        many.iter()
+                            .map(u8::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    false,
+                ),
+            }
+            if trigger.action == TriggerAction::Reset
+                && trigger.group > 0
+                && !m.triggers.iter().any(|t| t.member == trigger.group)
             {
                 note(
                     key,
                     format!(
-                        "{name} sends signal {}, which nothing receives.",
+                        "{name} resets group {}, which has no triggers.",
                         trigger.group
                     ),
                     false,
@@ -809,6 +890,17 @@ impl Document {
                     false,
                 );
             }
+        }
+        if let Some(cycle) = signal_loop(&m.triggers) {
+            let names: Vec<String> = cycle.iter().map(|i| (i + 1).to_string()).collect();
+            note(
+                Some(Key::Trigger(cycle[0])),
+                format!(
+                    "Triggers {} signal each other with no delay, gate or chance, so a round cuts the chain short each time it starts.",
+                    names.join(", ")
+                ),
+                false,
+            );
         }
         for (index, zone) in m.zones.iter().enumerate() {
             if zone.kind == ZoneKind::Portal && !portal_exit_clear(m, zone.exit) {
@@ -979,6 +1071,103 @@ impl Document {
     }
 }
 
+/// How one trigger reaches another, for the canvas arrows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Link {
+    /// A signal it sends wakes the other.
+    Signal,
+    /// Its otherwise signal, sent while its gate is shut, wakes the other.
+    Otherwise,
+    /// It changes a counter the other watches or checks.
+    Counter,
+    /// It switches a group the other watches or checks.
+    Group,
+    /// It resets the other.
+    Reset,
+}
+
+/// Whether, and how, `from` acting can affect `to`.
+pub fn link(from: &MapTrigger, to: &MapTrigger) -> Option<Link> {
+    let reads_counter = |counter: u8| {
+        (matches!(to.when, TriggerWhen::Counter | TriggerWhen::Changed) && to.source == counter)
+            || to.conditions().any(|test| {
+                (test.kind == TestKind::Counter && test.index == counter)
+                    || (test.kind.compares() && test.against == counter)
+            })
+    };
+    let reads_group = |group: u8| {
+        (matches!(to.when, TriggerWhen::Shown | TriggerWhen::Hidden) && to.source == group)
+            || to
+                .conditions()
+                .any(|test| !test.kind.compares() && test.index == group)
+    };
+    let listens = |channel: u8| to.when == TriggerWhen::Signal && to.source == channel;
+    if from.action.channels(from.group, from.amount).any(listens) {
+        Some(Link::Signal)
+    } else if from.action.targets_counter() && reads_counter(from.group) {
+        Some(Link::Counter)
+    } else if from.action.targets_group() && reads_group(from.group) {
+        Some(Link::Group)
+    } else if from.action == TriggerAction::Reset && (from.group == 0 || to.member == from.group) {
+        Some(Link::Reset)
+    } else if from.otherwise > 0 && from.only_if.is_some() && listens(from.otherwise) {
+        Some(Link::Otherwise)
+    } else {
+        None
+    }
+}
+
+/// Triggers that signal one another in a ring with nothing to stop them, by
+/// index, when there are any: no delay, gate or chance, and not once per round.
+fn signal_loop(triggers: &[MapTrigger]) -> Option<Vec<usize>> {
+    let free = |t: &MapTrigger| t.delay == 0. && t.chance == 100 && !t.once && t.only_if.is_none();
+    let next: Vec<Vec<usize>> = triggers
+        .iter()
+        .map(|t| {
+            if !free(t) {
+                return Vec::new();
+            }
+            let channels = t.action.channels(t.group, t.amount);
+            triggers
+                .iter()
+                .enumerate()
+                .filter(|(_, other)| {
+                    other.when == TriggerWhen::Signal
+                        && free(other)
+                        && channels.contains(&other.source)
+                })
+                .map(|(i, _)| i)
+                .collect()
+        })
+        .collect();
+    // Depth-first search; 0 unvisited, 1 on the path, 2 finished.
+    fn visit(at: usize, next: &[Vec<usize>], state: &mut [u8], path: &mut Vec<usize>) -> bool {
+        state[at] = 1;
+        path.push(at);
+        for &to in &next[at] {
+            if state[to] == 1 {
+                let start = path.iter().position(|&i| i == to).unwrap_or(0);
+                path.drain(..start);
+                return true;
+            }
+            if state[to] == 0 && visit(to, next, state, path) {
+                return true;
+            }
+        }
+        path.pop();
+        state[at] = 2;
+        false
+    }
+    let mut state = vec![0; triggers.len()];
+    for start in 0..triggers.len() {
+        let mut path = Vec::new();
+        if state[start] == 0 && visit(start, &next, &mut state, &mut path) {
+            path.sort_unstable();
+            return Some(path);
+        }
+    }
+    None
+}
 fn sentence(text: &str) -> String {
     let mut out = text.trim().to_owned();
     if let Some(first) = out.get(..1) {
@@ -996,10 +1185,15 @@ fn seconds(value: f32) -> String {
         format!("{value:.1} s")
     }
 }
+/// The boss a Defeated trigger waits for, or `None` for any boss.
+pub fn defeated_boss(t: &MapTrigger) -> Option<&'static str> {
+    usize::from(t.source)
+        .checked_sub(1)
+        .and_then(|i| BOSS_IDS.get(i).copied())
+}
 fn boss_name(id: &str) -> &'static str {
     tankyard_core::BossKind::from_id(id).map_or("unknown boss", tankyard_core::BossKind::name)
 }
-/// A trigger in one plain sentence, for the inspector and logic list.
 /// A valid map id made from a display name: "Switch Yard 2" → "switch_yard_2".
 pub fn map_id(name: &str) -> String {
     let mut id = String::new();
@@ -1019,6 +1213,7 @@ pub fn map_id(name: &str) -> String {
     }
 }
 
+/// A trigger in one plain sentence, for the inspector and logic list.
 pub fn describe_trigger(t: &MapTrigger) -> String {
     let who = match t.who {
         TriggerWho::Anyone => "a tank",
@@ -1053,9 +1248,17 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         }
         TriggerWhen::Cleared => format!("When the last {}{team} leaves", &who[2..]),
         TriggerWhen::Destroyed => format!("When {who}{team} is destroyed here"),
+        TriggerWhen::Changed => format!("When counter {} changes", t.source),
+        TriggerWhen::Shown => format!("When group {} is shown", t.source),
+        TriggerWhen::Hidden => format!("When group {} is hidden", t.source),
+        TriggerWhen::Defeated => match defeated_boss(t) {
+            Some(id) => format!("When the {} is defeated", boss_name(id)),
+            None => "When a boss is defeated".into(),
+        },
     };
-    if let Some(test) = &t.only_if {
-        text += &format!(", if {}", describe_test(test));
+    if let Some(gate) = describe_gate(t) {
+        text += ", ";
+        text += &gate;
     }
     if t.chance < 100 {
         text += &format!(", {}% of the time", t.chance);
@@ -1084,6 +1287,13 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         TriggerAction::Award => format!("award {} points here", t.amount),
         TriggerAction::Calculate => describe_math(t),
         TriggerAction::Script => format!("raise script event \u{201c}{}\u{201d}", t.text.trim()),
+        TriggerAction::Sequence => format!(
+            "send signals {} to {} in turn",
+            t.group,
+            i32::from(t.group) + t.amount - 1
+        ),
+        TriggerAction::Reset if t.group == 0 => "start every trigger afresh".into(),
+        TriggerAction::Reset => format!("start group {}'s triggers afresh", t.group),
     };
     if t.action.targets_group() && t.duration > 0. {
         text += &format!(" for {}", seconds(t.duration));
@@ -1092,6 +1302,9 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         text += &format!(", {} later", seconds(t.delay));
     }
     text.push('.');
+    if t.otherwise > 0 && t.only_if.is_some() {
+        text += &format!(" Otherwise sends signal {}.", t.otherwise);
+    }
     if t.when.watches_area() && t.when != TriggerWhen::Occupied && t.seconds > 0. {
         text += &format!(" Rests {} after acting.", seconds(t.seconds));
     }
@@ -1103,35 +1316,70 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
     }
     text
 }
-/// A gate in words: "counter 1 is at least 3".
+/// A condition in words: "counter 1 is at least 3".
 pub fn describe_test(test: &TriggerTest) -> String {
+    let other = if test.against > 0 {
+        format!("counter {}", test.against)
+    } else {
+        test.value.to_string()
+    };
+    let words = test.compare.words();
     match test.kind {
-        TestKind::Counter if test.against > 0 => format!(
-            "counter {} {} counter {}",
-            test.index,
-            test.compare.words(),
-            test.against
-        ),
-        TestKind::Counter => format!(
-            "counter {} {} {}",
-            test.index,
-            test.compare.words(),
-            test.value
-        ),
+        TestKind::Counter => format!("counter {} {words} {other}", test.index),
         TestKind::Shown => format!("group {} is shown", test.index),
         TestKind::Hidden => format!("group {} is hidden", test.index),
+        TestKind::Inside => format!("the tank count inside {words} {other}"),
+        TestKind::Time if test.against > 0 => format!("the round time {words} {other}"),
+        TestKind::Time => format!("the round time {words} {other} s"),
     }
 }
-/// A gate in a few characters: "#1≥3", "G4 on".
+/// The gate in words, starting "if" or "unless", when there is one.
+pub fn describe_gate(t: &MapTrigger) -> Option<String> {
+    let tests: Vec<String> = t.conditions().map(describe_test).collect();
+    let list = |joint: &str| match tests.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} {joint} {last}", rest.join(", ")),
+    };
+    Some(match (t.gate, tests.len()) {
+        (_, 0) => return None,
+        (GateMode::NotAll | GateMode::NoneOf, 1) => format!("unless {}", tests[0]),
+        (GateMode::All | GateMode::Any | GateMode::One, 1) => format!("if {}", tests[0]),
+        (GateMode::All, _) => format!("if {}", list("and")),
+        (GateMode::Any, _) => format!("if {}", list("or")),
+        (GateMode::NotAll, _) => format!("unless {}", list("and")),
+        (GateMode::NoneOf, _) => format!("unless {}", list("or")),
+        (GateMode::One, _) => format!("if just one of {} holds", list("or")),
+    })
+}
+/// A condition in a few characters: "#1≥3", "G4 on".
 fn test_tag(test: &TriggerTest) -> String {
+    let other = if test.against > 0 {
+        format!("#{}", test.against)
+    } else {
+        test.value.to_string()
+    };
+    let symbol = test.compare.symbol();
     match test.kind {
-        TestKind::Counter if test.against > 0 => {
-            format!("#{}{}#{}", test.index, test.compare.symbol(), test.against)
-        }
-        TestKind::Counter => format!("#{}{}{}", test.index, test.compare.symbol(), test.value),
+        TestKind::Counter => format!("#{}{symbol}{other}", test.index),
         TestKind::Shown => format!("G{} on", test.index),
         TestKind::Hidden => format!("G{} off", test.index),
+        TestKind::Inside => format!("in{symbol}{other}"),
+        TestKind::Time if test.against > 0 => format!("t{symbol}{other}"),
+        TestKind::Time => format!("t{symbol}{other}s"),
     }
+}
+/// The gate in a few characters: "#1≥3", "AND(#1≥3, G4 on)", or with
+/// `compact`, "AND of 2".
+fn gate_tag(t: &MapTrigger, compact: bool) -> Option<String> {
+    let tests: Vec<String> = t.conditions().map(test_tag).collect();
+    Some(match (t.gate, tests.len()) {
+        (_, 0) => return None,
+        (GateMode::NotAll | GateMode::NoneOf, 1) => format!("not {}", tests[0]),
+        (_, 1) => tests[0].clone(),
+        (gate, n) if compact => format!("{} of {n}", gate.short()),
+        (gate, _) => format!("{}({})", gate.short(), tests.join(", ")),
+    })
 }
 /// What Calculate does, in words.
 fn describe_math(t: &MapTrigger) -> String {
@@ -1156,8 +1404,16 @@ fn describe_math(t: &MapTrigger) -> String {
         MathOp::Flip => format!("flip counter {c} between 0 and 1"),
     }
 }
-/// A trigger in a few characters, for its badge on the canvas.
+/// A trigger in a few characters, for lists.
 pub fn trigger_tag(t: &MapTrigger) -> String {
+    tag(t, false)
+}
+/// A trigger in fewer characters, for its badge on the canvas: a gate of
+/// several conditions shows only how many and how they combine.
+pub fn trigger_badge_tag(t: &MapTrigger) -> String {
+    tag(t, true)
+}
+fn tag(t: &MapTrigger, compact: bool) -> String {
     let when = match t.when {
         TriggerWhen::Every => seconds(t.seconds).replace(' ', ""),
         TriggerWhen::Enter => "Enter".into(),
@@ -1168,6 +1424,10 @@ pub fn trigger_tag(t: &MapTrigger) -> String {
         TriggerWhen::Occupied => format!("Inside {}", seconds(t.seconds).replace(' ', "")),
         TriggerWhen::Cleared => "Empty".into(),
         TriggerWhen::Destroyed => "Destroy".into(),
+        TriggerWhen::Changed => format!("#{} changes", t.source),
+        TriggerWhen::Shown => format!("G{} shown", t.source),
+        TriggerWhen::Hidden => format!("G{} hidden", t.source),
+        TriggerWhen::Defeated => "Boss down".into(),
     };
     let action = match t.action {
         TriggerAction::Toggle => format!("Toggle {}", t.group),
@@ -1207,11 +1467,22 @@ pub fn trigger_tag(t: &MapTrigger) -> String {
             }
         }
         TriggerAction::Script => format!("Script {}", t.text.trim()),
+        TriggerAction::Sequence => format!(
+            "Seq {}\u{2013}{}",
+            t.group,
+            i32::from(t.group) + t.amount - 1
+        ),
+        TriggerAction::Reset if t.group == 0 => "Reset all".into(),
+        TriggerAction::Reset => format!("Reset G{}", t.group),
     };
-    match &t.only_if {
-        Some(test) => format!("{when} if {} \u{2192} {action}", test_tag(test)),
+    let mut tag = match gate_tag(t, compact) {
+        Some(gate) => format!("{when} if {gate} \u{2192} {action}"),
         None => format!("{when} \u{2192} {action}"),
+    };
+    if t.otherwise > 0 && t.only_if.is_some() {
+        tag += &format!(" else Send {}", t.otherwise);
     }
+    tag
 }
 
 #[cfg(test)]
@@ -1358,6 +1629,37 @@ mod tests {
         assert_eq!(doc.next_free_group(), Some(4));
     }
     #[test]
+    fn free_channels_skip_listeners_senders_and_otherwise() {
+        let mut doc = Document::default();
+        doc.insert(Object::Trigger(MapTrigger {
+            when: TriggerWhen::Signal,
+            source: 1,
+            action: TriggerAction::Hide,
+            group: 2,
+            otherwise: 3,
+            ..Default::default()
+        }));
+        assert_eq!(doc.next_free_channel(), Some(2));
+        doc.insert(Object::Trigger(MapTrigger {
+            action: TriggerAction::Sequence,
+            group: 2,
+            amount: 3,
+            ..Default::default()
+        }));
+        assert_eq!(doc.next_free_channel(), Some(5));
+        doc.insert(Object::Trigger(MapTrigger {
+            action: TriggerAction::Sequence,
+            group: 1,
+            amount: i32::from(MAP_GROUPS),
+            ..Default::default()
+        }));
+        assert_eq!(
+            doc.next_free_channel(),
+            None,
+            "never reuse an occupied channel"
+        );
+    }
+    #[test]
     fn checks_point_at_the_trigger_at_fault() {
         let mut doc = Document::default();
         doc.insert(Object::Trigger(MapTrigger {
@@ -1406,5 +1708,151 @@ mod tests {
              1.5 s later. Once per round."
         );
         assert_eq!(trigger_tag(&t), "Enter \u{2192} Show 4");
+    }
+    fn counter_at_least(index: u8, value: i32) -> TriggerTest {
+        TriggerTest {
+            index,
+            value,
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn gates_read_as_logic_in_sentences_and_badges() {
+        let mut t = MapTrigger {
+            when: TriggerWhen::Signal,
+            action: TriggerAction::Signal,
+            source: 1,
+            group: 2,
+            otherwise: 3,
+            gate: GateMode::Any,
+            ..Default::default()
+        };
+        t.set_conditions(vec![
+            counter_at_least(1, 1),
+            TriggerTest {
+                kind: TestKind::Hidden,
+                index: 4,
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(
+            describe_trigger(&t),
+            "On signal 1, if counter 1 is at least 1 or group 4 is hidden: send signal 2. \
+             Otherwise sends signal 3."
+        );
+        assert_eq!(
+            trigger_tag(&t),
+            "Signal 1 if OR(#1\u{2265}1, G4 off) \u{2192} Send 2 else Send 3"
+        );
+        t.gate = GateMode::NoneOf;
+        t.set_conditions(vec![TriggerTest {
+            kind: TestKind::Time,
+            compare: Compare::Below,
+            value: 30,
+            ..Default::default()
+        }]);
+        assert!(describe_trigger(&t).contains("unless the round time is below 30 s"));
+        let watcher = MapTrigger {
+            when: TriggerWhen::Defeated,
+            source: 2,
+            action: TriggerAction::Sequence,
+            group: 4,
+            amount: 3,
+            ..Default::default()
+        };
+        assert_eq!(
+            describe_trigger(&watcher),
+            "When the Prism is defeated: send signals 4 to 6 in turn."
+        );
+    }
+    #[test]
+    fn links_follow_signals_counters_groups_and_resets() {
+        let sender = MapTrigger {
+            action: TriggerAction::Sequence,
+            group: 2,
+            amount: 3,
+            ..Default::default()
+        };
+        let listener = MapTrigger {
+            when: TriggerWhen::Signal,
+            source: 4,
+            ..Default::default()
+        };
+        assert_eq!(link(&sender, &listener), Some(Link::Signal));
+        let counting = MapTrigger {
+            action: TriggerAction::Calculate,
+            group: 5,
+            ..Default::default()
+        };
+        let mut gated = MapTrigger::default();
+        gated.set_conditions(vec![TriggerTest {
+            against: 5,
+            kind: TestKind::Inside,
+            ..Default::default()
+        }]);
+        assert_eq!(link(&counting, &gated), Some(Link::Counter));
+        let hiding = MapTrigger {
+            action: TriggerAction::Hide,
+            group: 6,
+            ..Default::default()
+        };
+        let alarm = MapTrigger {
+            when: TriggerWhen::Hidden,
+            source: 6,
+            ..Default::default()
+        };
+        assert_eq!(link(&hiding, &alarm), Some(Link::Group));
+        let reset = MapTrigger {
+            action: TriggerAction::Reset,
+            group: 7,
+            ..Default::default()
+        };
+        let member = MapTrigger {
+            member: 7,
+            ..Default::default()
+        };
+        assert_eq!(link(&reset, &member), Some(Link::Reset));
+        assert_eq!(link(&member, &reset), None);
+    }
+    #[test]
+    fn checks_find_unheard_channels_quiet_groups_and_loops() {
+        let mut doc = Document::default();
+        // 1 and 2 signal each other with nothing in between.
+        for (source, group) in [(1, 2), (2, 1)] {
+            doc.insert(Object::Trigger(MapTrigger {
+                when: TriggerWhen::Signal,
+                action: TriggerAction::Signal,
+                source,
+                group,
+                ..Default::default()
+            }));
+        }
+        doc.insert(Object::Trigger(MapTrigger {
+            action: TriggerAction::Sequence,
+            group: 1,
+            amount: 3,
+            ..Default::default()
+        }));
+        doc.insert(Object::Trigger(MapTrigger {
+            when: TriggerWhen::Shown,
+            source: 9,
+            action: TriggerAction::Announce,
+            text: "Open".into(),
+            ..Default::default()
+        }));
+        let problems = doc.problems();
+        let says = |text: &str| problems.iter().any(|p| p.text.contains(text));
+        assert!(says("Triggers 1, 2 signal each other"), "{problems:#?}");
+        assert!(
+            says("sends signal 3, which nothing receives"),
+            "{problems:#?}"
+        );
+        assert!(says("watches group 9, which nothing shows or hides"));
+        // A delay breaks the loop.
+        if let Some(Object::Trigger(mut first)) = doc.object(Key::Trigger(0)) {
+            first.delay = 1.;
+            doc.replace(Key::Trigger(0), Object::Trigger(first));
+        }
+        assert!(!doc.problems().iter().any(|p| p.text.contains("each other")));
     }
 }

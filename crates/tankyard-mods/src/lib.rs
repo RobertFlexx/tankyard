@@ -467,6 +467,11 @@ pub enum Effect {
         group: u8,
         shown: bool,
     },
+    /// Start the triggers of map group `group` afresh, as a Reset triggers
+    /// action does; 0 resets every trigger.
+    MapReset {
+        group: u8,
+    },
 }
 /// Widgets one pack may show to one player (or to everyone).
 pub const MAX_HUD_WIDGETS: usize = 16;
@@ -596,6 +601,7 @@ impl Effect {
                         .contains(value)
             }
             Self::MapGroup { group, .. } => (1..=tankyard_content::MAP_GROUPS).contains(group),
+            Self::MapReset { group } => *group <= tankyard_content::MAP_GROUPS,
         };
         if !valid {
             return Err("invalid hook action or class reference".into());

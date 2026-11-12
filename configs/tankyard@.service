@@ -1,3 +1,6 @@
+# One of several Tank Yard arenas on this machine: tankyard@ffa-1 reads
+# /var/lib/tankyard/ffa-1.toml. Give each its own server_id, port, and ban,
+# access and audit files. docs/hosting.md#scaling-arenas explains the setup.
 [Unit]
 Description=Tank Yard arena %i
 After=network-online.target
@@ -7,8 +10,9 @@ Wants=network-online.target
 Type=simple
 User=tankyard
 Group=tankyard
-WorkingDirectory=/opt/tankyard
-ExecStart=/opt/tankyard/target/release/tankyard-server --config /opt/tankyard/configs/%i.toml --no-console
+StateDirectory=tankyard
+WorkingDirectory=/var/lib/tankyard
+ExecStart=/opt/tankyard/tankyard-server --config /var/lib/tankyard/%i.toml --no-console
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=10
@@ -16,7 +20,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/tankyard/configs
 StandardOutput=journal
 StandardError=journal
 

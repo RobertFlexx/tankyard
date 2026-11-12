@@ -776,6 +776,7 @@ fn apply(world: &mut World, actor: EntityId, effect: Effect) {
             LogicInput::SetCounter(counter, value)
         }),
         Effect::MapGroup { group, shown } => world.map_input(LogicInput::Group(group, shown)),
+        Effect::MapReset { group } => world.map_input(LogicInput::Reset(group)),
     }
 }
 

@@ -18,7 +18,7 @@ Bastion verifies the pinned Ed25519 creator identity and each exact signed admin
 
 Signed creator tools deliberately change authoritative rules. God mode, enhanced movement and weapons, unlimited abilities, boss/bot spawning, and safe teleports are permitted creator actions; Bastion does not flag or ban the creator for using them. This permission comes from the verified signing key, not from a client-controlled exemption bit. Normal bounded input still describes intentions; creator commands describe the authorized rule changes. Private servers and nonconsenting community hosts retain their own policy boundary. See [creator administration](creator-administration.md).
 
-Cryptography proves possession of the private key, not the identity of an executable file. A stolen key could authorize another executable. Keep the private creator client and its credential private; signing secrets and creator-client code are excluded from the public repository and release packages. A leak requires revocation and key rotation. Executable hashes or client-reported "genuine binary" flags would not solve this trust problem.
+Cryptography proves possession of the private key, not the identity of an executable file. A stolen key could authorize another executable. Keep staff credential packs and identity seeds private. Private signing credentials are excluded from the public repository and release packages. A leak requires revocation and key rotation. Executable hashes or client-reported "genuine binary" flags would not solve this trust problem.
 
 ## Scope and checks
 
