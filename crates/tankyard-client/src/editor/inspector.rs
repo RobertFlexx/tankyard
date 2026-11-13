@@ -1711,10 +1711,9 @@ impl Editor {
         ) + 26. * s;
         label("Start from a built-in arena", x, y, 15. * s, text_color());
         y += 14. * s;
-        for index in 0..self.templates.len() {
-            let name = &self.templates[index].name;
-            if small_button(Rect::new(x, y, w, 29. * s), name, s * 0.8) {
-                let mut doc = Document::from_map(self.templates[index].clone());
+        for template in &self.templates {
+            if small_button(Rect::new(x, y, w, 29. * s), &template.name, s * 0.8) {
+                let mut doc = Document::from_map(template.clone());
                 request = match doc.bake_procedure() {
                     Ok(()) => {
                         doc.map.id = format!("my_{}", doc.map.id);
