@@ -747,6 +747,10 @@ pub struct MatchState {
     /// Map counters 1 to 8, which labels and announcements can show.
     #[serde(default)]
     pub counters: [i32; tankyard_content::MAP_COUNTERS as usize],
+    /// How map logic is moving, turning and fading groups. Clients replay
+    /// these against the round clock instead of receiving moved geometry.
+    #[serde(default)]
+    pub tweens: Vec<tankyard_content::Tween>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum EventKind {
@@ -792,7 +796,11 @@ pub struct Snapshot {
     pub projectiles: Vec<Projectile>,
     pub targets: Vec<Target>,
     pub bosses: Vec<Boss>,
+    /// Cover where the map places it; map groups move it by `match_state.tweens`.
     pub walls: Vec<Rect>,
+    /// The map group of each wall, sent along with `walls`.
+    #[serde(default)]
+    pub wall_groups: Vec<u8>,
     pub objectives: Vec<Objective>,
     pub match_state: MatchState,
     pub events: Vec<GameEvent>,

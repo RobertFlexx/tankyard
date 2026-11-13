@@ -222,7 +222,7 @@ local px, py = editor.world(map, point)
 
 Use `editor.free_group(map)`, `editor.free_channel(map)` and `editor.free_counter(map)` to find the lowest unused number. They return `nil` when exhausted.
 
-- Groups range from 1 to 32. The helper checks block, zone, decoration and trigger memberships, visibility and Reset triggers actions, On shown and On hidden watchers, group conditions and starting hidden groups.
+- Groups range from 1 to 32. The helper checks block, zone, decoration and trigger memberships, visibility, motion and Reset triggers actions, On shown, On hidden and On arrive watchers, group conditions and starting hidden groups.
 - Signal channels range from 1 to 32. The helper checks signal listeners, signal actions, otherwise channels and the ranges used by Random signal and Sequence actions.
 - Counters range from 1 to 8. The helper checks On counter and On change listeners, Count, Set and Calculate actions, counter operands and every condition's counters.
 

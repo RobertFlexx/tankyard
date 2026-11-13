@@ -660,6 +660,39 @@ editor.check {
     }
 
     #[test]
+    fn free_groups_skip_moving_groups_and_their_watchers() {
+        use tankyard_content::{MapTrigger, TriggerAction, TriggerWhen};
+        const PICK: &str = r#"
+editor.tool {
+  id = "pick",
+  name = "Pick a group",
+  run = function(map, params, ctx)
+    ctx.say(tostring(editor.free_group(map)))
+  end,
+}
+"#;
+        let mut plugins = Plugins::load(&[plugin_pack("pick", PICK)]);
+        assert!(plugins.errors.is_empty(), "{:?}", plugins.errors);
+        let mut map = tankyard_content::builtin_maps().remove(0);
+        map.triggers = vec![
+            MapTrigger {
+                action: TriggerAction::Fade,
+                group: 1,
+                ..Default::default()
+            },
+            MapTrigger {
+                when: TriggerWhen::Arrived,
+                action: TriggerAction::Signal,
+                source: 2,
+                group: 7,
+                ..Default::default()
+            },
+        ];
+        let outcome = plugins.run(0, 0, &map, &[], &Context::default()).unwrap();
+        assert_eq!(outcome.messages, vec!["3".to_owned()]);
+    }
+
+    #[test]
     fn broken_tools_and_runaway_loops_change_nothing() {
         let mut plugins = Plugins::load(&[plugin_pack(
             "broken",

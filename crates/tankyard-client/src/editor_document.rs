@@ -684,7 +684,7 @@ impl Document {
             {
                 mask |= MapDef::group_bit(trigger.group);
             }
-            if matches!(trigger.when, TriggerWhen::Shown | TriggerWhen::Hidden) {
+            if trigger.when.watches_group() {
                 mask |= MapDef::group_bit(trigger.source);
             }
             for test in trigger.conditions() {
@@ -771,12 +771,17 @@ impl Document {
                     .iter()
                     .any(|t| t.action.targets_counter() && t.group == counter)
             };
-            // Groups that can change during a round: what triggers show, hide
-            // or toggle. Scripts can too, so these stay notes.
+            // Groups that can change during a round: what triggers show, hide,
+            // toggle or animate. Scripts can too, so these stay notes.
             let switched = |group: u8| {
                 m.triggers
                     .iter()
-                    .any(|t| t.action.targets_group() && t.group == group)
+                    .any(|t| t.action.switches_group() && t.group == group)
+            };
+            let animated = |group: u8| {
+                m.triggers
+                    .iter()
+                    .any(|t| t.action.animates() && t.group == group)
             };
             match trigger.when {
                 TriggerWhen::Signal if !senders(trigger.source) => note(
@@ -799,6 +804,14 @@ impl Document {
                     key,
                     format!(
                         "{name} watches group {}, which nothing shows or hides.",
+                        trigger.source
+                    ),
+                    false,
+                ),
+                TriggerWhen::Arrived if !animated(trigger.source) => note(
+                    key,
+                    format!(
+                        "{name} waits for group {} to arrive, but nothing moves, turns or fades it.",
                         trigger.source
                     ),
                     false,
@@ -882,7 +895,7 @@ impl Document {
             }
             if trigger.member != 0
                 && trigger.member == trigger.group
-                && trigger.action.targets_group()
+                && trigger.action.switches_group()
             {
                 note(
                     key,
@@ -1101,12 +1114,15 @@ pub fn link(from: &MapTrigger, to: &MapTrigger) -> Option<Link> {
                 .conditions()
                 .any(|test| !test.kind.compares() && test.index == group)
     };
+    let awaits = |group: u8| to.when == TriggerWhen::Arrived && to.source == group;
     let listens = |channel: u8| to.when == TriggerWhen::Signal && to.source == channel;
     if from.action.channels(from.group, from.amount).any(listens) {
         Some(Link::Signal)
     } else if from.action.targets_counter() && reads_counter(from.group) {
         Some(Link::Counter)
-    } else if from.action.targets_group() && reads_group(from.group) {
+    } else if (from.action.switches_group() && reads_group(from.group))
+        || (from.action.animates() && awaits(from.group))
+    {
         Some(Link::Group)
     } else if from.action == TriggerAction::Reset && (from.group == 0 || to.member == from.group) {
         Some(Link::Reset)
@@ -1251,6 +1267,7 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         TriggerWhen::Changed => format!("When counter {} changes", t.source),
         TriggerWhen::Shown => format!("When group {} is shown", t.source),
         TriggerWhen::Hidden => format!("When group {} is hidden", t.source),
+        TriggerWhen::Arrived => format!("When group {} finishes a motion", t.source),
         TriggerWhen::Defeated => match defeated_boss(t) {
             Some(id) => format!("When the {} is defeated", boss_name(id)),
             None => "When a boss is defeated".into(),
@@ -1294,9 +1311,36 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         ),
         TriggerAction::Reset if t.group == 0 => "start every trigger afresh".into(),
         TriggerAction::Reset => format!("start group {}'s triggers afresh", t.group),
+        TriggerAction::Move => format!("move group {} {}", t.group, describe_travel(t.travel)),
+        TriggerAction::Place if t.travel == [0., 0.] => {
+            format!("move group {} back to where the map puts it", t.group)
+        }
+        TriggerAction::Place => format!(
+            "move group {} to {} from its place",
+            t.group,
+            describe_travel(t.travel)
+        ),
+        TriggerAction::Turn => format!("turn group {}'s decor {}\u{b0}", t.group, t.amount),
+        TriggerAction::Fade => format!("fade group {}'s decor to {}%", t.group, t.amount),
     };
+    if t.action.animates() {
+        text += &if t.tween > 0. {
+            format!(
+                " over {} ({}, {})",
+                seconds(t.tween),
+                t.easing.curve.name(),
+                t.easing.mode.name().to_lowercase()
+            )
+        } else {
+            " at once".into()
+        };
+    }
     if t.action.targets_group() && t.duration > 0. {
-        text += &format!(" for {}", seconds(t.duration));
+        text += &if t.action.animates() {
+            format!(", returning after {}", seconds(t.duration))
+        } else {
+            format!(" for {}", seconds(t.duration))
+        };
     }
     if t.delay > 0. {
         text += &format!(", {} later", seconds(t.delay));
@@ -1315,6 +1359,23 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         text += &format!(" Off while group {} is hidden.", t.member);
     }
     text
+}
+/// A move in words: "12% right and 5% up", as fractions of the arena.
+pub fn describe_travel([x, y]: [f32; 2]) -> String {
+    let part = |value: f32, positive: &str, negative: &str| {
+        let percent = (value.abs() * 1000.).round() / 10.;
+        (percent > 0.).then(|| {
+            format!(
+                "{percent}% {}",
+                if value > 0. { positive } else { negative }
+            )
+        })
+    };
+    match (part(x, "right", "left"), part(y, "down", "up")) {
+        (Some(x), Some(y)) => format!("{x} and {y}"),
+        (Some(one), None) | (None, Some(one)) => one,
+        (None, None) => "nowhere".into(),
+    }
 }
 /// A condition in words: "counter 1 is at least 3".
 pub fn describe_test(test: &TriggerTest) -> String {
@@ -1428,6 +1489,7 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
         TriggerWhen::Shown => format!("G{} shown", t.source),
         TriggerWhen::Hidden => format!("G{} hidden", t.source),
         TriggerWhen::Defeated => "Boss down".into(),
+        TriggerWhen::Arrived => format!("G{} arrives", t.source),
     };
     let action = match t.action {
         TriggerAction::Toggle => format!("Toggle {}", t.group),
@@ -1472,6 +1534,10 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
             t.group,
             i32::from(t.group) + t.amount - 1
         ),
+        TriggerAction::Move => format!("Move {}", t.group),
+        TriggerAction::Place => format!("Place {}", t.group),
+        TriggerAction::Turn => format!("Turn {} {}\u{b0}", t.group, t.amount),
+        TriggerAction::Fade => format!("Fade {} {}%", t.group, t.amount),
         TriggerAction::Reset if t.group == 0 => "Reset all".into(),
         TriggerAction::Reset => format!("Reset G{}", t.group),
     };

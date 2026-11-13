@@ -1,6 +1,6 @@
 //! Logic preview: the arena's triggers run in the editor with the same rule
 //! engine servers use, with a test tank at the pointer for area triggers.
-use tankyard_content::{MAP_COUNTERS, MapDef, MapTrigger};
+use tankyard_content::{GroupPoses, MAP_COUNTERS, MapDef, MapTrigger};
 use tankyard_core::{DT, LogicEffect, LogicInput, MapLogic, Occupant, V2, WorldConfig};
 
 /// A trigger's gate as the preview sees it now.
@@ -182,6 +182,7 @@ impl Preview {
             &self.counters,
             self.time,
             self.hidden,
+            self.logic.poses(),
             &tanks,
         );
         Some(GateView {
@@ -191,6 +192,14 @@ impl Preview {
                 .collect(),
             open: trigger.gate_open(&state),
         })
+    }
+    /// Where motions have put each group, between steps too so glides
+    /// look smooth at any frame rate.
+    pub fn poses(&self) -> GroupPoses {
+        if self.at_start() && !self.running {
+            return GroupPoses::default();
+        }
+        GroupPoses::at(&self.logic.tweens, self.time + self.carry)
     }
     /// Whether trigger `index` has used its one action this round.
     pub fn spent(&self, index: usize) -> bool {

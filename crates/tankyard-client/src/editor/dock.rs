@@ -257,10 +257,13 @@ impl Editor {
     fn palette(&mut self, r: Rect, settings: &Settings, s: f32) {
         let tab_h = 26. * s;
         let chooser = 210. * s;
-        let tab_w = ((r.w - chooser - 10. * s) / brushes::CATEGORIES.len() as f32).min(110. * s);
+        let tabs = brushes::CATEGORIES.len() as f32;
+        let gap = 4. * s;
+        // The tabs and the gaps between them stop short of the group chooser.
+        let tab_w = ((r.w - chooser - 10. * s - gap * (tabs - 1.)) / tabs).min(110. * s);
         for (i, name) in brushes::CATEGORIES.into_iter().enumerate() {
             if button(
-                Rect::new(r.x + i as f32 * (tab_w + 4. * s), r.y, tab_w, tab_h),
+                Rect::new(r.x + i as f32 * (tab_w + gap), r.y, tab_w, tab_h),
                 name,
                 self.category == i,
                 true,

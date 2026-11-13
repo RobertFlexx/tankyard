@@ -186,6 +186,18 @@ end
 function tankyard.reset_map_triggers(group)
   emit("reset_map_triggers", number("reset_map_triggers", group or 0, "group"))
 end
+function tankyard.move_map_group(group, x, y, seconds, curve, mode)
+  emit("move_map_group", number("move_map_group", group, "group"), number("move_map_group", x or 0, "x"),
+    number("move_map_group", y or 0, "y"), number("move_map_group", seconds or 0, "seconds"), curve, mode)
+end
+function tankyard.turn_map_group(group, degrees, seconds, curve, mode)
+  emit("turn_map_group", number("turn_map_group", group, "group"), number("turn_map_group", degrees, "degrees"),
+    number("turn_map_group", seconds or 0, "seconds"), curve, mode)
+end
+function tankyard.fade_map_group(group, percent, seconds, curve, mode)
+  emit("fade_map_group", number("fade_map_group", group, "group"), number("fade_map_group", percent, "percent"),
+    number("fade_map_group", seconds or 0, "seconds"), curve, mode)
+end
 function tankyard.set_score(tank, score) emit("set_score", id("set_score", tank), number("set_score", score, "score")) end
 function tankyard.set_team_score(team, score)
   emit("set_team_score", number("set_team_score", team, "team"), number("set_team_score", score, "score"))

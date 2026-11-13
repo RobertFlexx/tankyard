@@ -58,6 +58,11 @@ pub struct NetworkClient {
     admin_nonce: Option<[u8; 32]>,
     pub admin_server_id: Option<String>,
     pub central_owner_challenge: Option<[u8; 32]>,
+    /// The player agreed to prove a staff identity to this server. A server
+    /// could pass a proof it was handed on to another server, so only the
+    /// official server, a hosted game or one on this computer gets proofs
+    /// without asking. Each connection starts without consent.
+    pub staff_consent: bool,
     admin_sequence: u64,
     pub server_notice: Option<(ServerNotice, std::time::Instant)>,
     client: RenetClient,
@@ -68,8 +73,9 @@ pub struct NetworkClient {
     event_queue: Vec<GameEvent>,
     handshake_elapsed: Duration,
     input_history: InputBundle,
-    /// Walls are sent when they change; snapshots without them reuse these.
-    walls: Vec<tankyard_core::Rect>,
+    /// Walls and their groups are sent when they change; snapshots without
+    /// them reuse these.
+    walls: WallCopy,
     /// The tick of the snapshot those walls came in.
     walls_tick: u64,
     _bridge: Option<crate::websocket::ClientBridge>,
@@ -78,20 +84,25 @@ pub struct NetworkClient {
 /// Keep the newest geometry a snapshot carried, and complete snapshots that
 /// omit unchanged walls. A missed update is replaced by the next repeat, and
 /// a late packet never brings back walls a newer one replaced.
-fn restore_walls(
-    snapshot: &mut Snapshot,
-    cache: &mut Vec<tankyard_core::Rect>,
-    cached_tick: &mut u64,
-) {
+fn restore_walls(snapshot: &mut Snapshot, cache: &mut WallCopy, cached_tick: &mut u64) {
     if snapshot.walls_included {
         if snapshot.tick >= *cached_tick {
-            cache.clone_from(&snapshot.walls);
+            cache.walls.clone_from(&snapshot.walls);
+            cache.groups.clone_from(&snapshot.wall_groups);
             *cached_tick = snapshot.tick;
         }
     } else {
-        snapshot.walls.clone_from(cache);
+        snapshot.walls.clone_from(&cache.walls);
+        snapshot.wall_groups.clone_from(&cache.groups);
         snapshot.walls_included = true;
     }
+}
+
+/// The last walls a snapshot carried, with the map group of each.
+#[derive(Default)]
+struct WallCopy {
+    walls: Vec<tankyard_core::Rect>,
+    groups: Vec<u8>,
 }
 
 impl NetworkClient {
@@ -260,7 +271,7 @@ impl NetworkClient {
             event_queue: Vec::with_capacity(128),
             handshake_elapsed: Duration::ZERO,
             input_history: InputBundle::default(),
-            walls: Vec::new(),
+            walls: WallCopy::default(),
             walls_tick: 0,
             _bridge: bridge,
             bundle,
@@ -286,6 +297,7 @@ impl NetworkClient {
             admin_nonce: None,
             admin_server_id: None,
             central_owner_challenge: None,
+            staff_consent: false,
             admin_sequence: 0,
             server_notice: None,
         })
@@ -492,7 +504,7 @@ impl NetworkClient {
                         self.event_queue.clear();
                         self.events.clear();
                         self.voice_packets.clear();
-                        self.walls.clear();
+                        self.walls = WallCopy::default();
                         self.walls_tick = 0;
                     }
                     self.player_id = Some(player);
@@ -1119,7 +1131,7 @@ mod tests {
         omitted.tick = 12;
         omitted.walls_included = false;
         omitted.walls.clear();
-        let (mut cache, mut cached_tick) = (Vec::new(), 0);
+        let (mut cache, mut cached_tick) = (WallCopy::default(), 0);
         restore_walls(&mut open, &mut cache, &mut cached_tick);
         // The door's closing packet turns up after the one that opened it.
         restore_walls(&mut shut, &mut cache, &mut cached_tick);

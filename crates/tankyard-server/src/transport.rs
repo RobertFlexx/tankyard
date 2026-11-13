@@ -1617,9 +1617,10 @@ impl UdpServer {
         let wall_repeats =
             Duration::from_secs_f64(WALL_REPEATS / f64::from(self.settings.snapshot_rate.max(1)));
         for arena in &mut self.arenas {
+            let world = &arena.session.world;
             arena
                 .walls
-                .refresh(&arena.session.world.walls, self.elapsed);
+                .refresh(&world.rest_walls, &world.wall_groups, self.elapsed);
         }
         let elapsed = self.elapsed;
         for (&client, peer) in &mut self.peers {
@@ -1676,6 +1677,7 @@ impl UdpServer {
             snapshot.walls_included = include_walls;
             if !include_walls {
                 snapshot.walls.clear();
+                snapshot.wall_groups.clear();
             }
             let bytes = match bounded_snapshot(snapshot, center, &mut self.snapshot_encoder) {
                 Ok(bytes) => bytes,

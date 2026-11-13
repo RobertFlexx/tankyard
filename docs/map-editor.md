@@ -70,7 +70,7 @@ Press **F1** for the in-editor list. Ctrl means Cmd on a Mac.
 | Ctrl+Shift+C, V | Copy settings, then paste them onto matching objects |
 | Ctrl+G | Put the selection in a new group |
 | Ctrl+L, Ctrl+Shift+L | Lock the selection's groups, unlock every group |
-| Ctrl+A | Select everything shown |
+| Ctrl+A, Ctrl+Shift+A | Select everything shown, or everything like the selection (every torch, every speed pad) |
 | Ctrl+Z, Ctrl+Y (or Ctrl+Shift+Z) | Undo, redo (48 steps) |
 | Ctrl+S | Save the project |
 | Ctrl+R | Run the last plugin tool again |
@@ -123,6 +123,8 @@ Overlapping speed and mud pads multiply, and the final factor is clamped to 0.3�
 
 **Decor** includes tiles, stripes, lights, rings, arrows, labels and particle emitters. It has color, opacity, rotation, spin, pulse and an *above players* switch. It never changes collision. A label can show a counter: `{1}` to `{8}` are replaced with that counter's value.
 
+**Lights** brighten whatever lies under them, so they glow strongly on a dark floor and softly on a light one. Their size sets how far the light reaches, and *Flicker* makes them waver like a flame or a failing lamp (Reduced motion holds them steady). The Decor tab has Torch, Neon and Lantern presets.
+
 **Markers** place spawn regions (neutral, team 1 or team 2), team bases and objectives. A team base needs a matching team spawn region around it.
 
 ## Groups and logic
@@ -144,6 +146,7 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **On change:** its counter changes value at all, by any trigger or script. Setting a counter to the value it already has is not a change.
 - **On shown / On hidden:** its group is shown or hidden, however that happened: a trigger, an *Undo after* timer or a script. The groups a round starts with don't count, so a group hidden from the start doesn't fire On hidden.
 - **On boss down:** a boss is defeated anywhere in the arena. Pick one boss, or *Any boss*.
+- **On arrive:** a motion of its group ends: a move, turn or fade, the trip back included. A motion cut short by another doesn't count. See [Motions](#motions).
 
 ### Actions
 
@@ -162,7 +165,44 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **Script event:** raises a named event for script packs (see [Modding](modding.md#map-logic)). Scripts can answer by sending signals, changing counters, showing or hiding groups and resetting triggers. Without a script pack it does nothing, and the preview only logs it.
 - **Reset triggers:** makes every trigger in a group start afresh, as at the start of a round: *Once per round* triggers can act again, rest times and cooldowns end, delayed actions still waiting are dropped, timers start counting again from now and sequences go back to their first channel. Group 0 resets every trigger in the map. Counters and groups keep their state; set those with their own actions.
 
+- **Move group, Move group to, Turn decor, Fade decor:** animate a group. See [Motions](#motions).
+
 The tank actions act on tanks inside the trigger's own area. On a timer, signal, counter, group or boss trigger, *Who* and *Team* appear under the action to choose those tanks.
+
+### Motions
+
+Motion actions animate a group the way a tween does in Godot: from where it is now to a new value, over a time, along an easing curve. All of a group's blocks, pads, decor and trigger areas move together. Moving cover pushes tanks, shapes and bosses ahead of it, so a closing door shoves tanks out of the doorway rather than trapping them.
+
+- **Move group** glides the group by an amount, from wherever it is. Each press of a Move plate takes it one step further.
+- **Move group to** glides it to a place measured from where the map puts it; 0%, 0% brings it home.
+- **Turn decor** turns the group's decor by a number of degrees, and **Fade decor** fades it to a percentage of its opacity. Neither affects collision.
+
+The Object tab sets the target group, the distance as a percentage of the arena's width and height, **Over** (seconds; 0 moves at once), the **Curve** (Linear, Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Elastic or Bounce) and the **Mode** (Ease in, Ease out, In and out, Out and in). A graph shows the curve, with a dot that plays the motion. **Go back after** plays the motion in reverse that many seconds after it ends: doors that shut again, lifts that come back down.
+
+With one Move trigger selected, the canvas draws its group where the motion takes it, joined by an arrow. Drag the diamond at the arrow's head to set the distance; it snaps to the grid, and Shift keeps it straight. A move may average at most one arena width a second, so dragging further lengthens **Over** as needed.
+
+To run motions one after another, start the next from an **On arrive** trigger watching the group that moves first, or from the Then piece's signal. A lift that rises, then opens its door, is a Move on the lift's group and an On arrive trigger that moves the door's group.
+
+The logic preview plays motions too. Objects away from home show a dashed outline where the map places them, and **Fire** plays a trigger's motion at once. Motions start afresh every round.
+
+### The Motion palette
+
+The **Motion** tab in Build holds ready-made motions. Each acts on group 1; put the objects you want to move in that group, or pick a group in the dock first.
+
+| Piece | What it does |
+| --- | --- |
+| Door | Slides group 1 up when a tank arrives, and back 4 seconds later |
+| Shuttle | Glides group 1 across and back every 6 seconds |
+| Piston | Punches group 1 out and pulls it back every 2 seconds |
+| Lift | On signal 1, carries group 1 to 12% below its place |
+| Home | On signal 2, brings group 1 back to where the map puts it |
+| Drop | Drops group 1 down with a bounce as the round starts |
+| Spinner | Turns group 1's decor a quarter turn every 3 seconds |
+| Fader | Fades group 1's decor while tanks pass, back after 5 seconds |
+| Blink | Dims group 1's decor and brings it back every 2 seconds |
+| Then | Sends signal 1 each time group 1 finishes a motion |
+
+Scripts can play motions too, with `move_map_group`, `turn_map_group` and `fade_map_group` (see [Modding](modding.md#changing-the-match)).
 
 ### Conditions and gates
 
@@ -318,7 +358,12 @@ The bundled **Workshop Toolkit** adds Repeat, Ring of blocks, Arena frame, Snap 
 
 ## Particle generator
 
-Place an emitter from **Decor**. Its Object tab has presets (Embers, Rain, Dust, Sparks) and every setting: shape, rate, lifetime, speed, direction, spread, gravity, drag, start and end size, spin, fade and both colors. Direction uses screen coordinates: 0° right, 90° down. Particles are born across the emitter's area.
+Place an emitter from **Decor**. Its Object tab has ten presets (Embers, Rain, Dust, Sparks, Fireflies, Smoke, Snow, Glitter, Fountain and Pulse) and every setting: shape, where particles start, rate, lifetime, speed, direction, spread, gravity, drag, start and end size, spin, wobble, twinkle, fade, glow and both colors. Direction uses screen coordinates: 0° right, 90° down.
+
+- **Shape:** dot, square, spark, ring, triangle, soft (a dot with a soft edge, for smoke, mist and glows) or star.
+- **Emit from:** anywhere in the emitter (Fill), inside the ellipse it encloses (Round), along its outline (Edge) or from its center.
+- **Wobble** sways each particle sideways as it travels, for smoke and fireflies. **Twinkle** makes each one flicker.
+- **Glow** adds particles' light to what lies beneath them, like embers or sparks.
 
 Particles are drawn from seeds, so they cost the server nothing and send no network traffic. A map has at most 48 emitters, each with at most 240 live particles, and the client draws at most 1,024 map particles, scaled by the Effects setting. Reduced motion hides map particles and freezes spin, pulse and conveyor marks.
 
@@ -335,9 +380,9 @@ The workshop folder is `workshop/` inside Tank Yard's data directory. **Files �
 - `draft.json`: the recovery draft.
 - `projects/<map-id>.json`: named editable documents.
 - `exports/<map-id>-<timestamp>.zip`: portable exports.
-- `prefs.json`: panel sizes and canvas switches.
+- `prefs.json`: panel sizes, canvas switches, navigation settings, the palette tab and item, the inspector tab, the logic preview's speed, and where you were looking in the map you had open.
 
-Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Servers never send triggers to players, so players on any 0.15 build can still join. Maps that don't use the new logic save exactly as before.
+Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings. It uses protocol 26, so 1.0 servers and players play only with each other, and maps saved or exported from 1.0 need 1.0 to open.
 
 For a dedicated server, put the ZIP in persistent storage, add its path to the top-level `mods` list, and run `reload-mods`. Then `maps` lists it and `map my_arena` selects it. Joining clients receive the checked map data automatically. See [Hosting](hosting.md) and [domain setup](hosting-domain.md).
 

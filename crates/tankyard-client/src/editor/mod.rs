@@ -50,6 +50,18 @@ enum Tab {
     Files,
     Tools,
 }
+impl Tab {
+    /// In the order of the inspector's tab bar.
+    const ALL: [Self; 7] = [
+        Self::Map,
+        Self::Object,
+        Self::Logic,
+        Self::Check,
+        Self::Rules,
+        Self::Files,
+        Self::Tools,
+    ];
+}
 /// Where each part of the editor sits this frame.
 #[derive(Clone, Copy)]
 struct Layout {
@@ -188,8 +200,26 @@ impl Editor {
             .and_then(|p| read_document(&p).ok());
         let restored = draft.is_some();
         let doc = draft.unwrap_or_else(|| map.map(Document::from_map).unwrap_or_default());
-        let preview = preview::Preview::new(&doc.map);
+        let mut preview = preview::Preview::new(&doc.map);
         let prefs = panels::Prefs::load();
+        preview.speed = prefs.logic_speed;
+        let catalog = brushes::catalog();
+        let category = prefs.palette.min(catalog.len() - 1);
+        let brush = if prefs.brush < catalog[category].len() {
+            prefs.brush
+        } else {
+            1.min(catalog[category].len() - 1)
+        };
+        // Back where the camera was, when this is the map it was over.
+        let mut view = View::new();
+        let saved_view = prefs.view.as_ref().filter(|saved| {
+            saved.map == doc.map.id && saved.size == [doc.map.width, doc.map.height]
+        });
+        if let Some(saved) = saved_view {
+            view.center = V2::new(saved.center[0], saved.center[1]);
+            view.zoom = saved.zoom;
+        }
+        let fitted = saved_view.is_some();
         let mut editor = Self {
             doc,
             undo: vec![],
@@ -206,16 +236,16 @@ impl Editor {
             clipboard: vec![],
             style_clipboard: None,
             mode: Mode::Build,
-            category: 0,
-            brush: 1,
-            brushes: brushes::catalog(),
+            category,
+            brush,
+            brushes: catalog,
             stamp: None,
             build_group: 0,
             swipe: false,
             snap: prefs.snap,
             grid: prefs.grid,
             step: prefs.step,
-            show_hidden: true,
+            show_hidden: prefs.show_hidden,
             show_groups: prefs.show_groups,
             show_links: prefs.show_links,
             focus: None,
@@ -223,16 +253,19 @@ impl Editor {
             probe: None,
             send_channel: 1,
             send_boss: None,
-            animate: true,
+            animate: prefs.animate,
             time: 0.,
-            view: View::new(),
-            fitted: false,
+            view,
+            fitted,
             gesture: None,
             panning: None,
             last_click: None,
             nudge_since: 0.,
             nudge_last: 0.,
-            tab: Tab::Object,
+            tab: Tab::ALL
+                .get(prefs.inspector_tab)
+                .copied()
+                .unwrap_or(Tab::Object),
             scroll: 0.,
             content_height: 0.,
             text_focus: None,
@@ -728,9 +761,11 @@ impl Editor {
         if !self.typing() && !is_mouse_button_down(MouseButton::Left) {
             self.property_edit = false;
         }
-        self.keep_prefs();
-        if !matches!(action, Action::None) {
+        if matches!(action, Action::None) {
+            self.keep_prefs(false);
+        } else {
             self.release_cursor();
+            self.keep_prefs(true);
         }
         if self.revision != self.draft_revision && get_time() - self.last_autosave > 3. {
             self.last_autosave = get_time();
@@ -840,7 +875,12 @@ impl Editor {
                     self.lock_selection();
                 }
             }
-            if pressed(KeyCode::A) {
+            if pressed(KeyCode::A) && shift() {
+                // Everything like the selection: every torch, every pad.
+                if !self.selection.is_empty() {
+                    self.select_kind();
+                }
+            } else if pressed(KeyCode::A) {
                 let keys = self
                     .doc
                     .items()
@@ -1147,7 +1187,7 @@ impl Editor {
                 ("Ctrl Shift C  V", "Copy and paste settings"),
                 ("Ctrl G", "Put the selection in a new group"),
                 ("Ctrl L,  Shift L", "Lock its groups, unlock them all"),
-                ("Ctrl A", "Select everything shown"),
+                ("Ctrl A,  Shift A", "Select everything shown, or alike"),
                 ("Ctrl Z  Y", "Undo, redo"),
                 ("Ctrl S", "Save the project"),
                 ("Ctrl R", "Run the last plugin tool again"),

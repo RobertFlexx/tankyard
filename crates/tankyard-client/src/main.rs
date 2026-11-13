@@ -15,6 +15,7 @@ mod editor;
 mod effects;
 mod file_dialog;
 mod first_run;
+mod glow;
 mod graphics;
 mod hardware;
 mod hosting;
@@ -1328,8 +1329,14 @@ impl App {
             } else if self.session.as_ref().is_some_and(|session| matches!(&session.engine, session::Engine::Online { client, .. } if !client.permissions.is_empty())) {
                 self.community.admin_open = !self.community.admin_open;
             } else if self.central_owner.enabled()
-                && let Some(Session { engine: session::Engine::Online { client, .. }, .. }) = &self.session {
-                self.effects.notice(&central_owner::CentralOwner::unavailable(client));
+                && let Some(Session { engine: session::Engine::Online { client, .. }, .. }) = &mut self.session {
+                if client.central_owner_challenge.is_some() {
+                    // Asking for owner tools here is consent to verify.
+                    client.staff_consent = true;
+                    self.effects.notice("Verifying your owner identity with this server. Verify only where you trust the host.");
+                } else {
+                    self.effects.notice(&central_owner::CentralOwner::unavailable(client));
+                }
             }
             self.hud.sandbox = false;
             self.hud.evolution = false;

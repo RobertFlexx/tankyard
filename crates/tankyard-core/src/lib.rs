@@ -31,7 +31,7 @@ pub mod world;
 pub use arena::PVE_WAVES;
 pub use map_features::{
     LogicEffect, LogicInput, MAP_EVENT_LIMIT, MapEvent, MapLogic, Occupant, gate_state, map_point,
-    map_rect, shelter_factor, terrain_factor, terrain_push, zones_at,
+    map_rect, place_walls, shelter_factor, snapshot_poses, terrain_factor, terrain_push, zones_at,
 };
 pub use math::*;
 pub use model::*;

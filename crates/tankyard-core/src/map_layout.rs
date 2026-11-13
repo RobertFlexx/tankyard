@@ -44,16 +44,29 @@ impl World {
         self.compose_walls();
     }
 
+    /// Place the map's walls inside the current (possibly shrinking) arena,
+    /// both where the map puts them and where map logic has moved them.
     pub(crate) fn scale_map_walls(&mut self) {
         let bounds = self.config.bounds();
         let scale = self.config.arena_scale;
-        for (wall, original) in self.walls.iter_mut().zip(&self.map_walls) {
-            *wall = Rect {
+        let (width, height) = (self.config.width * scale, self.config.height * scale);
+        self.wall_groups.resize(self.map_walls.len(), 0);
+        self.rest_walls.clear();
+        self.walls.clear();
+        for (original, &group) in self.map_walls.iter().zip(&self.wall_groups) {
+            let rest = Rect {
                 x: bounds.x + original.x * scale,
                 y: bounds.y + original.y * scale,
                 w: original.w * scale,
                 h: original.h * scale,
             };
+            let [dx, dy] = self.poses.offset(group);
+            self.rest_walls.push(rest);
+            self.walls.push(Rect {
+                x: rest.x + dx * width,
+                y: rest.y + dy * height,
+                ..rest
+            });
         }
     }
 
@@ -66,6 +79,9 @@ impl World {
         let old_walls = std::mem::take(&mut self.walls);
         let old_map_walls = std::mem::take(&mut self.map_walls);
         let old_static_walls = std::mem::take(&mut self.static_walls);
+        let old_rest_walls = std::mem::take(&mut self.rest_walls);
+        let old_wall_groups = std::mem::take(&mut self.wall_groups);
+        let old_poses = std::mem::take(&mut self.poses);
         let old_objectives = std::mem::take(&mut self.objectives);
         let old_hidden = self.match_state.hidden_groups;
         self.config.map.clone_from(&map.id);
@@ -117,6 +133,9 @@ impl World {
             self.walls = old_walls;
             self.map_walls = old_map_walls;
             self.static_walls = old_static_walls;
+            self.rest_walls = old_rest_walls;
+            self.wall_groups = old_wall_groups;
+            self.poses = old_poses;
             self.match_state.hidden_groups = old_hidden;
             self.objectives = old_objectives;
             return Err(
@@ -131,6 +150,7 @@ impl World {
         }
         self.logic = Default::default();
         self.match_state.counters = Default::default();
+        self.match_state.tweens.clear();
         self.portal_rest.clear();
         for (boss, pos) in self.bosses.iter_mut().zip(bosses) {
             boss.pos = pos;

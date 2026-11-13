@@ -777,6 +777,27 @@ fn apply(world: &mut World, actor: EntityId, effect: Effect) {
         }),
         Effect::MapGroup { group, shown } => world.map_input(LogicInput::Group(group, shown)),
         Effect::MapReset { group } => world.map_input(LogicInput::Reset(group)),
+        Effect::MapMotion {
+            group,
+            action,
+            value,
+            seconds,
+            easing,
+        } => {
+            // Glides take at least as long as the speed limit asks.
+            let seconds = if action == tankyard_content::TriggerAction::Place && seconds > 0. {
+                seconds.max(tankyard_content::least_tween(value))
+            } else {
+                seconds
+            };
+            world.map_input(LogicInput::Motion {
+                group,
+                action,
+                value,
+                seconds,
+                easing,
+            })
+        }
     }
 }
 

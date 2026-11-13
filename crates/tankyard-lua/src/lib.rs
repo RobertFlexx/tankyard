@@ -695,8 +695,81 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
                 group: whole(arg(0), "group", 0, tankyard_content::MAP_GROUPS.into())? as u8,
             },
         ),
+        "move_map_group" | "turn_map_group" | "fade_map_group" => {
+            use tankyard_content::{TRAVEL_LIMIT, TURN_LIMIT, TWEEN_SECONDS, TriggerAction};
+            let group = whole(arg(0), "group", 1, tankyard_content::MAP_GROUPS.into())? as u8;
+            let within = |index: usize, what: &str, lo: f64, hi: f64| {
+                let n = number(arg(index), what)?;
+                if !(lo..=hi).contains(&n) {
+                    return Err(rt(format!("{what} must be between {lo} and {hi}")));
+                }
+                Ok(n as f32)
+            };
+            let travel = f64::from(TRAVEL_LIMIT);
+            let (action, value, rest) = match op {
+                "move_map_group" => (
+                    TriggerAction::Place,
+                    [
+                        within(1, "x", -travel, travel)?,
+                        within(2, "y", -travel, travel)?,
+                    ],
+                    3,
+                ),
+                "turn_map_group" => (
+                    TriggerAction::Turn,
+                    [
+                        within(1, "degrees", -f64::from(TURN_LIMIT), f64::from(TURN_LIMIT))?,
+                        0.,
+                    ],
+                    2,
+                ),
+                _ => (
+                    TriggerAction::Fade,
+                    [within(1, "percent", 0., 100.)?, 0.],
+                    2,
+                ),
+            };
+            (
+                0,
+                Effect::MapMotion {
+                    group,
+                    action,
+                    value,
+                    seconds: within(rest, "seconds", 0., f64::from(TWEEN_SECONDS))?,
+                    easing: easing(arg(rest + 1), arg(rest + 2))?,
+                },
+            )
+        }
         _ => return Err(rt(format!("unknown command {op:?}"))),
     })
+}
+
+/// An easing curve and mode by name, such as "sine" and "in_out".
+fn easing(curve: Option<&Value>, mode: Option<&Value>) -> mlua::Result<tankyard_content::Easing> {
+    use tankyard_content::{Curve, EaseMode};
+    let name = |value: Option<&Value>| match value {
+        Some(Value::String(s)) => Some(s.to_string_lossy().to_ascii_lowercase()),
+        _ => None,
+    };
+    let curve = match name(curve) {
+        None => Curve::default(),
+        Some(text) => Curve::ALL
+            .into_iter()
+            .find(|c| c.name().eq_ignore_ascii_case(&text))
+            .ok_or_else(|| rt(format!("unknown curve {text:?}")))?,
+    };
+    let mode = match name(mode).as_deref() {
+        None | Some("in_out") => EaseMode::InOut,
+        Some("in") => EaseMode::In,
+        Some("out") => EaseMode::Out,
+        Some("out_in") => EaseMode::OutIn,
+        Some(other) => {
+            return Err(rt(format!(
+                "unknown ease mode {other:?}; use in, out, in_out or out_in"
+            )));
+        }
+    };
+    Ok(tankyard_content::Easing { curve, mode })
 }
 
 /// A whole number from `lo` to `hi`.

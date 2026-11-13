@@ -31,7 +31,7 @@ impl Ambient {
         for id in session.world.tanks.iter().map(|t| t.id).collect::<Vec<_>>() {
             session.world.set_practice_level(id, 18);
         }
-        let snapshot = session.world.snapshot();
+        let snapshot = session.world.display_snapshot();
         Self {
             session,
             snapshot,

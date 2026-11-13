@@ -6,9 +6,9 @@
 //! the server's arithmetic.
 use crate::*;
 use tankyard_content::{
-    CONVEYOR_SPEED, COUNTER_LIMIT, GateState, MAP_COUNTERS, MAP_GROUPS, MapDef, MapTrigger,
-    MapZone, MathOp, TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction, TriggerWhen, TriggerWho,
-    ZoneKind,
+    CONVEYOR_SPEED, COUNTER_LIMIT, Easing, GateState, GroupPoses, MAP_COUNTERS, MAP_GROUPS, MapDef,
+    MapTrigger, MapZone, MathOp, TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction, TriggerWhen,
+    TriggerWho, Tween, TweenChannel, ZoneKind,
 };
 
 /// A normalized map rectangle in world units, following animated borders the
@@ -33,15 +33,17 @@ fn contains(rect: Rect, p: V2) -> bool {
     p.x >= rect.x && p.y >= rect.y && p.x <= rect.x + rect.w && p.y <= rect.y + rect.h
 }
 
-/// The shown pads whose area holds `pos`.
+/// The shown pads whose area holds `pos`, where their groups have moved them.
 pub fn zones_at<'a>(
     map: &'a MapDef,
     config: &'a WorldConfig,
     hidden: u32,
+    poses: &'a GroupPoses,
     pos: V2,
 ) -> impl Iterator<Item = &'a MapZone> + 'a {
     map.zones.iter().filter(move |zone| {
-        MapDef::group_bit(zone.group) & hidden == 0 && contains(map_rect(config, zone.rect), pos)
+        MapDef::group_bit(zone.group) & hidden == 0
+            && contains(map_rect(config, poses.shift(zone.rect, zone.group)), pos)
     })
 }
 
@@ -61,28 +63,46 @@ fn push_of(zone: &MapZone) -> V2 {
 }
 
 /// How much faster (above 1) or slower a tank moves at `pos`.
-pub fn terrain_factor(map: &MapDef, config: &WorldConfig, hidden: u32, pos: V2) -> f32 {
+pub fn terrain_factor(
+    map: &MapDef,
+    config: &WorldConfig,
+    hidden: u32,
+    poses: &GroupPoses,
+    pos: V2,
+) -> f32 {
     if map.zones.is_empty() {
         return 1.;
     }
-    zones_at(map, config, hidden, pos)
+    zones_at(map, config, hidden, poses, pos)
         .fold(1., speed_of)
         .clamp(0.3, 2.5)
 }
 
 /// The velocity conveyors at `pos` add, in world units per second.
-pub fn terrain_push(map: &MapDef, config: &WorldConfig, hidden: u32, pos: V2) -> V2 {
+pub fn terrain_push(
+    map: &MapDef,
+    config: &WorldConfig,
+    hidden: u32,
+    poses: &GroupPoses,
+    pos: V2,
+) -> V2 {
     if map.zones.is_empty() {
         return V2::ZERO;
     }
-    zones_at(map, config, hidden, pos)
+    zones_at(map, config, hidden, poses, pos)
         .fold(V2::ZERO, |sum, zone| sum + push_of(zone))
         .clamp_length(600.)
 }
 
 /// Damage taken at `pos` as a fraction; Shelter pads reduce it.
-pub fn shelter_factor(map: &MapDef, config: &WorldConfig, hidden: u32, pos: V2) -> f32 {
-    zones_at(map, config, hidden, pos)
+pub fn shelter_factor(
+    map: &MapDef,
+    config: &WorldConfig,
+    hidden: u32,
+    poses: &GroupPoses,
+    pos: V2,
+) -> f32 {
+    zones_at(map, config, hidden, poses, pos)
         .filter(|zone| zone.kind == ZoneKind::Shelter)
         .fold(1., |factor, zone| factor / (1. + 1.5 * zone.strength))
 }
@@ -140,7 +160,7 @@ pub enum LogicEffect {
 
 /// What scripts ask map logic to do; it happens at the start of the next
 /// step, before schedules and areas.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LogicInput {
     Signal(u8),
     SetCounter(u8, i32),
@@ -148,6 +168,16 @@ pub enum LogicInput {
     Group(u8, bool),
     /// Start group `n`'s triggers afresh, every trigger for 0.
     Reset(u8),
+    /// Play a motion on a group as a Move to (`Place`), Turn or Fade
+    /// trigger would: to offset `value`, by `value[0]` degrees, or to
+    /// `value[0]` percent, over `seconds`.
+    Motion {
+        group: u8,
+        action: TriggerAction,
+        value: [f32; 2],
+        seconds: f32,
+        easing: Easing,
+    },
     /// A boss was defeated; the arena reports it for On boss down triggers.
     Defeated(BossKind),
 }
@@ -184,6 +214,8 @@ struct Listeners {
     /// Triggers watching groups be shown or hidden.
     groups: Vec<usize>,
     defeated: Vec<usize>,
+    /// Triggers waiting for a group's motion to end.
+    arrived: Vec<usize>,
     /// Triggers with a schedule or an area; event triggers never need the
     /// per-step scan.
     stepped: Vec<usize>,
@@ -204,6 +236,7 @@ impl Listeners {
                 TriggerWhen::Changed => lists.change.get_mut(slot),
                 TriggerWhen::Shown | TriggerWhen::Hidden => Some(&mut lists.groups),
                 TriggerWhen::Defeated => Some(&mut lists.defeated),
+                TriggerWhen::Arrived => Some(&mut lists.arrived),
                 _ => Some(&mut lists.stepped),
             } {
                 list.push(index);
@@ -232,6 +265,16 @@ pub struct MapLogic {
     alive: Vec<EntityId>,
     /// Groups to set back: when, which group, and whether it ends hidden.
     reverts: Vec<(f32, u8, bool)>,
+    /// Group motions, at most one per group and channel; each holds its end
+    /// once finished, so it also says where a group has come to rest.
+    pub tweens: Vec<Tween>,
+    /// Motions to play back: when, and the motion that returns the group.
+    returns: Vec<(f32, Tween)>,
+    /// Motions under way: when each ends, and its group and channel. A
+    /// motion that another takes over from never arrives.
+    arrivals: Vec<(f32, u8, TweenChannel)>,
+    /// Where every group stood when this step began.
+    poses: GroupPoses,
     /// Delayed actions: when, and which trigger.
     pending: Vec<(f32, usize)>,
     /// Triggers to fire from signals and counters, in order.
@@ -297,6 +340,26 @@ impl MapLogic {
                         self.reset(map, group, now);
                     }
                 }
+                LogicInput::Motion {
+                    group,
+                    action,
+                    value,
+                    seconds,
+                    easing,
+                } if action.animates() => {
+                    let trigger = MapTrigger {
+                        action,
+                        group,
+                        travel: value,
+                        amount: value[0] as i32,
+                        tween: seconds,
+                        easing,
+                        duration: 0.,
+                        ..Default::default()
+                    };
+                    self.animate(&trigger, now);
+                }
+                LogicInput::Motion { .. } => {}
                 LogicInput::Defeated(kind) => {
                     let number = tankyard_content::BOSS_IDS
                         .iter()
@@ -309,6 +372,28 @@ impl MapLogic {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Queue the triggers waiting for a group whose motion has ended, once
+    /// for each group however many of its motions end together.
+    fn notice_arrivals(&mut self, map: &MapDef, now: f32) {
+        if !self.arrivals.iter().any(|&(at, ..)| at <= now) {
+            return;
+        }
+        let mut arrived = 0;
+        self.arrivals.retain(|&(at, group, _)| {
+            if at <= now {
+                arrived |= MapDef::group_bit(group);
+                false
+            } else {
+                true
+            }
+        });
+        for &index in &self.listeners.arrived {
+            if MapDef::group_bit(map.triggers[index].source) & arrived != 0 {
+                self.queue.push(index);
             }
         }
     }
@@ -351,6 +436,10 @@ impl MapLogic {
         self.listeners = Listeners::new(map);
         self.seen = hidden;
         self.reverts.clear();
+        self.tweens.clear();
+        self.returns.clear();
+        self.arrivals.clear();
+        self.poses = GroupPoses::default();
         self.pending.clear();
         self.queue.clear();
         self.ready = true;
@@ -370,14 +459,17 @@ impl MapLogic {
         effects: &mut Vec<LogicEffect>,
     ) {
         if map.triggers.is_empty() {
-            // Scripts may still use counters and groups on a map without
-            // triggers; counters last until the round or map changes.
+            // Scripts may still use counters, groups and motions on a map
+            // without triggers; they last until the round or map changes.
             let mut kept = Self {
                 counters: self.counters,
                 inbox: std::mem::take(&mut self.inbox),
+                tweens: std::mem::take(&mut self.tweens),
+                returns: std::mem::take(&mut self.returns),
                 ..Self::default()
             };
             kept.take_inputs(map, now, hidden);
+            kept.poses = GroupPoses::at(&kept.tweens, now);
             *self = kept;
             return;
         }
@@ -387,6 +479,7 @@ impl MapLogic {
         self.alive.extend(tanks.iter().map(|tank| tank.id));
         self.alive.sort_unstable();
         self.take_inputs(map, now, hidden);
+        self.poses = GroupPoses::at(&self.tweens, now);
         self.reverts.retain(|&(at, group, hide)| {
             if now < at {
                 return true;
@@ -395,6 +488,7 @@ impl MapLogic {
             *hidden = if hide { *hidden | bit } else { *hidden & !bit };
             false
         });
+        self.play_returns(now);
         if self.pending.iter().any(|&(at, _)| at <= now) {
             let mut due = Vec::new();
             self.pending.retain(|&(at, index)| {
@@ -449,7 +543,8 @@ impl MapLogic {
                 | TriggerWhen::Changed
                 | TriggerWhen::Shown
                 | TriggerWhen::Hidden
-                | TriggerWhen::Defeated => false,
+                | TriggerWhen::Defeated
+                | TriggerWhen::Arrived => false,
             };
             if fire
                 && self.fire(index, map, config, now, hidden, tanks, random, effects)
@@ -459,6 +554,9 @@ impl MapLogic {
                 self.next[index] = now + trigger.seconds.max(0.25);
             }
         }
+        // Motions that end now wake their watchers once per step, so a
+        // chain of instant motions moves on a step at a time.
+        self.notice_arrivals(map, now);
         self.follow(map, config, now, hidden, tanks, random, effects);
     }
 
@@ -511,6 +609,7 @@ impl MapLogic {
             return;
         }
         self.prepare(map, now, *hidden);
+        self.poses = GroupPoses::at(&self.tweens, now);
         self.budget = CHAIN_BUDGET;
         self.alive.clear();
         self.alive.extend(tanks.iter().map(|tank| tank.id));
@@ -528,7 +627,7 @@ impl MapLogic {
         tanks: &[Occupant],
     ) -> bool {
         let trigger = &map.triggers[index];
-        let area = map_rect(config, trigger.rect);
+        let area = self.area(config, trigger);
         self.scratch.clear();
         self.scratch.extend(
             tanks
@@ -615,8 +714,124 @@ impl MapLogic {
             &self.counters,
             now,
             hidden,
+            &self.poses,
             tanks,
         ))
+    }
+
+    /// Where `trigger`'s area is now: it moves with the trigger's own group.
+    fn area(&self, config: &WorldConfig, trigger: &MapTrigger) -> Rect {
+        map_rect(config, self.poses.shift(trigger.rect, trigger.member))
+    }
+
+    /// The value `group` has on `channel` at `now`.
+    pub fn tween_value(&self, group: u8, channel: TweenChannel, now: f32) -> [f32; 2] {
+        self.tweens
+            .iter()
+            .find(|tween| tween.group == group && tween.channel == channel)
+            .map_or(channel.rest(), |tween| tween.value(now))
+    }
+
+    /// Send groups back whose Go back after time has come.
+    fn play_returns(&mut self, now: f32) {
+        if !self.returns.iter().any(|&(at, _)| at <= now) {
+            return;
+        }
+        let mut due = Vec::new();
+        self.returns.retain(|&(at, tween)| {
+            if at <= now {
+                due.push(tween);
+                false
+            } else {
+                true
+            }
+        });
+        for back in due {
+            let from = self.tween_value(back.group, back.channel, now);
+            self.start_tween(Tween {
+                from,
+                start: now,
+                ..back
+            });
+        }
+    }
+
+    /// Whether any group has moved, turned or faded, or will go back.
+    pub fn in_motion(&self) -> bool {
+        !self.tweens.is_empty() || !self.returns.is_empty()
+    }
+
+    /// Play `tween`, replacing whatever that group was doing on its channel.
+    fn start_tween(&mut self, tween: Tween) {
+        if let Some(slot) = self
+            .tweens
+            .iter_mut()
+            .find(|slot| slot.group == tween.group && slot.channel == tween.channel)
+        {
+            *slot = tween;
+        } else if self.tweens.len() < tankyard_content::TWEEN_SLOTS {
+            self.tweens.push(tween);
+        } else {
+            return;
+        }
+        self.arrivals
+            .retain(|&(_, group, channel)| group != tween.group || channel != tween.channel);
+        self.arrivals
+            .push((tween.start + tween.length, tween.group, tween.channel));
+    }
+
+    /// Move, Move to, Turn or Fade: glide the group from where it is now.
+    fn animate(&mut self, trigger: &MapTrigger, now: f32) {
+        let group = trigger.group;
+        if !(1..=MAP_GROUPS).contains(&group) {
+            return;
+        }
+        let channel = match trigger.action {
+            TriggerAction::Turn => TweenChannel::Turn,
+            TriggerAction::Fade => TweenChannel::Fade,
+            _ => TweenChannel::Move,
+        };
+        let from = self.tween_value(group, channel, now);
+        // Offsets stay within a few arenas however often a Move repeats, and
+        // turns wrap so they never lose precision.
+        let reach = tankyard_content::TRAVEL_LIMIT * 2.;
+        let to = match trigger.action {
+            TriggerAction::Move => [
+                (from[0] + trigger.travel[0]).clamp(-reach, reach),
+                (from[1] + trigger.travel[1]).clamp(-reach, reach),
+            ],
+            TriggerAction::Place => trigger.travel,
+            TriggerAction::Turn => [from[0] % 360. + trigger.amount as f32, 0.],
+            _ => [trigger.amount.clamp(0, 100) as f32 / 100., 0.],
+        };
+        let from = if channel == TweenChannel::Turn {
+            [from[0] % 360., 0.]
+        } else {
+            from
+        };
+        let tween = Tween {
+            group,
+            channel,
+            from,
+            to,
+            start: now,
+            length: trigger.tween.clamp(0., tankyard_content::TWEEN_SECONDS),
+            easing: trigger.easing,
+        };
+        // A new motion replaces any return the group was waiting for.
+        self.returns
+            .retain(|(_, back)| back.group != group || back.channel != channel);
+        if trigger.duration > 0. && from != to {
+            self.returns.push((
+                now + tween.length + trigger.duration,
+                Tween {
+                    from: to,
+                    to: from,
+                    ..tween
+                },
+            ));
+        }
+        self.start_tween(tween);
     }
 
     /// Queue every trigger listening on signal channel `channel`.
@@ -700,12 +915,16 @@ impl MapLogic {
                 }
                 *hidden = if hide { *hidden | bit } else { *hidden & !bit };
             }
+            TriggerAction::Move
+            | TriggerAction::Place
+            | TriggerAction::Turn
+            | TriggerAction::Fade => self.animate(trigger, now),
             TriggerAction::Announce => effects.push(LogicEffect::Announce(
                 tankyard_content::fill_counters(trigger.text.trim(), &self.counters).into_owned(),
             )),
             TriggerAction::Boss => {
                 if let Some(kind) = BossKind::from_id(&trigger.boss) {
-                    let area = map_rect(config, trigger.rect);
+                    let area = self.area(config, trigger);
                     effects.push(LogicEffect::Boss {
                         kind,
                         at: V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5),
@@ -714,7 +933,7 @@ impl MapLogic {
             }
             TriggerAction::Shapes => effects.push(LogicEffect::Shapes {
                 count: trigger.amount.clamp(1, TRIGGER_SHAPES) as u32,
-                area: map_rect(config, trigger.rect),
+                area: self.area(config, trigger),
             }),
             TriggerAction::Signal => self.signal(trigger.group),
             TriggerAction::Random => {
@@ -760,7 +979,7 @@ impl MapLogic {
                 }
             }
             TriggerAction::Script => {
-                let area = map_rect(config, trigger.rect);
+                let area = self.area(config, trigger);
                 effects.push(LogicEffect::Script {
                     name: trigger.text.trim().to_owned(),
                     trigger: index,
@@ -773,7 +992,7 @@ impl MapLogic {
                 });
             }
             TriggerAction::Heal | TriggerAction::Hurt | TriggerAction::Award => {
-                let area = map_rect(config, trigger.rect);
+                let area = self.area(config, trigger);
                 let ids = tanks
                     .iter()
                     .filter(|tank| notices(trigger, tank) && contains(area, tank.pos))
@@ -807,6 +1026,10 @@ impl MapLogic {
             .then(|| self.next.get(index).copied())
             .flatten()
     }
+    /// Where the motions have put each group as of the last step.
+    pub fn poses(&self) -> &GroupPoses {
+        &self.poses
+    }
     /// Whether trigger `index` has used up its one action this round.
     pub fn spent(&self, index: usize) -> bool {
         self.spent.get(index).copied().unwrap_or(false)
@@ -832,16 +1055,18 @@ fn schedule(trigger: &MapTrigger, from: f32) -> f32 {
 
 /// What `trigger`'s gate sees: the counters, the groups, the round time and
 /// the noticed tanks in its area, counted only when a condition asks.
+#[allow(clippy::too_many_arguments)]
 pub fn gate_state<'a>(
     trigger: &MapTrigger,
     config: &WorldConfig,
     counters: &'a [i32; MAP_COUNTERS as usize],
     now: f32,
     hidden: u32,
+    poses: &GroupPoses,
     tanks: &[Occupant],
 ) -> GateState<'a> {
     let inside = if trigger.counts_inside() {
-        let area = map_rect(config, trigger.rect);
+        let area = map_rect(config, poses.shift(trigger.rect, trigger.member));
         tanks
             .iter()
             .filter(|tank| notices(trigger, tank) && contains(area, tank.pos))
@@ -862,6 +1087,20 @@ impl World {
         self.match_state.hidden_groups
     }
 
+    /// Whether map logic is gliding any group's cover right now.
+    pub fn cover_gliding(&self) -> bool {
+        let now = self.match_state.elapsed;
+        self.match_state
+            .tweens
+            .iter()
+            .any(|t| t.channel == TweenChannel::Move && t.moving(now))
+    }
+
+    /// Where map logic has put each group.
+    pub fn group_poses(&self) -> &GroupPoses {
+        &self.poses
+    }
+
     /// A script's request to map logic, carried out next tick.
     pub fn map_input(&mut self, input: LogicInput) {
         self.logic.input(input);
@@ -872,6 +1111,8 @@ impl World {
     pub(crate) fn compose_walls(&mut self) {
         let hidden = self.map_hidden();
         self.map_walls.clone_from(&self.static_walls);
+        self.wall_groups.clear();
+        self.wall_groups.resize(self.static_walls.len(), 0);
         let (width, height) = (self.config.width, self.config.height);
         let mut bases = Vec::new();
         let original_scale = self.config.arena_scale;
@@ -900,6 +1141,7 @@ impl World {
             };
             if !bases.iter().any(|&base| overlaps(base)) {
                 self.map_walls.push(rect);
+                self.wall_groups.push(block.group);
                 continue;
             }
             let mut pieces = vec![rect];
@@ -909,10 +1151,107 @@ impl World {
                     .flat_map(|piece| crate::map_layout::outside_base(piece, base))
                     .collect();
             }
+            self.wall_groups
+                .extend(std::iter::repeat_n(block.group, pieces.len()));
             self.map_walls.extend(pieces);
         }
-        self.walls.clone_from(&self.map_walls);
         self.scale_map_walls();
+    }
+
+    /// Follow map logic's group motions: move the cover of moving groups,
+    /// carrying tanks, shapes and bosses that stand in its way, and publish
+    /// the motions so clients draw the same glide.
+    pub(crate) fn follow_group_motion(&mut self) {
+        let now = self.match_state.elapsed;
+        // A motion that ended where the map placed its group tells clients
+        // nothing, so snapshots leave it out; a second's grace lets clients
+        // that draw a little behind the server finish drawing it.
+        let shown = |t: &&Tween| t.to != t.channel.rest() || now < t.start + t.length + 1.;
+        if !self
+            .match_state
+            .tweens
+            .iter()
+            .eq(self.logic.tweens.iter().filter(shown))
+        {
+            self.match_state.tweens.clear();
+            self.match_state
+                .tweens
+                .extend(self.logic.tweens.iter().filter(shown));
+        }
+        let poses = GroupPoses::at(&self.match_state.tweens, now);
+        if poses == self.poses {
+            return;
+        }
+        // Groups whose cover glided at some point since the last step. The
+        // step that ends a glide still moves it, often fastest of all.
+        let gliding = self
+            .match_state
+            .tweens
+            .iter()
+            .filter(|t| t.channel == TweenChannel::Move && t.moving(now - DT))
+            .fold(0, |mask, t| mask | MapDef::group_bit(t.group));
+        let before = std::mem::replace(&mut self.poses, poses);
+        if before.offset == self.poses.offset {
+            return;
+        }
+        let mut old = std::mem::take(&mut self.motion_scratch);
+        old.clone_from(&self.walls);
+        self.scale_map_walls();
+        if gliding != 0 {
+            self.push_from_moving_walls(&old, gliding);
+        }
+        self.motion_scratch = old;
+    }
+
+    /// Cover that glided this step pushes what its leading face swept into,
+    /// sideways first and then up or down, so a diagonal glide pushes like
+    /// the two straight ones it is made of. Whatever is beside the cover or
+    /// behind it stays put. A wall that jumps (an instant move) is handled
+    /// like one that appears.
+    fn push_from_moving_walls(&mut self, old: &[Rect], gliding: u32) {
+        let bounds = self.config.bounds();
+        for (index, (&before, &after)) in old.iter().zip(&self.walls).enumerate() {
+            let group = self.wall_groups.get(index).copied().unwrap_or(0);
+            if before == after || MapDef::group_bit(group) & gliding == 0 {
+                continue;
+            }
+            let across = Rect {
+                x: after.x,
+                w: after.w,
+                ..before
+            };
+            for (from, to, vertical) in [(before, across, false), (across, after, true)] {
+                let push = |pos: V2, radius: f32| -> Option<V2> {
+                    let pushed = swept_by(pos, radius, from, to, vertical)?;
+                    let (lo, hi) = if vertical {
+                        (bounds.y + radius, bounds.y + bounds.h - radius)
+                    } else {
+                        (bounds.x + radius, bounds.x + bounds.w - radius)
+                    };
+                    let pushed = pushed.clamp(lo, hi.max(lo));
+                    Some(if vertical {
+                        V2::new(pos.x, pushed)
+                    } else {
+                        V2::new(pushed, pos.y)
+                    })
+                };
+                for tank in self.tanks.iter_mut().filter(|t| t.alive) {
+                    if let Some(pos) = push(tank.pos, tank.radius) {
+                        tank.pos = pos;
+                    }
+                }
+                for target in &mut self.targets {
+                    if let Some(pos) = push(target.pos, target.radius) {
+                        target.pos = pos;
+                    }
+                }
+                for boss in &mut self.bosses {
+                    if let Some(pos) = push(boss.pos, boss.radius) {
+                        boss.pos = pos;
+                    }
+                }
+            }
+        }
     }
 
     /// Pads: speed and conveyors for movement, portals, then repair and
@@ -935,7 +1274,12 @@ impl World {
                 .iter()
                 .enumerate()
                 .filter(|(_, zone)| MapDef::group_bit(zone.group) & hidden == 0)
-                .map(|(index, zone)| (index, map_rect(&self.config, zone.rect))),
+                .map(|(index, zone)| {
+                    (
+                        index,
+                        map_rect(&self.config, self.poses.shift(zone.rect, zone.group)),
+                    )
+                }),
         );
         self.portal_rest.retain(|_, rest| {
             *rest -= DT;
@@ -997,7 +1341,7 @@ impl World {
 
     /// Run map logic for this tick and carry out what it asks.
     pub(crate) fn run_triggers(&mut self) {
-        if self.map.triggers.is_empty() && !self.logic.has_input() {
+        if self.map.triggers.is_empty() && !self.logic.has_input() && !self.logic.in_motion() {
             return;
         }
         let now = self.match_state.elapsed;
@@ -1092,6 +1436,67 @@ impl World {
             self.match_state.hidden_groups = hidden;
             self.compose_walls();
         }
+        self.follow_group_motion();
+    }
+}
+
+/// Where map logic has put each group at round time `now`, as a client
+/// replays it from a snapshot.
+pub fn snapshot_poses(snapshot: &Snapshot, now: f32) -> GroupPoses {
+    GroupPoses::at(&snapshot.match_state.tweens, now)
+}
+
+/// `snapshot`'s walls where map logic has moved them at round time `now`.
+/// Snapshots carry walls where the map places them, so a gliding door costs
+/// no traffic and every client draws the same easing the server plays.
+pub fn place_walls(snapshot: &Snapshot, poses: &GroupPoses, out: &mut Vec<Rect>) {
+    out.clone_from(&snapshot.walls);
+    if !poses.moved || snapshot.wall_groups.len() != snapshot.walls.len() {
+        return;
+    }
+    let scale = snapshot.config.arena_scale;
+    let (width, height) = (
+        snapshot.config.width * scale,
+        snapshot.config.height * scale,
+    );
+    for (wall, &group) in out.iter_mut().zip(&snapshot.wall_groups) {
+        let [dx, dy] = poses.offset(group);
+        wall.x += dx * width;
+        wall.y += dy * height;
+    }
+}
+
+/// Where a circle goes along one axis when a wall glides from `from` to `to`
+/// along it: just clear of the leading face, if that face reached the circle.
+/// Only a circle whose center started at or past the leading face is pushed,
+/// which leaves alone one the wall slides past or moves away from, however
+/// it touches, and still catches one a fast wall passed right over.
+fn swept_by(pos: V2, radius: f32, from: Rect, to: Rect, vertical: bool) -> Option<f32> {
+    // (start, length) of a rectangle along the motion, then across it.
+    let along = |r: Rect| if vertical { (r.y, r.h) } else { (r.x, r.w) };
+    let side = |r: Rect| if vertical { (r.x, r.w) } else { (r.y, r.h) };
+    let (at, beside) = if vertical {
+        (pos.y, pos.x)
+    } else {
+        (pos.x, pos.y)
+    };
+    let ((start, length), (end, size)) = (along(from), along(to));
+    let (low, wide) = side(to);
+    let gap = beside - beside.clamp(low, low + wide);
+    if gap.abs() >= radius {
+        return None;
+    }
+    // How far from the face the center sits when the circle just touches it.
+    let clear = (radius * radius - gap * gap).sqrt();
+    let forward = (end + size * 0.5) - (start + length * 0.5);
+    if forward > 0. {
+        let (face, reached) = (start + length, end + size);
+        (at >= face && at - clear < reached).then_some(reached + clear + 0.5)
+    } else if forward < 0. {
+        let (face, reached) = (start, end);
+        (at <= face && at + clear > reached).then_some(reached - clear - 0.5)
+    } else {
+        None
     }
 }
 
@@ -1198,6 +1603,305 @@ mod tests {
     }
 
     #[test]
+    fn moving_groups_glide_cover_push_tanks_and_return() {
+        let mut world = world_with(|map| {
+            map.blocks.push(MapBlock {
+                rect: [0.3, 0.3, 0.04, 0.1],
+                style: Default::default(),
+                color: None,
+                group: 5,
+            });
+            map.zones.push(MapZone {
+                kind: ZoneKind::Speed,
+                rect: [0.3, 0.6, 0.05, 0.05],
+                strength: 1.,
+                group: 5,
+                angle: 0.,
+                exit: [0., 0.],
+            });
+            map.triggers.push(MapTrigger {
+                group: 5,
+                travel: [0.1, 0.],
+                tween: 1.,
+                easing: tankyard_content::Easing::LINEAR,
+                duration: 2.,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Move)
+            });
+        });
+        world.add_player("in the way", false);
+        let block = *world.walls.last().unwrap();
+        let start = block.x;
+        let width = world.config.width * world.config.arena_scale;
+        world.tanks[0].pos = V2::new(block.x + block.w + 0.05 * width, block.y + block.h * 0.5);
+        world.tanks[0].vel = V2::ZERO;
+        for _ in 0..30 {
+            world.step();
+        }
+        // The arena resizes as players join, so measure from the block's home now.
+        let shift =
+            |world: &World| world.walls.last().unwrap().x - world.rest_walls.last().unwrap().x;
+        assert!(shift(&world) > 0.03 * width, "the block glides");
+        assert!(
+            (world.rest_walls.last().unwrap().x - start).abs() < 10.,
+            "snapshots keep its home"
+        );
+        assert_eq!(*world.wall_groups.last().unwrap(), 5);
+        assert!(world.cover_gliding());
+        assert_eq!(world.match_state.tweens.len(), 1);
+        for _ in 0..40 {
+            world.step();
+        }
+        let wall = *world.walls.last().unwrap();
+        let width = world.config.width * world.config.arena_scale;
+        assert!(
+            (shift(&world) - 0.1 * width).abs() < 1.,
+            "it stops at the end"
+        );
+        let tank = &world.tanks[0];
+        assert!(
+            tank.pos.x - tank.radius >= wall.x + wall.w - 1.,
+            "the tank it swept along stays clear of it"
+        );
+        assert!(!world.cover_gliding());
+        let pad = map_point(&world.config, [0.32 + 0.1, 0.62]);
+        assert!(
+            terrain_factor(&world.map, &world.config, 0, &world.poses, pad) > 1.,
+            "pads move with their group"
+        );
+        // Two seconds after arriving it glides home over the same second.
+        for _ in 0..200 {
+            world.step();
+        }
+        assert!(shift(&world).abs() < 1e-3, "and comes home");
+        let snapshot = world.snapshot();
+        assert_eq!(snapshot.walls.len(), snapshot.wall_groups.len());
+        assert!(snapshot.match_state.tweens.iter().all(|t| t.valid()));
+        // Once home, the motion soon drops out of snapshots.
+        for _ in 0..90 {
+            world.step();
+        }
+        assert!(world.snapshot().match_state.tweens.is_empty());
+        assert!(shift(&world).abs() < 1e-3, "and it stays home");
+    }
+
+    fn gliding_block(travel: [f32; 2], easing: tankyard_content::Easing) -> World {
+        world_with(|map| {
+            map.blocks.push(MapBlock {
+                rect: [0.3, 0.3, 0.04, 0.1],
+                style: Default::default(),
+                color: None,
+                group: 5,
+            });
+            map.triggers.push(MapTrigger {
+                group: 5,
+                travel,
+                tween: 1.,
+                easing,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Move)
+            });
+        })
+    }
+
+    #[test]
+    fn gliding_cover_pushes_only_what_lies_ahead_of_it() {
+        let mut world = gliding_block([0.1, 0.], tankyard_content::Easing::LINEAR);
+        for name in ["above", "below", "behind", "corner", "ahead"] {
+            world.add_player(name, false);
+        }
+        // Joining players grow the arena, so place tanks once it has settled.
+        for _ in 0..240 {
+            world.update_arena_size();
+        }
+        world.scale_map_walls();
+        let block = *world.walls.last().unwrap();
+        let r = world.tanks[0].radius;
+        let (right, bottom) = (block.x + block.w, block.y + block.h);
+        // Each rests against the block, a hair inside it as collisions leave
+        // tanks, except the one just past its top right corner.
+        let spots = [
+            V2::new(block.x + block.w * 0.5, block.y - r + 0.01),
+            V2::new(block.x + block.w * 0.75, bottom + r - 0.01),
+            V2::new(block.x - r + 0.01, block.y + block.h * 0.5),
+            V2::new(right + r * 0.8, block.y - r * 0.7),
+            V2::new(right + r - 0.01, block.y + block.h * 0.5),
+        ];
+        for (tank, spot) in world.tanks.iter_mut().zip(spots) {
+            tank.pos = spot;
+            tank.vel = V2::ZERO;
+        }
+        for _ in 0..3 {
+            world.step();
+        }
+        let wall = *world.walls.last().unwrap();
+        assert!(wall.x > block.x + 1., "the block glides");
+        let [above, below, behind, corner, ahead] = [0, 1, 2, 3, 4].map(|i| world.tanks[i].pos);
+        assert!(
+            (above.x - spots[0].x).abs() < 0.5 && (below.x - spots[1].x).abs() < 0.5,
+            "cover sliding past tanks leaves them be: {above:?} {below:?}"
+        );
+        assert!(
+            (behind.x - spots[2].x).abs() < 0.5,
+            "cover moving away leaves a tank behind: {behind:?}"
+        );
+        assert!(
+            corner.x > spots[3].x && corner.x - spots[3].x < wall.x - block.x,
+            "a corner nudges a tank it meets, less than it moved: {corner:?}"
+        );
+        assert!(
+            ahead.x - r >= wall.x + wall.w,
+            "and carries one ahead of it"
+        );
+        for _ in 0..80 {
+            world.step();
+        }
+        let wall = *world.walls.last().unwrap();
+        for tank in &world.tanks {
+            assert!(
+                crate::physics::circle_rect(tank.pos, tank.radius - 0.5, wall).is_none(),
+                "no tank ends inside the block: {:?} {wall:?}",
+                tank.pos
+            );
+        }
+    }
+
+    #[test]
+    fn fast_diagonal_glides_push_through_their_last_step() {
+        // Ease-in moves fastest at the very end, as an instant move would.
+        let easing = tankyard_content::Easing {
+            curve: tankyard_content::Curve::Expo,
+            mode: tankyard_content::EaseMode::In,
+        };
+        let mut world = gliding_block([0.12, 0.08], easing);
+        world.add_player("ahead", false);
+        world.config.dynamic_arena = false;
+        world.step();
+        let block = *world.walls.last().unwrap();
+        let width = world.config.width * world.config.arena_scale;
+        let height = world.config.height * world.config.arena_scale;
+        let r = world.tanks[0].radius;
+        // Where the block ends, just past its far corner: only the last few
+        // steps reach it.
+        let goal = V2::new(
+            block.x + block.w + 0.12 * width,
+            block.y + block.h + 0.08 * height,
+        );
+        world.tanks[0].pos = goal + V2::new(r * 0.5, r * 0.5);
+        world.tanks[0].vel = V2::ZERO;
+        for _ in 0..90 {
+            world.step();
+        }
+        let wall = *world.walls.last().unwrap();
+        assert!((wall.x + wall.w - goal.x).abs() < 1., "the block arrives");
+        let tank = &world.tanks[0];
+        assert!(
+            crate::physics::circle_rect(tank.pos, tank.radius - 0.5, wall).is_none(),
+            "the tank was pushed clear: {:?} {wall:?}",
+            tank.pos
+        );
+        assert!(
+            tank.pos.x > goal.x && tank.pos.y > goal.y,
+            "ahead of the block"
+        );
+    }
+
+    #[test]
+    fn turn_and_fade_change_only_how_decor_looks() {
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                group: 2,
+                amount: 90,
+                tween: 1.,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Turn)
+            },
+            MapTrigger {
+                group: 2,
+                amount: 25,
+                tween: 0.,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Fade)
+            },
+            MapTrigger {
+                group: 3,
+                travel: [0.2, 0.1],
+                tween: 0.5,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Place)
+            },
+        ]);
+        bench.run(2., &[]);
+        let poses = GroupPoses::at(&bench.logic.tweens, bench.now);
+        assert!((poses.turn(2) - 90.).abs() < 1e-3);
+        assert!((poses.opacity(2) - 0.25).abs() < 1e-3);
+        assert_eq!(poses.offset(3), [0.2, 0.1]);
+        assert_eq!(poses.offset(2), [0., 0.]);
+    }
+
+    #[test]
+    fn arrivals_wake_watchers_once_each_motion_ends() {
+        let count = |counter: u8, source: u8| MapTrigger {
+            source,
+            group: counter,
+            amount: 1,
+            seconds: 0.,
+            ..trigger(TriggerWhen::Arrived, TriggerAction::Count)
+        };
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                group: 3,
+                travel: [0.1, 0.],
+                tween: 1.,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Move)
+            },
+            count(1, 3),
+            // Group 3 arriving fades group 4 at once, which arrives in turn.
+            MapTrigger {
+                source: 3,
+                group: 4,
+                amount: 40,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Arrived, TriggerAction::Fade)
+            },
+            count(2, 4),
+        ]);
+        bench.run(0.9, &[]);
+        assert_eq!(bench.logic.counters[..2], [0, 0], "still gliding");
+        bench.run(0.2, &[]);
+        assert_eq!(
+            bench.logic.counters[..2],
+            [1, 1],
+            "it arrived, then the fade"
+        );
+        bench.run(2., &[]);
+        assert_eq!(bench.logic.counters[..2], [1, 1], "nothing arrives twice");
+
+        // A motion that another takes over from never arrives; the new one does.
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                group: 3,
+                travel: [0.1, 0.],
+                tween: 1.,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Move)
+            },
+            MapTrigger {
+                group: 3,
+                tween: 1.,
+                seconds: 0.5,
+                ..trigger(TriggerWhen::Start, TriggerAction::Place)
+            },
+            count(1, 3),
+        ]);
+        bench.run(1.2, &[]);
+        assert_eq!(bench.logic.counters[0], 0, "the first glide was cut short");
+        bench.run(0.5, &[]);
+        assert_eq!(bench.logic.counters[0], 1);
+    }
+
+    #[test]
     fn pads_change_speed_and_push_only_inside_shown_areas() {
         let mut map = tankyard_content::builtin_maps().remove(0);
         map.zones.push(MapZone {
@@ -1218,12 +1922,21 @@ mod tests {
         });
         let config = WorldConfig::default();
         let inside = V2::new(config.width * 0.5, config.height * 0.5);
-        assert!(terrain_factor(&map, &config, 0, inside) > 1.4);
-        assert_eq!(terrain_factor(&map, &config, 0, V2::new(10., 10.)), 1.);
-        assert_eq!(terrain_factor(&map, &config, 1 << 1, inside), 1.);
-        let push = terrain_push(&map, &config, 0, inside);
+        assert!(terrain_factor(&map, &config, 0, &GroupPoses::default(), inside) > 1.4);
+        assert_eq!(
+            terrain_factor(&map, &config, 0, &GroupPoses::default(), V2::new(10., 10.)),
+            1.
+        );
+        assert_eq!(
+            terrain_factor(&map, &config, 1 << 1, &GroupPoses::default(), inside),
+            1.
+        );
+        let push = terrain_push(&map, &config, 0, &GroupPoses::default(), inside);
         assert!(push.x.abs() < 0.01 && (push.y - CONVEYOR_SPEED).abs() < 0.01);
-        assert_eq!(terrain_push(&map, &config, 0, V2::new(10., 10.)), V2::ZERO);
+        assert_eq!(
+            terrain_push(&map, &config, 0, &GroupPoses::default(), V2::new(10., 10.)),
+            V2::ZERO
+        );
     }
 
     #[test]

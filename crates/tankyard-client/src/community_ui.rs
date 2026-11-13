@@ -208,7 +208,14 @@ impl CommunityUi {
         if (!client.permissions.is_empty() || owner)
             && small_button(Self::server_button(s, creator), title, s * 0.72)
         {
-            if client.permissions.is_empty() {
+            if client.permissions.is_empty() && owner && client.central_owner_challenge.is_some() {
+                // Asking for owner tools here is the owner's consent to
+                // prove who they are to this server.
+                client.staff_consent = true;
+                client.last_action = Some(
+                    "Verifying your owner identity with this server. Verify only where you trust the host.".into(),
+                );
+            } else if client.permissions.is_empty() {
                 client.last_action = Some(crate::central_owner::CentralOwner::unavailable(client));
             } else {
                 self.admin_open = !self.admin_open;

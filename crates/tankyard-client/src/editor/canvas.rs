@@ -42,6 +42,9 @@ pub enum Gesture {
     },
     /// Dragging a portal's exit.
     Exit { key: Key },
+    /// Dragging where a Move or Place trigger sends its group, measured
+    /// from the middle of the group.
+    Travel { index: usize, center: [f32; 2] },
     /// Selecting (Edit) or deleting (Delete) a screen region.
     Marquee { start: Vec2, additive: bool },
     /// Deleting whatever the pointer crosses.
@@ -336,7 +339,7 @@ impl Editor {
                     if trigger.action.targets_group() || trigger.action == TriggerAction::Reset {
                         trigger.group = self.build_group;
                     }
-                    if matches!(trigger.when, TriggerWhen::Shown | TriggerWhen::Hidden) {
+                    if trigger.when.watches_group() {
                         trigger.source = self.build_group;
                     }
                 }
@@ -449,7 +452,36 @@ impl Editor {
             r.y + r.h * (f32::from(y) + 1.) * 0.5 + f32::from(y) * out(r.h),
         )
     }
+    /// The selected Move or Place trigger and the bounds of the group it
+    /// moves, as the map places it.
+    fn travel_target(&self) -> Option<(usize, [f32; 4])> {
+        let [Key::Trigger(index)] = *self.selection.as_slice() else {
+            return None;
+        };
+        let trigger = self.doc.map.triggers.get(index)?;
+        if !trigger.action.moves() || trigger.group == 0 {
+            return None;
+        }
+        let members: Vec<Key> = self
+            .doc
+            .items()
+            .filter(|&(key, _, group)| group == trigger.group && !matches!(key, Key::Trigger(_)))
+            .map(|(key, _, _)| key)
+            .collect();
+        Some((index, self.doc.bounds(&members)?))
+    }
     fn handle_at(&self, p: Vec2) -> Option<Gesture> {
+        if let Some((index, bounds)) = self.travel_target() {
+            let travel = self.doc.map.triggers[index].travel;
+            let center = [bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5];
+            if self
+                .point_on_screen([center[0] + travel[0], center[1] + travel[1]])
+                .distance(p)
+                < 12.
+            {
+                return Some(Gesture::Travel { index, center });
+            }
+        }
         let (originals, from) = self.handle_target()?;
         if let [(key, Object::Zone(zone))] = originals.as_slice()
             && zone.kind == ZoneKind::Portal
@@ -712,6 +744,29 @@ impl Editor {
                     self.doc.replace(*key, Object::Zone(zone));
                 }
             }
+            Gesture::Travel { index, center } => {
+                let world = self.view.world(pointer);
+                let (w, h) = (self.doc.map.width, self.doc.map.height);
+                let mut travel = [world.x / w - center[0], world.y / h - center[1]];
+                if self.snap {
+                    travel[0] = (travel[0] * w / self.grid).round() * self.grid / w;
+                    travel[1] = (travel[1] * h / self.grid).round() * self.grid / h;
+                }
+                // Shift keeps the move straight along its longer axis.
+                if shift() {
+                    let along = usize::from(travel[1].abs() > travel[0].abs());
+                    travel[1 - along] = 0.;
+                }
+                let travel = travel.map(|v| v.clamp(-TRAVEL_LIMIT, TRAVEL_LIMIT));
+                let key = Key::Trigger(*index);
+                if let Some(Object::Trigger(mut trigger)) = self.doc.object(key) {
+                    trigger.travel = travel;
+                    if trigger.tween > 0. {
+                        trigger.tween = trigger.tween.max(least_tween(travel));
+                    }
+                    self.doc.replace(key, Object::Trigger(trigger));
+                }
+            }
             Gesture::Marquee { .. } => {}
             Gesture::Erase { last } => {
                 self.erase(*last, pointer);
@@ -766,6 +821,7 @@ impl Editor {
             Gesture::Paint { .. }
             | Gesture::Resize { .. }
             | Gesture::Exit { .. }
+            | Gesture::Travel { .. }
             | Gesture::Erase { .. } => self.commit(),
         }
     }
@@ -795,8 +851,9 @@ impl Editor {
         let shown = scenery::Shown {
             hidden: if self.show_hidden { 0 } else { ghost },
             counters: self.preview.counters,
+            poses: self.preview.poses(),
         };
-        scenery::floor(map, config, shown.hidden, &self.view, self.time);
+        scenery::floor(map, config, &shown, &self.view, self.time);
         scenery::decorations(map, config, &shown, &self.view, self.time, false, settings);
         let style = |style: BlockStyle| {
             scenery::wall_style(
@@ -815,7 +872,13 @@ impl Editor {
             canvas.h + 80.,
         );
         for (key, r, group) in self.doc.items() {
-            let rect = self.on_screen(r);
+            // The logic preview glides groups; their homes stay outlined,
+            // since that is where editing moves them.
+            let moved = shown.poses.offset(group) != [0., 0.];
+            if moved {
+                dashed_rect(self.on_screen(r), 1., 4., alpha(muted_color(), 0.45));
+            }
+            let rect = self.on_screen(shown.poses.shift(r, group));
             if !overlaps(view, rect) {
                 continue;
             }
@@ -1210,6 +1273,41 @@ impl Editor {
             draw_poly(exit.x, exit.y, 4, 9., 45., color);
             draw_poly_lines(exit.x, exit.y, 4, 9., 45., 1.5, WHITE);
         }
+        self.draw_travel(s);
+    }
+    /// Where the selected Move or Place trigger sends its group: a ghost of
+    /// each member there, an arrow, a dot riding the arrow with the
+    /// trigger's easing, and the diamond that drags the destination.
+    fn draw_travel(&self, s: f32) {
+        let Some((index, bounds)) = self.travel_target() else {
+            return;
+        };
+        let trigger = &self.doc.map.triggers[index];
+        let [dx, dy] = trigger.travel;
+        let color = brushes::LOGIC;
+        let center = [bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5];
+        let from = self.point_on_screen(center);
+        let to = self.point_on_screen([center[0] + dx, center[1] + dy]);
+        dashed_rect(self.on_screen(bounds), 1., 4., alpha(color, 0.55));
+        let members = self
+            .doc
+            .items()
+            .filter(|&(key, _, group)| group == trigger.group && !matches!(key, Key::Trigger(_)));
+        for (_, r, _) in members.take(256) {
+            let ghost = self.on_screen([r[0] + dx, r[1] + dy, r[2], r[3]]);
+            draw_rectangle(ghost.x, ghost.y, ghost.w, ghost.h, alpha(color, 0.10));
+            dashed_rect(ghost, 1.5, 5., alpha(color, 0.75));
+        }
+        if from.distance(to) > 2. {
+            arrow(from, to, 2., alpha(color, 0.85));
+        }
+        if trigger.tween > 0. && !reduced_motion() {
+            let phase = ((self.time % (trigger.tween + 0.6)) / trigger.tween).min(1.);
+            let p = from.lerp(to, trigger.easing.apply(phase));
+            draw_circle(p.x, p.y, 4. * s.max(0.8), alpha(color, 0.95));
+        }
+        draw_poly(to.x, to.y, 4, 9., 45., color);
+        draw_poly_lines(to.x, to.y, 4, 9., 45., 1.5, WHITE);
     }
     fn draw_preview_marks(&self, s: f32) {
         let preview = &self.preview;

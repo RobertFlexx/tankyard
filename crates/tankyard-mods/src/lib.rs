@@ -472,6 +472,18 @@ pub enum Effect {
     MapReset {
         group: u8,
     },
+    /// Glide, turn or fade map group `group` (1 to 32) as a `place`, `turn`
+    /// or `fade` trigger would, over `seconds`: to offset `value` from where
+    /// the map puts it, by `value[0]` degrees, or to `value[0]` percent.
+    MapMotion {
+        group: u8,
+        action: tankyard_content::TriggerAction,
+        value: [f32; 2],
+        #[serde(default)]
+        seconds: f32,
+        #[serde(default)]
+        easing: tankyard_content::Easing,
+    },
 }
 /// Widgets one pack may show to one player (or to everyone).
 pub const MAX_HUD_WIDGETS: usize = 16;
@@ -602,6 +614,25 @@ impl Effect {
             }
             Self::MapGroup { group, .. } => (1..=tankyard_content::MAP_GROUPS).contains(group),
             Self::MapReset { group } => *group <= tankyard_content::MAP_GROUPS,
+            Self::MapMotion {
+                group,
+                action,
+                value,
+                seconds,
+                ..
+            } => {
+                use tankyard_content::{TRAVEL_LIMIT, TURN_LIMIT, TWEEN_SECONDS, TriggerAction};
+                let within = |v: f32, limit: f32| v.is_finite() && v.abs() <= limit;
+                (1..=tankyard_content::MAP_GROUPS).contains(group)
+                    && seconds.is_finite()
+                    && (0. ..=TWEEN_SECONDS).contains(seconds)
+                    && match action {
+                        TriggerAction::Place => value.iter().all(|&v| within(v, TRAVEL_LIMIT)),
+                        TriggerAction::Turn => within(value[0], TURN_LIMIT as f32),
+                        TriggerAction::Fade => (0. ..=100.).contains(&value[0]),
+                        _ => false,
+                    }
+            }
         };
         if !valid {
             return Err("invalid hook action or class reference".into());

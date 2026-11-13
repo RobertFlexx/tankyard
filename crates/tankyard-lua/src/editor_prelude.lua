@@ -97,10 +97,11 @@ function editor.free_group(map)
   for _, trigger in ipairs(map.triggers or {}) do
     used[trigger.member or 0] = true
     local action = trigger.action
-    if action == "toggle" or action == "show" or action == "hide" or action == "reset" then
+    if action == "toggle" or action == "show" or action == "hide" or action == "reset"
+      or action == "move" or action == "place" or action == "turn" or action == "fade" then
       used[trigger.group or 0] = true
     end
-    if trigger.when == "shown" or trigger.when == "hidden" then
+    if trigger.when == "shown" or trigger.when == "hidden" or trigger.when == "arrived" then
       used[trigger.source or 0] = true
     end
     for _, test in ipairs(conditions(trigger)) do

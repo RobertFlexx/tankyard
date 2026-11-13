@@ -370,6 +370,9 @@ All commands need a tank ID where they act on a tank. Values outside the bounds 
 | `set_map_counter(n, value)`, `add_map_counter(n, value)` | sets or adds to map counter 1–8; whole numbers, results within ±99,999 |
 | `show_map_group(group, shown)` | shows (`true`, the default) or hides map group 1–32 |
 | `reset_map_triggers(group)` | (0.16) makes map group 1–32's triggers start afresh, or every trigger with 0 or `nil`: once-per-round triggers can act again, rest times end, waiting delays are dropped, timers restart from now and sequences go back to their first channel |
+| `move_map_group(group, x, y, seconds, curve, mode)` | (1.0) glides map group 1–32 to `x`, `y` from where the map places it, as fractions of the arena's width and height (±2; `0, 0` brings it home), over `seconds` (0–600; 0 or `nil` moves it at once). A glide faster than one arena a second is slowed to that speed. `curve` and `mode` are [easing](#motions) names; leave them out for `"sine"`, `"in_out"` |
+| `turn_map_group(group, degrees, seconds, curve, mode)` | (1.0) turns map group 1–32's decor `degrees` further (±3,600) |
+| `fade_map_group(group, percent, seconds, curve, mode)` | (1.0) fades map group 1–32's decor to `percent` opacity (0–100) |
 
 Commands are capped at 512 per pack per tick.
 
@@ -428,7 +431,7 @@ end)
 
 Widget IDs use lowercase letters, digits and `_`. A pack may show 16 widgets to everyone and 16 to each player, and a player receives at most 64 from all packs. Bots have no screen, so widgets for bots are dropped. Widgets end with the round, with their player, or when the pack is disabled.
 
-The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. Clients draw exactly what they receive. HUD widgets were introduced in 0.12. Extended map features use protocol 25; players and servers must use matching supported protocols.
+The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. Clients draw exactly what they receive. HUD widgets were introduced in 0.12. Tank Yard 1.0 uses protocol 26; players and servers must use matching supported protocols.
 
 ### Defining content
 
@@ -711,6 +714,7 @@ Actions take the same bounds as the [Lua commands](#changing-the-match):
 | `map_counter` | `counter` (1–8), `value`, `add` (`true` adds, otherwise sets) |
 | `map_group` | `group` (1–32), `shown` |
 | `map_reset` | (0.16) `group` (0–32; 0 resets every trigger) |
+| `map_motion` | (1.0) `group` (1–32), `action` (`place`, `turn` or `fade`), `value: [x, y]` (the offset, or degrees or percent first, as in the script commands above), `seconds` (0–600) and `easing` (`{ "curve": "bounce", "mode": "out" }`) |
 
 A pack has at most 64 hooks, 16 conditions and 16 actions per hook, conditions nested four deep, 10,000 condition checks per tick, 4,096 counters and 16,384 cooldown entries. Hooks don't trigger other hooks. A pack whose batch fails validation is disabled without applying it. Counters and cooldowns reset each round.
 
@@ -778,8 +782,8 @@ The [Arena Workshop](map-editor.md) creates these definitions without writing co
 - `style`: `map`, `slate`, `garden`, `circuit`, `bastion`, `relay`, `orrery` or `sand`.
 - `blocks`: `{ "rect": [x,y,w,h], "style": "slate", "color": [r,g,b], "group": 0 }`. Color is optional; these are solid, axis-aligned rectangles.
 - `zones`: `{ "kind": "speed", "rect": [x,y,w,h], "strength": 1, "group": 0, "angle": 0, "exit": [x,y] }`. Kinds are `speed`, `mud`, `repair`, `hazard`, `shelter`, and (protocol 25) `conveyor` and `portal`; strength is 0.25–2. A conveyor pushes along `angle` in degrees (0 right, 90 down) at `150 × strength` units a second. A portal sends tanks to `exit`, a map-relative point that must be open floor. See the [pad formulas](map-editor.md#objects).
-- `decor`: `{ "kind": "tile", "rect": [x,y,w,h], "color": [120,160,190], "alpha": 255, "rotation": 0, "pulse": 0, "spin": 0, "above": false, "text": "", "effect": null, "group": 0 }`. Kinds: `tile`, `stripes`, `light`, `ring`, `arrow`, `label`, `emitter`. Rotation/spin are degrees; pulse is cycles/second. Text has at most 64 characters.
-- `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`, (protocol 25) `exit`, `signal`, `counter`, (0.15.1) `occupied` (every `seconds`, at least 0.25, while `threshold` tanks, 1–64, are inside), `cleared` (the last noticed tank leaves or dies) and `destroyed` (a noticed tank dies inside), and (0.16) `changed` (counter `source`, 1–8, changes value), `shown` and `hidden` (group `source`, 1–32, is shown or hidden during the round, by anything) and `defeated` (a boss is defeated; `source` 0 for any boss, or a boss's place in the list under `spawn_boss` counting from 1). Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`), (protocol 25) `signal` (channel `group`), `count` (adds `amount` to counter `group`) and `shapes` (`amount` shapes, 1–24, inside `rect`), and (0.15.1) `set` (puts counter `group` at `amount`), `random` (signals one of `amount` channels, at least 2, starting at `group`), `heal` and `hurt` (`amount` percent of health, 1–100) and `award` (`amount` points, 1–100,000) for the noticed tanks inside `rect`, `calculate` (changes counter `group` with `math` and `amount`, or with counter `operand`) and `script` (raises the [`map_event`](#map-logic) script event named `text`: lowercase letters, digits and `_`, starting with a letter, up to 32), and (0.16) `sequence` (signals the next of `amount` channels starting at `group` each time, then starts over) and `reset` (makes group `group`'s triggers start afresh, or every trigger for 0, like `reset_map_triggers`). Protocol 25 fields, all optional:
+- `decor`: `{ "kind": "tile", "rect": [x,y,w,h], "color": [120,160,190], "alpha": 255, "rotation": 0, "pulse": 0, "spin": 0, "flicker": 0, "above": false, "text": "", "effect": null, "group": 0 }`. Kinds: `tile`, `stripes`, `light`, `ring`, `arrow`, `label`, `emitter`. Rotation/spin are degrees; pulse is cycles/second. (1.0) `flicker`, 0–1, makes a `light` waver like a flame or a failing lamp. Text has at most 64 characters.
+- `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`, (protocol 25) `exit`, `signal`, `counter`, (0.15.1) `occupied` (every `seconds`, at least 0.25, while `threshold` tanks, 1–64, are inside), `cleared` (the last noticed tank leaves or dies) and `destroyed` (a noticed tank dies inside), and (0.16) `changed` (counter `source`, 1–8, changes value), `shown` and `hidden` (group `source`, 1–32, is shown or hidden during the round, by anything) and `defeated` (a boss is defeated; `source` 0 for any boss, or a boss's place in the list under `spawn_boss` counting from 1), and (1.0) `arrived` (a motion of group `source`, 1–32, ends). Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`), (protocol 25) `signal` (channel `group`), `count` (adds `amount` to counter `group`) and `shapes` (`amount` shapes, 1–24, inside `rect`), and (0.15.1) `set` (puts counter `group` at `amount`), `random` (signals one of `amount` channels, at least 2, starting at `group`), `heal` and `hurt` (`amount` percent of health, 1–100) and `award` (`amount` points, 1–100,000) for the noticed tanks inside `rect`, `calculate` (changes counter `group` with `math` and `amount`, or with counter `operand`) and `script` (raises the [`map_event`](#map-logic) script event named `text`: lowercase letters, digits and `_`, starting with a letter, up to 32), and (0.16) `sequence` (signals the next of `amount` channels starting at `group` each time, then starts over) and `reset` (makes group `group`'s triggers start afresh, or every trigger for 0, like `reset_map_triggers`), and (1.0) the [motions](#motions) `move`, `place`, `turn` and `fade`. Protocol 25 fields, all optional:
   - `member`: the trigger's own group; it is off while that group is hidden.
   - `who` (`anyone`, `players`, `bots`) and `team` (0–4): which tanks an area trigger notices, or which tanks a `heal`, `hurt` or `award` action reaches.
   - `source`: the signal channel (1–32) or counter (1–8) a trigger waits for. `threshold`: the counter value it waits for.
@@ -788,10 +792,28 @@ The [Arena Workshop](map-editor.md) creates these definitions without writing co
   - (0.16) `also_if`: up to three more conditions, shaped like `only_if`, which they need. `gate` says how all of them combine: `all` (AND, the default), `any` (OR), `not_all` (NAND), `none_of` (NOR) or `one` (XOR, exactly one holds). `otherwise`: a signal channel, 1–32, sent instead when the gate is shut; 0 or left out sends nothing.
   - (0.15.1) `math`: how `calculate` changes its counter: `add`, `subtract`, `multiply`, `divide` (rounds down), `remainder` (never negative), `lowest`, `highest`, `copy`, `random` (0 up to one less than the other value) or `flip` (0 becomes 1, anything else 0). Dividing by zero changes nothing. `operand`: use counter 1–8 instead of `amount`.
 
-  Fields added in 0.15.1 and 0.16 are left out of exported maps when unused, so maps that do without them still load in older versions. A map that uses them needs a server (or offline game) from that version; older ones refuse the map rather than run it wrongly.
+  Trigger fields added in 0.15.1, 0.16 and 1.0 are left out of exported maps when unused. A map that uses them needs a server (or offline game) from that version; older ones refuse the map rather than run it wrongly. Decor and particles in 1.0 always carry their new fields, so maps from 1.0 need 1.0.
 
   Counters 1–8 start at 0 each round and stay within ±99,999. Announcements and decor labels replace `{1}`–`{8}` with counter values. The [logic guide](map-editor.md#groups-and-logic) explains schedules, entry edges, chains and restoration.
 - `hidden_groups`: groups 1–32 hidden at round start. Group 0 is always visible. Blocks, zones and decor sharing a group change together.
+
+#### Motions
+
+Protocol 26 (Tank Yard 1.0) adds triggers that animate a group, in the manner of Godot's tweens. Group `group`'s blocks, pads, decor and trigger areas move together, and moving cover pushes tanks, shapes and bosses ahead of it. Turns and fades change only how decor looks.
+
+- `move` glides the group by `travel` from wherever it is, and `place` glides it to `travel` from where the map places it (`[0, 0]` brings it home). `travel` is `[x, y]` in fractions of the arena's width and height, each within ±2; a group never ends up more than four arenas away.
+- `turn` turns the group's decor `amount` degrees further (±3,600), and `fade` fades it to `amount` percent opacity (0–100).
+- `tween` is how many seconds the motion takes, 0–600; 0 is instant. A move or place may average at most one arena width or height a second.
+- `easing` shapes the motion: `{ "curve": "sine", "mode": "in_out" }` is the default. Curves are `linear`, `sine`, `quad`, `cubic`, `quart`, `quint`, `expo`, `circ`, `back` (pulls back or overshoots a little), `elastic` (springs past the end) and `bounce`. Modes are `in` (starts slowly), `out` (ends slowly), `in_out` and `out_in`.
+- `duration`, when above 0, plays the motion back that many seconds after it ends: a door that shuts again, a lift that comes back down.
+
+A new motion on a group and channel takes over from the one playing, starting where the group is now. An `arrived` trigger watching group `source` acts each time one of the group's motions ends, the trip back included, but not for a motion another took over from; chain motions or open a door once a lift arrives with it. Motions reset each round.
+
+```json
+{ "when": "enter", "action": "move", "rect": [0.45, 0.4, 0.1, 0.2], "group": 3,
+  "travel": [0, -0.06], "tween": 0.5, "easing": { "curve": "cubic", "mode": "out" },
+  "duration": 4, "seconds": 1 }
+```
 
 Emitters' `effect` is an optional particle profile. Defaults are:
 
@@ -801,11 +823,12 @@ Emitters' `effect` is an optional particle profile. Defaults are:
   "speed": 60, "direction": 270, "spread": 50,
   "gravity": 0, "drag": 0.6, "size": 9, "end_size": 3,
   "color": [255,200,90], "end_color": [230,90,60],
-  "fade": true, "spin": 0
+  "fade": true, "spin": 0,
+  "glow": false, "wobble": 0, "twinkle": 0, "area": "fill"
 }
 ```
 
-Particle shapes are `dot`, `square`, `spark`, `ring`, `triangle`. Rate is 0.2–60/s, lifetime 0.1–8 s, speed 0–800, spread 0–360°, gravity ±800, drag 0–8, initial size 1–120, final size 0–120, and spin ±1080°/s. `rate × lifetime` must not exceed 240. Colors are three bytes; direction 0° points right and 90° down.
+Particle shapes are `dot`, `square`, `spark`, `ring`, `triangle`, and (1.0) `soft` (a dot with a soft edge, for smoke, mist and glows) and `star`. (1.0) `glow` adds particles' light to what lies beneath them, like embers; `wobble` drifts them sideways by up to that many world units (0–200), for smoke and fireflies; `twinkle` (0–1) makes each one flicker; and `area` says where they start: anywhere in the rectangle (`fill`), in the ellipse inside it (`round`), along its outline (`edge`) or at its center (`point`). Rate is 0.2–60/s, lifetime 0.1–8 s, speed 0–800, spread 0–360°, gravity ±800, drag 0–8, initial size 1–120, final size 0–120, and spin ±1080°/s. `rate × lifetime` must not exceed 240. Colors are three bytes; direction 0° points right and 90° down.
 
 Maps allow 2,048 walls/blocks combined, 256 zones, 1,024 decor items (48 emitters), 128 triggers, 32 spawn regions, 4 team bases and 32 objectives. Geometry validation also has a catalog-wide work budget. Dimensions are 900–16,000 by 700–16,000 world units. Every rectangle must fit inside `[0,1]²`. Validation checks starting collision/connectivity, finite values and count limits before accepting a pack.
 

@@ -19,16 +19,18 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 25 adds conveyor and portal pads, trigger signals, counters,
-/// filters, chance and delays, and map counters in match state; pad effects
-/// no longer travel in snapshots. Version 24 added map blocks, pads, decor
-/// and triggers and live rule changes. Snapshots and map data changed shape,
-/// so servers accept only version 25 clients. The netcode protocol id stays
+/// Version 26 (Tank Yard 1.0) adds group motions: snapshots carry each
+/// wall's group and the motions map logic is playing, and walls stay where
+/// the map places them. Decor gains flicker and particles gain glow, wobble,
+/// twinkle, emit areas and two shapes. Version 25 added conveyor and portal
+/// pads, trigger signals, counters, filters, chance and delays, and map
+/// counters in match state. Snapshots and map data changed shape, so
+/// servers accept only version 26 clients. The netcode protocol id stays
 /// at 22's so older clients still connect far enough to be told which side
 /// needs updating.
-pub const PROTOCOL_VERSION: u32 = 25;
+pub const PROTOCOL_VERSION: u32 = 26;
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 25;
+pub const MIN_PROTOCOL_VERSION: u32 = 26;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
 pub const SERVER_OUTDATED: &str =
     "This server runs an older Tank Yard. Its host needs to update it.";
@@ -639,6 +641,12 @@ fn snapshot_valid(s: &Snapshot) -> bool {
         && s.walls.iter().all(|w| {
             scalar(w.x) && scalar(w.y) && scalar(w.w) && scalar(w.h) && w.w >= 0. && w.h >= 0.
         })
+        && (s.wall_groups.is_empty() || s.wall_groups.len() == s.walls.len())
+        && s.wall_groups
+            .iter()
+            .all(|&group| group <= tankyard_content::MAP_GROUPS)
+        && s.match_state.tweens.len() <= tankyard_content::TWEEN_SLOTS
+        && s.match_state.tweens.iter().all(|t| t.valid())
         && s.objectives.iter().all(|o| {
             vector(o.pos)
                 && vector(o.home)

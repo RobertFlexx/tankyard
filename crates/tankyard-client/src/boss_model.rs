@@ -38,6 +38,8 @@ fn poly(
         color,
     });
 }
+/// An outlined plate with a lighter rim, so armor reads as raised rather
+/// than painted on. The rim drops out where it would be under a pixel.
 fn hull(
     emit: &mut impl FnMut(Primitive),
     center: Vec2,
@@ -48,7 +50,22 @@ fn hull(
     edge: f32,
 ) {
     poly(emit, center, sides, radius + edge, angle, OUTLINE);
-    poly(emit, center, sides, radius, angle, color);
+    let rim = (radius * 0.07).min(edge * 2.5);
+    if rim >= 0.8 {
+        poly(emit, center, sides, radius, angle, lighten(color, 0.2));
+        poly(emit, center, sides, radius - rim, angle, color);
+    } else {
+        poly(emit, center, sides, radius, angle, color);
+    }
+}
+/// `color` moved `amount` of the way to white.
+fn lighten(color: Color, amount: f32) -> Color {
+    Color::new(
+        color.r + (1. - color.r) * amount,
+        color.g + (1. - color.g) * amount,
+        color.b + (1. - color.b) * amount,
+        color.a,
+    )
 }
 fn tint(color: Color, factor: f32) -> Color {
     Color::new(
@@ -75,6 +92,21 @@ fn plate(emit: &mut impl FnMut(Primitive), center: Vec2, size: Vec2, angle: f32,
     });
 }
 
+/// Each boss's main armor: its sides, its size against the boss radius and
+/// its angle, matching the hulls drawn below.
+fn armor(kind: BossKind, aim: f32, rotate: f32) -> (u8, f32, f32) {
+    match kind {
+        BossKind::Guardian | BossKind::Tempest | BossKind::Skirmisher => (3, 1., aim),
+        BossKind::Defender | BossKind::Prism => (3, 1., rotate),
+        BossKind::Summoner => (4, 1., aim + FRAC_PI_4),
+        BossKind::Foundry => (4, 0.89, aim + FRAC_PI_4),
+        BossKind::SiegeEngine => (4, 0.81, aim + FRAC_PI_4),
+        BossKind::Bastion => (4, 1., FRAC_PI_4),
+        BossKind::FallenOverlord | BossKind::FallenBooster => (0, 1., 0.),
+        BossKind::Sentinel | BossKind::Eclipse | BossKind::Trapper => (6, 1., aim),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn boss_model_geometry(
     kind: BossKind,
@@ -82,7 +114,7 @@ pub fn boss_model_geometry(
     r: f32,
     aim: f32,
     time: f32,
-    _phase: u8,
+    phase: u8,
     team_color: Option<Color>,
     emit: &mut impl FnMut(Primitive),
 ) {
@@ -92,6 +124,32 @@ pub fn boss_model_geometry(
     let color = team_color.unwrap_or_else(|| boss_color(kind));
     let edge = (r * 0.045).max(0.6);
     let rotate = time * 0.16;
+    // A wounded boss burns: amber at its second phase, a pulsing red at its
+    // last, glowing around its armor in the armor's own shape.
+    if phase >= 2 {
+        let (sides, size, angle) = armor(kind, aim, rotate);
+        let (heat, pulse) = if phase >= 3 {
+            (
+                Color::new(1., 0.28, 0.2, color.a),
+                0.5 + 0.5 * (time * 5.).sin(),
+            )
+        } else {
+            (Color::new(1., 0.7, 0.24, color.a), 0.)
+        };
+        for (scale, strength) in [(1.2, 0.1), (1.09, 0.16)] {
+            poly(
+                emit,
+                p,
+                sides,
+                r * size * (scale + 0.04 * pulse) + edge,
+                angle,
+                Color {
+                    a: heat.a * (strength + 0.06 * pulse),
+                    ..heat
+                },
+            );
+        }
+    }
     let direction = |angle: f32| vec2(angle.cos(), angle.sin());
     let mount = |emit: &mut _, angle: f32, width: f32, length: f32, flare: f32| {
         cannon_profile(
@@ -155,26 +213,31 @@ pub fn boss_model_geometry(
                 mount(emit, rotate + n as f32 * TAU / 3. + PI, 0.42, 0.94, 1.45);
             }
             hull(emit, p, 3, r, rotate, color, edge);
-            for n in 0..3 {
-                let position = p + direction(rotate + n as f32 * TAU / 3.) * r * 0.51;
+            hull(emit, p, 3, r * 0.42, rotate, tint(color, 0.86), edge * 0.5);
+            // Every turret barrel goes down before any turret ring, so no
+            // barrel crosses another turret.
+            let turrets = (0..3).map(|n| p + direction(rotate + n as f32 * TAU / 3.) * r * 0.51);
+            for position in turrets.clone() {
                 cannon_profile(
                     emit,
                     position,
                     aim,
-                    r * 0.75,
-                    r * 0.25,
+                    r * 0.68,
+                    r * 0.22,
                     color,
                     0.,
                     1.,
                     Some(edge * 0.7),
                 );
+            }
+            for position in turrets {
                 hull(
                     emit,
                     position,
                     0,
-                    r * 0.23,
+                    r * 0.2,
                     0.,
-                    Color::new(0.66, 0.66, 0.66, 1.),
+                    Color::new(0.66, 0.66, 0.66, color.a),
                     edge * 0.7,
                 );
             }

@@ -26,6 +26,9 @@ pub struct Session {
     party_manual_address: bool,
     pub practice: Option<tankyard_client::practice::Run>,
     pub engine: Engine,
+    /// Whether staff identity proofs go to this server without asking; see
+    /// [`trusted_address`].
+    pub staff_trusted: bool,
     pub player: EntityId,
     pub spectating: Option<EntityId>,
     spectating_round: u32,
@@ -41,6 +44,10 @@ pub struct Session {
     received_tick: Option<(u32, u64)>,
     received_at: f64,
     render_time: f32,
+    /// The latest snapshot's walls where map logic has moved them, and the
+    /// group poses that put them there, for prediction.
+    walls_now: Vec<tankyard_core::Rect>,
+    poses_now: tankyard_content::GroupPoses,
     pub previous_positions: HashMap<EntityId, (V2, f32)>,
     pub ticks: u64,
     pub dropped_ticks: u64,
@@ -143,7 +150,7 @@ impl Session {
                 while local.world.upgrade_stat(player, index) {}
             }
         }
-        let snapshot = local.world.snapshot();
+        let snapshot = local.world.display_snapshot();
         let run = tankyard_client::practice::Run::new(index, &snapshot, player)
             .ok_or("Could not start practice.")?;
         let mut session = Self::create(Engine::Offline(Box::new(local)), player, Some(snapshot));
@@ -153,7 +160,7 @@ impl Session {
     pub fn offline(config: WorldConfig, bots: usize, name: &str) -> Self {
         let mut local = LocalSession::new(config, bots);
         let id = local.world.add_player(name, false);
-        let snapshot = local.world.snapshot();
+        let snapshot = local.world.display_snapshot();
         Self::create(Engine::Offline(Box::new(local)), id, Some(snapshot))
     }
     /// A workshop playtest, starting at `start` when it has room for a tank.
@@ -179,7 +186,7 @@ impl Session {
         {
             world.tanks[index].pos = clear;
         }
-        let snapshot = local.world.snapshot();
+        let snapshot = local.world.display_snapshot();
         Ok(Self::create(
             Engine::Offline(Box::new(local)),
             id,
@@ -195,7 +202,7 @@ impl Session {
         let loaded = crate::mod_library::load(paths)?;
         let mut local = LocalSession::with_mods(config, bots, loaded)?;
         let id = local.world.add_player(name, false);
-        let snapshot = local.world.snapshot();
+        let snapshot = local.world.display_snapshot();
         Ok(Self::create(
             Engine::Offline(Box::new(local)),
             id,
@@ -227,6 +234,7 @@ impl Session {
             None,
         );
         session.party_invite = invite;
+        session.staff_trusted = trusted_address(address);
         Ok(session)
     }
     pub fn party(
@@ -388,6 +396,7 @@ impl Session {
         }
         Self {
             practice: None,
+            staff_trusted: matches!(engine, Engine::Online { host: Some(_), .. }),
             party_invite: None,
             party_network: String::new(),
             party_discovery: None,
@@ -410,6 +419,8 @@ impl Session {
             received_tick: None,
             received_at: 0.0,
             render_time: 0.0,
+            walls_now: Vec::new(),
+            poses_now: Default::default(),
             previous_positions: HashMap::new(),
             ticks: 0,
             dropped_ticks: 0,
@@ -617,6 +628,8 @@ impl Session {
             );
             self.received_tick = Some((snapshot.match_state.round, snapshot.tick));
             self.received_at = now;
+            self.poses_now = tankyard_core::snapshot_poses(snapshot, snapshot.match_state.elapsed);
+            tankyard_core::place_walls(snapshot, &self.poses_now, &mut self.walls_now);
             self.previous_positions.clear();
             if let Some(previous) = &client.previous_snapshot
                 && previous.match_state.round == snapshot.match_state.round
@@ -655,12 +668,12 @@ impl Session {
                 for input in &self.pending {
                     predicted.input = *input;
                     self.predicted_tick += 1;
-                    predict_pads(&self.bundle.maps, snapshot, &mut predicted);
+                    predict_pads(&self.bundle.maps, snapshot, &self.poses_now, &mut predicted);
                     predict_tank(
                         &mut predicted,
                         content,
                         &snapshot.config,
-                        &snapshot.walls,
+                        &self.walls_now,
                         self.predicted_tick,
                         DT,
                     );
@@ -708,7 +721,8 @@ impl Session {
                     latest.vel,
                     extrapolation,
                     latest.radius,
-                    snapshot,
+                    &snapshot.config,
+                    &self.walls_now,
                 );
                 tank.aim = lerp_angle(*angle, latest.aim, alpha);
             }
@@ -720,7 +734,8 @@ impl Session {
                     latest.vel,
                     extrapolation,
                     latest.radius,
-                    snapshot,
+                    &snapshot.config,
+                    &self.walls_now,
                 );
             }
         }
@@ -731,7 +746,8 @@ impl Session {
                     latest.vel,
                     extrapolation,
                     latest.radius,
-                    snapshot,
+                    &snapshot.config,
+                    &self.walls_now,
                 );
                 target.angle = lerp_angle(*angle, latest.angle, alpha);
             }
@@ -743,10 +759,18 @@ impl Session {
                     latest.vel,
                     extrapolation,
                     latest.radius,
-                    snapshot,
+                    &snapshot.config,
+                    &self.walls_now,
                 );
             }
         }
+        // Map groups glide by the round clock, so draw them at the moment
+        // the rest of the display shows rather than at the packet's.
+        let map_time = snapshot.match_state.elapsed
+            + (self.render_time - snapshot.tick as f32 * DT).clamp(-0.5, 0.1);
+        display.match_state.elapsed = map_time;
+        let poses = tankyard_core::snapshot_poses(snapshot, map_time);
+        tankyard_core::place_walls(snapshot, &poses, &mut display.walls);
     }
     pub fn tick(&mut self, input: PlayerInput, content: &Content) {
         if self.practice.as_ref().is_some_and(|run| run.done()) {
@@ -784,7 +808,7 @@ impl Session {
                 if let Some(display) = &mut self.display {
                     local.world.snapshot_into(display);
                 } else {
-                    self.display = Some(local.world.snapshot());
+                    self.display = Some(local.world.display_snapshot());
                 }
                 if let (Some(run), Some(snapshot)) = (&mut self.practice, &self.display) {
                     run.observe(snapshot);
@@ -801,12 +825,12 @@ impl Session {
                     {
                         predicted.input = input;
                         self.predicted_tick += 1;
-                        predict_pads(&self.bundle.maps, snapshot, predicted);
+                        predict_pads(&self.bundle.maps, snapshot, &self.poses_now, predicted);
                         predict_tank(
                             predicted,
                             content,
                             &snapshot.config,
-                            &snapshot.walls,
+                            &self.walls_now,
                             self.predicted_tick,
                             DT,
                         );
@@ -922,7 +946,7 @@ impl Session {
                 }
                 self.achievement_tracker
                     .observe_world(&local.world, self.player);
-                self.display = Some(local.world.snapshot());
+                self.display = Some(local.world.display_snapshot());
             }
             Engine::Online { client, .. } => {
                 client.upgrade_stat_amount(index, count);
@@ -936,7 +960,7 @@ impl Session {
                     self.achievement_tracker
                         .observe_world(&local.world, self.player);
                     self.events.extend(local.world.events.last().cloned());
-                    self.display = Some(local.world.snapshot());
+                    self.display = Some(local.world.display_snapshot());
                 }
             }
             Engine::Online { client, .. } => {
@@ -951,7 +975,7 @@ impl Session {
         match &mut self.engine {
             Engine::Offline(local) => {
                 local.world.sandbox_level(self.player, level);
-                self.display = Some(local.world.snapshot());
+                self.display = Some(local.world.display_snapshot());
             }
             Engine::Online { client, .. } => {
                 client.sandbox_level(level);
@@ -992,7 +1016,7 @@ impl Session {
             Engine::Offline(local) => {
                 if local.world.sandbox_class(self.player, class) {
                     self.events.extend(local.world.events.last().cloned());
-                    self.display = Some(local.world.snapshot());
+                    self.display = Some(local.world.display_snapshot());
                 }
             }
             Engine::Online { client, .. } => {
@@ -1021,7 +1045,7 @@ impl Session {
             Engine::Offline(local) => {
                 if local.world.bosses.len() < 12 && local.world.spawn_boss(kind) != 0 {
                     self.events.extend(local.world.events.last().cloned());
-                    self.display = Some(local.world.snapshot());
+                    self.display = Some(local.world.display_snapshot());
                 }
             }
             Engine::Online { client, .. } => {
@@ -1091,15 +1115,21 @@ pub(super) fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
 }
 /// Pads under a predicted tank, with the server's arithmetic, since pad
 /// effects do not travel in snapshots.
-fn predict_pads(maps: &[tankyard_content::MapDef], snapshot: &Snapshot, tank: &mut Tank) {
+fn predict_pads(
+    maps: &[tankyard_content::MapDef],
+    snapshot: &Snapshot,
+    poses: &tankyard_content::GroupPoses,
+    tank: &mut Tank,
+) {
     let Some(map) = maps.iter().find(|map| map.id == snapshot.config.map) else {
         tank.terrain = 1.;
         tank.push = V2::ZERO;
         return;
     };
     let hidden = snapshot.match_state.hidden_groups;
-    tank.terrain = tankyard_core::terrain_factor(map, &snapshot.config, hidden, tank.pos);
-    tank.push = tankyard_core::terrain_push(map, &snapshot.config, hidden, tank.pos);
+    let config = &snapshot.config;
+    tank.terrain = tankyard_core::terrain_factor(map, config, hidden, poses, tank.pos);
+    tank.push = tankyard_core::terrain_push(map, config, hidden, poses, tank.pos);
 }
 
 pub fn interpolate_position(previous: V2, current: V2, fraction: f32) -> V2 {
@@ -1116,30 +1146,78 @@ fn extrapolate_position(
     velocity: V2,
     seconds: f32,
     radius: f32,
-    snapshot: &Snapshot,
+    config: &tankyard_core::WorldConfig,
+    walls: &[tankyard_core::Rect],
 ) -> V2 {
     if seconds <= 0.0 {
         return position;
     }
     let end = position + velocity * seconds.min(0.075);
     let mut contact: f32 = 1.0;
-    for &wall in &snapshot.walls {
+    for &wall in walls {
         if let Some((time, _)) = tankyard_core::physics::sweep_rect(position, end, radius, wall) {
             contact = contact.min(time);
         }
     }
     let position = position.lerp(end, contact);
-    let edge_x = radius.min(snapshot.config.width * 0.5);
-    let edge_y = radius.min(snapshot.config.height * 0.5);
+    let edge_x = radius.min(config.width * 0.5);
+    let edge_y = radius.min(config.height * 0.5);
     V2::new(
-        position.x.clamp(edge_x, snapshot.config.width - edge_x),
-        position.y.clamp(edge_y, snapshot.config.height - edge_y),
+        position.x.clamp(edge_x, config.width - edge_x),
+        position.y.clamp(edge_y, config.height - edge_y),
     )
+}
+
+/// Whether a server address names the official server or this computer.
+/// Staff identity proofs go only there, or to a game this client hosts,
+/// without asking: any server could pass a proof it was handed on to another
+/// server, so elsewhere the player chooses to verify.
+pub fn trusted_address(address: &str) -> bool {
+    let address = address.trim();
+    let rest = address.split_once("://").map_or(address, |(_, rest)| rest);
+    let host = rest.split('/').next().unwrap_or_default();
+    if let Ok(socket) = host.parse::<std::net::SocketAddr>() {
+        return socket.ip().is_loopback();
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+    let name = host
+        .rsplit_once(':')
+        .filter(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(host, |(name, _)| name);
+    name.eq_ignore_ascii_case(crate::settings::CENTRAL_SERVER)
+        || name.eq_ignore_ascii_case("localhost")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn staff_proofs_go_unasked_only_to_the_official_server_or_this_computer() {
+        for address in [
+            "tankyard.kokonico.me",
+            "TankYard.Kokonico.me:7777",
+            "wss://tankyard.kokonico.me/play",
+            "localhost:7777",
+            "127.0.0.1:7777",
+            "[::1]:7777",
+            "::1",
+        ] {
+            assert!(trusted_address(address), "{address}");
+        }
+        for address in [
+            "203.0.113.5:7777",
+            "192.168.1.20:7777",
+            "tankyard.kokonico.me.example.com",
+            "evil.example:7777",
+            "wss://example.com/tankyard.kokonico.me",
+            "tankyard://party/abc",
+            "",
+        ] {
+            assert!(!trusted_address(address), "{address}");
+        }
+    }
     #[test]
     fn local_spawn_protection_display_ends_without_waiting_for_a_server_snapshot() {
         let content = Content::builtin();
@@ -1363,7 +1441,14 @@ mod tests {
         let snapshot = session.display.as_mut().unwrap();
         let origin = V2::new(500., 500.);
         let velocity = V2::new(1000., 0.);
-        let capped = extrapolate_position(origin, velocity, 10., 22., snapshot);
+        let capped = extrapolate_position(
+            origin,
+            velocity,
+            10.,
+            22.,
+            &snapshot.config,
+            &snapshot.walls,
+        );
         assert!((capped.x - 575.).abs() < 0.001);
         snapshot.walls.push(tankyard_core::Rect {
             x: 550.,
@@ -1371,7 +1456,14 @@ mod tests {
             w: 20.,
             h: 200.,
         });
-        let contact = extrapolate_position(origin, velocity, 0.075, 22., snapshot);
+        let contact = extrapolate_position(
+            origin,
+            velocity,
+            0.075,
+            22.,
+            &snapshot.config,
+            &snapshot.walls,
+        );
         assert!((contact.x - 528.).abs() < 0.001);
         snapshot.walls.clear();
         let edge = extrapolate_position(
@@ -1379,15 +1471,23 @@ mod tests {
             velocity,
             0.075,
             22.,
-            snapshot,
+            &snapshot.config,
+            &snapshot.walls,
         );
         assert_eq!(edge.x, snapshot.config.width - 22.);
         assert_eq!(
-            extrapolate_position(origin, velocity, 0., 22., snapshot),
+            extrapolate_position(origin, velocity, 0., 22., &snapshot.config, &snapshot.walls),
             origin
         );
         assert_eq!(
-            extrapolate_position(origin, velocity, 0.075, 2000., snapshot),
+            extrapolate_position(
+                origin,
+                velocity,
+                0.075,
+                2000.,
+                &snapshot.config,
+                &snapshot.walls
+            ),
             V2::new(snapshot.config.width * 0.5, snapshot.config.height * 0.5)
         );
     }

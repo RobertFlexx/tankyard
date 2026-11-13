@@ -36,13 +36,18 @@ impl Arena {
 pub(crate) struct WallCache {
     pub revision: u32,
     walls: Vec<Rect>,
+    groups: Vec<u8>,
     pub changed_at: Duration,
 }
 impl WallCache {
-    pub fn refresh(&mut self, walls: &[Rect], now: Duration) {
-        if self.walls != walls {
+    /// Snapshots carry walls where the map places them, so cover that map
+    /// logic glides around never makes them resend.
+    pub fn refresh(&mut self, walls: &[Rect], groups: &[u8], now: Duration) {
+        if self.walls != walls || self.groups != groups {
             self.walls.clear();
             self.walls.extend_from_slice(walls);
+            self.groups.clear();
+            self.groups.extend_from_slice(groups);
             self.revision = self.revision.wrapping_add(1);
             self.changed_at = now;
         }

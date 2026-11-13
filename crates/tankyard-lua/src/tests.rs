@@ -651,11 +651,45 @@ fn map_events_reach_scripts_and_scripts_drive_map_logic() {
             "tankyard.reset_map_triggers(33)",
             "group must be a whole number from 0 to 32",
         ),
+        (
+            "tankyard.move_map_group(1, 3, 0)",
+            "x must be between -2 and 2",
+        ),
+        (
+            "tankyard.fade_map_group(1, 50, 1, 'wobbly')",
+            "unknown curve \"wobbly\"",
+        ),
+        (
+            "tankyard.turn_map_group(1, 90, 1, 'back', 'sideways')",
+            "unknown ease mode",
+        ),
     ] {
         let (_, runtime) = run(&format!("tankyard.on('tick', function() {call} end)"), 1);
         let errors = runtime.errors.join(" | ");
         assert!(errors.contains(error), "{call}: {errors}");
     }
+}
+
+#[test]
+fn scripts_glide_turn_and_fade_map_groups() {
+    let source = r#"
+        local started = false
+        tankyard.on("tick", function()
+          if not started then
+            started = true
+            tankyard.move_map_group(3, 0.1, -0.05, 0.5, "cubic", "out")
+            tankyard.turn_map_group(4, 90)
+            tankyard.fade_map_group(4, 40, 1, "linear")
+          end
+        end)
+    "#;
+    let (world, runtime) = run(source, 90);
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    let poses = world.group_poses();
+    assert_eq!(poses.offset(3), [0.1, -0.05]);
+    assert_eq!(poses.turn(4), 90.);
+    assert!((poses.opacity(4) - 0.4).abs() < 1e-4);
+    assert_eq!(world.match_state.tweens.len(), 3);
 }
 
 #[test]

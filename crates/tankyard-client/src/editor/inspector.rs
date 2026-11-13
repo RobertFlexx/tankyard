@@ -843,6 +843,10 @@ impl Editor {
                 let mut opacity = f32::from(d.alpha);
                 f.number("Opacity", &mut opacity, [0., 255.], 1.);
                 d.alpha = opacity as u8;
+                if d.kind == DecorKind::Light {
+                    f.number("Flicker", &mut d.flicker, [0., 1.], 0.05);
+                    f.note("Lights brighten what lies under them. Opacity sets how strongly; flicker makes them waver like a flame.");
+                }
                 f.toggle("Above tanks", &mut d.above);
                 if d.kind == DecorKind::Emitter {
                     let effect = d.effect.get_or_insert_default();
@@ -1879,6 +1883,11 @@ fn trigger_form(
                 "Acts when a trigger, a restore timer or a script hides the group. The starting layout does not count."
             });
         }
+        TriggerWhen::Arrived => {
+            t.source = t.source.clamp(1, MAP_GROUPS);
+            f.stepper("Watch group", &mut t.source, [1, MAP_GROUPS], None);
+            f.note("Acts each time a motion of the group ends: a move, turn or fade, the trip back included. Chain motions with it, or open a door once a lift arrives.");
+        }
         TriggerWhen::Defeated => {
             let mut boss = defeated_boss(t).and_then(BossKind::from_id);
             let options: Vec<Option<BossKind>> = std::iter::once(None)
@@ -1998,6 +2007,58 @@ fn trigger_form(
             }
             f.note("A script pack hears it with tankyard.on(\"map_event\", ...); event.name is this name. Without such a pack it does nothing.");
         }
+        TriggerAction::Move | TriggerAction::Place => {
+            t.group = t.group.clamp(1, MAP_GROUPS);
+            f.stepper("Target group", &mut t.group, [1, MAP_GROUPS], None);
+            let place = t.action == TriggerAction::Place;
+            let limit = TRAVEL_LIMIT * 100.;
+            for (axis, title) in [
+                if place {
+                    "Right of its place (% of width)"
+                } else {
+                    "Right (% of width)"
+                },
+                if place {
+                    "Below its place (% of height)"
+                } else {
+                    "Down (% of height)"
+                },
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut percent = t.travel[axis] * 100.;
+                if f.number(title, &mut percent, [-limit, limit], 0.5) {
+                    t.travel[axis] = percent / 100.;
+                }
+            }
+            motion_form(f, t);
+            f.note(if place {
+                "Sends the group's blocks, pads, decor and trigger areas to this offset from where the map puts them; 0 and 0 bring them home. Drag the diamond on the canvas to set it."
+            } else {
+                "Moves the group's blocks, pads, decor and trigger areas this far from wherever they are now. Drag the diamond on the canvas to set it. Cover pushes tanks in its way."
+            });
+        }
+        TriggerAction::Turn => {
+            t.group = t.group.clamp(1, MAP_GROUPS);
+            f.stepper("Target group", &mut t.group, [1, MAP_GROUPS], None);
+            t.amount = t.amount.clamp(-TURN_LIMIT, TURN_LIMIT);
+            f.integer(
+                "Turn by (degrees)",
+                &mut t.amount,
+                [-TURN_LIMIT, TURN_LIMIT],
+            );
+            motion_form(f, t);
+            f.note("Turns the group's decor and emitters about their own centers, on top of any spin. Blocks and pads keep their shape.");
+        }
+        TriggerAction::Fade => {
+            t.group = t.group.clamp(1, MAP_GROUPS);
+            f.stepper("Target group", &mut t.group, [1, MAP_GROUPS], None);
+            t.amount = t.amount.clamp(0, 100);
+            f.integer("Opacity (%)", &mut t.amount, [0, 100]);
+            motion_form(f, t);
+            f.note("Fades the group's decor and emitters. Blocks and pads stay solid; hide the group to take them away.");
+        }
         TriggerAction::Reset => {
             t.group = t.group.min(MAP_GROUPS);
             f.stepper("Group (0 for all)", &mut t.group, [0, MAP_GROUPS], None);
@@ -2023,6 +2084,72 @@ fn trigger_form(
     f.number("Chance %", &mut chance, [1., 100.], 1.);
     t.chance = chance as u8;
     f.toggle("Once per round", &mut t.once);
+}
+
+/// How a Move, Place, Turn or Fade plays: how long, along which curve, and
+/// whether it goes back.
+fn motion_form(f: &mut Form, t: &mut MapTrigger) {
+    f.number(
+        "Over (s, 0 at once)",
+        &mut t.tween,
+        [0., TWEEN_SECONDS],
+        0.1,
+    );
+    if t.action.moves() && t.tween > 0. {
+        // Long moves take longer rather than breaking the speed limit.
+        t.tween = t.tween.max(least_tween(t.travel));
+    }
+    if t.tween > 0. {
+        f.pick("Curve", &mut t.easing.curve, &Curve::ALL, Curve::name, 4);
+        f.pick("", &mut t.easing.mode, &EaseMode::ALL, EaseMode::name, 2);
+        curve_graph(f, t.easing);
+    }
+    f.number(
+        "Go back after (s, 0 stays)",
+        &mut t.duration,
+        [0., 3600.],
+        0.5,
+    );
+}
+
+/// The easing curve as a small graph, with a dot riding it so its feel shows.
+fn curve_graph(f: &mut Form, easing: Easing) {
+    let s = f.s;
+    let r = Rect::new(f.x, f.y, f.w, 76. * s);
+    draw_rectangle(r.x, r.y, r.w, r.h, alpha(text_color(), 0.05));
+    // Overshooting curves need room above and below.
+    let (low, high) = (-0.45, 1.45);
+    let point = |t: f32, v: f32| {
+        vec2(
+            r.x + 10. * s + t * (r.w - 20. * s),
+            r.bottom() - (v - low) / (high - low) * r.h,
+        )
+    };
+    for v in [0., 1.] {
+        let (a, b) = (point(0., v), point(1., v));
+        draw_line(a.x, a.y, b.x, b.y, 1., alpha(muted_color(), 0.45));
+    }
+    let mut last = point(0., easing.apply(0.));
+    for i in 1..=60 {
+        let t = i as f32 / 60.;
+        let p = point(t, easing.apply(t));
+        draw_line(last.x, last.y, p.x, p.y, 2. * s, brushes::LOGIC);
+        last = p;
+    }
+    // Play it over a second, hold, then start again.
+    let t = if reduced_motion() {
+        0.5
+    } else {
+        ((get_time() as f32) % 1.6).min(1.)
+    };
+    let value = easing.apply(t);
+    let p = point(t, value);
+    draw_circle(p.x, p.y, 4. * s, accent_color());
+    // The same value as a slide along the bottom, as a group would move.
+    let track = r.bottom() - 7. * s;
+    let x = r.x + 10. * s + value.clamp(low, high) * (r.w - 20. * s);
+    draw_circle(x, track, 3. * s, alpha(accent_color(), 0.7));
+    f.y += r.h + 12. * s;
 }
 
 /// The gate: up to four conditions, how they combine and what a shut gate
@@ -2217,12 +2344,19 @@ fn script_name(text: &str) -> String {
 
 fn effect_form(f: &mut Form, e: &mut ParticleEffect) {
     f.heading("Particles");
-    if let Some(i) = f.buttons(&brushes::EFFECT_PRESETS, true) {
-        *e = brushes::effect_preset(i);
+    for row in brushes::EFFECT_PRESETS.chunks(5).enumerate() {
+        if let Some(i) = f.buttons(row.1, true) {
+            *e = brushes::effect_preset(row.0 * 5 + i);
+        }
     }
-    f.cycle("Shape", &mut e.shape, &ParticleShape::ALL, |v| {
-        format!("{v:?}")
-    });
+    f.pick(
+        "Shape",
+        &mut e.shape,
+        &ParticleShape::ALL,
+        ParticleShape::name,
+        4,
+    );
+    f.pick("Emit from", &mut e.area, &EmitArea::ALL, EmitArea::name, 4);
     for (title, value, limits, step) in [
         ("Rate", &mut e.rate, [0.2, 60.], 0.2),
         ("Lifetime", &mut e.lifetime, [0.1, 8.], 0.1),
@@ -2234,11 +2368,14 @@ fn effect_form(f: &mut Form, e: &mut ParticleEffect) {
         ("Start size", &mut e.size, [1., 120.], 1.),
         ("End size", &mut e.end_size, [0., 120.], 1.),
         ("Spin", &mut e.spin, [-1080., 1080.], 15.),
+        ("Wobble", &mut e.wobble, [0., 200.], 2.),
+        ("Twinkle", &mut e.twinkle, [0., 1.], 0.05),
     ] {
         f.number(title, value, limits, step);
     }
     e.rate = e.rate.min(240. / e.lifetime);
     f.toggle("Fade out", &mut e.fade);
+    f.toggle("Glow (adds light)", &mut e.glow);
     f.heading("Start colour");
     f.color(&mut e.color);
     f.heading("End colour");

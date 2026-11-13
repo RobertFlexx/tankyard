@@ -195,15 +195,58 @@ pub enum ParticleShape {
     Spark,
     Ring,
     Triangle,
+    /// A dot with a soft edge, for smoke, mist and glows.
+    Soft,
+    /// A five-pointed star.
+    Star,
 }
 impl ParticleShape {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Dot,
+        Self::Soft,
         Self::Square,
         Self::Spark,
         Self::Ring,
         Self::Triangle,
+        Self::Star,
     ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Dot => "Dot",
+            Self::Soft => "Soft",
+            Self::Square => "Square",
+            Self::Spark => "Spark",
+            Self::Ring => "Ring",
+            Self::Triangle => "Triangle",
+            Self::Star => "Star",
+        }
+    }
+}
+
+/// Where in its rectangle an emitter releases particles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmitArea {
+    /// Anywhere in the rectangle.
+    #[default]
+    Fill,
+    /// Anywhere in the ellipse inside it.
+    Round,
+    /// Along its outline.
+    Edge,
+    /// From its center.
+    Point,
+}
+impl EmitArea {
+    pub const ALL: [Self; 4] = [Self::Fill, Self::Round, Self::Edge, Self::Point];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Fill => "Fill",
+            Self::Round => "Round",
+            Self::Edge => "Edge",
+            Self::Point => "Center",
+        }
+    }
 }
 
 /// A particle effect, drawn by clients only. Every field has a bounded range
@@ -235,6 +278,13 @@ pub struct ParticleEffect {
     pub fade: bool,
     /// Spin in degrees per second, -1080 to 1080.
     pub spin: f32,
+    /// Add their light to what is beneath them, like embers or sparks.
+    pub glow: bool,
+    /// Sideways drift in world units, 0 to 200, for smoke and fireflies.
+    pub wobble: f32,
+    /// How much each particle flickers, 0 to 1.
+    pub twinkle: f32,
+    pub area: EmitArea,
 }
 impl Default for ParticleEffect {
     fn default() -> Self {
@@ -253,6 +303,10 @@ impl Default for ParticleEffect {
             end_color: [230, 90, 60],
             fade: true,
             spin: 0.,
+            glow: false,
+            wobble: 0.,
+            twinkle: 0.,
+            area: EmitArea::Fill,
         }
     }
 }
@@ -268,6 +322,8 @@ impl ParticleEffect {
             && range(self.size, 1., 120.)
             && range(self.end_size, 0., 120.)
             && range(self.spin, -1080., 1080.)
+            && range(self.wobble, 0., 200.)
+            && range(self.twinkle, 0., 1.)
             && self.rate * self.lifetime <= 240.
         {
             Ok(())
@@ -296,6 +352,9 @@ pub struct MapDecor {
     /// Degrees per second, -720 to 720.
     #[serde(default)]
     pub spin: f32,
+    /// Unsteady brightness, like a flame or a failing lamp, 0 to 1.
+    #[serde(default)]
+    pub flicker: f32,
     /// Drawn above tanks instead of on the floor.
     #[serde(default)]
     pub above: bool,
@@ -346,9 +405,12 @@ pub enum TriggerWhen {
     /// When a boss is defeated: boss `source` of [`BOSS_IDS`], counting from
     /// 1, or any boss for 0.
     Defeated,
+    /// When a motion of group `source` ends: a Move, Move to, Turn or Fade,
+    /// the trip back included.
+    Arrived,
 }
 impl TriggerWhen {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Every,
         Self::Enter,
         Self::Exit,
@@ -362,6 +424,7 @@ impl TriggerWhen {
         Self::Shown,
         Self::Hidden,
         Self::Defeated,
+        Self::Arrived,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -378,6 +441,7 @@ impl TriggerWhen {
             Self::Shown => "On shown",
             Self::Hidden => "On hidden",
             Self::Defeated => "On boss down",
+            Self::Arrived => "On arrive",
         }
     }
     /// Whether the trigger watches its rectangle for tanks.
@@ -397,7 +461,12 @@ impl TriggerWhen {
                 | Self::Shown
                 | Self::Hidden
                 | Self::Defeated
+                | Self::Arrived
         )
+    }
+    /// Whether `source` names a group it watches.
+    pub fn watches_group(self) -> bool {
+        matches!(self, Self::Shown | Self::Hidden | Self::Arrived)
     }
 }
 
@@ -442,12 +511,24 @@ pub enum TriggerAction {
     /// waiting delays are dropped, Once per round ones can act again, timers
     /// count from now and sequences start at their first channel.
     Reset,
+    /// Glides group `group` by `travel` over `tween` seconds.
+    Move,
+    /// Glides group `group` to `travel` from where the map places it.
+    Place,
+    /// Turns group `group`'s decorations by `amount` degrees.
+    Turn,
+    /// Fades group `group`'s decorations to `amount` percent opacity.
+    Fade,
 }
 impl TriggerAction {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 21] = [
         Self::Toggle,
         Self::Show,
         Self::Hide,
+        Self::Move,
+        Self::Place,
+        Self::Turn,
+        Self::Fade,
         Self::Announce,
         Self::Boss,
         Self::Signal,
@@ -482,11 +563,36 @@ impl TriggerAction {
             Self::Script => "Script event",
             Self::Sequence => "Sequence",
             Self::Reset => "Reset triggers",
+            Self::Move => "Move group",
+            Self::Place => "Move group to",
+            Self::Turn => "Turn decor",
+            Self::Fade => "Fade decor",
         }
     }
     /// Whether `group` names a map group, as opposed to a channel or counter.
     pub fn targets_group(self) -> bool {
+        matches!(
+            self,
+            Self::Toggle
+                | Self::Show
+                | Self::Hide
+                | Self::Move
+                | Self::Place
+                | Self::Turn
+                | Self::Fade
+        )
+    }
+    /// Whether it shows or hides group `group`.
+    pub fn switches_group(self) -> bool {
         matches!(self, Self::Toggle | Self::Show | Self::Hide)
+    }
+    /// Whether it plays a motion, using `tween` and `easing`.
+    pub fn animates(self) -> bool {
+        matches!(self, Self::Move | Self::Place | Self::Turn | Self::Fade)
+    }
+    /// Whether it moves the group, using `travel`.
+    pub fn moves(self) -> bool {
+        matches!(self, Self::Move | Self::Place)
     }
     /// Whether `group` names a counter.
     pub fn targets_counter(self) -> bool {
@@ -918,6 +1024,17 @@ pub struct MapTrigger {
     /// A signal channel sent instead when the gate stays shut; 0 sends none.
     #[serde(default, skip_serializing_if = "is_default")]
     pub otherwise: u8,
+    // Added in 1.0.0, and likewise left out when unused.
+    /// How far Move glides its group, or where Move to puts it, as a
+    /// fraction of the arena's width and height.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub travel: [f32; 2],
+    /// Seconds a motion takes; 0 is instant.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub tween: f32,
+    /// How a motion speeds up and slows down.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub easing: crate::Easing,
 }
 fn always() -> u8 {
     100
@@ -960,6 +1077,9 @@ impl Default for MapTrigger {
             also_if: Vec::new(),
             gate: GateMode::All,
             otherwise: 0,
+            travel: [0., 0.],
+            tween: 0.,
+            easing: crate::Easing::default(),
         }
     }
 }
@@ -997,6 +1117,24 @@ impl MapTrigger {
 pub const MAP_COUNTERS: u8 = 8;
 /// Counter values stay within this magnitude.
 pub const COUNTER_LIMIT: i32 = 99_999;
+/// How far one Move or Move to trigger may glide its group, in arena widths
+/// or heights.
+pub const TRAVEL_LIMIT: f32 = 2.;
+/// Fastest average glide, in arena widths or heights a second. Easing makes
+/// the middle of a motion faster; moving cover pushes tanks along with it.
+pub const MOVE_SPEED_LIMIT: f32 = 1.;
+/// Most degrees one Turn trigger turns.
+pub const TURN_LIMIT: i32 = 3600;
+/// The shortest glide, in tenths of a second, that keeps a move of
+/// `travel` within `MOVE_SPEED_LIMIT`.
+pub fn least_tween(travel: [f32; 2]) -> f32 {
+    let far = travel[0].abs().max(travel[1].abs());
+    if far.is_finite() {
+        (far / MOVE_SPEED_LIMIT * 10.).ceil() / 10.
+    } else {
+        0.
+    }
+}
 /// At most this many shapes from one Spawn shapes trigger.
 pub const TRIGGER_SHAPES: i32 = 24;
 /// At most this many points from one Award points trigger.
@@ -1348,6 +1486,7 @@ pub fn validate_map_features(map: &MapDef) -> Result<(), String> {
         if !decor.rotation.is_finite()
             || !range(decor.pulse, 0., 4.)
             || !range(decor.spin, -720., 720.)
+            || !range(decor.flicker, 0., 1.)
             || !group(decor.group)
             || !display_text(&decor.text, 64)
         {
@@ -1415,7 +1554,7 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         TriggerWhen::Changed if !(1..=MAP_COUNTERS).contains(&trigger.source) => {
             return Err(format!("watch a counter from 1 to {MAP_COUNTERS}"));
         }
-        TriggerWhen::Shown | TriggerWhen::Hidden if !(1..=MAP_GROUPS).contains(&trigger.source) => {
+        when if when.watches_group() && !(1..=MAP_GROUPS).contains(&trigger.source) => {
             return Err(format!("watch a group from 1 to {MAP_GROUPS}"));
         }
         TriggerWhen::Defeated if usize::from(trigger.source) > BOSS_IDS.len() => {
@@ -1487,6 +1626,31 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
                 "name the script event with lowercase letters, digits and _ (32 at most)".into(),
             );
         }
+        TriggerAction::Move | TriggerAction::Place
+            if !trigger
+                .travel
+                .iter()
+                .all(|v| range(*v, -TRAVEL_LIMIT, TRAVEL_LIMIT)) =>
+        {
+            return Err(format!(
+                "move by at most {TRAVEL_LIMIT} arena widths or heights"
+            ));
+        }
+        TriggerAction::Move | TriggerAction::Place
+            if trigger.tween > 0.
+                && trigger.travel[0].abs().max(trigger.travel[1].abs()) / trigger.tween
+                    > MOVE_SPEED_LIMIT =>
+        {
+            return Err(format!(
+                "glide more slowly: at most {MOVE_SPEED_LIMIT} arena widths a second"
+            ));
+        }
+        TriggerAction::Turn if !(-TURN_LIMIT..=TURN_LIMIT).contains(&trigger.amount) => {
+            return Err(format!("turn by at most {TURN_LIMIT} degrees"));
+        }
+        TriggerAction::Fade if !(0..=100).contains(&trigger.amount) => {
+            return Err("fade to 0 to 100 percent".into());
+        }
         TriggerAction::Reset if trigger.group > MAP_GROUPS => {
             return Err(format!(
                 "reset a group from 1 to {MAP_GROUPS}, or 0 for every trigger"
@@ -1532,6 +1696,12 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
     }
     if !(1..=100).contains(&trigger.chance) {
         return Err("chance must be 1 to 100 percent".into());
+    }
+    if !range(trigger.tween, 0., crate::TWEEN_SECONDS) {
+        return Err(format!(
+            "a motion takes 0 to {} seconds",
+            crate::TWEEN_SECONDS
+        ));
     }
     if trigger.member > MAP_GROUPS || trigger.team > 4 {
         return Err(format!(

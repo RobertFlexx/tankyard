@@ -32,7 +32,10 @@ impl CentralOwner {
         let Some(key) = &self.key else {
             return;
         };
+        // Elsewhere the challenge waits until the owner opens owner tools.
+        let trusted = session.staff_trusted;
         if let Engine::Online { client, .. } = &mut session.engine
+            && (trusted || client.staff_consent)
             && let Some(nonce) = client.central_owner_challenge.take()
         {
             let message = tankyard_protocol::central_owner_challenge(

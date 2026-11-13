@@ -26,6 +26,9 @@ struct Args {
     time: f32,
     #[arg(long, default_value_t = 8)]
     columns: usize,
+    /// The phase bosses are drawn in, 1 to 3.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=3))]
+    phase: u8,
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
@@ -157,7 +160,7 @@ fn export_bosses(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             kind.radius() * 0.9,
             args.aim,
             args.time,
-            1,
+            args.phase,
             None,
             &mut |primitive| write_primitive(&mut svg, primitive),
         );

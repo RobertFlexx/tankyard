@@ -31,6 +31,29 @@ pub struct Prefs {
     pub scroll: ScrollMode,
     pub pan_speed: f32,
     pub zoom_speed: f32,
+    /// The palette tab and brush last chosen.
+    pub palette: usize,
+    pub brush: usize,
+    /// The inspector tab last open, in the tab bar's order.
+    pub inspector_tab: usize,
+    /// Whether hidden groups show as outlines on the canvas.
+    pub show_hidden: bool,
+    /// Whether decor and effects move on the canvas.
+    pub animate: bool,
+    /// How fast the logic preview runs.
+    pub logic_speed: f32,
+    /// Where the camera was, and over which map.
+    pub view: Option<SavedView>,
+}
+
+/// The canvas camera over one map.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedView {
+    pub map: String,
+    /// The map's size, so a resized map is framed afresh.
+    pub size: [f32; 2],
+    pub center: [f32; 2],
+    pub zoom: f32,
 }
 
 /// Whether scrolling over the canvas pans or zooms.
@@ -78,6 +101,13 @@ impl Default for Prefs {
             scroll: ScrollMode::Auto,
             pan_speed: 1.,
             zoom_speed: 1.,
+            palette: 0,
+            brush: 1,
+            inspector_tab: 1,
+            show_hidden: true,
+            animate: true,
+            logic_speed: 1.,
+            view: None,
         }
     }
 }
@@ -103,6 +133,19 @@ impl Prefs {
         }
         prefs.folded.retain(|id| !id.is_empty() && id.len() <= 64);
         prefs.folded.truncate(64);
+        if ![0.25, 0.5, 1., 2., 4.].contains(&prefs.logic_speed) {
+            prefs.logic_speed = 1.;
+        }
+        if prefs.palette >= super::brushes::CATEGORIES.len() {
+            prefs.palette = 0;
+        }
+        prefs.view = prefs.view.filter(|view| {
+            view.map.len() <= 64
+                && view.size.iter().all(|v| v.is_finite() && *v > 0.)
+                && view.center.iter().all(|v| v.is_finite() && v.abs() < 1e6)
+                && view.zoom.is_finite()
+                && (0.015..=4.).contains(&view.zoom)
+        });
         prefs
     }
     fn save(&self) -> Result<(), String> {
@@ -133,6 +176,29 @@ mod tests {
         assert_eq!(prefs.scroll, ScrollMode::Auto);
         assert_eq!(prefs.pan_speed, 1.);
         assert_eq!(prefs.zoom_speed, 1.);
+        assert!(prefs.show_hidden && prefs.animate);
+        assert_eq!(prefs.logic_speed, 1.);
+        assert_eq!(prefs.view, None);
+    }
+
+    #[test]
+    fn preferences_round_trip_with_the_camera() {
+        let prefs = Prefs {
+            palette: 5,
+            brush: 3,
+            inspector_tab: 2,
+            show_hidden: false,
+            logic_speed: 2.,
+            view: Some(SavedView {
+                map: "custom".into(),
+                size: [4000., 3000.],
+                center: [1200., 900.],
+                zoom: 0.4,
+            }),
+            ..Prefs::default()
+        };
+        let text = serde_json::to_string(&prefs).unwrap();
+        assert_eq!(serde_json::from_str::<Prefs>(&text).unwrap(), prefs);
     }
 }
 
@@ -280,19 +346,36 @@ impl Editor {
     }
 
     pub(super) fn prefs_now(&self) -> Prefs {
+        let map = &self.doc.map;
         Prefs {
             grid: self.grid,
             snap: self.snap,
             step: self.step,
             show_groups: self.show_groups,
             show_links: self.show_links,
+            palette: self.category,
+            brush: self.brush,
+            inspector_tab: super::Tab::ALL
+                .iter()
+                .position(|&tab| tab == self.tab)
+                .unwrap_or(1),
+            show_hidden: self.show_hidden,
+            animate: self.animate,
+            logic_speed: self.preview.speed,
+            view: self.fitted.then(|| SavedView {
+                map: map.id.clone(),
+                size: [map.width, map.height],
+                center: [self.view.center.x, self.view.center.y],
+                zoom: self.view.zoom,
+            }),
             ..self.prefs.clone()
         }
     }
 
-    /// Write the preferences a second after they settle.
-    pub(super) fn keep_prefs(&mut self) {
-        if self.resizing.is_some() || get_time() - self.prefs_checked < 1. {
+    /// Write the preferences a second after they settle, or at once when
+    /// leaving the workshop.
+    pub(super) fn keep_prefs(&mut self, leaving: bool) {
+        if !leaving && (self.resizing.is_some() || get_time() - self.prefs_checked < 1.) {
             return;
         }
         self.prefs_checked = get_time();

@@ -91,6 +91,8 @@ mod native {
         Status::Unavailable(
             if cfg!(target_vendor = "apple") {
                 "DLSS needs an NVIDIA RTX GPU; Macs use MetalFX."
+            } else if cfg!(target_os = "freebsd") {
+                "NVIDIA ships DLSS only for Linux and Windows, so FreeBSD uses FSR 1 instead."
             } else {
                 "This build of Tank Yard doesn't include DLSS."
             }

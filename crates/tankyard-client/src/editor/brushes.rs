@@ -24,7 +24,9 @@ impl Brush {
     }
 }
 
-pub const CATEGORIES: [&str; 6] = ["Blocks", "Pads", "Decor", "Logic", "Gates", "Markers"];
+pub const CATEGORIES: [&str; 7] = [
+    "Blocks", "Pads", "Decor", "Logic", "Gates", "Motion", "Markers",
+];
 
 fn block(name: &'static str, style: BlockStyle) -> Brush {
     Brush {
@@ -86,9 +88,37 @@ fn decor(name: &'static str, kind: DecorKind, size: [f32; 2]) -> Brush {
             },
             effect: (kind == DecorKind::Emitter).then(ParticleEffect::default),
             group: 0,
+            flicker: 0.,
         }),
         size,
         hint: "",
+    }
+}
+/// A light of `color` that wavers by `flicker`.
+fn lamp(name: &'static str, color: [u8; 3], flicker: f32, size: f32) -> Brush {
+    let mut brush = decor(name, DecorKind::Light, [size, size]);
+    if let Object::Decor(item) = &mut brush.object {
+        item.color = color;
+        item.flicker = flicker;
+        item.alpha = 220;
+    }
+    brush
+}
+/// A motion trigger on group 1 that plays over `tween` seconds.
+fn motion(
+    when: TriggerWhen,
+    action: TriggerAction,
+    tween: f32,
+    curve: Curve,
+    mode: EaseMode,
+) -> MapTrigger {
+    MapTrigger {
+        when,
+        action,
+        group: 1,
+        tween,
+        easing: Easing { curve, mode },
+        ..Default::default()
     }
 }
 fn effect(name: &'static str, preset: usize) -> Brush {
@@ -135,13 +165,31 @@ fn on(index: u8) -> TriggerTest {
 }
 
 /// Particle presets shared by the palette and the inspector.
-pub const EFFECT_PRESETS: [&str; 4] = ["Embers", "Rain", "Dust", "Sparks"];
+pub const EFFECT_PRESETS: [&str; 10] = [
+    "Embers",
+    "Rain",
+    "Dust",
+    "Sparks",
+    "Fireflies",
+    "Smoke",
+    "Snow",
+    "Glitter",
+    "Fountain",
+    "Pulse",
+];
 pub fn effect_preset(index: usize) -> ParticleEffect {
     match index {
         0 => ParticleEffect {
-            shape: ParticleShape::Square,
+            shape: ParticleShape::Soft,
+            glow: true,
+            rate: 10.,
+            speed: 50.,
+            spread: 40.,
             gravity: -18.,
-            spin: 80.,
+            size: 8.,
+            end_size: 2.,
+            wobble: 24.,
+            twinkle: 0.3,
             ..Default::default()
         },
         1 => ParticleEffect {
@@ -157,22 +205,115 @@ pub fn effect_preset(index: usize) -> ParticleEffect {
             ..Default::default()
         },
         2 => ParticleEffect {
+            shape: ParticleShape::Soft,
             speed: 18.,
             spread: 360.,
             rate: 5.,
-            size: 12.,
-            end_size: 18.,
+            size: 14.,
+            end_size: 22.,
             color: [164, 156, 140],
             end_color: [164, 156, 140],
+            wobble: 12.,
             ..Default::default()
         },
-        _ => ParticleEffect {
+        3 => ParticleEffect {
             shape: ParticleShape::Spark,
+            glow: true,
             speed: 240.,
             spread: 75.,
             gravity: 170.,
             rate: 14.,
             lifetime: 1.2,
+            ..Default::default()
+        },
+        4 => ParticleEffect {
+            shape: ParticleShape::Soft,
+            glow: true,
+            rate: 3.,
+            lifetime: 4.,
+            speed: 12.,
+            spread: 360.,
+            drag: 0.2,
+            size: 7.,
+            end_size: 6.,
+            color: [210, 255, 120],
+            end_color: [170, 230, 90],
+            wobble: 40.,
+            twinkle: 0.85,
+            ..Default::default()
+        },
+        5 => ParticleEffect {
+            shape: ParticleShape::Soft,
+            rate: 6.,
+            lifetime: 3.5,
+            speed: 30.,
+            spread: 25.,
+            gravity: -10.,
+            drag: 0.4,
+            size: 16.,
+            end_size: 46.,
+            color: [120, 120, 124],
+            end_color: [168, 168, 172],
+            wobble: 18.,
+            area: EmitArea::Point,
+            ..Default::default()
+        },
+        6 => ParticleEffect {
+            shape: ParticleShape::Soft,
+            rate: 14.,
+            lifetime: 6.,
+            speed: 40.,
+            direction: 90.,
+            spread: 20.,
+            drag: 0.,
+            size: 5.,
+            end_size: 4.,
+            color: [240, 245, 255],
+            end_color: [220, 230, 245],
+            wobble: 30.,
+            ..Default::default()
+        },
+        7 => ParticleEffect {
+            shape: ParticleShape::Star,
+            glow: true,
+            rate: 10.,
+            lifetime: 1.4,
+            speed: 20.,
+            spread: 360.,
+            size: 7.,
+            end_size: 1.,
+            color: [255, 240, 170],
+            end_color: [255, 180, 220],
+            spin: 120.,
+            twinkle: 0.8,
+            ..Default::default()
+        },
+        8 => ParticleEffect {
+            rate: 30.,
+            lifetime: 1.3,
+            speed: 300.,
+            spread: 18.,
+            gravity: 420.,
+            drag: 0.1,
+            size: 5.,
+            end_size: 3.,
+            color: [130, 200, 255],
+            end_color: [90, 150, 230],
+            area: EmitArea::Point,
+            ..Default::default()
+        },
+        _ => ParticleEffect {
+            shape: ParticleShape::Ring,
+            glow: true,
+            rate: 1.5,
+            lifetime: 1.6,
+            speed: 0.,
+            spread: 0.,
+            size: 6.,
+            end_size: 60.,
+            color: [120, 220, 255],
+            end_color: [90, 140, 255],
+            area: EmitArea::Point,
             ..Default::default()
         },
     }
@@ -191,6 +332,9 @@ pub fn catalog() -> Vec<Vec<Brush>> {
             decor("Tile", DecorKind::Tile, [160., 160.]),
             decor("Stripes", DecorKind::Stripes, [240., 80.]),
             decor("Light", DecorKind::Light, [160., 160.]),
+            lamp("Torch", [255, 158, 72], 0.55, 150.).hint("A warm light that wavers like a flame"),
+            lamp("Neon", [96, 224, 255], 0., 200.).hint("A cool, steady glow"),
+            lamp("Lantern", [255, 214, 150], 0.15, 260.).hint("A wide, soft light"),
             decor("Ring", DecorKind::Ring, [120., 120.]),
             decor("Arrow", DecorKind::Arrow, [120., 60.]),
             decor("Label", DecorKind::Label, [280., 60.]),
@@ -198,6 +342,12 @@ pub fn catalog() -> Vec<Vec<Brush>> {
             effect("Rain", 1),
             effect("Dust", 2),
             effect("Sparks", 3),
+            effect("Fireflies", 4),
+            effect("Smoke", 5),
+            effect("Snow", 6),
+            effect("Glitter", 7),
+            effect("Fountain", 8),
+            effect("Pulse", 9),
         ],
         vec![
             logic(
@@ -540,6 +690,167 @@ pub fn catalog() -> Vec<Vec<Brush>> {
             .hint("Announces every 30 s once the round passes 5 minutes"),
         ],
         vec![
+            logic(
+                "Door",
+                [160., 160.],
+                MapTrigger {
+                    travel: [0., -0.06],
+                    duration: 4.,
+                    seconds: 1.,
+                    ..motion(
+                        TriggerWhen::Enter,
+                        TriggerAction::Move,
+                        0.5,
+                        Curve::Cubic,
+                        EaseMode::Out,
+                    )
+                },
+            )
+            .hint("Slides group 1 up when a tank arrives, and back 4 s later"),
+            logic(
+                "Shuttle",
+                small,
+                MapTrigger {
+                    travel: [0.15, 0.],
+                    duration: 1.,
+                    seconds: 6.,
+                    ..motion(
+                        TriggerWhen::Every,
+                        TriggerAction::Move,
+                        2.,
+                        Curve::Sine,
+                        EaseMode::InOut,
+                    )
+                },
+            )
+            .hint("Glides group 1 across and back every 6 seconds"),
+            logic(
+                "Piston",
+                small,
+                MapTrigger {
+                    travel: [0.04, 0.],
+                    duration: 0.4,
+                    seconds: 2.,
+                    ..motion(
+                        TriggerWhen::Every,
+                        TriggerAction::Move,
+                        0.2,
+                        Curve::Expo,
+                        EaseMode::Out,
+                    )
+                },
+            )
+            .hint("Punches group 1 out and pulls it back every 2 seconds"),
+            logic(
+                "Lift",
+                small,
+                MapTrigger {
+                    travel: [0., 0.12],
+                    ..motion(
+                        TriggerWhen::Signal,
+                        TriggerAction::Place,
+                        1.5,
+                        Curve::Quad,
+                        EaseMode::InOut,
+                    )
+                },
+            )
+            .hint("On signal 1, carries group 1 to 12% below its place"),
+            logic(
+                "Home",
+                small,
+                MapTrigger {
+                    source: 2,
+                    ..motion(
+                        TriggerWhen::Signal,
+                        TriggerAction::Place,
+                        1.5,
+                        Curve::Quad,
+                        EaseMode::InOut,
+                    )
+                },
+            )
+            .hint("On signal 2, brings group 1 back to where the map puts it"),
+            logic(
+                "Drop",
+                small,
+                MapTrigger {
+                    travel: [0., 0.08],
+                    seconds: 0.,
+                    ..motion(
+                        TriggerWhen::Start,
+                        TriggerAction::Move,
+                        1.2,
+                        Curve::Bounce,
+                        EaseMode::Out,
+                    )
+                },
+            )
+            .hint("Drops group 1 down with a bounce as the round starts"),
+            logic(
+                "Spinner",
+                small,
+                MapTrigger {
+                    amount: 90,
+                    seconds: 3.,
+                    ..motion(
+                        TriggerWhen::Every,
+                        TriggerAction::Turn,
+                        0.8,
+                        Curve::Back,
+                        EaseMode::Out,
+                    )
+                },
+            )
+            .hint("Turns group 1's decor a quarter turn every 3 seconds"),
+            logic(
+                "Fader",
+                [160., 160.],
+                MapTrigger {
+                    amount: 15,
+                    duration: 5.,
+                    seconds: 1.,
+                    ..motion(
+                        TriggerWhen::Enter,
+                        TriggerAction::Fade,
+                        0.6,
+                        Curve::Sine,
+                        EaseMode::InOut,
+                    )
+                },
+            )
+            .hint("Fades group 1's decor while tanks pass, back after 5 s"),
+            logic(
+                "Blink",
+                small,
+                MapTrigger {
+                    amount: 0,
+                    duration: 0.7,
+                    seconds: 2.,
+                    ..motion(
+                        TriggerWhen::Every,
+                        TriggerAction::Fade,
+                        0.3,
+                        Curve::Sine,
+                        EaseMode::InOut,
+                    )
+                },
+            )
+            .hint("Dims group 1's decor and brings it back every 2 seconds"),
+            logic(
+                "Then",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Arrived,
+                    action: TriggerAction::Signal,
+                    source: 1,
+                    group: 1,
+                    ..Default::default()
+                },
+            )
+            .hint("Sends signal 1 each time group 1 finishes a motion"),
+        ],
+        vec![
             marker(
                 "Spawn",
                 Object::Spawn(SpawnRegion {
@@ -768,6 +1079,50 @@ pub fn trigger_badge(action: TriggerAction, r: Rect, lit: f32) {
                 ink,
             );
         }
+        TriggerAction::Move => {
+            // A block with speed lines behind it.
+            draw_rectangle_lines(c.x - u * 0.1, c.y - u * 0.55, u * 1.1, u * 1.1, line, ink);
+            for (y, from) in [(-0.35, 1.), (0., 0.8), (0.35, 1.)] {
+                draw_line(
+                    c.x - u * from,
+                    c.y + u * y,
+                    c.x - u * 0.35,
+                    c.y + u * y,
+                    line * 0.8,
+                    alpha(ink, 0.75),
+                );
+            }
+        }
+        TriggerAction::Place => {
+            // A target: where the group goes.
+            draw_circle_lines(c.x, c.y, u * 0.75, line, ink);
+            draw_circle(c.x, c.y, u * 0.2, ink);
+            for (dx, dy) in [(1., 0.), (-1., 0.), (0., 1.), (0., -1.)] {
+                draw_line(
+                    c.x + dx * u * 0.75,
+                    c.y + dy * u * 0.75,
+                    c.x + dx * u * 1.1,
+                    c.y + dy * u * 1.1,
+                    line,
+                    ink,
+                );
+            }
+        }
+        TriggerAction::Turn => {
+            draw_poly_lines(c.x, c.y, 4, u * 0.75, 25., line, ink);
+            draw_arc(c.x, c.y, 24, u * 1.05, -80., line * 0.8, 70., ink);
+        }
+        TriggerAction::Fade => {
+            for i in 0..3 {
+                draw_rectangle(
+                    c.x - u + i as f32 * u * 0.72,
+                    c.y - u * 0.6,
+                    u * 0.56,
+                    u * 1.2,
+                    alpha(ink, 1. - i as f32 * 0.35),
+                );
+            }
+        }
         TriggerAction::Reset => {
             // A circular arrow: start again.
             draw_arc(c.x, c.y, 24, u * 0.8, 40., line, 280., ink);
@@ -891,7 +1246,7 @@ pub fn thumbnail(brush: &Brush, r: Rect, map: &MapDef, settings: &Settings, time
             if item.kind == DecorKind::Label {
                 item.text = "Aa".into();
             }
-            scenery::decoration(&item, inner, 0., 0.4, &[0; MAP_COUNTERS as usize]);
+            scenery::decoration(&item, inner, 0., 0.4, &[0; MAP_COUNTERS as usize], 0., 1.);
         }
         Object::Trigger(t) => {
             let size = inner.w.min(inner.h) * 0.8;
@@ -1044,6 +1399,81 @@ mod tests {
             });
         }
         map
+    }
+
+    #[test]
+    fn every_palette_piece_makes_a_valid_map() {
+        let rect = [0.4, 0.4, 0.05, 0.05];
+        for (tab, brushes) in CATEGORIES.iter().zip(catalog()) {
+            for brush in brushes {
+                let mut map = tankyard_content::builtin_maps().remove(0);
+                match brush.object {
+                    Object::Block(b) => map.blocks.push(MapBlock { rect, ..b }),
+                    Object::Zone(z) => map.zones.push(MapZone { rect, ..z }),
+                    Object::Decor(d) => map.decor.push(MapDecor { rect, ..d }),
+                    Object::Trigger(t) => map.triggers.push(MapTrigger { rect, ..t }),
+                    _ => continue,
+                }
+                if let Err(error) = tankyard_content::validate_map_features(&map) {
+                    panic!("{tab} / {}: {error}", brush.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn motion_pieces_glide_turn_and_fade_their_group() {
+        let mut map = tankyard_content::builtin_maps().remove(0);
+        map.triggers.clear();
+        for name in ["Shuttle", "Spinner"] {
+            map.triggers
+                .push(piece("Motion", name, [0.1, 0.1, 0.04, 0.04]));
+        }
+        map.triggers.push(MapTrigger {
+            group: 2,
+            ..piece("Motion", "Blink", [0.2, 0.1, 0.04, 0.04])
+        });
+        tankyard_content::validate_map_features(&map).unwrap();
+        let config = WorldConfig {
+            width: map.width,
+            height: map.height,
+            ..WorldConfig::default()
+        };
+        let mut logic = MapLogic::default();
+        let mut hidden = map.starting_mask();
+        let mut effects = Vec::new();
+        let mut now = 0.;
+        let mut run_to = |until: f32, logic: &mut MapLogic| {
+            while now < until {
+                now += DT;
+                logic.step(
+                    &map,
+                    &config,
+                    now,
+                    &mut hidden,
+                    &[],
+                    &mut || 0.5,
+                    &mut effects,
+                );
+            }
+        };
+        // The shuttle leaves at 6 s, arrives 2 s later, waits 1 s and returns.
+        run_to(5.9, &mut logic);
+        assert_eq!(logic.poses().offset(1), [0., 0.]);
+        run_to(7., &mut logic);
+        let halfway = logic.poses().offset(1)[0];
+        assert!((0.05..0.1).contains(&halfway), "{halfway}");
+        run_to(8.5, &mut logic);
+        assert!((logic.poses().offset(1)[0] - 0.15).abs() < 1e-4);
+        run_to(11.5, &mut logic);
+        assert_eq!(logic.poses().offset(1), [0., 0.]);
+        // By then the spinner has turned a quarter three times.
+        assert!((logic.poses().turn(1) - 270.).abs() < 1e-3);
+        // Blink dims group 2 to nothing for a moment every 2 s.
+        run_to(12.4, &mut logic);
+        assert!(logic.poses().opacity(2) < 0.05);
+        run_to(13.5, &mut logic);
+        assert!((logic.poses().opacity(2) - 1.).abs() < 1e-4);
     }
 
     #[test]

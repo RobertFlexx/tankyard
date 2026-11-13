@@ -290,6 +290,8 @@ pub struct BotController {
     brains: HashMap<EntityId, Brain>,
     perception: Perception,
     navigation: Navigation,
+    /// Ticks since the route grid last followed gliding cover.
+    navigation_age: u32,
     seen: Vec<Seen>,
     commands: Vec<Command>,
     inputs: Vec<(EntityId, PlayerInput)>,
@@ -304,6 +306,7 @@ impl BotController {
             brains: HashMap::new(),
             perception: Perception::default(),
             navigation: Navigation::default(),
+            navigation_age: 0,
             seen: Vec::with_capacity(256),
             commands: Vec::with_capacity(128),
             inputs: Vec::with_capacity(128),
@@ -409,8 +412,14 @@ impl BotController {
         if !world.tanks.iter().any(|tank| tank.bot && tank.alive) {
             return;
         }
-        self.navigation
-            .refresh(world.config.width, world.config.height, &world.walls);
+        // Gliding cover would rebuild the route grid every tick. Routes only
+        // need it a few times a second; steering still meets the real walls.
+        self.navigation_age = self.navigation_age.saturating_add(1);
+        if !world.cover_gliding() || self.navigation_age >= 30 {
+            self.navigation_age = 0;
+            self.navigation
+                .refresh(world.config.width, world.config.height, &world.walls);
+        }
         self.perception.rebuild(world);
         self.commands.clear();
         self.inputs.clear();

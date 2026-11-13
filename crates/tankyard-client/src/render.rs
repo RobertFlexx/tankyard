@@ -431,9 +431,10 @@ pub fn world(
     let shown = crate::scenery::Shown {
         hidden: snapshot.match_state.hidden_groups,
         counters: snapshot.match_state.counters,
+        poses: tankyard_core::snapshot_poses(snapshot, snapshot.match_state.elapsed),
     };
     if let Some(map) = map {
-        crate::scenery::floor(map, &snapshot.config, shown.hidden, view, animation_time);
+        crate::scenery::floor(map, &snapshot.config, &shown, view, animation_time);
         crate::scenery::decorations(
             map,
             &snapshot.config,
@@ -507,7 +508,23 @@ pub fn world(
         }
     }
     let styles = map.map(crate::scenery::block_styles);
-    for original in &snapshot.walls {
+    // Styles belong to where the map puts each block, before any glide.
+    let arena_size = V2::new(
+        snapshot.config.width * snapshot.config.arena_scale,
+        snapshot.config.height * snapshot.config.arena_scale,
+    );
+    let home = |index: usize, wall: tankyard_core::Rect| match snapshot.wall_groups.get(index) {
+        Some(&group) if shown.poses.moved && group > 0 => {
+            let [dx, dy] = shown.poses.offset(group);
+            tankyard_core::Rect {
+                x: wall.x - dx * arena_size.x,
+                y: wall.y - dy * arena_size.y,
+                ..wall
+            }
+        }
+        _ => wall,
+    };
+    for (index, original) in snapshot.walls.iter().enumerate() {
         let wall = scaled(original);
         if !view.visible(wall.center(), wall.w.max(wall.h)) {
             continue;
@@ -526,7 +543,7 @@ pub fn world(
                         map,
                         &snapshot.config,
                         snapshot.match_state.hidden_groups,
-                        *original,
+                        home(index, *original),
                     )
             },
         );
@@ -1030,10 +1047,7 @@ pub fn world(
         crate::scenery::decorations(
             map,
             &snapshot.config,
-            &crate::scenery::Shown {
-                hidden: snapshot.match_state.hidden_groups,
-                counters: snapshot.match_state.counters,
-            },
+            &shown,
             view,
             animation_time,
             true,

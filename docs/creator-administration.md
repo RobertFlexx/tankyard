@@ -69,6 +69,8 @@ Console commands `creator-admin off` and `central-owner off` revoke their corres
 
 Creator and central-owner proof domains are separate. Fresh random 256-bit nonces bind identity to the server and connection; central-owner proofs also bind the ephemeral administration public key. Every staff request is signed over its domain, server ID, nonce, connection, round, monotonic sequence, payload length and exact payload. The server rechecks signatures, policy, permissions, hierarchy, budgets and bounds. Ordinary Owner grants cannot invoke creator gameplay powers.
 
+A server could pass a challenge it received from another server to a staff client and hand the resulting proof back to that other server. To prevent this, the game proves a staff identity without asking only to the official server (`tankyard.kokonico.me`), servers on the same computer, and games hosted from the Host page. On any other server, the creator tools button reads **Verify as creator** and the panel asks first. The central owner verifies there by opening owner tools (F8). Each connection asks again. Verify only on servers whose host you trust.
+
 Creator and central-owner access require writable request auditing before privileged execution. Official servers without an explicit audit path use `creator-audit.jsonl`; Docker should mount it persistently. Logs rotate after 8 MiB with private Unix permissions. Host moderation uses the configured audit path. Requests are rate-limited and contain bounded data, never executable code.
 
 ## Central server deployment

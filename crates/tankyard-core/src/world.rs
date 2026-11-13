@@ -35,7 +35,16 @@ pub struct World {
     pub projectiles: Vec<Projectile>,
     pub targets: Vec<Target>,
     pub bosses: Vec<Boss>,
+    /// Cover as it stands now, moved by map logic: what everything collides with.
     pub walls: Vec<Rect>,
+    /// Cover where the map places it, before group motions; snapshots carry
+    /// these and `wall_groups`, and clients apply the motions themselves.
+    pub rest_walls: Vec<Rect>,
+    /// The map group of each wall; 0 for walls that never move.
+    pub wall_groups: Vec<u8>,
+    /// Where map logic has put each group this tick.
+    pub(crate) poses: tankyard_content::GroupPoses,
+    pub(crate) motion_scratch: Vec<Rect>,
     pub(crate) map_walls: Vec<Rect>,
     /// Unscaled walls that never change during a round (map walls, generated
     /// cover); blocks in shown groups are added to these.
@@ -177,6 +186,10 @@ impl World {
             targets: Vec::with_capacity(config.target_count),
             bosses: vec![],
             walls: vec![],
+            rest_walls: vec![],
+            wall_groups: vec![],
+            poses: Default::default(),
+            motion_scratch: vec![],
             map_walls: vec![],
             static_walls: vec![],
             logic: Default::default(),
@@ -200,6 +213,7 @@ impl World {
                 arena: ArenaStatus::default(),
                 hidden_groups: map.starting_mask(),
                 counters: [0; tankyard_content::MAP_COUNTERS as usize],
+                tweens: Vec::new(),
             },
             config,
             content,
@@ -1037,7 +1051,15 @@ impl World {
     pub fn snapshot(&self) -> Snapshot {
         self.make_snapshot(None)
     }
+    /// A snapshot to draw: walls stand where map logic has moved them, as
+    /// a client puts them after receiving a snapshot.
+    pub fn display_snapshot(&self) -> Snapshot {
+        let mut snapshot = self.make_snapshot(None);
+        snapshot.walls.clone_from(&self.walls);
+        snapshot
+    }
     /// Refresh an offline display without discarding its entity buffers.
+    /// Walls stand where map logic has moved them, as in `display_snapshot`.
     pub fn snapshot_into(&self, snapshot: &mut Snapshot) {
         snapshot.tick = self.tick;
         snapshot.config.clone_from(&self.config);
@@ -1046,6 +1068,7 @@ impl World {
         snapshot.targets.clone_from(&self.targets);
         snapshot.bosses.clone_from(&self.bosses);
         snapshot.walls.clone_from(&self.walls);
+        snapshot.wall_groups.clone_from(&self.wall_groups);
         snapshot.objectives.clone_from(&self.objectives);
         snapshot.match_state.clone_from(&self.match_state);
         snapshot.events.clone_from(&self.events);
@@ -1066,7 +1089,8 @@ impl World {
         });
         clone_filtered(&mut snapshot.targets, &self.targets, |t| visible(t.pos));
         snapshot.bosses.clone_from(&self.bosses);
-        snapshot.walls.clone_from(&self.walls);
+        snapshot.walls.clone_from(&self.rest_walls);
+        snapshot.wall_groups.clone_from(&self.wall_groups);
         snapshot.objectives.clone_from(&self.objectives);
         snapshot.match_state.clone_from(&self.match_state);
         clone_filtered(&mut snapshot.events, &self.events, |e| visible(e.pos));
@@ -1093,7 +1117,8 @@ impl World {
                 .cloned()
                 .collect(),
             bosses: self.bosses.clone(),
-            walls: self.walls.clone(),
+            walls: self.rest_walls.clone(),
+            wall_groups: self.wall_groups.clone(),
             objectives: self.objectives.clone(),
             match_state: self.match_state.clone(),
             events: self
@@ -1133,6 +1158,7 @@ impl World {
                 &self.map,
                 &self.config,
                 self.match_state.hidden_groups,
+                &self.poses,
                 t.pos,
             )
         };

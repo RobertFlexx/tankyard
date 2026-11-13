@@ -100,6 +100,7 @@ impl CreatorUi {
         let Some(key) = &self.key else {
             return;
         };
+        let trusted = session.staff_trusted;
         match &mut session.engine {
             Engine::Offline(local) => {
                 if let Some(t) = local
@@ -120,6 +121,10 @@ impl CreatorUi {
                 }
             }
             Engine::Online { client, .. } => {
+                // Elsewhere the challenge waits for the creator to verify.
+                if !trusted && !client.staff_consent {
+                    return;
+                }
                 if let Some(nonce) = client.creator_challenge.take() {
                     if self.authorization != Some(nonce) {
                         self.authorization = Some(nonce);
@@ -143,6 +148,26 @@ impl CreatorUi {
                 }
             }
         }
+    }
+    /// Whether this server asked the creator to verify and is waiting for
+    /// them to agree.
+    fn awaiting_consent(session: &Session) -> bool {
+        match &session.engine {
+            Engine::Offline(_) => false,
+            Engine::Online { client, .. } => {
+                client.creator_challenge.is_some()
+                    && !session.staff_trusted
+                    && !client.staff_consent
+            }
+        }
+    }
+    /// The creator agreed to prove who they are to this server.
+    fn verify_here(&mut self, session: &mut Session) {
+        if let Engine::Online { client, .. } = &mut session.engine {
+            client.staff_consent = true;
+            self.notice = "Verifying with this server…".into();
+        }
+        self.authenticate(session);
     }
     fn attack_rect(s: f32) -> Rect {
         Rect::new(22. * s, screen_height() - 328. * s, 246. * s, 302. * s)
@@ -307,12 +332,17 @@ impl CreatorUi {
             self.send(session, command);
         }
         set_interactive(true);
+        let awaiting = Self::awaiting_consent(session);
         if !self.open {
             self.attack_panel(session, s);
             if button(
                 Self::button_rect(s),
-                "Creator tools [F8]",
-                false,
+                if awaiting {
+                    "Verify as creator [F8]"
+                } else {
+                    "Creator tools [F8]"
+                },
+                awaiting,
                 true,
                 s * 0.72,
             ) {
@@ -363,7 +393,9 @@ impl CreatorUi {
             }
         };
         center_label(
-            if available {
+            if awaiting {
+                "This server asks you to verify"
+            } else if available {
                 "Creator tools · enabled by this host"
             } else {
                 "Creator tools disabled by this host"
@@ -373,6 +405,53 @@ impl CreatorUi {
             12. * s,
             muted_color(),
         );
+        if awaiting {
+            let x = r.x + 24. * s;
+            let width = r.w - 48. * s;
+            let y = r.y + 110. * s;
+            center_label(
+                "VERIFY ON THIS SERVER?",
+                r.center().x,
+                y + 18. * s,
+                21. * s,
+                AMBER,
+            );
+            wrap(
+                "Verifying shows your creator badge here and lets the host's creator tools work for you. Verify only on servers whose host you trust: a server could pass your proof on to another server and wear your badge there.",
+                x,
+                y + 58. * s,
+                width,
+                16. * s,
+                text_color(),
+            );
+            wrap(
+                "The official server, servers on this computer and games you host verify without asking.",
+                x,
+                y + 168. * s,
+                width,
+                14. * s,
+                muted_color(),
+            );
+            if button(
+                Rect::new(x, y + 230. * s, width, 42. * s),
+                "Verify here",
+                true,
+                true,
+                s * 0.9,
+            ) {
+                self.verify_here(session);
+            }
+            if button(
+                Rect::new(x, y + 284. * s, width, 36. * s),
+                "Not now",
+                false,
+                true,
+                s * 0.8,
+            ) {
+                self.open = false;
+            }
+            return;
+        }
         let tab_width = (r.w - 80. * s) / 7.;
         for (index, title) in [
             "Player",

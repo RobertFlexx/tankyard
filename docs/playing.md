@@ -183,4 +183,4 @@ The party roster includes **I'm ready** and a ready count. Readiness is shared w
 
 Siege Engine, Skirmisher and Trapper add three boss encounters, each with a practice trial. Special attacks lock their aim during the warning. Heavy siege shots, a straight skirmisher charge and side-pocket mines each leave a different escape route. Boss models use distinct mechanical silhouettes rather than a shared stack of rotating armor.
 
-Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Extended maps and snapshots need protocol 25 on both server and client.
+Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Server and client must both use protocol 26, which Tank Yard 1.0 uses.

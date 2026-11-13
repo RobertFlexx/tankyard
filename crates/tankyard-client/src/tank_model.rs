@@ -609,7 +609,11 @@ pub fn class_model_geometry(
             Color::new(0.98, 0.91, 0.65, color.a),
         );
     }
-    // Automatic mounts sit above the hull and rotate independently.
+    // Automatic mounts sit above the hull and rotate independently. Every
+    // barrel goes down before any cap, so barrels sharing a hub meet under
+    // one cap instead of crossing over each other's.
+    let mut hubs = [(Vec2::ZERO, 0_u8); 16];
+    let mut hub_count = 0;
     for &index in &order[..count] {
         let barrel = &class.barrels[index];
         if barrel.pattern != FirePattern::Auto {
@@ -630,12 +634,30 @@ pub fn class_model_geometry(
             color,
             recoil * 60.0 * unit,
         );
-        let turret_radius = (base_radius * 0.34).clamp(6.5, 12.0) * unit;
+        match hubs[..hub_count]
+            .iter_mut()
+            .find(|(hub, _)| hub.distance(at) < 1.5 * unit)
+        {
+            Some((_, barrels)) => *barrels += 1,
+            None => {
+                hubs[hub_count] = (at, 1);
+                hub_count += 1;
+            }
+        }
+    }
+    let turret_radius = (base_radius * 0.34).clamp(6.5, 12.0) * unit;
+    for &(at, barrels) in &hubs[..hub_count] {
+        // A hub carrying several barrels is a larger, ringed turret.
+        let radius = if barrels > 1 {
+            turret_radius * 1.22
+        } else {
+            turret_radius
+        };
         polygon(
             emit,
             at,
             0,
-            turret_radius + 2.5 * unit,
+            radius + 2.5 * unit,
             0.0,
             alpha(OUTLINE, color.a),
         );
@@ -643,10 +665,20 @@ pub fn class_model_geometry(
             emit,
             at,
             0,
-            turret_radius,
+            radius,
             0.0,
             Color::new(0.65, 0.65, 0.65, color.a),
         );
+        if barrels > 1 {
+            polygon(
+                emit,
+                at,
+                0,
+                radius * 0.5,
+                0.0,
+                Color::new(0.56, 0.56, 0.56, color.a),
+            );
+        }
     }
 }
 #[cfg(test)]

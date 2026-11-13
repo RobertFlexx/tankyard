@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 mod maps;
+mod tween;
 pub use maps::*;
+pub use tween::*;
 
 pub const MAX_LEVEL: u8 = 55;
 pub const UPGRADE_LEVELS: [u8; 5] = [1, 15, 30, 45, 55];
