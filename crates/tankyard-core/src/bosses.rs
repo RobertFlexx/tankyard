@@ -49,7 +49,7 @@ impl World {
         self.tanks
             .iter()
             .filter(|tank| {
-                tank.alive
+                tank.tangible()
                     && tank.health > 0.
                     && tank.protection <= 0.
                     && !self.config.base_protected(tank.team, tank.pos, tank.radius)
@@ -218,7 +218,7 @@ impl World {
                 .tanks
                 .iter()
                 .filter(|t| {
-                    t.alive
+                    t.tangible()
                         && t.health > 0.
                         && self.hostile(b.team, t.team)
                         && t.protection <= 0.

@@ -1266,7 +1266,7 @@ impl World {
                         V2::new(pushed, pos.y)
                     })
                 };
-                for tank in self.tanks.iter_mut().filter(|t| t.alive) {
+                for tank in self.tanks.iter_mut().filter(|t| t.tangible()) {
                     if let Some(pos) = push(tank.pos, tank.radius) {
                         tank.pos = pos;
                     }
@@ -1318,7 +1318,9 @@ impl World {
         });
         for index in 0..self.tanks.len() {
             let tank = &self.tanks[index];
-            if !tank.alive {
+            if !tank.tangible() {
+                self.tanks[index].terrain = 1.;
+                self.tanks[index].push = V2::ZERO;
                 continue;
             }
             let (id, pos, radius) = (tank.id, tank.pos, tank.radius);
@@ -1381,7 +1383,7 @@ impl World {
         tanks.extend(
             self.tanks
                 .iter()
-                .filter(|tank| tank.alive)
+                .filter(|tank| tank.tangible())
                 .map(|tank| Occupant {
                     id: tank.id,
                     pos: tank.pos,

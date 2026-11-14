@@ -64,6 +64,7 @@ pub fn encode(motion: Vec2) -> Color {
 #[derive(Default)]
 pub struct History {
     camera: Option<Camera>,
+    pocket: bool,
     /// When motion was last drawn; a gap means the arena wasn't on screen.
     drawn_at: f64,
     positions: HashMap<(u8, EntityId), V2>,
@@ -122,7 +123,15 @@ impl History {
         let before = self.camera.replace(now);
         let time = get_time();
         let gap = time - std::mem::replace(&mut self.drawn_at, time) > 0.25;
+        let pocket = snapshot.tanks.iter().any(|tank| {
+            tank.id == local
+                && tank.alive
+                && tank.pocket > 0.
+                && tankyard_core::POCKET_SECONDS - tank.pocket >= 0.12
+        });
+        let changed_layer = std::mem::replace(&mut self.pocket, pocket) != pocket;
         let cut = gap
+            || changed_layer
             || before.is_none_or(|b| {
                 b.screen != now.screen
                     || b.center.distance(now.center) > 400.
@@ -177,28 +186,35 @@ impl History {
                     crate::session::interpolate_position(previous, current, interpolation)
                 })
         };
-        for target in &snapshot.targets {
-            let radius = target.radius * 1.25 + 4.;
-            if let Some((here, color)) = motion(0, target.id, at(target.id, target.pos), radius) {
-                draw_circle(here.x, here.y, radius * now.zoom, color);
+        if !pocket {
+            for target in &snapshot.targets {
+                let radius = target.radius * 1.25 + 4.;
+                if let Some((here, color)) = motion(0, target.id, at(target.id, target.pos), radius)
+                {
+                    draw_circle(here.x, here.y, radius * now.zoom, color);
+                }
             }
-        }
-        for projectile in &snapshot.projectiles {
-            let position = projectile.previous.lerp(projectile.pos, interpolation);
-            let radius = projectile.radius + 3.;
-            if let Some((here, color)) = motion(1, projectile.id, position, radius) {
-                draw_circle(here.x, here.y, radius * now.zoom, color);
+            for projectile in &snapshot.projectiles {
+                let position = projectile.previous.lerp(projectile.pos, interpolation);
+                let radius = projectile.radius + 3.;
+                if let Some((here, color)) = motion(1, projectile.id, position, radius) {
+                    draw_circle(here.x, here.y, radius * now.zoom, color);
+                }
             }
-        }
-        for boss in &snapshot.bosses {
-            let radius = boss.radius * 1.7;
-            if let Some((here, color)) = motion(2, boss.id, at(boss.id, boss.pos), radius) {
-                draw_circle(here.x, here.y, radius * now.zoom, color);
+            for boss in &snapshot.bosses {
+                let radius = boss.radius * 1.7;
+                if let Some((here, color)) = motion(2, boss.id, at(boss.id, boss.pos), radius) {
+                    draw_circle(here.x, here.y, radius * now.zoom, color);
+                }
             }
         }
         // Tanks last, as they're drawn on top.
         let z = now.zoom;
-        for tank in snapshot.tanks.iter().filter(|t| t.alive) {
+        for tank in snapshot
+            .tanks
+            .iter()
+            .filter(|t| t.alive && (t.id == local || (!pocket && t.pocket <= 0.)))
+        {
             let Some((here, color)) = motion(3, tank.id, at(tank.id, tank.pos), tank.radius * 4.)
             else {
                 continue;

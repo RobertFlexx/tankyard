@@ -551,6 +551,35 @@ pub fn class_model_geometry(
             alpha(WHITE, (flash / 0.12 * 0.42).clamp(0.0, 0.42)),
         );
     }
+    if class.ability == tankyard_content::Ability::Pocket {
+        let ink = Color::new(0.16, 0.20, 0.17, color.a);
+        let acid = Color::new(0.88, 0.94, 0.34, color.a);
+        polygon(emit, p, 6, r * 0.78, aim, alpha(OUTLINE, color.a));
+        polygon(emit, p, 6, r * 0.68, aim, ink);
+        for side in [-1., 1.] {
+            let a = aim + side * 1.22;
+            let d = vec2(a.cos(), a.sin());
+            cannon_profile(
+                emit,
+                p + d * r * 0.68,
+                a + std::f32::consts::FRAC_PI_2,
+                r * 0.43,
+                r * 0.17,
+                acid,
+                0.,
+                1.,
+                None,
+            );
+        }
+        polygon(emit, p, 6, r * 0.41, aim, acid);
+        polygon(emit, p, 6, r * 0.30, aim, ink);
+        // Three clean isolation shutters surround the recessed reactor.
+        for vane in 0..3 {
+            let a = aim + vane as f32 * std::f32::consts::TAU / 3.;
+            let d = vec2(a.cos(), a.sin());
+            polygon(emit, p + d * r * 0.18, 3, r * 0.12, a, acid);
+        }
+    }
     if class.ability == tankyard_content::Ability::Stasis {
         // A machined eight-segment chronometer with a recessed dial, clean
         // tick marks and counter-rotating hands, all in the arena's vector style.

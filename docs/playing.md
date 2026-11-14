@@ -184,3 +184,7 @@ The party roster includes **I'm ready** and a ready count. Readiness is shared w
 Siege Engine, Skirmisher and Trapper add three boss encounters, each with a practice trial. Special attacks lock their aim during the warning. Heavy siege shots, a straight skirmisher charge and side-pocket mines each leave a different escape route. Boss models use distinct mechanical silhouettes rather than a shared stack of rotating armor.
 
 Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Server and client must both use protocol 26, which Tank Yard 1.0 uses.
+
+## Bacteria’s pocket dimension
+
+[Bacteria](bacteria.md), reached from Specter or Wisp at level 55, can leave the arena for ten seconds to repair and reposition in a private maze. Its guide covers the controls, cooldown, healing and return.

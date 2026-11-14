@@ -3386,7 +3386,7 @@ impl Menu {
         if cfg!(target_vendor = "apple") {
             notices += "Rendering with Metal and upscaling with MetalFX by Apple. ";
         }
-        notices += "DejaVu Sans Bold and Mono fonts; Lucide microphone icons (ISC). Third-party licenses are in NOTICE.md.";
+        notices += "DejaVu Sans Bold and Mono fonts; Lucide microphone icons (ISC). Backrooms textures by Amini Allight; fluorescent hum by theonlycanvas (CC0). Third-party licenses are in NOTICE.md.";
         if cfg!(tankyard_dlss) {
             notices += " NVIDIA, GeForce, RTX and DLSS are trademarks and/or registered trademarks of NVIDIA Corporation in the U.S. and other countries.";
         }

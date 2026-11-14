@@ -435,7 +435,9 @@ fn every_class_moves_fires_and_uses_abilities() {
                     movement: V2::new(0., 0.25),
                     aim: 0.,
                     fire: true,
-                    ability: seq == 1,
+                    // Exercise the guns before entering an ability that can
+                    // deliberately suspend firing, such as a pocket visit.
+                    ability: seq == 90,
                     ..Default::default()
                 },
             );

@@ -63,6 +63,7 @@ pub enum Ability {
     CounterParry,
     VolleyParry,
     Stasis,
+    Pocket,
 }
 
 impl Ability {
@@ -83,6 +84,7 @@ impl Ability {
             Self::CounterParry => "Counter",
             Self::VolleyParry => "Reprisal",
             Self::Stasis => "Stasis wave",
+            Self::Pocket => "Pocket dimension",
         }
     }
 
@@ -585,6 +587,8 @@ mod tests {
             ("auto_five", "auto_three", 3),
             ("manager", "flock", 3),
             ("gunner_trapper", "gunner", 3),
+            ("bacteria", "specter", 4),
+            ("bacteria", "wisp", 4),
         ] {
             let class = content.class(id).expect("new class must exist");
             assert_eq!(class.tier, tier);
@@ -597,7 +601,7 @@ mod tests {
                     .contains(&id.to_owned())
             );
         }
-        assert_eq!(content.classes.len(), 111);
+        assert_eq!(content.classes.len(), 112);
         content.validate().unwrap();
     }
 
@@ -756,6 +760,7 @@ mod tests {
             Ability::Fortify,
             Ability::Magnet,
             Ability::Parry,
+            Ability::Pocket,
         ] {
             assert!(content.classes.iter().any(|c| c.ability == ability));
         }

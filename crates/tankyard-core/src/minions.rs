@@ -48,7 +48,7 @@ impl World {
             .tanks
             .iter()
             .filter(|tank| {
-                tank.alive
+                tank.tangible()
                     && tank.id != owner
                     && tank.protection <= 0.
                     && !self.config.base_protected(tank.team, tank.pos, tank.radius)

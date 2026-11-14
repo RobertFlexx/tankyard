@@ -12,8 +12,8 @@ impl World {
             .class(&a.class)
             .is_some_and(tankyard_content::ClassDef::is_smasher);
         if !melee
-            || !a.alive
-            || !d.alive
+            || !a.tangible()
+            || !d.tangible()
             || a.health <= 0.
             || d.health <= 0.
             || a.protection > 0.

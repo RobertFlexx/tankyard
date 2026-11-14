@@ -387,9 +387,24 @@ pub fn predict_tank(
     tank.boost = (tank.boost - dt).max(0.0);
     tank.knockback = (tank.knockback - dt).max(0.);
     tank.stasis = (tank.stasis - dt).max(0.);
+    let was_pocket = tank.pocket > 0.;
+    crate::pocket::advance(tank, dt, false);
+    if was_pocket {
+        // Reconciliation samples ordinary map pads before predicting. Those
+        // pads belong to the other layer, including on the returning tick.
+        tank.terrain = 1.;
+        tank.push = V2::ZERO;
+    }
     tank.ability_cooldown = (tank.ability_cooldown - dt).max(0.0);
     tank.shield = (tank.shield - dt).max(0.0);
     update_protection(tank, dt);
+    let pocket_walls;
+    let walls = if tank.pocket > 0. {
+        pocket_walls = crate::pocket_walls(config);
+        pocket_walls.as_slice()
+    } else {
+        walls
+    };
     move_tank(tank, content, config, walls, dt);
     if tank.spawn_immunity && tank.protection > 0. {
         return;
@@ -397,10 +412,22 @@ pub fn predict_tank(
     let Some(class) = content.class(&tank.class) else {
         return;
     };
-    let activate =
-        tank.input.ability && tank.ability_cooldown <= 0.0 && class.ability != Ability::None;
+    let activate = tank.pocket <= 0.
+        && tank.input.ability
+        && tank.ability_cooldown <= 0.0
+        && class.ability != Ability::None;
     if activate {
         tank.ability_cooldown = class.ability_cooldown;
+        if class.ability == Ability::Pocket {
+            apply_personal_ability(tank, class.ability, config, walls);
+        }
+    }
+    if tank.pocket > 0. {
+        tank.charge = 0.;
+        for cooldown in &mut tank.cooldowns {
+            *cooldown = (*cooldown - dt).max(0.);
+        }
+        return;
     }
     if tank.cooldowns.len() != class.barrels.len()
         || tank.barrel_shots.len() != class.barrels.len()
@@ -510,6 +537,16 @@ pub(crate) fn apply_personal_ability(
         }
         Ability::Shield => tank.shield = 3.5,
         Ability::Stasis => tank.stasis = crate::STASIS_SECONDS,
+        Ability::Pocket => {
+            tank.pocket = crate::POCKET_SECONDS;
+            tank.shield = 0.;
+            tank.boost = 0.;
+            tank.stasis = 0.;
+            tank.charge = 0.;
+            tank.terrain = 1.;
+            tank.push = V2::ZERO;
+            constrain_tank(tank, config, &crate::pocket_walls(config));
+        }
         Ability::Parry | Ability::CounterParry | Ability::VolleyParry => {
             tank.shield = ability.parry_window().unwrap_or(0.)
         }

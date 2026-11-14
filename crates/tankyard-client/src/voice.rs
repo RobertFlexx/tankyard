@@ -206,8 +206,10 @@ impl VoiceChat {
             self.decoders.clear();
             if let Ok(mut mixer) = self.mixer.lock() {
                 mixer.voices.clear();
-                mixer.a = 0.;
-                mixer.b = 0.;
+                if !mixer.pocket.audible() {
+                    mixer.a = 0.;
+                    mixer.b = 0.;
+                }
             }
             return;
         }
@@ -336,6 +338,22 @@ impl VoiceChat {
         stream.play().map_err(|e| e.to_string())?;
         self.output = Some(stream);
         Ok(())
+    }
+
+    pub fn pocket_ambience(&mut self, active: bool, volume: f32) {
+        let active = active && !self.disabled;
+        if active
+            && volume > 0.
+            && self.output.is_none()
+            && !self.output_failed
+            && let Err(error) = self.start_output()
+        {
+            self.output_failed = true;
+            log::warn!("Pocket audio unavailable: {error}");
+        }
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.pocket.set(active, volume);
+        }
     }
 
     pub fn effects_volume(&mut self, volume: f32) {
@@ -802,6 +820,7 @@ struct Mixer {
     volume: f32,
     alarm: VecDeque<f32>,
     alarm_volume: f32,
+    pocket: crate::pocket_audio::PocketAudio,
 }
 impl Mixer {
     fn sample(&mut self, rate: u32) -> f32 {
@@ -809,11 +828,12 @@ impl Mixer {
             self.phase -= 1.;
             self.a = self.b;
             self.b = self.voices.values_mut().map(Playback::sample).sum::<f32>() * self.volume
-                + self.alarm.pop_front().unwrap_or(0.) * self.alarm_volume;
+                + self.alarm.pop_front().unwrap_or(0.) * self.alarm_volume
+                + self.pocket.sample();
         }
         let sample = self.a + (self.b - self.a) * self.phase as f32;
         self.phase += f64::from(VOICE_SAMPLE_RATE) / f64::from(rate.max(1));
-        if self.volume == 0. && self.alarm.is_empty() {
+        if self.volume == 0. && self.alarm.is_empty() && !self.pocket.audible() {
             0.
         } else {
             soft_clip(sample)

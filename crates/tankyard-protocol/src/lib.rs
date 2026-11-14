@@ -19,18 +19,13 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 26 (Tank Yard 1.0) adds group motions: snapshots carry each
-/// wall's group and the motions map logic is playing, and walls stay where
-/// the map places them. Decor gains flicker and particles gain glow, wobble,
-/// twinkle, emit areas and two shapes. Version 25 added conveyor and portal
-/// pads, trigger signals, counters, filters, chance and delays, and map
-/// counters in match state. Snapshots and map data changed shape, so
-/// servers accept only version 26 clients. The netcode protocol id stays
-/// at 22's so older clients still connect far enough to be told which side
-/// needs updating.
-pub const PROTOCOL_VERSION: u32 = 26;
+/// Version 27 adds the authoritative pocket-dimension timer to tanks and the
+/// Pocket ability to content. Older snapshots have a different shape, so
+/// clients and servers must update together. The transport id remains stable
+/// so older peers receive a readable update notice.
+pub const PROTOCOL_VERSION: u32 = 27;
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 26;
+pub const MIN_PROTOCOL_VERSION: u32 = 27;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
 pub const SERVER_OUTDATED: &str =
     "This server runs an older Tank Yard. Its host needs to update it.";
@@ -572,6 +567,7 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && (0.25..=8.).contains(&t.damage_scale)
                 && (0.0..=1.).contains(&t.knockback)
                 && (0.0..=tankyard_core::STASIS_SECONDS).contains(&t.stasis)
+                && (0.0..=tankyard_core::POCKET_SECONDS).contains(&t.pocket)
                 && (!t.creator_boss || t.game_creator)
                 && t.creator_attacks.iter().all(|v| {
                     v.is_finite() && (0.0..=tankyard_core::creator_boss::MAX_COOLDOWN).contains(v)

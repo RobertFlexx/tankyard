@@ -28,6 +28,8 @@ mod motion;
 mod native_resolution;
 mod notifications;
 mod party_ui;
+mod pocket_audio;
+mod pocket_view;
 mod practice_ui;
 mod presentation;
 mod render;
@@ -1395,7 +1397,7 @@ impl App {
                         && snapshot
                             .tanks
                             .iter()
-                            .any(|t| t.id == session.player && t.alive)
+                            .any(|t| t.id == session.player && t.tangible())
                 });
             if let session::Engine::Online { client, .. } = &mut session.engine {
                 self.party_ui.sync(client);
@@ -1424,6 +1426,24 @@ impl App {
                 }
             }
         }
+        let in_pocket = self.session.as_ref().is_some_and(|session| {
+            session.failure.is_none()
+                && session.display.as_ref().is_some_and(|snapshot| {
+                    !snapshot.match_state.finished
+                        && snapshot
+                            .tanks
+                            .iter()
+                            .any(|tank| tank.id == session.player && tank.alive && tank.pocket > 0.)
+                })
+        });
+        self.voice.pocket_ambience(
+            in_pocket,
+            if self.paused || self.menu_over_game {
+                0.
+            } else {
+                self.settings.master_volume * self.settings.effects_volume
+            },
+        );
         if let Some((round, started)) = self.party_restart {
             let client = self
                 .session
@@ -2437,6 +2457,19 @@ impl App {
         {
             self.creator.draw(session, s);
         }
+        if !self.paused
+            && !self.menu_over_game
+            && let Some(tank) = self.session.as_ref().and_then(|session| {
+                session
+                    .display
+                    .as_ref()?
+                    .tanks
+                    .iter()
+                    .find(|tank| tank.id == session.player && tank.alive)
+            })
+        {
+            pocket_view::blackout(tank.pocket, self.settings.reduced_motion);
+        }
     }
     fn hud_action(&mut self, action: HudAction) {
         match action {
@@ -2634,6 +2667,7 @@ async fn run(cli: Cli) {
     }
     let mut native_resolution = native_resolution::NativeResolution::new(&initial_settings);
     ui::init_font();
+    pocket_view::prepare();
     // The splash hands over the live arena it revealed, which the password
     // prompt and then the menu carry on drawing.
     let mut arena = None;

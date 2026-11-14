@@ -1039,6 +1039,69 @@ mod tests {
     }
 
     #[test]
+    fn pocket_state_reaches_an_online_player_and_suppresses_firing() {
+        use crate::{ServerSettings, UdpServer};
+        let mut server = UdpServer::bind(ServerSettings {
+            bind: "127.0.0.1:0".into(),
+            bot_count: 0,
+            ban_file: String::new(),
+            world: WorldConfig {
+                mode: tankyard_core::Mode::Sandbox,
+                target_count: 0,
+                spawn_protection: 0.,
+                dynamic_arena: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+        let mut client =
+            NetworkClient::connect(&server.address.to_string(), "Bacteria", "").unwrap();
+        let step = Duration::from_nanos(16_666_667);
+        for _ in 0..300 {
+            client.update(step).unwrap();
+            server.update(step).unwrap();
+            if client.is_ready() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(client.is_ready());
+        let id = client.player_id.unwrap();
+        assert!(server.arenas[0].session.world.sandbox_class(id, "bacteria"));
+        let mut received = false;
+        for sequence in 1..=300 {
+            assert!(client.send_input(PlayerInput {
+                sequence,
+                ability: sequence <= 10,
+                fire: true,
+                ..Default::default()
+            }));
+            client.flush().unwrap();
+            server.update(step).unwrap();
+            client.update(step).unwrap();
+            if client
+                .player_snapshot()
+                .and_then(|s| s.tanks.iter().find(|t| t.id == id))
+                .is_some_and(|t| t.class == "bacteria" && t.pocket > 0.)
+            {
+                received = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            received,
+            "the pocket timer must be carried in a validated network snapshot"
+        );
+        let world = &server.arenas[0].session.world;
+        let tank = world.tanks.iter().find(|t| t.id == id).unwrap();
+        assert!(tank.pocket > 0.);
+        assert_eq!(tank.shot_count, 0);
+        assert!(world.projectiles.iter().all(|p| p.owner != id));
+    }
+
+    #[test]
     fn round_assignments_reject_reordered_snapshots_with_reused_human_and_bot_ids() {
         let config = WorldConfig {
             target_count: 0,

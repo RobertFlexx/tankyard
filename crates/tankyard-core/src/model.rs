@@ -256,6 +256,9 @@ pub struct Tank {
     pub damage_scale: f32,
     #[serde(default)]
     pub stasis: f32,
+    /// Seconds left in the isolated pocket layer. Always controlled by the host.
+    #[serde(default)]
+    pub pocket: f32,
     /// Set only after the server verifies the creator's signing key.
     #[serde(default)]
     pub game_creator: bool,
@@ -295,6 +298,10 @@ impl ServerBadge {
     }
 }
 impl Tank {
+    /// Present for combat, pickups and objectives in the shared arena.
+    pub fn tangible(&self) -> bool {
+        self.alive && self.pocket <= 0.
+    }
     pub fn badge(&self) -> &'static str {
         if self.game_creator {
             "Game Creator"
@@ -365,6 +372,7 @@ impl Clone for Tank {
             reload_scale: self.reload_scale,
             damage_scale: self.damage_scale,
             stasis: self.stasis,
+            pocket: self.pocket,
             game_creator: self.game_creator,
             creator_boss: self.creator_boss,
             creator_attacks: self.creator_attacks,
@@ -417,6 +425,7 @@ impl Clone for Tank {
         self.reload_scale = source.reload_scale;
         self.damage_scale = source.damage_scale;
         self.stasis = source.stasis;
+        self.pocket = source.pocket;
         self.game_creator = source.game_creator;
         self.creator_boss = source.creator_boss;
         self.creator_attacks = source.creator_attacks;

@@ -164,7 +164,7 @@ impl World {
         let mut events = Vec::new();
         for index in 0..self.tanks.len() {
             let tank = &self.tanks[index];
-            if !tank.alive || tank.health <= 0. {
+            if !tank.tangible() || tank.health <= 0. {
                 continue;
             }
             let Some(class) = self.content.class(&tank.class) else {
@@ -222,6 +222,9 @@ impl World {
             if tank.input.ability && tank.ability_cooldown <= 0. && class.ability != Ability::None {
                 tank.ability_cooldown = class.ability_cooldown;
                 abilities.push((index, class.ability));
+                if class.ability == Ability::Pocket {
+                    continue;
+                }
             }
             if tank.input.fire {
                 tank.protection = 0.;
@@ -457,7 +460,7 @@ impl World {
             }
         };
         for tank in &self.tanks {
-            if tank.alive
+            if tank.tangible()
                 && tank.id != owner
                 && tank.protection <= 0.
                 && !self.config.base_protected(tank.team, tank.pos, tank.radius)
@@ -490,6 +493,22 @@ impl World {
             &self.walls,
         );
         match ability {
+            Ability::Pocket => {
+                // No delayed shots, drones or traps may attack from safety.
+                for shot in &mut self.projectiles {
+                    if shot.owner == id {
+                        shot.lifetime = 0.;
+                    }
+                }
+                self.tanks[index].carrying = false;
+                for objective in &mut self.objectives {
+                    if objective.carrier == Some(id) {
+                        objective.carrier = None;
+                        objective.pos = pos;
+                        objective.return_timer = 15.;
+                    }
+                }
+            }
             Ability::None
             | Ability::Dash
             | Ability::Shield
@@ -501,7 +520,7 @@ impl World {
             Ability::Heal => {
                 let heal = self.tanks[index].max_health * 0.27;
                 for t in &mut self.tanks {
-                    if t.alive
+                    if t.tangible()
                         && (t.id == id || team > 0 && t.team == team)
                         && t.pos.distance(pos) < 330.
                     {
@@ -561,7 +580,7 @@ impl World {
     fn rebuild_grid_for_ability(&mut self) {
         self.grid.clear();
         for (i, t) in self.tanks.iter().enumerate() {
-            if t.alive {
+            if t.tangible() {
                 self.grid
                     .insert_body(t.pos, t.radius, crate::physics::Body::Tank(i));
             }

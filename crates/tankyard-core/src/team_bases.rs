@@ -173,7 +173,7 @@ impl World {
         let base = self.config.team_base(team)?;
         let mut nearest: Option<(f32, V2)> = None;
         for tank in &self.tanks {
-            if !tank.alive
+            if !tank.tangible()
                 || tank.health <= 0.
                 || tank.team == team
                 || !self.hostile(team, tank.team)

@@ -330,6 +330,7 @@ Positions are world units, with (0, 0) at the arena's top-left corner and y poin
 | --- | --- |
 | `id`, `name`, `class`, `team` | identity; team 0 means no team |
 | `x`, `y`, `vx`, `vy`, `aim`, `radius` | position, velocity, aim angle, size |
+| `pocket` | seconds remaining in the pocket dimension, from 0 to 10; positive means the tank is absent from arena combat and objectives |
 | `health`, `max_health`, `shield`, `protection` | health, and the seconds left of shield and spawn protection |
 | `level`, `xp`, `score`, `kills`, `deaths`, `points` | progress; `points` are unspent skill points |
 | `stats` | the eight skill levels, in the order of `tankyard.stats` |
@@ -736,7 +737,7 @@ Tank definitions use the same schema as [`assets/content/classes.json`](../asset
 | `body_texture` | a texture ID |
 | `barrels` | the guns (below) |
 | `drone_limit` | drones and minions alive at once (default 8) |
-| `ability` | `None`, `Dash`, `Shield`, `Heal`, `Nova`, `Recall`, `Cloak`, `Overdrive`, `Blink`, `Fortify`, `Magnet`, `Parry`, `CounterParry`, `VolleyParry` or `Stasis` |
+| `ability` | `None`, `Dash`, `Shield`, `Heal`, `Nova`, `Recall`, `Cloak`, `Overdrive`, `Blink`, `Fortify`, `Magnet`, `Parry`, `CounterParry`, `VolleyParry`, `Stasis` or `Pocket` |
 | `ability_cooldown`, `passive_regen` | seconds; health per second |
 | `strengths`, `weaknesses` | text for the upgrade menu |
 | `ai_range` | how far away bots using this tank like to fight |

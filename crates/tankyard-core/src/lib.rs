@@ -16,6 +16,8 @@ pub mod modding;
 pub mod model;
 mod modes;
 mod parry;
+mod pocket;
+pub use pocket::{POCKET_HEAL_RATE, POCKET_SECONDS, walls as pocket_walls};
 pub mod physics;
 pub mod progression;
 #[cfg(test)]

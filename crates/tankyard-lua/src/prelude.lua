@@ -321,13 +321,13 @@ function host.definitions() return definitions end
 -- faster than the host setting each field.
 function host.tank(id, name, class, team, x, y, vx, vy, aim, radius, health, max_health,
     level, xp, score, kills, deaths, alive, bot, points, shield, protection, speed_scale,
-    reload_scale, damage_scale, in_base, s1, s2, s3, s4, s5, s6, s7, s8)
+    reload_scale, damage_scale, in_base, s1, s2, s3, s4, s5, s6, s7, s8, pocket)
   return {
     id = id, name = name, class = class, team = team, x = x, y = y, vx = vx, vy = vy,
     aim = aim, radius = radius, health = health, max_health = max_health, level = level,
     xp = xp, score = score, kills = kills, deaths = deaths, alive = alive, bot = bot,
     points = points, shield = shield, protection = protection, speed_scale = speed_scale,
-    reload_scale = reload_scale, damage_scale = damage_scale, in_base = in_base,
+    reload_scale = reload_scale, damage_scale = damage_scale, in_base = in_base, pocket = pocket,
     stats = { s1, s2, s3, s4, s5, s6, s7, s8 },
   }
 end

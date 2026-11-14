@@ -1,0 +1,76 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:05.240
+A wall with a gap. The blocks in the gap are group 1: the door.
+
+00:00:05.240 --> 00:00:15.040
+Motion holds ready-made motions. Hover a tile to see what it does.
+
+00:00:15.040 --> 00:00:21.710
+Choose group 1 in the dock, then drag out a Door over the gap.
+
+00:00:21.710 --> 00:00:27.200
+In Edit, the Door shows its motion: group 1 moves 6% up over half a second.
+
+00:00:27.200 --> 00:00:31.910
+The ghost shows where the door goes. Drag the diamond to move it.
+
+00:00:31.910 --> 00:00:38.230
+Over sets how long it takes. The curve and mode set how it feels.
+
+00:00:38.230 --> 00:00:41.700
+Bounce bounces against the end.
+
+00:00:41.700 --> 00:00:47.860
+Back overshoots a little, and Elastic springs past the end.
+
+00:00:47.860 --> 00:00:51.400
+Cubic with Ease out starts fast and settles gently.
+
+00:00:51.400 --> 00:00:55.150
+P runs the logic in place. Hold T for a test tank at the pointer.
+
+00:00:55.150 --> 00:00:58.860
+Drive it into the Door's area, and the door slides up out of the way.
+
+00:00:58.860 --> 00:01:01.540
+Four seconds after the last tank arrives, the door slides shut.
+
+00:01:01.540 --> 00:01:05.050
+The neon beside the door blinks each time the door comes to rest.
+
+00:01:05.050 --> 00:01:11.250
+On arrive starts a motion when another ends. Shift+P runs the preview again.
+
+00:01:11.250 --> 00:01:16.520
+Each Drop waits for the barricade before it, and a Then announces the last.
+
+00:01:16.520 --> 00:01:21.740
+A Shuttle glides group 2 across every 6 seconds: cover that moves.
+
+00:01:21.740 --> 00:01:26.110
+F9 switches to the dark theme, where lights glow brightest.
+
+00:01:26.110 --> 00:01:31.200
+Torches waver like flames, and a lantern spreads a wide, soft light.
+
+00:01:31.200 --> 00:01:37.680
+Select a light to set its Flicker, from steady to a failing lamp.
+
+00:01:37.680 --> 00:01:41.160
+Ctrl+Shift+A selects every light, so one change reaches them all.
+
+00:01:41.160 --> 00:01:53.420
+Particle presets fill in every setting at once.
+
+00:01:53.420 --> 00:01:57.770
+Shape, Emit from, Speed and Gravity fine-tune them.
+
+00:01:57.770 --> 00:02:04.620
+Check finds nothing to fix. Shift+F5 playtests from the pointer.
+
+00:02:04.620 --> 00:02:10.650
+The door opens for real tanks too, and shuts behind them.
+
+00:02:10.650 --> 00:02:14.667
+The written tutorial builds the whole gatehouse, step by step.

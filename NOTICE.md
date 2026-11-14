@@ -25,6 +25,18 @@ reproducible with `scripts/generate_boss_alarm.py`, covered by this project's li
 Boss models are original procedural geometry; behavior references are documented
 in [bosses and learning](docs/bosses-and-learning.md).
 
+Bacteria's pocket dimension uses the carpet, wallpaper and ceiling-light diffuse
+textures from [Backrooms Textures by Amini Allight](https://github.com/amini-allight/backrooms-textures),
+commit `f7e7cb9a2b40e0e74af559c3acb2a88550b1266d`, under CC0 1.0.
+The upstream project credits Seamless Pixels for the carpet source. The full
+dedication is in [licenses/Backrooms-CC0.txt](licenses/Backrooms-CC0.txt).
+Its ambience includes [fluorescent 1.wav by theonlycanvas](https://freesound.org/people/theonlycanvas/sounds/234462/),
+also CC0 1.0. The public HQ MP3 preview was decoded, normalized and looped,
+then mixed with original room tones. The entry sting is original synthesized
+audio. Both embedded PCM tracks can be reproduced with
+`scripts/generate_pocket_audio.py` and that recording. The game downloads no
+sounds or textures when the ability is used.
+
 Linux window controls use `libloading` under the ISC license; its notice is in
 [licenses/libloading.txt](licenses/libloading.txt). X11 and Xcursor are loaded
 from the desktop to use its cursor theme and native monitor geometry.

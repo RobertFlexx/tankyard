@@ -868,7 +868,7 @@ fn hud(args: &[Value]) -> mlua::Result<Effect> {
 }
 
 fn tank_table(lua: &Lua, world: &World, make: &Function, tank: &Tank) -> mlua::Result<Table> {
-    let mut args = Vec::with_capacity(34);
+    let mut args = Vec::with_capacity(35);
     args.extend([
         Value::Number(lua_id(tank.id)),
         Value::String(lua.create_string(&tank.name)?),
@@ -914,6 +914,7 @@ fn tank_table(lua: &Lua, world: &World, make: &Function, tank: &Tank) -> mlua::R
         tank.radius,
     )));
     args.extend(tank.stats.iter().map(|v| Value::Number(f64::from(*v))));
+    args.push(Value::Number(tank.pocket.into()));
     make.call(mlua::MultiValue::from_vec(args))
 }
 

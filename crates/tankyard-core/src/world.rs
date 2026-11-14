@@ -368,6 +368,7 @@ impl World {
             reload_scale: 1.,
             damage_scale: 1.,
             stasis: 0.,
+            pocket: 0.,
             game_creator: false,
             creator_boss: false,
             creator_attacks: [0.; crate::creator_boss::ATTACK_COUNT],
@@ -692,7 +693,7 @@ impl World {
         self.resolve_boss_contacts();
         let bounds = self.config.bounds();
         self.wall_index.sync(&self.walls);
-        for tank in self.tanks.iter_mut().filter(|tank| tank.alive) {
+        for tank in self.tanks.iter_mut().filter(|tank| tank.tangible()) {
             // Inside the arena and clear of every wall, constraining changes
             // nothing; most tanks are, and checking only nearby walls is cheap.
             if bounds.contains_circle(tank.pos, tank.radius)
@@ -749,6 +750,11 @@ impl World {
     }
     fn update_tanks(&mut self) {
         let mut respawns = vec![];
+        let pocket_walls = self
+            .tanks
+            .iter()
+            .any(|t| t.pocket > 0.)
+            .then(|| crate::pocket_walls(&self.config));
         self.wall_index.sync(&self.walls);
         for tank in &mut self.tanks {
             if !tank.alive {
@@ -770,6 +776,13 @@ impl World {
             for cooldown in &mut tank.creator_attacks {
                 *cooldown = (*cooldown - DT).max(0.);
             }
+            let was_pocket = tank.pocket > 0.;
+            crate::pocket::advance(tank, DT, true);
+            if tank.pocket > 0. {
+                for cooldown in &mut tank.cooldowns {
+                    *cooldown = (*cooldown - DT).max(0.);
+                }
+            }
             crate::physics::update_protection(tank, DT);
             if self
                 .admin_modifiers
@@ -786,7 +799,7 @@ impl World {
             let def = self.content.class(&tank.class);
             let regen = 2. * stat_scale(tank.stats[1]) * def.map_or(1., |c| c.multipliers[1])
                 + def.map_or(0., |c| c.passive_regen);
-            if self.tick.saturating_sub(tank.damaged_at) > 180 {
+            if !was_pocket && self.tick.saturating_sub(tank.damaged_at) > 180 {
                 tank.health = (tank.health + regen * DT * self.config.rules.regen_multiplier)
                     .min(tank.max_health);
             }
@@ -799,7 +812,9 @@ impl World {
                 steer_tank(tank, &self.content, &self.config, DT);
                 let reach = tank.radius + slide_reach(tank, DT) + 2.;
                 let near = self.wall_index.near(tank.pos, reach);
-                let walls = if near
+                let walls = if tank.pocket > 0. {
+                    pocket_walls.as_deref().unwrap_or(&[])
+                } else if near
                     .iter()
                     .any(|&wall| circle_rect(tank.pos, tank.radius, wall).is_some())
                 {
@@ -821,6 +836,7 @@ impl World {
                 t.protection = self.config.spawn_protection;
                 t.spawn_immunity = t.protection > 0.0;
                 t.health = t.max_health;
+                t.pocket = 0.;
                 t.cooldowns.clear();
             }
         }
@@ -859,7 +875,7 @@ impl World {
         self.grid.clear();
         self.body_padding = 0.0;
         for (i, t) in self.tanks.iter().enumerate() {
-            if t.alive {
+            if t.tangible() {
                 self.grid.insert_body(t.pos, t.radius, Body::Tank(i));
                 self.body_padding = self.body_padding.max(t.radius);
             }
@@ -1142,7 +1158,7 @@ impl World {
         knockback: V2,
     ) {
         let t = &mut self.tanks[index];
-        if !t.alive
+        if !t.tangible()
             || t.health <= 0.
             || t.protection > 0.
             || self.config.base_protected(t.team, t.pos, t.radius)
@@ -1218,6 +1234,7 @@ impl World {
                 t.input = PlayerInput::default();
                 t.shield = 0.;
                 t.stasis = 0.;
+                t.pocket = 0.;
                 t.knockback = 0.;
                 t.boost = 0.;
                 t.ability_cooldown = 0.;
@@ -1406,7 +1423,7 @@ impl World {
         let mut contacts = Vec::new();
         for i in 0..self.tanks.len() {
             let a = &self.tanks[i];
-            if !a.alive {
+            if !a.tangible() {
                 continue;
             }
             self.grid.query_bodies(
@@ -1419,7 +1436,7 @@ impl World {
                 match *body {
                     Body::Tank(j) if j > i => {
                         let b = &self.tanks[j];
-                        if !b.alive {
+                        if !b.tangible() {
                             continue;
                         }
                         let d = b.pos - a.pos;
@@ -1531,7 +1548,12 @@ impl World {
             .enumerate()
             .filter(|(_, boss)| boss.health > 0.0)
         {
-            for (i, tank) in self.tanks.iter().enumerate().filter(|(_, tank)| tank.alive) {
+            for (i, tank) in self
+                .tanks
+                .iter()
+                .enumerate()
+                .filter(|(_, tank)| tank.tangible())
+            {
                 let delta = boss.pos - tank.pos;
                 let radius = boss.radius + tank.radius;
                 if delta.length_squared() >= radius * radius {
@@ -1882,7 +1904,7 @@ impl World {
                     t.pos,
                     t.radius,
                     t.id,
-                    t.alive
+                    t.tangible()
                         && t.health > 0.
                         && t.id != owner
                         && t.protection <= 0.
@@ -2036,7 +2058,7 @@ impl World {
         let mut target = None;
         for t in &self.tanks {
             let d = (pos - t.pos).length_squared();
-            if t.alive
+            if t.tangible()
                 && t.id != owner
                 && t.protection <= 0.
                 && !self.config.base_protected(t.team, t.pos, t.radius)

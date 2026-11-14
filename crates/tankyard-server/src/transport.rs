@@ -697,7 +697,7 @@ impl UdpServer {
                     world
                         .tanks
                         .iter()
-                        .find(|t| t.id == id && t.alive && t.health > 0.)
+                        .find(|t| t.id == id && t.tangible() && t.health > 0.)
                         .map(|t| t.pos)
                 };
                 // Voice position and sender identity come exclusively from the

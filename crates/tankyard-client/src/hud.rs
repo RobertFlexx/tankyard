@@ -571,6 +571,7 @@ impl Hud {
         if tank.alive
             && !modal
             && let Some(class) = class
+            && tank.pocket <= 0.
             && let Some(progress) = tankyard_core::reload_progress(tank, class, &snapshot.config)
         {
             let p = view.screen(tank.pos);
@@ -653,12 +654,16 @@ impl Hud {
             }
         }
         let header_width = (w - 548. * s).max(120. * s);
-        let mode_name = snapshot
-            .config
-            .mode_name
-            .as_deref()
-            .unwrap_or(snapshot.config.mode.name());
-        let title = if snapshot.config.mode == Mode::Infection {
+        let mode_name = if tank.pocket > 0. {
+            "Backrooms"
+        } else {
+            snapshot
+                .config
+                .mode_name
+                .as_deref()
+                .unwrap_or(snapshot.config.mode.name())
+        };
+        let title = if tank.pocket <= 0. && snapshot.config.mode == Mode::Infection {
             format!(
                 "{mode_name} · {}",
                 if tank.team == 2 {
@@ -923,30 +928,38 @@ impl Hud {
             {
                 let ready = tank.ability_cooldown <= 0.0;
                 let parrying = class.ability.is_parry() && tank.shield > 0.0;
-                center_label(
-                    &format!(
-                        "[{}] {}  {}",
-                        settings.bindings[4],
-                        class.ability.name(),
-                        if parrying {
-                            "ACTIVE".into()
-                        } else if ready {
-                            "READY".into()
-                        } else {
-                            format!("{:.1}s", tank.ability_cooldown)
-                        }
-                    ),
-                    w * 0.5,
-                    status_y,
-                    15.0 * s,
-                    if parrying {
-                        AMBER
+                let status = format!(
+                    "[{}] {}  {}",
+                    settings.bindings[4],
+                    class.ability.name(),
+                    if tank.pocket > 0. {
+                        format!("{:.1}s · REPAIRING", tank.pocket)
+                    } else if parrying {
+                        "ACTIVE".into()
                     } else if ready {
-                        accent()
+                        "READY".into()
                     } else {
-                        muted_color()
-                    },
+                        format!("{:.1}s", tank.ability_cooldown)
+                    }
                 );
+                if tank.pocket > 0. {
+                    // The outline stays readable over both carpet and lamps.
+                    arcade_center(&status, w * 0.5, status_y, 15.0 * s);
+                } else {
+                    center_label(
+                        &status,
+                        w * 0.5,
+                        status_y,
+                        15.0 * s,
+                        if parrying {
+                            AMBER
+                        } else if ready {
+                            accent()
+                        } else {
+                            muted_color()
+                        },
+                    );
+                }
                 status_y -= 24.0 * s;
             }
             if let Some(class) = class.filter(|class| class.has_drones()) {
@@ -1181,6 +1194,13 @@ impl Hud {
         s: f32,
         view: &render::View,
     ) {
+        if snapshot
+            .tanks
+            .iter()
+            .any(|tank| tank.id == local && tank.pocket > 0.)
+        {
+            return;
+        }
         let width = 184.0 * s;
         let height = 132.0 * s;
         let x = screen_width() - width - 22.0 * s;
@@ -1269,7 +1289,7 @@ impl Hud {
             let p = point(boss.pos);
             draw_poly(p.x, p.y, 4, 4.0 * s, 45.0, RED);
         }
-        for tank in snapshot.tanks.iter().filter(|t| t.alive) {
+        for tank in snapshot.tanks.iter().filter(|t| t.tangible()) {
             let p = point(tank.pos);
             let color = render::team_color(tank.team, tank.id == local, settings.colorblind);
             draw_circle(

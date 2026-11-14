@@ -222,7 +222,7 @@ impl World {
         for o in &mut self.objectives {
             let mut counts = [0u16; 4];
             for t in &self.tanks {
-                if t.alive && t.team > 0 && t.pos.distance(o.pos) < o.radius {
+                if t.tangible() && t.team > 0 && t.pos.distance(o.pos) < o.radius {
                     counts[t.team as usize - 1] += 1;
                 }
             }
@@ -241,7 +241,7 @@ impl World {
                         o.progress = 1.;
                         captures.push((o.pos, o.id, team));
                         for t in &self.tanks {
-                            if t.alive && t.team == team && t.pos.distance(o.pos) < o.radius {
+                            if t.tangible() && t.team == team && t.pos.distance(o.pos) < o.radius {
                                 rewards.push(t.id);
                             }
                         }
@@ -282,7 +282,11 @@ impl World {
         let mut captures = Vec::new();
         for o in &mut self.objectives {
             if let Some(carrier) = o.carrier {
-                if let Some(t) = self.tanks.iter_mut().find(|t| t.id == carrier && t.alive) {
+                if let Some(t) = self
+                    .tanks
+                    .iter_mut()
+                    .find(|t| t.id == carrier && t.tangible())
+                {
                     o.pos = t.pos;
                     t.carrying = true;
                     let home = homes[t.team as usize - 1];
@@ -306,7 +310,7 @@ impl World {
                 }
                 let mut pickup = None;
                 for t in &self.tanks {
-                    if !t.alive || t.pos.distance(o.pos) > o.radius + t.radius {
+                    if !t.tangible() || t.pos.distance(o.pos) > o.radius + t.radius {
                         continue;
                     }
                     if t.team == o.team {

@@ -1,5 +1,9 @@
 # Motions tutorial
 
+**[Watch the video](motions-tutorial.mp4)** (2 min 15 s) · [English captions](motions-tutorial.vtt) · [Watch on the website](https://robertflexx.github.io/tankyard-site/#motions-video)
+
+Choose **Motions** above the website's video player for chapters on doors, curves, chained motions, lights, particles and playtesting.
+
 This tutorial builds a small gatehouse in the Arena Workshop, one piece at a time. It covers what's new in 1.0: motions and easing curves, chained motions, moving decor, lights and particles. Allow about fifteen minutes. The [workshop guide](map-editor.md#motions) is the full reference; this page is the hands-on version. To get a feel for the curves first, the [Tank Yard website](https://robertflexx.github.io/tankyard-site/#motions) plays every curve and mode in your browser.
 
 The finished gatehouse:

@@ -291,6 +291,14 @@ pub fn world(
     local_animation_time: f32,
     previous_positions: &HashMap<EntityId, (V2, f32)>,
 ) {
+    let pocket = snapshot
+        .tanks
+        .iter()
+        .find(|tank| tank.id == local && tank.alive && tank.pocket > 0.);
+    if let Some(tank) = pocket.filter(|tank| tankyard_core::POCKET_SECONDS - tank.pocket >= 0.12) {
+        crate::pocket_view::draw(snapshot, tank, content, view, settings, animation_time);
+        return;
+    }
     let dark = settings.dark_arena;
     // Each map keeps the classic floor, faintly tinted by its palette.
     let accent =
@@ -850,12 +858,25 @@ pub fn world(
         );
     }
     for tank in &snapshot.tanks {
+        if tank.alive && tank.id != local && tank.pocket > 0. && tank.pocket < 0.8 {
+            let p = view.screen(tank.pos);
+            draw_circle_lines(
+                p.x,
+                p.y,
+                (tank.radius + 9.) * z,
+                2. * z,
+                alpha(AMBER, (0.8 - tank.pocket) * 0.7),
+            );
+        }
         let position = previous_positions
             .get(&tank.id)
             .map_or(tank.pos, |&(previous, _)| {
                 crate::session::interpolate_position(previous, tank.pos, interpolation)
             });
-        if !tank.alive || !view.visible(position, tank.radius + 65.0) {
+        if !tank.alive
+            || (tank.pocket > 0. && tank.id != local)
+            || !view.visible(position, tank.radius + 65.0)
+        {
             continue;
         }
         let Some(class) = content.class(&tank.class) else {

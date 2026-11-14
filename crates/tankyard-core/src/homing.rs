@@ -53,7 +53,7 @@ impl World {
             self.tanks
                 .iter()
                 .filter(|tank| {
-                    tank.alive
+                    tank.tangible()
                         && tank.health > 0.0
                         && tank.id != owner
                         && tank.protection <= 0.0

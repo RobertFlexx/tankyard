@@ -3509,7 +3509,8 @@
       ],
       "upgrades": [
         "harrier",
-        "mirage"
+        "mirage",
+        "bacteria"
       ],
       "multipliers": [
         1.0,
@@ -3608,7 +3609,8 @@
       ],
       "upgrades": [
         "rook",
-        "mirage"
+        "mirage",
+        "bacteria"
       ],
       "multipliers": [
         0.9,
@@ -11036,6 +11038,83 @@
       "strengths": "Sustains itself while drones keep pressure from both flanks.",
       "weaknesses": "A smaller flock than the Overlord's.",
       "ai_range": 520
+    },
+    {
+      "id": "bacteria",
+      "name": "Bacteria",
+      "description": "Twin isolation cannons. Slip into a private pocket dimension for ten seconds to escape and repair 40% of your hull. You cannot fight or capture objectives inside.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "specter",
+        "wisp"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        0.92,
+        1,
+        0.9,
+        1,
+        1,
+        1,
+        1,
+        1.06
+      ],
+      "hull_sides": 6,
+      "barrels": [
+        {
+          "offset": [
+            1,
+            -8
+          ],
+          "angle": 0,
+          "length": 37,
+          "width": 11,
+          "cooldown": 0.56,
+          "delay": 0,
+          "recoil": 10,
+          "pattern": "Alternating",
+          "projectile": "Bullet",
+          "speed": 430,
+          "damage": 17,
+          "radius": 5.5,
+          "lifetime": 1.9,
+          "penetration": 1.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        },
+        {
+          "offset": [
+            1,
+            8
+          ],
+          "angle": 0,
+          "length": 37,
+          "width": 11,
+          "cooldown": 0.56,
+          "delay": 0.28,
+          "recoil": 10,
+          "pattern": "Alternating",
+          "projectile": "Bullet",
+          "speed": 430,
+          "damage": 17,
+          "radius": 5.5,
+          "lifetime": 1.9,
+          "penetration": 1.5,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Pocket",
+      "ability_cooldown": 40,
+      "passive_regen": 0,
+      "strengths": "Ten seconds to reposition and repair, with a private liminal layer.",
+      "weaknesses": "Moderate firepower. Drops carried cores and clears deployed weapons on entry. Thirty seconds exposed between visits.",
+      "ai_range": 390
     }
   ]
 }
