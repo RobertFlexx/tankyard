@@ -290,6 +290,8 @@ tankyard-load --local --clients 8 --seconds 600 --latency-ms 100 --jitter-ms 20 
 
 Runs can last up to 24 hours. Timing samples stay bounded; mean and maximum use every observation, while p95 and p99 use a uniform sample of up to 65,536 observations. The report includes completed reconnects, stale clients and peak combined resident memory where the OS exposes it. Reconnect tests against a remote host need a spare connection slot while a lost disconnect expires. Loopback results do not establish internet or production capacity.
 
+Local reconnect runs reserve one spare connection, so they support up to 127 clients. Latency and packet-loss emulation supports up to 16 clients per process.
+
 ## Scaling arenas
 
 ### Arena groups on one server
