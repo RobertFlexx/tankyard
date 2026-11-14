@@ -12,7 +12,7 @@ Mods are scripted in [Luau](https://luau.org); packs written for the earlier Lua
 
 Choose **Play** for the public server or **Play offline** for a local game.
 
-[Bacteria](docs/bacteria.md) is a level-55 escape tank with a ten-second pocket dimension: a private maze of yellow rooms where you can repair and reposition.
+[Bacteria](docs/bacteria.md) is a level-55 escape tank with up to ten seconds in a pocket dimension: a private maze of yellow rooms where you can repair and reposition.
 
 Windows (64-bit): [NSIS installer (.exe)](https://github.com/RobertFlexx/tankyard/releases/download/v1.0.1/tankyard-v1.0.1-windows-x86_64-setup.exe) · [Portable ZIP](https://github.com/RobertFlexx/tankyard/releases/download/v1.0.1/tankyard-v1.0.1-windows-x86_64.zip). For the portable version, extract the ZIP and open `tankyard.exe`.
 

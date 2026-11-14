@@ -1761,7 +1761,8 @@ impl UdpServer {
                 | EventKind::Kill
                 | EventKind::BodyParry
                 | EventKind::StasisRelease
-                | EventKind::BossAttack => self.important_events.push(event),
+                | EventKind::BossAttack
+                | EventKind::PocketEject => self.important_events.push(event),
                 _ if state.pending_effects.len() < 4096 => state.pending_effects.push(event),
                 _ => {}
             }

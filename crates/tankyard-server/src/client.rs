@@ -618,11 +618,12 @@ impl NetworkClient {
             }
             // Bundles carry a map's initial rules. Validated snapshots carry
             // the current rules, which hosts may change without a restart.
-            if snapshot
-                .tanks
-                .iter()
-                .any(|t| self.bundle.content.class(&t.class).is_none())
-            {
+            if snapshot.tanks.iter().any(|t| {
+                self.bundle.content.class(&t.class).is_none()
+                    || t.pocket_echoes
+                        .iter()
+                        .any(|echo| self.bundle.content.class(&echo.class).is_none())
+            }) {
                 return self.fail("Snapshot does not match the server's game data.".into());
             }
             restore_walls(&mut snapshot, &mut self.walls, &mut self.walls_tick);
@@ -1097,8 +1098,54 @@ mod tests {
         let world = &server.arenas[0].session.world;
         let tank = world.tanks.iter().find(|t| t.id == id).unwrap();
         assert!(tank.pocket > 0.);
+        assert_eq!(tank.pocket_echoes.len(), tankyard_core::POCKET_ECHO_LIMIT);
+        assert_eq!(
+            client
+                .player_snapshot()
+                .unwrap()
+                .tanks
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .pocket_echoes
+                .len(),
+            tankyard_core::POCKET_ECHO_LIMIT
+        );
         assert_eq!(tank.shot_count, 0);
         assert!(world.projectiles.iter().all(|p| p.owner != id));
+        let tank = server.arenas[0]
+            .session
+            .world
+            .tanks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .unwrap();
+        tank.pocket_echoes[0].pos = tank.pos;
+        tank.pocket_echoes[0].wake = 0.;
+        let mut returned = false;
+        let mut notified = false;
+        for _ in 0..60 {
+            server.update(step).unwrap();
+            client.update(step).unwrap();
+            notified |= client.events.iter().any(|e| {
+                e.subject == id && matches!(e.kind, tankyard_core::EventKind::PocketEject)
+            });
+            returned |= client
+                .player_snapshot()
+                .and_then(|s| s.tanks.iter().find(|t| t.id == id))
+                .is_some_and(|t| {
+                    t.pocket == 0. && t.pocket_echoes.is_empty() && t.ability_cooldown > 30.
+                });
+            if returned && notified {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(returned, "an authoritative catch must reach the client");
+        assert!(
+            notified,
+            "the forced return must survive the reliable event channel"
+        );
     }
 
     #[test]

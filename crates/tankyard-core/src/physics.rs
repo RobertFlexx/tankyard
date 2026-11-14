@@ -302,7 +302,11 @@ pub fn constrain_tank(tank: &mut Tank, config: &WorldConfig, walls: &[Rect]) {
             break;
         }
     }
-    let bounds = config.bounds();
+    let bounds = if tank.pocket > 0. {
+        crate::pocket_bounds(config)
+    } else {
+        config.bounds()
+    };
     let clamped = bounds.clamp_circle(tank.pos, tank.radius);
     if tank.pos.x < clamped.x {
         tank.vel.x = tank.vel.x.max(0.);
@@ -398,14 +402,13 @@ pub fn predict_tank(
     tank.ability_cooldown = (tank.ability_cooldown - dt).max(0.0);
     tank.shield = (tank.shield - dt).max(0.0);
     update_protection(tank, dt);
-    let pocket_walls;
-    let walls = if tank.pocket > 0. {
-        pocket_walls = crate::pocket_walls(config);
-        pocket_walls.as_slice()
+    if tank.pocket > 0. {
+        crate::with_pocket_layout(config, |layout| {
+            move_tank(tank, content, config, &layout.walls, dt);
+        });
     } else {
-        walls
-    };
-    move_tank(tank, content, config, walls, dt);
+        move_tank(tank, content, config, walls, dt);
+    }
     if tank.spawn_immunity && tank.protection > 0. {
         return;
     }
@@ -539,13 +542,16 @@ pub(crate) fn apply_personal_ability(
         Ability::Stasis => tank.stasis = crate::STASIS_SECONDS,
         Ability::Pocket => {
             tank.pocket = crate::POCKET_SECONDS;
+            tank.pocket_echoes.clear();
             tank.shield = 0.;
             tank.boost = 0.;
             tank.stasis = 0.;
             tank.charge = 0.;
             tank.terrain = 1.;
             tank.push = V2::ZERO;
-            constrain_tank(tank, config, &crate::pocket_walls(config));
+            crate::with_pocket_layout(config, |layout| {
+                constrain_tank(tank, config, &layout.walls);
+            });
         }
         Ability::Parry | Ability::CounterParry | Ability::VolleyParry => {
             tank.shield = ability.parry_window().unwrap_or(0.)

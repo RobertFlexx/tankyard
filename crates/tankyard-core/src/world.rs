@@ -32,6 +32,7 @@ pub struct World {
     pub map: tankyard_content::MapDef,
     pub tick: u64,
     pub tanks: Vec<Tank>,
+    pub(crate) pocket_plan: Option<Box<crate::PocketLayout>>,
     pub projectiles: Vec<Projectile>,
     pub targets: Vec<Target>,
     pub bosses: Vec<Boss>,
@@ -170,6 +171,7 @@ impl World {
             .clone();
         config.map = map.id.clone();
         let mut world = Self {
+            pocket_plan: None,
             admin_modifiers: BTreeMap::new(),
             incoming_damage: BTreeMap::new(),
             hud: BTreeMap::new(),
@@ -282,6 +284,7 @@ impl World {
                     | EventKind::BodyParry
                     | EventKind::StasisRelease
                     | EventKind::BossAttack
+                    | EventKind::PocketEject
             ) && let Some(index) = self
                 .events
                 .iter()
@@ -369,6 +372,7 @@ impl World {
             damage_scale: 1.,
             stasis: 0.,
             pocket: 0.,
+            pocket_echoes: vec![],
             game_creator: false,
             creator_boss: false,
             creator_attacks: [0.; crate::creator_boss::ATTACK_COUNT],
@@ -750,11 +754,16 @@ impl World {
     }
     fn update_tanks(&mut self) {
         let mut respawns = vec![];
-        let pocket_walls = self
-            .tanks
-            .iter()
-            .any(|t| t.pocket > 0.)
-            .then(|| crate::pocket_walls(&self.config));
+        let mut ejected = Vec::new();
+        if self.tanks.iter().any(|t| t.pocket > 0.)
+            && self
+                .pocket_plan
+                .as_deref()
+                .is_none_or(|plan| !plan.matches(&self.config))
+        {
+            self.pocket_plan = Some(Box::new(crate::PocketLayout::new(&self.config)));
+        }
+        let pocket_plan = self.pocket_plan.as_deref();
         self.wall_index.sync(&self.walls);
         for tank in &mut self.tanks {
             if !tank.alive {
@@ -776,6 +785,7 @@ impl World {
             for cooldown in &mut tank.creator_attacks {
                 *cooldown = (*cooldown - DT).max(0.);
             }
+            let before_position = tank.pos;
             let was_pocket = tank.pocket > 0.;
             crate::pocket::advance(tank, DT, true);
             if tank.pocket > 0. {
@@ -813,7 +823,7 @@ impl World {
                 let reach = tank.radius + slide_reach(tank, DT) + 2.;
                 let near = self.wall_index.near(tank.pos, reach);
                 let walls = if tank.pocket > 0. {
-                    pocket_walls.as_deref().unwrap_or(&[])
+                    pocket_plan.map_or(&[][..], |plan| plan.walls.as_slice())
                 } else if near
                     .iter()
                     .any(|&wall| circle_rect(tank.pos, tank.radius, wall).is_some())
@@ -824,6 +834,15 @@ impl World {
                 };
                 slide_tank(tank, &self.config, walls, DT);
             }
+            if let Some(plan) = pocket_plan
+                && crate::pocket::pursue(tank, before_position, &self.content, plan, DT)
+            {
+                constrain_tank(tank, &self.config, &self.walls);
+                ejected.push((tank.pos, tank.id, tank.team));
+            }
+        }
+        for (pos, id, team) in ejected {
+            self.event(EventKind::PocketEject, pos, id, 0, team);
         }
         for id in respawns {
             let team = self.tanks.iter().find(|t| t.id == id).map_or(0, |t| t.team);
@@ -837,6 +856,7 @@ impl World {
                 t.spawn_immunity = t.protection > 0.0;
                 t.health = t.max_health;
                 t.pocket = 0.;
+                t.pocket_echoes.clear();
                 t.cooldowns.clear();
             }
         }
@@ -1235,6 +1255,7 @@ impl World {
                 t.shield = 0.;
                 t.stasis = 0.;
                 t.pocket = 0.;
+                t.pocket_echoes.clear();
                 t.knockback = 0.;
                 t.boost = 0.;
                 t.ability_cooldown = 0.;

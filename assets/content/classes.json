@@ -11042,7 +11042,7 @@
     {
       "id": "bacteria",
       "name": "Bacteria",
-      "description": "Twin isolation cannons. Slip into a private pocket dimension for ten seconds to escape and repair 40% of your hull. You cannot fight or capture objectives inside.",
+      "description": "Twin isolation cannons. Noclip into a private maze for up to ten seconds, repairing 4% of your hull each second. Keep moving: silent doubles pursue you and force an early return on contact.",
       "tier": 4,
       "min_level": 55,
       "parents": [
@@ -11112,8 +11112,8 @@
       "ability": "Pocket",
       "ability_cooldown": 40,
       "passive_regen": 0,
-      "strengths": "Ten seconds to reposition and repair, with a private liminal layer.",
-      "weaknesses": "Moderate firepower. Drops carried cores and clears deployed weapons on entry. Thirty seconds exposed between visits.",
+      "strengths": "Escape arena combat and repair while finding a route through the private maze.",
+      "weaknesses": "Moderate firepower. Doubles cut visits short on contact. Entry drops cores and clears deployed weapons; the cooldown continues after an early return.",
       "ai_range": 390
     }
   ]

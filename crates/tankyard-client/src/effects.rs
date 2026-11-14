@@ -199,6 +199,7 @@ impl Effects {
                 EventKind::BodyParry => (AMBER, 30, true),
                 EventKind::StasisRelease => (CYAN, 24, true),
                 EventKind::BossAttack => (RED, 3, true),
+                EventKind::PocketEject => (AMBER, 6, true),
             };
             let count = (count as f32 * intensity) as usize;
             for _ in 0..count {
@@ -282,6 +283,7 @@ impl Effects {
                 let text = match event.kind {
                     EventKind::LevelUp => Some(format!("LEVEL {}", event.value)),
                     EventKind::Evolve => Some("Tank upgraded".into()),
+                    EventKind::PocketEject => Some("A double forced you out".into()),
                     EventKind::Kill => None, // The name belongs in the top-screen feed.
                     EventKind::Parry => Some("Parried".into()),
                     EventKind::BodyParry => Some("SMASHER COUNTERED".into()),

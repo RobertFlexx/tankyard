@@ -494,6 +494,27 @@ impl World {
         );
         match ability {
             Ability::Pocket => {
+                if self
+                    .pocket_plan
+                    .as_deref()
+                    .is_none_or(|plan| !plan.matches(&self.config))
+                {
+                    self.pocket_plan = Some(Box::new(crate::PocketLayout::new(&self.config)));
+                }
+                let mut classes = vec![self.tanks[index].class.clone()];
+                classes.extend(
+                    self.tanks
+                        .iter()
+                        .filter(|t| t.id != id && t.alive && !t.creator_boss)
+                        .take(2)
+                        .map(|t| t.class.clone()),
+                );
+                crate::pocket::populate(
+                    &mut self.tanks[index],
+                    &self.config,
+                    &classes,
+                    self.pocket_plan.as_deref().unwrap(),
+                );
                 // No delayed shots, drones or traps may attack from safety.
                 for shot in &mut self.projectiles {
                     if shot.owner == id {

@@ -259,6 +259,9 @@ pub struct Tank {
     /// Seconds left in the isolated pocket layer. Always controlled by the host.
     #[serde(default)]
     pub pocket: f32,
+    /// Private, non-shooting doubles. Only the host advances their pursuit.
+    #[serde(default)]
+    pub pocket_echoes: Vec<PocketEcho>,
     /// Set only after the server verifies the creator's signing key.
     #[serde(default)]
     pub game_creator: bool,
@@ -297,6 +300,18 @@ impl ServerBadge {
         }
     }
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PocketEcho {
+    pub pos: V2,
+    pub previous: V2,
+    pub vel: V2,
+    pub aim: f32,
+    pub radius: f32,
+    pub class: String,
+    /// A short still pose before the double starts pursuing.
+    pub wake: f32,
+}
+
 impl Tank {
     /// Present for combat, pickups and objectives in the shared arena.
     pub fn tangible(&self) -> bool {
@@ -373,6 +388,7 @@ impl Clone for Tank {
             damage_scale: self.damage_scale,
             stasis: self.stasis,
             pocket: self.pocket,
+            pocket_echoes: self.pocket_echoes.clone(),
             game_creator: self.game_creator,
             creator_boss: self.creator_boss,
             creator_attacks: self.creator_attacks,
@@ -426,6 +442,7 @@ impl Clone for Tank {
         self.damage_scale = source.damage_scale;
         self.stasis = source.stasis;
         self.pocket = source.pocket;
+        self.pocket_echoes.clone_from(&source.pocket_echoes);
         self.game_creator = source.game_creator;
         self.creator_boss = source.creator_boss;
         self.creator_attacks = source.creator_attacks;
@@ -777,6 +794,7 @@ pub enum EventKind {
     BodyParry,
     StasisRelease,
     BossAttack,
+    PocketEject,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Elimination {

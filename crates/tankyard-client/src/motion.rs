@@ -210,6 +210,31 @@ impl History {
         }
         // Tanks last, as they're drawn on top.
         let z = now.zoom;
+        if pocket && let Some(visitor) = snapshot.tanks.iter().find(|t| t.id == local) {
+            for (index, echo) in visitor.pocket_echoes.iter().enumerate() {
+                let position = echo.previous.lerp(echo.pos, interpolation);
+                let Some((here, color)) = motion(4, index as EntityId, position, echo.radius * 4.)
+                else {
+                    continue;
+                };
+                if let Some(class) = content.class(&echo.class) {
+                    crate::tank_model::class_model_geometry(
+                        class,
+                        here,
+                        echo.radius * z,
+                        echo.aim,
+                        0.,
+                        0.,
+                        color,
+                        0.,
+                        None,
+                        None,
+                        Some(z),
+                        &mut |primitive| silhouette(primitive, color, 1.5 * z),
+                    );
+                }
+            }
+        }
         for tank in snapshot
             .tanks
             .iter()
@@ -256,6 +281,41 @@ impl History {
                     color,
                 );
             }
+        }
+        if pocket {
+            // Roof fixtures move against the floor. Their dominant translucent
+            // pixels need the roof's motion rather than the carpet's vectors.
+            let reduced = crate::accessibility::reduced_motion();
+            let size = crate::pocket_view::LIGHT_SIZE * z;
+            tankyard_core::with_pocket_layout(&snapshot.config, |layout| {
+                for light in &layout.lights {
+                    let light = light.pos;
+                    let here = crate::pocket_view::ceiling_position(
+                        now.screen(light),
+                        now.screen,
+                        reduced,
+                    );
+                    let last = crate::pocket_view::ceiling_position(
+                        before.screen(light),
+                        before.screen,
+                        reduced,
+                    );
+                    if here.x + size.x * 0.5 < 0.
+                        || here.y + size.y * 0.5 < 0.
+                        || here.x - size.x * 0.5 > now.screen.x
+                        || here.y - size.y * 0.5 > now.screen.y
+                    {
+                        continue;
+                    }
+                    draw_rectangle(
+                        here.x - size.x * 0.5,
+                        here.y - size.y * 0.5,
+                        size.x,
+                        size.y,
+                        encode((last - here) * render),
+                    );
+                }
+            });
         }
         gl_use_default_material();
         cut

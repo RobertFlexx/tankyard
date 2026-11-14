@@ -660,7 +660,10 @@ impl Session {
                 let old = self
                     .predicted
                     .as_ref()
-                    .filter(|t| t.alive == authoritative.alive)
+                    .filter(|t| {
+                        t.alive == authoritative.alive
+                            && (t.pocket > 0.) == (authoritative.pocket > 0.)
+                    })
                     .map(|t| t.pos + self.correction)
                     .unwrap_or(authoritative.pos);
                 let mut predicted = authoritative.clone();
@@ -709,6 +712,31 @@ impl Session {
             })
             + extrapolation;
         for (tank, latest) in display.tanks.iter_mut().zip(&snapshot.tanks) {
+            // Doubles are host-controlled. Interpolate authoritative poses
+            // without extrapolating them through the private room's walls.
+            let previous_echoes = client
+                .previous_snapshot
+                .as_ref()
+                .filter(|previous| previous.match_state.round == snapshot.match_state.round)
+                .and_then(|previous| previous.tanks.iter().find(|t| t.id == tank.id))
+                .filter(|previous| previous.pocket >= latest.pocket && latest.pocket > 0.);
+            for (index, (echo, current)) in tank
+                .pocket_echoes
+                .iter_mut()
+                .zip(&latest.pocket_echoes)
+                .enumerate()
+            {
+                if let Some(old) = previous_echoes
+                    .and_then(|t| t.pocket_echoes.get(index))
+                    .filter(|old| old.class == current.class)
+                {
+                    echo.pos = old.pos.lerp(current.pos, alpha);
+                    echo.aim = lerp_angle(old.aim, current.aim, alpha);
+                } else {
+                    echo.pos = current.pos;
+                }
+                echo.previous = echo.pos;
+            }
             if tank.id == self.player {
                 if let Some(predicted) = &self.predicted {
                     tank.pos = predicted.pos + self.correction;
@@ -1121,7 +1149,12 @@ fn predict_pads(
     poses: &tankyard_content::GroupPoses,
     tank: &mut Tank,
 ) {
-    let Some(map) = maps.iter().find(|map| map.id == snapshot.config.map) else {
+    // Like the server, pads leave alone tanks that are not in the arena.
+    let Some(map) = maps
+        .iter()
+        .find(|map| map.id == snapshot.config.map)
+        .filter(|_| tank.tangible())
+    else {
         tank.terrain = 1.;
         tank.push = V2::ZERO;
         return;

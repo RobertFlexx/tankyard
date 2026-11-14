@@ -1,73 +1,18 @@
 //! A private office maze without arena combat or objectives. Its generated
 //! walls keep movement predictable; the host alone applies the healing.
-use crate::{Rect, Tank, WorldConfig};
+use crate::{PocketEcho, PocketLayout, Rect, Tank, V2, WorldConfig, physics};
+use tankyard_content::Content;
 
 pub const POCKET_SECONDS: f32 = 10.;
+pub const POCKET_ECHO_LIMIT: usize = 3;
+/// The longest still pose before a double gives chase, in seconds.
+pub const POCKET_ECHO_WAKE: f32 = 3.;
 /// Forty percent of maximum hull health over a complete visit.
 pub const POCKET_HEAL_RATE: f32 = 0.04;
 
-/// Every pocket uses the same deterministic, open-ended office maze. Its
-/// geometry is derived on each side, so it requires no map download or packets.
+/// The collision plan is cached and shared with the renderer and pursuers.
 pub fn walls(config: &WorldConfig) -> Vec<Rect> {
-    let bounds = config.bounds();
-    let cell = 400.;
-    let columns = (bounds.w / cell).ceil().min(64.) as i32;
-    let rows = (bounds.h / cell).ceil().min(64.) as i32;
-    let mut walls = Vec::with_capacity((columns * rows * 2) as usize);
-    for row in 0..rows {
-        for column in 0..columns {
-            let x = bounds.x + column as f32 * cell;
-            let y = bounds.y + row as f32 * cell;
-            let mut key = config.seed ^ (column as u64 * 0x517cc1b7) ^ (row as u64 * 0x6eed0e9d);
-            key = (key ^ (key >> 17)).wrapping_mul(0x9e3779b97f4a7c15);
-            // Wide gaps join every room. Alternate the ends rather than making
-            // corridors with a wall at every crossing or sealed rooms.
-            if column + 1 < columns {
-                walls.push(Rect {
-                    x: x + 376.,
-                    y: y + if key & 1 == 0 { 0. } else { 150. },
-                    w: 48.,
-                    h: 250.,
-                });
-            }
-            if row > 0 && key & 6 != 0 {
-                walls.push(Rect {
-                    x: x + if key & 8 == 0 { 0. } else { 150. },
-                    y: y - 24.,
-                    w: 250.,
-                    h: 48.,
-                });
-            }
-        }
-    }
-    // A skirting wall marks the actual boundary instead of an invisible edge.
-    walls.extend([
-        Rect {
-            x: bounds.x - 48.,
-            y: bounds.y - 48.,
-            w: bounds.w + 96.,
-            h: 48.,
-        },
-        Rect {
-            x: bounds.x - 48.,
-            y: bounds.y + bounds.h,
-            w: bounds.w + 96.,
-            h: 48.,
-        },
-        Rect {
-            x: bounds.x - 48.,
-            y: bounds.y,
-            w: 48.,
-            h: bounds.h,
-        },
-        Rect {
-            x: bounds.x + bounds.w,
-            y: bounds.y,
-            w: 48.,
-            h: bounds.h,
-        },
-    ]);
-    walls
+    crate::with_pocket_layout(config, |layout| layout.walls.clone())
 }
 
 pub(crate) fn advance(tank: &mut Tank, dt: f32, healing: bool) {
@@ -84,6 +29,90 @@ pub(crate) fn advance(tank: &mut Tank, dt: f32, healing: bool) {
     } else {
         tank.pocket - dt
     };
+    if tank.pocket == 0. {
+        tank.pocket_echoes.clear();
+    }
+}
+
+pub(crate) fn populate(
+    tank: &mut Tank,
+    config: &WorldConfig,
+    classes: &[String],
+    layout: &PocketLayout,
+) {
+    tank.pocket_echoes.clear();
+    let phase = ((config.seed ^ tank.id.wrapping_mul(0x517cc1b7)) % 628) as f32 * 0.01;
+    let mut used = Vec::with_capacity(POCKET_ECHO_LIMIT);
+    for index in 0..POCKET_ECHO_LIMIT {
+        let angle = phase + index as f32 * std::f32::consts::TAU / POCKET_ECHO_LIMIT as f32;
+        let wanted = tank.pos + V2::from_angle(angle) * (420. + index as f32 * 80.);
+        let Some(pos) = layout.spawn(tank.pos, wanted, &used) else {
+            continue;
+        };
+        used.push(pos);
+        tank.pocket_echoes.push(PocketEcho {
+            pos,
+            previous: pos,
+            vel: V2::ZERO,
+            aim: (tank.pos - pos).angle(),
+            radius: (tank.radius * 0.9).clamp(4., 24.),
+            class: classes
+                .get(index % classes.len().max(1))
+                .unwrap_or(&tank.class)
+                .clone(),
+            // A moment to take in the room before the first one moves.
+            wake: 1.8 + index as f32 * 0.5,
+        });
+    }
+}
+
+/// Host-only pursuit. A double has no input, weapon state or arena entity id.
+/// Contact ends the visit; it cannot inflict damage or leave the private layer.
+pub(crate) fn pursue(
+    tank: &mut Tank,
+    before: V2,
+    content: &Content,
+    layout: &PocketLayout,
+    dt: f32,
+) -> bool {
+    if tank.pocket <= 0. {
+        return false;
+    }
+    // Slower than the visitor, so steady movement always opens a lead.
+    let speed = (physics::tank_speed(tank, content) * 0.74).clamp(95., 195.);
+    let target = tank.pos;
+    let mut caught = false;
+    for echo in &mut tank.pocket_echoes {
+        echo.previous = echo.pos;
+        echo.wake = (echo.wake - dt).max(0.);
+        if echo.wake == 0. {
+            let goal = layout
+                .route(echo.pos, target, echo.radius)
+                .unwrap_or(echo.pos);
+            let delta = goal - echo.pos;
+            let desired = delta.normalized() * speed.min(delta.length() / dt.max(0.001));
+            echo.vel = echo.vel.lerp(desired, 1. - (-9. * dt).exp());
+            echo.pos = layout.slide(echo.pos, echo.vel * dt, echo.radius);
+            if echo.vel.length_squared() > 1. {
+                echo.aim = echo.vel.angle();
+            }
+        }
+        // Relative sweeps catch a crossing, even when both hulls move quickly.
+        caught |= physics::sweep_circle(
+            echo.previous - before,
+            echo.pos - target,
+            V2::ZERO,
+            tank.radius + echo.radius,
+        )
+        .is_some();
+    }
+    if caught {
+        tank.pocket = 0.;
+        tank.pocket_echoes.clear();
+        tank.charge = 0.;
+        tank.input.fire = false;
+    }
+    caught
 }
 
 #[cfg(test)]
@@ -141,6 +170,9 @@ mod tests {
         assert!(world.projectiles.iter().all(|p| p.owner != id));
         let velocity = world.tanks[0].vel;
         let health = world.tanks[0].health;
+        // Exercise the timer and isolation without a catch interrupting it.
+        // Pursuit and earned healing on a catch have their own regression below.
+        world.tanks[0].pocket_echoes.clear();
         world.damage_tank(0, 10000., 0, V2::new(300., 0.));
         assert_eq!(world.tanks[0].health, health);
         assert_eq!(world.tanks[0].vel, velocity);
@@ -227,6 +259,11 @@ mod tests {
                 DT,
             );
             world.step();
+            if tick == 0 {
+                // Client prediction only moves the visitor. The host supplies
+                // forced returns separately in authoritative snapshots.
+                world.tanks[0].pocket_echoes.clear();
+            }
             let actual = &world.tanks[0];
             assert!(
                 actual.pos.distance(predicted.pos) < 0.02,
@@ -258,5 +295,131 @@ mod tests {
         world.step();
         assert!(!world.tanks[0].alive);
         assert_eq!(world.tanks[0].pocket, 0.);
+        assert!(world.tanks[0].pocket_echoes.is_empty());
+    }
+
+    #[test]
+    fn doubles_wake_then_catch_a_stationary_visitor_without_firing() {
+        for seed in [1, 19, 203, 775] {
+            let (mut world, _) = world(Mode::Sandbox);
+            world.config.seed = seed;
+            enter(&mut world);
+            let initial: Vec<V2> = world.tanks[0].pocket_echoes.iter().map(|e| e.pos).collect();
+            assert_eq!(initial.len(), POCKET_ECHO_LIMIT);
+            for echo in &world.tanks[0].pocket_echoes {
+                assert!(echo.pos.distance(world.tanks[0].pos) >= 340.);
+            }
+            let health = world.tanks[0].health;
+            for _ in 0..60 {
+                world.step();
+            }
+            assert!(
+                world.tanks[0]
+                    .pocket_echoes
+                    .iter()
+                    .zip(&initial)
+                    .all(|(e, p)| e.pos == *p)
+            );
+            let mut steps = 60;
+            while world.tanks[0].pocket > 0. && steps < 600 {
+                world.step();
+                steps += 1;
+            }
+            let tank = &world.tanks[0];
+            assert!(
+                steps < 600,
+                "seed {seed}: a stationary visitor escaped every double"
+            );
+            assert_eq!(tank.pocket, 0.);
+            assert!(tank.pocket_echoes.is_empty());
+            let earned = tank.max_health * POCKET_HEAL_RATE * steps as f32 * DT;
+            assert!((tank.health - health - earned).abs() < 0.01);
+            assert!((tank.ability_cooldown - (40. - steps as f32 * DT)).abs() < 0.01);
+            assert_eq!(tank.shot_count, 0);
+            assert!(world.projectiles.is_empty());
+            assert!(world.position_clear(tank.pos, tank.radius));
+            assert_eq!(
+                world
+                    .events
+                    .iter()
+                    .filter(|e| matches!(e.kind, crate::EventKind::PocketEject))
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn a_swept_contact_with_a_sleeping_double_returns_without_damage() {
+        let (mut world, _) = world(Mode::Sandbox);
+        enter(&mut world);
+        let tank = &mut world.tanks[0];
+        let layout = world.pocket_plan.as_deref().unwrap();
+        tank.pos = layout.lights[0].pos;
+        tank.pocket_echoes.truncate(1);
+        let echo = &mut tank.pocket_echoes[0];
+        echo.pos = tank.pos;
+        echo.previous = echo.pos;
+        echo.wake = 1.;
+        let before = tank.pos - V2::new(90., 0.);
+        tank.pos += V2::new(90., 0.);
+        let health = tank.health;
+        let cooldown = tank.ability_cooldown;
+        assert!(pursue(tank, before, &world.content, layout, DT));
+        assert_eq!(tank.pocket, 0.);
+        assert!(tank.pocket_echoes.is_empty());
+        assert_eq!(tank.health, health);
+        assert_eq!(tank.ability_cooldown, cooldown);
+        assert!(!tank.input.fire);
+    }
+
+    #[test]
+    fn moving_away_can_outpace_a_double_and_natural_return_clears_it() {
+        let (mut world, _) = world(Mode::Sandbox);
+        world.tanks[0].pos = V2::new(200., 200.);
+        enter(&mut world);
+        world.tanks[0].pocket_echoes.truncate(1);
+        let tank = &mut world.tanks[0];
+        tank.pocket_echoes[0].pos = tank.pos - V2::new(120., 0.);
+        tank.pocket_echoes[0].previous = tank.pocket_echoes[0].pos;
+        tank.pocket_echoes[0].wake = 0.;
+        tank.input = PlayerInput {
+            movement: V2::new(1., 0.),
+            ..Default::default()
+        };
+        for tick in 0..599 {
+            world.step();
+            assert!(world.tanks[0].pocket > 0., "caught at {tick}");
+        }
+        world.step();
+        assert_eq!(world.tanks[0].pocket, 0.);
+        assert!(world.tanks[0].pocket_echoes.is_empty());
+        assert!(
+            !world
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, crate::EventKind::PocketEject))
+        );
+    }
+
+    #[test]
+    fn echoes_use_living_player_classes_and_a_new_visit_starts_with_fresh_poses() {
+        let (mut world, _) = world(Mode::Sandbox);
+        let other = world.add_player("Other", false);
+        world.set_class(other, "twin");
+        enter(&mut world);
+        assert_eq!(world.tanks[0].pocket_echoes[0].class, "bacteria");
+        assert_eq!(world.tanks[0].pocket_echoes[1].class, "twin");
+        world.tanks[0].pocket = DT;
+        world.step();
+        assert!(world.tanks[0].pocket_echoes.is_empty());
+        world.tanks[0].ability_cooldown = 0.;
+        enter(&mut world);
+        assert!(
+            world.tanks[0]
+                .pocket_echoes
+                .iter()
+                .all(|e| e.wake > 1. && e.vel == V2::ZERO && e.pos == e.previous)
+        );
     }
 }

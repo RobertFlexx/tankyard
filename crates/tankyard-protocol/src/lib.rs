@@ -19,13 +19,12 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 27 adds the authoritative pocket-dimension timer to tanks and the
-/// Pocket ability to content. Older snapshots have a different shape, so
-/// clients and servers must update together. The transport id remains stable
-/// so older peers receive a readable update notice.
-pub const PROTOCOL_VERSION: u32 = 27;
+/// Version 28 carries the private pocket's pursuing doubles and forced-return
+/// event. The previous snapshot shape cannot describe that hazard, so source
+/// clients and servers must update together. Released 1.0.1 uses version 27.
+pub const PROTOCOL_VERSION: u32 = 28;
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 27;
+pub const MIN_PROTOCOL_VERSION: u32 = 28;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
 pub const SERVER_OUTDATED: &str =
     "This server runs an older Tank Yard. Its host needs to update it.";
@@ -568,6 +567,17 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && (0.0..=1.).contains(&t.knockback)
                 && (0.0..=tankyard_core::STASIS_SECONDS).contains(&t.stasis)
                 && (0.0..=tankyard_core::POCKET_SECONDS).contains(&t.pocket)
+                && t.pocket_echoes.len() <= tankyard_core::POCKET_ECHO_LIMIT
+                && (t.pocket > 0. || t.pocket_echoes.is_empty())
+                && t.pocket_echoes.iter().all(|echo| {
+                    vector(echo.pos)
+                        && vector(echo.previous)
+                        && vector(echo.vel)
+                        && scalar(echo.aim)
+                        && (4.0..=24.0).contains(&echo.radius)
+                        && (0.0..=tankyard_core::POCKET_ECHO_WAKE).contains(&echo.wake)
+                        && valid_class_id(&echo.class)
+                })
                 && (!t.creator_boss || t.game_creator)
                 && t.creator_attacks.iter().all(|v| {
                     v.is_finite() && (0.0..=tankyard_core::creator_boss::MAX_COOLDOWN).contains(v)
@@ -726,6 +736,58 @@ mod tests {
         let single = decode_inputs(&encode(&single, MAX_INPUT_BYTES).unwrap()).unwrap();
         assert_eq!(single.count, 1);
         assert_eq!(single.inputs[0].sequence, u32::MAX);
+    }
+    #[test]
+    fn pocket_doubles_round_trip_and_invalid_private_state_is_rejected() {
+        use tankyard_core::{Mode, PlayerInput, World, WorldConfig};
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::Sandbox,
+                target_count: 0,
+                spawn_protection: 0.,
+                dynamic_arena: false,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        let id = world.add_player("Bacteria", false);
+        assert!(world.sandbox_class(id, "bacteria"));
+        world.tanks[0].input = PlayerInput {
+            ability: true,
+            ..Default::default()
+        };
+        world.step();
+        let snapshot = world.snapshot();
+        let restored = decode_snapshot(&encode_snapshot(&snapshot).unwrap()).unwrap();
+        assert_eq!(
+            restored.tanks[0].pocket_echoes.len(),
+            tankyard_core::POCKET_ECHO_LIMIT
+        );
+        for (expected, actual) in snapshot.tanks[0]
+            .pocket_echoes
+            .iter()
+            .zip(&restored.tanks[0].pocket_echoes)
+        {
+            assert_eq!(expected.class, actual.class);
+            assert_eq!(expected.pos, actual.pos);
+            assert_eq!(expected.wake, actual.wake);
+        }
+        for (radius, wake) in [(f32::NAN, 0.), (25., 0.), (0., 0.), (20., -1.), (20., 3.1)] {
+            let mut bad = snapshot.clone();
+            bad.tanks[0].pocket_echoes[0].radius = radius;
+            bad.tanks[0].pocket_echoes[0].wake = wake;
+            assert!(decode_snapshot(&encode_snapshot(&bad).unwrap()).is_err());
+        }
+        let mut bad = snapshot.clone();
+        bad.tanks[0].pocket_echoes[0].pos.x = f32::NAN;
+        assert!(decode_snapshot(&encode_snapshot(&bad).unwrap()).is_err());
+        let mut bad = snapshot.clone();
+        let extra = bad.tanks[0].pocket_echoes[0].clone();
+        bad.tanks[0].pocket_echoes.push(extra);
+        assert!(decode_snapshot(&encode_snapshot(&bad).unwrap()).is_err());
+        let mut bad = snapshot;
+        bad.tanks[0].pocket = 0.;
+        assert!(decode_snapshot(&encode_snapshot(&bad).unwrap()).is_err());
     }
     #[test]
     fn arena_status_spawn_immunity_and_reflected_shots_survive_the_wire() {

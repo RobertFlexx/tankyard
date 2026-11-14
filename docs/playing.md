@@ -187,4 +187,4 @@ Authorized community hosts can use **Server → Rules** for live changes without
 
 ## Bacteria’s pocket dimension
 
-[Bacteria](bacteria.md), reached from Specter or Wisp at level 55, can leave the arena for ten seconds to repair and reposition in a private maze. Its guide covers the controls, cooldown, healing and return.
+[Bacteria](bacteria.md), reached from Specter or Wisp at level 55, can leave the arena for up to ten seconds to repair and reposition in a private maze. Silent doubles pursue you through its rooms and force an early return on contact. Its guide covers the controls, cooldown, healing and doubles.

@@ -524,7 +524,7 @@ pub fn class_model_geometry(
     } else {
         class.hull_sides
     };
-    let body_angle = if sides == 3 {
+    let body_angle = if sides == 3 || class.ability == tankyard_content::Ability::Pocket {
         aim
     } else if sides == 4 {
         aim + std::f32::consts::FRAC_PI_4
@@ -552,33 +552,55 @@ pub fn class_model_geometry(
         );
     }
     if class.ability == tankyard_content::Ability::Pocket {
-        let ink = Color::new(0.16, 0.20, 0.17, color.a);
-        let acid = Color::new(0.88, 0.94, 0.34, color.a);
-        polygon(emit, p, 6, r * 0.78, aim, alpha(OUTLINE, color.a));
-        polygon(emit, p, 6, r * 0.68, aim, ink);
+        let ink = Color::new(0.16, 0.19, 0.16, color.a);
+        let steel = Color::new(0.45, 0.49, 0.39, color.a);
+        let acid = Color::new(0.84, 0.90, 0.36, color.a);
+        let d = vec2(aim.cos(), aim.sin());
+        let n = vec2(-d.y, d.x);
+        let at = |x: f32, y: f32| p + (d * x + n * y) * r;
+        // Two symmetric shoulder plates leave the team-coloured hull visible.
+        // Their isolation strips sit flush with the armour, away from the guns.
         for side in [-1., 1.] {
-            let a = aim + side * 1.22;
-            let d = vec2(a.cos(), a.sin());
-            cannon_profile(
+            let mut plate = [
+                at(-0.47, side * 0.48),
+                at(0.35, side * 0.48),
+                at(0.44, side * 0.73),
+                at(-0.32, side * 0.73),
+            ];
+            let mut strip = [
+                at(-0.35, side * 0.57),
+                at(0.29, side * 0.57),
+                at(0.31, side * 0.65),
+                at(-0.30, side * 0.65),
+            ];
+            if side < 0. {
+                plate.reverse();
+                strip.reverse();
+            }
+            quad(emit, plate, ink);
+            quad(emit, strip, acid);
+        }
+        // A recessed six-leaf iris: broad, quiet shapes that remain readable at
+        // match scale. The shutters turn with the hull, without idle spinning.
+        polygon(emit, p, 6, r * 0.58, aim, ink);
+        polygon(emit, p, 6, r * 0.49, aim, acid);
+        polygon(emit, p, 6, r * 0.42, aim, ink);
+        for leaf in 0..6 {
+            let a = aim + leaf as f32 * std::f32::consts::TAU / 6.;
+            let polar = |angle: f32, radius: f32| p + vec2(angle.cos(), angle.sin()) * r * radius;
+            quad(
                 emit,
-                p + d * r * 0.68,
-                a + std::f32::consts::FRAC_PI_2,
-                r * 0.43,
-                r * 0.17,
-                acid,
-                0.,
-                1.,
-                None,
+                [
+                    polar(a + 0.10, 0.39),
+                    polar(a + 0.92, 0.39),
+                    polar(a + 1.30, 0.18),
+                    polar(a + 0.70, 0.14),
+                ],
+                steel,
             );
         }
-        polygon(emit, p, 6, r * 0.41, aim, acid);
-        polygon(emit, p, 6, r * 0.30, aim, ink);
-        // Three clean isolation shutters surround the recessed reactor.
-        for vane in 0..3 {
-            let a = aim + vane as f32 * std::f32::consts::TAU / 3.;
-            let d = vec2(a.cos(), a.sin());
-            polygon(emit, p + d * r * 0.18, 3, r * 0.12, a, acid);
-        }
+        polygon(emit, p, 6, r * 0.14, aim, ink);
+        polygon(emit, p, 6, r * 0.075, aim, acid);
     }
     if class.ability == tankyard_content::Ability::Stasis {
         // A machined eight-segment chronometer with a recessed dial, clean

@@ -296,7 +296,21 @@ pub fn world(
         .iter()
         .find(|tank| tank.id == local && tank.alive && tank.pocket > 0.);
     if let Some(tank) = pocket.filter(|tank| tankyard_core::POCKET_SECONDS - tank.pocket >= 0.12) {
-        crate::pocket_view::draw(snapshot, tank, content, view, settings, animation_time);
+        let position = previous_positions
+            .get(&tank.id)
+            .map_or(tank.pos, |&(previous, _)| {
+                crate::session::interpolate_position(previous, tank.pos, interpolation)
+            });
+        crate::pocket_view::draw(
+            snapshot,
+            tank,
+            content,
+            view,
+            settings,
+            interpolation,
+            animation_time,
+            position,
+        );
         return;
     }
     let dark = settings.dark_arena;
@@ -1086,7 +1100,7 @@ pub fn world(
         );
     }
 }
-fn health_bar(p: Vec2, r: f32, ratio: f32, z: f32, color: Color) {
+pub(crate) fn health_bar(p: Vec2, r: f32, ratio: f32, z: f32, color: Color) {
     if ratio >= 0.999 {
         return;
     }

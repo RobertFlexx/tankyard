@@ -17,7 +17,14 @@ pub mod model;
 mod modes;
 mod parry;
 mod pocket;
-pub use pocket::{POCKET_HEAL_RATE, POCKET_SECONDS, walls as pocket_walls};
+mod pocket_layout;
+pub use pocket::{
+    POCKET_ECHO_LIMIT, POCKET_ECHO_WAKE, POCKET_HEAL_RATE, POCKET_SECONDS, walls as pocket_walls,
+};
+pub use pocket_layout::{
+    LightState, PocketEdge, PocketLayout, PocketLight, bounds as pocket_bounds,
+    with_layout as with_pocket_layout,
+};
 pub mod physics;
 pub mod progression;
 #[cfg(test)]
