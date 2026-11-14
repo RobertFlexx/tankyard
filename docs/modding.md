@@ -805,12 +805,12 @@ Protocol 26 (Tank Yard 1.0) adds triggers that animate a group, in the manner of
 - `turn` turns the group's decor `amount` degrees further (±3,600), and `fade` fades it to `amount` percent opacity (0–100).
 - `tween` is how many seconds the motion takes, 0–600; 0 is instant. A move or place may average at most one arena width or height a second.
 - `easing` shapes the motion: `{ "curve": "sine", "mode": "in_out" }` is the default. Curves are `linear`, `sine`, `quad`, `cubic`, `quart`, `quint`, `expo`, `circ`, `back` (pulls back or overshoots a little), `elastic` (springs past the end) and `bounce`. Modes are `in` (starts slowly), `out` (ends slowly), `in_out` and `out_in`.
-- `duration`, when above 0, plays the motion back that many seconds after it ends: a door that shuts again, a lift that comes back down.
+- `duration`, when above 0, plays the motion back that many seconds after it ends: a door that shuts again, a lift that comes back down. If a motion that goes back plays again before the group is home, the wait starts over and the group still returns to where it rested before it set off.
 
-A new motion on a group and channel takes over from the one playing, starting where the group is now. An `arrived` trigger watching group `source` acts each time one of the group's motions ends, the trip back included, but not for a motion another took over from; chain motions or open a door once a lift arrives with it. Motions reset each round.
+A new motion on a group and channel takes over from the one playing, starting where the group is now. An `arrived` trigger watching group `source` acts each time one of the group's motions ends, the trip back included, but not for a motion another took over from or one with nowhere to go; chain motions or open a door once a lift arrives with it. Motions reset each round.
 
 ```json
-{ "when": "enter", "action": "move", "rect": [0.45, 0.4, 0.1, 0.2], "group": 3,
+{ "when": "enter", "action": "place", "rect": [0.45, 0.4, 0.1, 0.2], "group": 3,
   "travel": [0, -0.06], "tween": 0.5, "easing": { "curve": "cubic", "mode": "out" },
   "duration": 4, "seconds": 1 }
 ```

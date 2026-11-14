@@ -55,6 +55,6 @@ entirely made by one guy. (me! :D)
 
 The [Arena Workshop](docs/map-editor.md) builds custom maps in the game, with pads, conveyors, portals, lights, particle effects, sliding doors and moving cover with eased motions, and map logic you can test in place: watchers, sequences and AND, OR and XOR gates. [Hosting](docs/hosting.md) covers a dedicated server in five minutes, running it as a service, and a community on your own hostname with the [domain setup guide](docs/hosting-domain.md).
 
-[Editor tutorial video](docs/arena-workshop-tutorial.mp4) · [Logic gates video](docs/logic-gates-tutorial.mp4) · [Logic gates tutorial](docs/logic-gates-tutorial.md) · [Editor plugin API and full guide](docs/editor-plugins.md)
+[Editor tutorial video](docs/arena-workshop-tutorial.mp4) · [Logic gates video](docs/logic-gates-tutorial.mp4) · [Logic gates tutorial](docs/logic-gates-tutorial.md) · [Motions tutorial](docs/motions-tutorial.md) · [Editor plugin API and full guide](docs/editor-plugins.md)
 
-The logic gates walkthrough builds a vault with the gates, watchers and sequences added in 0.16.
+The logic gates walkthrough builds a vault with the gates, watchers and sequences added in 0.16, and the motions tutorial builds a gatehouse with the sliding doors, moving cover, lights and particles added in 1.0.

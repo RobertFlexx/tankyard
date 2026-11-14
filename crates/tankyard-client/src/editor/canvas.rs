@@ -1270,8 +1270,9 @@ impl Editor {
             let exit = self.point_on_screen(zone.exit);
             let color = scenery::zone_color(ZoneKind::Portal);
             arrow(r.center(), exit, 2., alpha(color, 0.8));
-            draw_poly(exit.x, exit.y, 4, 9., 45., color);
-            draw_poly_lines(exit.x, exit.y, 4, 9., 45., 1.5, WHITE);
+            // A polygon's first corner points right, so no turn is a diamond.
+            draw_poly(exit.x, exit.y, 4, 9., 0., color);
+            draw_poly_lines(exit.x, exit.y, 4, 9., 0., 1.5, WHITE);
         }
         self.draw_travel(s);
     }
@@ -1306,8 +1307,8 @@ impl Editor {
             let p = from.lerp(to, trigger.easing.apply(phase));
             draw_circle(p.x, p.y, 4. * s.max(0.8), alpha(color, 0.95));
         }
-        draw_poly(to.x, to.y, 4, 9., 45., color);
-        draw_poly_lines(to.x, to.y, 4, 9., 45., 1.5, WHITE);
+        draw_poly(to.x, to.y, 4, 9., 0., color);
+        draw_poly_lines(to.x, to.y, 4, 9., 0., 1.5, WHITE);
     }
     fn draw_preview_marks(&self, s: f32) {
         let preview = &self.preview;

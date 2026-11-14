@@ -438,6 +438,17 @@ fn hash(mut value: u32) -> f32 {
     (value >> 8) as f32 / 16_777_216.
 }
 
+/// How opaque a particle `age` seconds old and `fraction` of the way through
+/// its life is, before the emitter's opacity: with `fade` it appears over a
+/// tenth of a second and fades out as it ages.
+fn particle_alpha(fade: bool, fraction: f32, age: f32) -> f32 {
+    if fade {
+        (1. - fraction).min(age * 10.).clamp(0., 1.)
+    } else {
+        1.
+    }
+}
+
 /// Where in `r` a particle starts, from two random fractions.
 fn emit_point(area: EmitArea, r: Rect, u: f32, v: f32) -> Vec2 {
     match area {
@@ -539,15 +550,8 @@ pub fn particles(
             1.
         };
         let c = alpha(
-            alpha(
-                mix(color(effect.color), color(effect.end_color), fraction),
-                if effect.fade {
-                    (1. - fraction).min(age * 10.)
-                } else {
-                    1.
-                },
-            ),
-            opacity * shimmer,
+            mix(color(effect.color), color(effect.end_color), fraction),
+            particle_alpha(effect.fade, fraction, age) * opacity * shimmer,
         );
         let rotation = random(4) * 360. + effect.spin * age;
         match effect.shape {
@@ -677,5 +681,21 @@ pub fn block(r: Rect, style: WallStyle, tint: Option<Color>, dark: bool, quality
             r.h - 2. * inset,
             alpha(tint, 0.3),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::particle_alpha;
+
+    #[test]
+    fn fading_particles_appear_quickly_and_fade_as_they_age() {
+        assert_eq!(particle_alpha(true, 0., 0.), 0.);
+        assert_eq!(particle_alpha(true, 0.1, 0.2), 0.9);
+        assert!((particle_alpha(true, 0.75, 1.2) - 0.25).abs() < 1e-6);
+        assert_eq!(particle_alpha(true, 1., 1.6), 0.);
+        // Without fade, a particle is solid from its first to its last frame.
+        assert_eq!(particle_alpha(false, 0., 0.), 1.);
+        assert_eq!(particle_alpha(false, 1., 1.6), 1.);
     }
 }

@@ -1,6 +1,6 @@
 # Arena Workshop
 
-[Watch the tutorial](arena-workshop-tutorial.mp4) (2 min 37 s) for building, editing, map logic, plugin tools and playtesting in the workshop. The [logic gates video](logic-gates-tutorial.mp4) (1 min 42 s) shows the new gate editor and live preview. The [written logic tutorial](logic-gates-tutorial.md) builds its lever puzzle step by step with conditions, gates, watchers and sequences. Plugin authors can start with the [editor plugin guide](editor-plugins.md).
+[Watch the tutorial](arena-workshop-tutorial.mp4) (2 min 37 s) for building, editing, map logic, plugin tools and playtesting in the workshop. The [logic gates video](logic-gates-tutorial.mp4) (1 min 42 s) shows the new gate editor and live preview. The [written logic tutorial](logic-gates-tutorial.md) builds its lever puzzle step by step with conditions, gates, watchers and sequences, and the [motions tutorial](motions-tutorial.md) builds a gatehouse with a sliding door, moving cover, chained motions, lights and particles. Plugin authors can start with the [editor plugin guide](editor-plugins.md).
 
 Open **Map editor** on the main menu. The workshop builds maps for local games and community servers using the same validated map-pack format as scripted mods. The canvas fills the middle of the screen. The **dock** along the bottom changes with the mode, and the **inspector** on the right has seven tabs: Map, Object, Logic, Check, Rules, Files and Tools.
 
@@ -70,7 +70,7 @@ Press **F1** for the in-editor list. Ctrl means Cmd on a Mac.
 | Ctrl+Shift+C, V | Copy settings, then paste them onto matching objects |
 | Ctrl+G | Put the selection in a new group |
 | Ctrl+L, Ctrl+Shift+L | Lock the selection's groups, unlock every group |
-| Ctrl+A, Ctrl+Shift+A | Select everything shown, or everything like the selection (every torch, every speed pad) |
+| Ctrl+A, Ctrl+Shift+A | Select everything shown, or everything like the selection (every light, every speed pad) |
 | Ctrl+Z, Ctrl+Y (or Ctrl+Shift+Z) | Undo, redo (48 steps) |
 | Ctrl+S | Save the project |
 | Ctrl+R | Run the last plugin tool again |
@@ -146,7 +146,7 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **On change:** its counter changes value at all, by any trigger or script. Setting a counter to the value it already has is not a change.
 - **On shown / On hidden:** its group is shown or hidden, however that happened: a trigger, an *Undo after* timer or a script. The groups a round starts with don't count, so a group hidden from the start doesn't fire On hidden.
 - **On boss down:** a boss is defeated anywhere in the arena. Pick one boss, or *Any boss*.
-- **On arrive:** a motion of its group ends: a move, turn or fade, the trip back included. A motion cut short by another doesn't count. See [Motions](#motions).
+- **On arrive:** a motion of its group ends: a move, turn or fade, the trip back included. A motion cut short by another doesn't count, and neither does one with nowhere to go, such as a door told to open while it's open. See [Motions](#motions).
 
 ### Actions
 
@@ -177,11 +177,11 @@ Motion actions animate a group the way a tween does in Godot: from where it is n
 - **Move group to** glides it to a place measured from where the map puts it; 0%, 0% brings it home.
 - **Turn decor** turns the group's decor by a number of degrees, and **Fade decor** fades it to a percentage of its opacity. Neither affects collision.
 
-The Object tab sets the target group, the distance as a percentage of the arena's width and height, **Over** (seconds; 0 moves at once), the **Curve** (Linear, Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Elastic or Bounce) and the **Mode** (Ease in, Ease out, In and out, Out and in). A graph shows the curve, with a dot that plays the motion. **Go back after** plays the motion in reverse that many seconds after it ends: doors that shut again, lifts that come back down.
+The Object tab sets the target group, the distance as a percentage of the arena's width and height, **Over** (seconds; 0 moves at once), the **Curve** (Linear, Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Elastic or Bounce) and the **Mode** (Ease in, Ease out, In and out, Out and in). A graph shows the curve, with a dot that plays the motion. **Go back after** plays the motion in reverse that many seconds after it ends: doors that shut again, lifts that come back down. If the motion plays again before the group is home, as when another tank reaches a door, the wait starts over and the group still goes back to where it rested before it set off. A motion without Go back cancels the trip back and leaves the group where it ends.
 
 With one Move trigger selected, the canvas draws its group where the motion takes it, joined by an arrow. Drag the diamond at the arrow's head to set the distance; it snaps to the grid, and Shift keeps it straight. A move may average at most one arena width a second, so dragging further lengthens **Over** as needed.
 
-To run motions one after another, start the next from an **On arrive** trigger watching the group that moves first, or from the Then piece's signal. A lift that rises, then opens its door, is a Move on the lift's group and an On arrive trigger that moves the door's group.
+To run motions one after another, start the next from an **On arrive** trigger watching the group that moves first, or from the Then piece's signal. The [motions tutorial](motions-tutorial.md) walks through doors, moving cover and chained motions. A lift that rises, then opens its door, is a Move on the lift's group and an On arrive trigger that moves the door's group.
 
 The logic preview plays motions too. Objects away from home show a dashed outline where the map places them, and **Fire** plays a trigger's motion at once. Motions start afresh every round.
 

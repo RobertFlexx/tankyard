@@ -270,6 +270,8 @@ pub struct MapLogic {
     pub tweens: Vec<Tween>,
     /// Motions to play back: when, and the motion that returns the group.
     returns: Vec<(f32, Tween)>,
+    /// The groups and channels whose motion is a return, under way or done.
+    homeward: Vec<(u8, TweenChannel)>,
     /// Motions under way: when each ends, and its group and channel. A
     /// motion that another takes over from never arrives.
     arrivals: Vec<(f32, u8, TweenChannel)>,
@@ -438,6 +440,7 @@ impl MapLogic {
         self.reverts.clear();
         self.tweens.clear();
         self.returns.clear();
+        self.homeward.clear();
         self.arrivals.clear();
         self.poses = GroupPoses::default();
         self.pending.clear();
@@ -466,6 +469,7 @@ impl MapLogic {
                 inbox: std::mem::take(&mut self.inbox),
                 tweens: std::mem::take(&mut self.tweens),
                 returns: std::mem::take(&mut self.returns),
+                homeward: std::mem::take(&mut self.homeward),
                 ..Self::default()
             };
             kept.take_inputs(map, now, hidden);
@@ -753,6 +757,9 @@ impl MapLogic {
                 start: now,
                 ..back
             });
+            if !self.homeward.contains(&(back.group, back.channel)) {
+                self.homeward.push((back.group, back.channel));
+            }
         }
     }
 
@@ -776,8 +783,12 @@ impl MapLogic {
         }
         self.arrivals
             .retain(|&(_, group, channel)| group != tween.group || channel != tween.channel);
-        self.arrivals
-            .push((tween.start + tween.length, tween.group, tween.channel));
+        // A motion with nowhere to go, like a door told to open while it is
+        // open, arrives nowhere.
+        if tween.from != tween.to {
+            self.arrivals
+                .push((tween.start + tween.length, tween.group, tween.channel));
+        }
     }
 
     /// Move, Move to, Turn or Fade: glide the group from where it is now.
@@ -791,24 +802,42 @@ impl MapLogic {
             TriggerAction::Fade => TweenChannel::Fade,
             _ => TweenChannel::Move,
         };
-        let from = self.tween_value(group, channel, now);
+        let here = self.tween_value(group, channel, now);
         // Offsets stay within a few arenas however often a Move repeats, and
         // turns wrap so they never lose precision.
         let reach = tankyard_content::TRAVEL_LIMIT * 2.;
+        let (from, wrapped) = if channel == TweenChannel::Turn {
+            let turn = here[0] % 360.;
+            ([turn, 0.], here[0] - turn)
+        } else {
+            (here, 0.)
+        };
         let to = match trigger.action {
             TriggerAction::Move => [
                 (from[0] + trigger.travel[0]).clamp(-reach, reach),
                 (from[1] + trigger.travel[1]).clamp(-reach, reach),
             ],
             TriggerAction::Place => trigger.travel,
-            TriggerAction::Turn => [from[0] % 360. + trigger.amount as f32, 0.],
+            TriggerAction::Turn => [from[0] + trigger.amount as f32, 0.],
             _ => [trigger.amount.clamp(0, 100) as f32 / 100., 0.],
         };
-        let from = if channel == TweenChannel::Turn {
-            [from[0] % 360., 0.]
-        } else {
-            from
-        };
+        // Going back takes the group to where it rested before it set off,
+        // even when it sets off again on the way out or back: a door that
+        // tanks keep opening still shuts all the way.
+        let slot = |g: u8, c: TweenChannel| g == group && c == channel;
+        let rest = self
+            .returns
+            .iter()
+            .find(|(_, back)| slot(back.group, back.channel))
+            .map(|(_, back)| back.to)
+            .or_else(|| {
+                self.homeward
+                    .contains(&(group, channel))
+                    .then(|| self.tweens.iter().find(|t| slot(t.group, t.channel)))
+                    .flatten()
+                    .map(|t| t.to)
+            });
+        let home = rest.map_or(from, |rest| [rest[0] - wrapped, rest[1]]);
         let tween = Tween {
             group,
             channel,
@@ -818,15 +847,17 @@ impl MapLogic {
             length: trigger.tween.clamp(0., tankyard_content::TWEEN_SECONDS),
             easing: trigger.easing,
         };
-        // A new motion replaces any return the group was waiting for.
+        // A new motion replaces any return the group was waiting for, and
+        // one that doesn't go back leaves the group where it ends.
         self.returns
-            .retain(|(_, back)| back.group != group || back.channel != channel);
-        if trigger.duration > 0. && from != to {
+            .retain(|(_, back)| !slot(back.group, back.channel));
+        self.homeward.retain(|&(g, c)| !slot(g, c));
+        if trigger.duration > 0. && home != to {
             self.returns.push((
                 now + tween.length + trigger.duration,
                 Tween {
                     from: to,
-                    to: from,
+                    to: home,
                     ..tween
                 },
             ));
@@ -1899,6 +1930,120 @@ mod tests {
         assert_eq!(bench.logic.counters[0], 0, "the first glide was cut short");
         bench.run(0.5, &[]);
         assert_eq!(bench.logic.counters[0], 1);
+
+        // A motion with nowhere to go, like a door told to open while it is
+        // open, arrives nowhere.
+        let place = |seconds: f32| MapTrigger {
+            group: 3,
+            travel: [0.1, 0.],
+            tween: 0.5,
+            seconds,
+            ..trigger(TriggerWhen::Start, TriggerAction::Place)
+        };
+        let mut bench = Bench::new(vec![place(0.), place(2.), count(1, 3)]);
+        bench.run(1., &[]);
+        assert_eq!(bench.logic.counters[0], 1);
+        bench.run(2., &[]);
+        assert_eq!(bench.logic.counters[0], 1, "the second had nowhere to go");
+    }
+
+    #[test]
+    fn motions_retriggered_on_the_way_back_still_go_home() {
+        // The Door and Fader pieces: a tank arriving opens or fades a group,
+        // which goes back a while after. Arriving again before it is home must
+        // put the return off, not forget where the group rests.
+        let triggers = vec![
+            MapTrigger {
+                group: 3,
+                travel: [0., -0.06],
+                tween: 0.5,
+                duration: 4.,
+                seconds: 1.,
+                ..trigger(TriggerWhen::Enter, TriggerAction::Move)
+            },
+            MapTrigger {
+                group: 4,
+                amount: 15,
+                tween: 0.6,
+                duration: 5.,
+                seconds: 1.,
+                ..trigger(TriggerWhen::Enter, TriggerAction::Fade)
+            },
+            MapTrigger {
+                group: 5,
+                travel: [0.05, 0.],
+                tween: 0.5,
+                duration: 4.,
+                seconds: 1.,
+                ..trigger(TriggerWhen::Enter, TriggerAction::Place)
+            },
+            MapTrigger {
+                group: 6,
+                amount: 400,
+                tween: 1.,
+                duration: 3.5,
+                seconds: 1.,
+                ..trigger(TriggerWhen::Enter, TriggerAction::Turn)
+            },
+        ];
+        let at = |bench: &Bench, group, channel| bench.logic.tween_value(group, channel, bench.now);
+        let home = |bench: &Bench| {
+            at(bench, 3, TweenChannel::Move) == TweenChannel::Move.rest()
+                && at(bench, 4, TweenChannel::Fade) == TweenChannel::Fade.rest()
+                && at(bench, 5, TweenChannel::Move) == TweenChannel::Move.rest()
+                && at(bench, 6, TweenChannel::Turn)[0] % 360. == 0.
+        };
+        let mut bench = Bench::new(triggers.clone());
+        let inside = [tank(1, bench.center(), false, 0)];
+        let away = [tank(1, V2::new(10., 10.), false, 0)];
+
+        // In again once everything has arrived, before anything goes back.
+        bench.run(1.5, &inside);
+        bench.run(1., &away);
+        bench.run(1.5, &inside);
+        bench.run(1., &away);
+        assert_eq!(
+            at(&bench, 3, TweenChannel::Move),
+            [0., -0.12],
+            "a Move goes a step further"
+        );
+        assert_eq!(
+            at(&bench, 4, TweenChannel::Fade),
+            [0.15, 0.],
+            "a fade holds"
+        );
+        assert_eq!(
+            at(&bench, 5, TweenChannel::Move),
+            [0.05, 0.],
+            "a Move to holds"
+        );
+        assert_eq!(
+            at(&bench, 6, TweenChannel::Turn),
+            [440., 0.],
+            "a turn goes on, wrapped"
+        );
+        bench.run(8., &away);
+        assert!(
+            home(&bench),
+            "after the last wait, every group goes all the way home"
+        );
+
+        // In again while they glide home.
+        let mut bench = Bench::new(triggers);
+        bench.run(1.5, &inside);
+        bench.run(3.05, &away);
+        let door = at(&bench, 3, TweenChannel::Move)[1];
+        assert!(-0.06 < door && door < 0., "the door is on its way home");
+        assert!(
+            at(&bench, 6, TweenChannel::Turn)[0] > 360.,
+            "and the turn past a full circle"
+        );
+        bench.run(0.5, &inside);
+        bench.run(10., &away);
+        assert!(
+            home(&bench),
+            "they turn round, and still go all the way home"
+        );
     }
 
     #[test]

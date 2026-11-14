@@ -690,6 +690,8 @@ pub fn catalog() -> Vec<Vec<Brush>> {
             .hint("Announces every 30 s once the round passes 5 minutes"),
         ],
         vec![
+            // Move to rather than Move: a busy doorway holds the door open
+            // instead of sliding it a step further for every tank.
             logic(
                 "Door",
                 [160., 160.],
@@ -699,7 +701,7 @@ pub fn catalog() -> Vec<Vec<Brush>> {
                     seconds: 1.,
                     ..motion(
                         TriggerWhen::Enter,
-                        TriggerAction::Move,
+                        TriggerAction::Place,
                         0.5,
                         Curve::Cubic,
                         EaseMode::Out,
@@ -1401,6 +1403,103 @@ mod tests {
         map
     }
 
+    /// The gatehouse from docs/motions-tutorial.md, built step by step from
+    /// the palette with the settings the tutorial gives.
+    fn tutorial_gatehouse() -> MapDef {
+        // 1. A new map: 3600 by 2600 with a spawn region in two corners.
+        let mut map = Document::default().map;
+        // World units to the map's fractions; the workshop's grid is 40.
+        let at = |x: f32, y: f32, w: f32, h: f32| [x / 3600., y / 2600., w / 3600., h / 2600.];
+        let spot = |x: f32, y: f32| [x, y, 0.04, 0.04];
+        let block = |rect: [f32; 4], group: u8| MapBlock {
+            rect,
+            style: BlockStyle::default(),
+            color: None,
+            group,
+        };
+        let decor = |name: &str, rect: [f32; 4], group: u8| match catalog()[2]
+            .iter()
+            .find(|b| b.name == name)
+            .map(|b| &b.object)
+        {
+            Some(Object::Decor(item)) => MapDecor {
+                rect,
+                group,
+                ..item.clone()
+            },
+            _ => panic!("no {name} decor in the palette"),
+        };
+        // 2. A wall down the middle with a gap three cells high, the door in
+        // group 1, and the Door over the gap. The door slides up into the wall.
+        // Tanks can drive around the wall's ends: the map check wants every
+        // part of the arena reachable while the door is shut.
+        map.blocks.push(block(at(1780., 400., 40., 840.), 0));
+        map.blocks.push(block(at(1780., 1360., 40., 840.), 0));
+        map.blocks.push(block(at(1780., 1240., 40., 120.), 1));
+        map.triggers
+            .push(piece("Motion", "Door", at(1720., 1220., 160., 160.)));
+        // 5. Cover in group 2, and the Shuttle built while group 2 is chosen.
+        map.blocks.push(block(at(600., 1800., 40., 200.), 2));
+        map.triggers.push(MapTrigger {
+            group: 2,
+            ..piece("Motion", "Shuttle", spot(0.1, 0.1))
+        });
+        // 6. Barricades in groups 3 to 5 that land in turn, then an announcement.
+        for group in 3..=5u8 {
+            let x = 2200. + f32::from(group - 3) * 200.;
+            map.blocks.push(block(at(x, 600., 160., 40.), group));
+        }
+        map.triggers.push(MapTrigger {
+            group: 3,
+            ..piece("Motion", "Drop", spot(0.1, 0.2))
+        });
+        for group in [4u8, 5] {
+            map.triggers.push(MapTrigger {
+                group,
+                when: TriggerWhen::Arrived,
+                source: group - 1,
+                ..piece("Motion", "Drop", spot(0.1, 0.1 + f32::from(group) * 0.05))
+            });
+        }
+        map.triggers.push(MapTrigger {
+            source: 5,
+            action: TriggerAction::Announce,
+            text: "The gates are set!".into(),
+            ..piece("Motion", "Then", spot(0.1, 0.4))
+        });
+        // 7. Torches on each side of the door and a lantern in the yard.
+        for x in [1615., 1835.] {
+            map.decor.push(decor("Torch", at(x, 1095., 150., 150.), 0));
+        }
+        map.decor
+            .push(decor("Lantern", at(2470., 1170., 260., 260.), 0));
+        // 8. A turning arrow in group 6 and a light in group 7 beside the
+        // door; the light blinks each time the door comes to rest.
+        map.decor
+            .push(decor("Arrow", at(1860., 1420., 120., 60.), 6));
+        map.triggers.push(MapTrigger {
+            group: 6,
+            ..piece("Motion", "Spinner", spot(0.2, 0.1))
+        });
+        map.decor
+            .push(decor("Neon", at(1620., 1400., 120., 120.), 7));
+        map.triggers.push(MapTrigger {
+            group: 7,
+            when: TriggerWhen::Arrived,
+            source: 1,
+            ..piece("Motion", "Blink", spot(0.25, 0.1))
+        });
+        // 9. Embers above the torches, a fountain and fireflies.
+        for x in [1650., 1870.] {
+            map.decor.push(decor("Embers", at(x, 1010., 80., 80.), 0));
+        }
+        map.decor
+            .push(decor("Fountain", at(2600., 1700., 200., 200.), 0));
+        map.decor
+            .push(decor("Fireflies", at(3060., 160., 360., 260.), 0));
+        map
+    }
+
     #[test]
     fn every_palette_piece_makes_a_valid_map() {
         let rect = [0.4, 0.4, 0.05, 0.05];
@@ -1474,6 +1573,59 @@ mod tests {
         assert!(logic.poses().opacity(2) < 0.05);
         run_to(13.5, &mut logic);
         assert!((logic.poses().opacity(2) - 1.).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_door_holds_open_for_a_busy_doorway_then_shuts() {
+        let mut map = tankyard_content::builtin_maps().remove(0);
+        map.triggers = vec![piece("Motion", "Door", [0.4, 0.4, 0.2, 0.2])];
+        tankyard_content::validate_map_features(&map).unwrap();
+        let config = WorldConfig {
+            width: map.width,
+            height: map.height,
+            ..WorldConfig::default()
+        };
+        let inside = Occupant {
+            id: 1,
+            pos: V2::new(config.width * 0.5, config.height * 0.5),
+            bot: false,
+            team: 0,
+        };
+        let away = Occupant {
+            pos: V2::new(10., 10.),
+            ..inside
+        };
+        let mut logic = MapLogic::default();
+        let mut hidden = map.starting_mask();
+        let mut effects = Vec::new();
+        let mut now = 0.;
+        let mut run = |seconds: f32, tank: Occupant, logic: &mut MapLogic| {
+            let until = now + seconds;
+            while now < until {
+                now += DT;
+                logic.step(
+                    &map,
+                    &config,
+                    now,
+                    &mut hidden,
+                    &[tank],
+                    &mut || 0.5,
+                    &mut effects,
+                );
+            }
+        };
+        // A tank arrives every two seconds: the door slides up once and stays.
+        for _ in 0..4 {
+            run(1., inside, &mut logic);
+            run(1., away, &mut logic);
+            assert_eq!(logic.poses().offset(1), [0., -0.06]);
+        }
+        // The last tank arrived at 6 s; the door waits four seconds after its
+        // slide, then slides home.
+        run(2.4, away, &mut logic);
+        assert_eq!(logic.poses().offset(1), [0., -0.06]);
+        run(0.8, away, &mut logic);
+        assert_eq!(logic.poses().offset(1), [0., 0.]);
     }
 
     #[test]
@@ -1560,5 +1712,92 @@ mod tests {
             .filter(|e| **e == LogicEffect::Announce("The vault is open!".into()))
             .count();
         assert_eq!(opened, 2, "the alarm announces each opening");
+    }
+
+    #[test]
+    fn the_motions_tutorial_gatehouse_works_as_written() {
+        let map = tutorial_gatehouse();
+        tankyard_content::validate_map_features(&map).unwrap();
+        let doc = Document::from_map(map.clone());
+        assert!(doc.problems().is_empty(), "{:?}", doc.problems());
+
+        let config = WorldConfig {
+            width: map.width,
+            height: map.height,
+            ..WorldConfig::default()
+        };
+        // In the Door's area beside the gap, and far off in a corner.
+        let door = V2::new(1750., 1300.);
+        let away = V2::new(300., 300.);
+        let mut logic = MapLogic::default();
+        let mut hidden = map.starting_mask();
+        let mut effects = Vec::new();
+        let mut now = 0.;
+        let mut blinks = 0;
+        let mut dark = false;
+        // Step to round time `until` with the tank at `at`, counting each
+        // time the warning light goes out.
+        let mut run = |until: f32, at: V2, logic: &mut MapLogic| {
+            while now < until {
+                now += DT;
+                let tank = Occupant {
+                    id: 1,
+                    pos: at,
+                    bot: false,
+                    team: 1,
+                };
+                logic.step(
+                    &map,
+                    &config,
+                    now,
+                    &mut hidden,
+                    &[tank],
+                    &mut || 0.5,
+                    &mut effects,
+                );
+                let out = logic.poses().opacity(7) < 0.05;
+                blinks += usize::from(out && !dark);
+                dark = out;
+            }
+            (blinks, effects.clone())
+        };
+        let landed = |logic: &MapLogic, group: u8| logic.poses().offset(group) == [0., 0.08];
+
+        // The barricades land one after another as the round starts.
+        run(1., away, &mut logic);
+        assert!(!landed(&logic, 3) && logic.poses().offset(4) == [0., 0.]);
+        run(2., away, &mut logic);
+        assert!(landed(&logic, 3) && !landed(&logic, 4));
+        assert_eq!(logic.poses().offset(5), [0., 0.]);
+        let (_, said) = run(4., away, &mut logic);
+        assert!((3..=5).all(|group| landed(&logic, group)));
+        let set = LogicEffect::Announce("The gates are set!".into());
+        assert_eq!(said.iter().filter(|e| **e == set).count(), 1);
+
+        // A tank drives up: the door slides open and the light blinks.
+        run(5., door, &mut logic);
+        assert_eq!(logic.poses().offset(1), [0., -0.06]);
+        let (blinked, _) = run(7., away, &mut logic);
+        assert_eq!(blinked, 1);
+        // Another arrives while it's open: it stays put, with no blink.
+        run(8., door, &mut logic);
+        let (blinked, _) = run(11.4, away, &mut logic);
+        assert_eq!(logic.poses().offset(1), [0., -0.06]);
+        assert_eq!(
+            blinked, 1,
+            "a door with nowhere to go doesn't blink the light"
+        );
+        // Four seconds after the last arrival's half-second motion, it shuts
+        // and the light blinks again.
+        let (blinked, _) = run(14., away, &mut logic);
+        assert_eq!(logic.poses().offset(1), [0., 0.]);
+        assert_eq!(blinked, 2);
+
+        // Meanwhile the shuttle has set off every six seconds, and rests across
+        // the yard for a second each time; the arrow has turned four times.
+        let (_, said) = run(14.5, away, &mut logic);
+        assert_eq!(logic.poses().offset(2), [0.15, 0.]);
+        assert!((logic.poses().turn(6) - 360.).abs() < 1e-3);
+        assert_eq!(said.iter().filter(|e| **e == set).count(), 1);
     }
 }
