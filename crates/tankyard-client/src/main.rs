@@ -21,6 +21,7 @@ mod hardware;
 mod hosting;
 mod hud;
 mod links;
+mod map_sounds;
 mod menu;
 mod mod_library;
 mod mod_viewer;
@@ -1805,6 +1806,19 @@ impl App {
                 self.voice
                     .boss_alarm(self.settings.master_volume * self.settings.effects_volume);
             }
+            // Map sounds play where their trigger is, heard from the camera.
+            let listener = self.view.center;
+            for event in &sounds {
+                if matches!(event.kind, tankyard_core::EventKind::MapSound)
+                    && let Some((sound, volume)) = tankyard_core::sound_of(event.value)
+                {
+                    let gain = volume
+                        * map_sounds::falloff(event.pos.distance(listener))
+                        * self.settings.master_volume
+                        * self.settings.effects_volume;
+                    self.voice.map_sound(sound, gain);
+                }
+            }
         }
         if let Some(session) = &mut self.session {
             session.events.clear();
@@ -1835,6 +1849,12 @@ impl App {
             && let Some(editor) = &mut self.editor
         {
             let action = editor.draw(&self.settings, s);
+            for (sound, volume) in editor.take_sounds() {
+                self.voice.map_sound(
+                    sound,
+                    volume * self.settings.master_volume * self.settings.effects_volume,
+                );
+            }
             match action {
                 editor::Action::None => {}
                 editor::Action::Exit => {

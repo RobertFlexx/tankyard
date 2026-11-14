@@ -98,7 +98,8 @@ function editor.free_group(map)
     used[trigger.member or 0] = true
     local action = trigger.action
     if action == "toggle" or action == "show" or action == "hide" or action == "reset"
-      or action == "move" or action == "place" or action == "turn" or action == "fade" then
+      or action == "move" or action == "place" or action == "turn" or action == "fade"
+      or action == "tint" or action == "scale" or action == "animate" or action == "stop" then
       used[trigger.group or 0] = true
     end
     if trigger.when == "shown" or trigger.when == "hidden" or trigger.when == "arrived" then

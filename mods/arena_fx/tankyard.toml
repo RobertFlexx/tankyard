@@ -1,0 +1,17 @@
+# Storefront details shown on the Mods page. Gameplay lives in mod.json.
+[mod]
+name = "Arena Effects"
+version = "1.0"
+description = "A bell at the start of each round, a thump for every wreck, a fanfare for kill streaks, and an alarm any map can sound."
+license = "MIT"
+icon = "icon.svg"
+tags = ["effects", "sound", "lua"]
+
+[creator]
+name = "Tank Yard"
+url = "https://github.com/RobertFlexx/tankyard"
+
+[links]
+source = "https://github.com/RobertFlexx/tankyard/tree/main/mods/arena_fx"
+download = "https://github.com/RobertFlexx/tankyard/releases/latest"
+issues = "https://github.com/RobertFlexx/tankyard/issues"

@@ -798,6 +798,53 @@ fn apply(world: &mut World, actor: EntityId, effect: Effect) {
                 easing,
             })
         }
+        Effect::MapTint {
+            group,
+            color,
+            percent,
+            seconds,
+            easing,
+        } => world.map_input(LogicInput::Tint {
+            group,
+            color,
+            percent,
+            seconds,
+            easing,
+        }),
+        Effect::MapAnimate {
+            group,
+            style,
+            size,
+            speed,
+            seconds,
+            easing,
+        } => world.map_input(LogicInput::Animate {
+            group,
+            style,
+            size,
+            speed,
+            seconds,
+            easing,
+        }),
+        Effect::MapStop { group } => world.map_input(LogicInput::Stop(group)),
+        Effect::ShakeView { percent, seconds } => {
+            let value = crate::shake_event(percent / 100., seconds);
+            // Only players have a view to shake.
+            let viewers: Vec<_> = world
+                .tanks
+                .iter()
+                .filter(|t| t.alive && !t.bot && (actor == 0 || t.id == actor))
+                .map(|t| (t.id, t.pos, t.team))
+                .collect();
+            for (id, pos, team) in viewers {
+                world.event(EventKind::MapShake, pos, id, value, team);
+            }
+        }
+        Effect::PlaySound { sound, at, percent } => {
+            let value = crate::sound_event(sound, percent / 100.);
+            let at = V2::new(at[0] * world.config.width, at[1] * world.config.height);
+            world.event(EventKind::MapSound, at, 0, value, 0);
+        }
     }
 }
 

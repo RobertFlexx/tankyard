@@ -24,8 +24,8 @@ impl Brush {
     }
 }
 
-pub const CATEGORIES: [&str; 7] = [
-    "Blocks", "Pads", "Decor", "Logic", "Gates", "Motion", "Markers",
+pub const CATEGORIES: [&str; 8] = [
+    "Blocks", "Pads", "Decor", "Logic", "Gates", "Motion", "Effects", "Markers",
 ];
 
 fn block(name: &'static str, style: BlockStyle) -> Brush {
@@ -61,6 +61,7 @@ fn pad(kind: ZoneKind) -> Brush {
             ZoneKind::Shelter => "Less damage taken",
             ZoneKind::Conveyor => "Carries tanks in its direction",
             ZoneKind::Portal => "Sends tanks to its exit marker",
+            ZoneKind::Launch => "Flings tanks in its direction; they coast on",
         },
     }
 }
@@ -119,6 +120,22 @@ fn motion(
         tween,
         easing: Easing { curve, mode },
         ..Default::default()
+    }
+}
+/// An Animate trigger on group 1 that plays `style` from the round's start.
+fn animation(style: AnimateStyle, size: i32, speed: f32) -> MapTrigger {
+    MapTrigger {
+        style,
+        amount: size,
+        speed,
+        seconds: 0.,
+        ..motion(
+            TriggerWhen::Start,
+            TriggerAction::Animate,
+            1.,
+            Curve::Sine,
+            EaseMode::InOut,
+        )
     }
 }
 fn effect(name: &'static str, preset: usize) -> Brush {
@@ -853,6 +870,144 @@ pub fn catalog() -> Vec<Vec<Brush>> {
             .hint("Sends signal 1 each time group 1 finishes a motion"),
         ],
         vec![
+            logic("Float", small, animation(AnimateStyle::Bob, 14, 0.6))
+                .hint("Group 1's decor floats gently up and down"),
+            logic("Sway", small, animation(AnimateStyle::Sway, 12, 0.5))
+                .hint("Group 1's decor rocks back and forth"),
+            logic("Throb", small, animation(AnimateStyle::Throb, 12, 1.2))
+                .hint("Group 1's decor swells and shrinks like a heartbeat"),
+            logic("Orbit", small, animation(AnimateStyle::Orbit, 40, 0.25))
+                .hint("Group 1's decor circles slowly around its place"),
+            logic(
+                "Quiver",
+                [160., 160.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    seconds: 1.,
+                    duration: 1.,
+                    ..animation(AnimateStyle::Shake, 6, 9.)
+                },
+            )
+            .hint("Group 1's decor trembles for a second when a tank arrives"),
+            logic(
+                "Flash",
+                [160., 160.],
+                MapTrigger {
+                    color: [255, 255, 255],
+                    amount: 90,
+                    duration: 0.12,
+                    seconds: 1.,
+                    ..motion(
+                        TriggerWhen::Enter,
+                        TriggerAction::Tint,
+                        0.08,
+                        Curve::Quad,
+                        EaseMode::Out,
+                    )
+                },
+            )
+            .hint("Flashes group 1's decor white when a tank arrives"),
+            logic(
+                "Alarm",
+                small,
+                MapTrigger {
+                    color: [255, 64, 48],
+                    amount: 80,
+                    duration: 0.35,
+                    seconds: 1.2,
+                    ..motion(
+                        TriggerWhen::Every,
+                        TriggerAction::Tint,
+                        0.25,
+                        Curve::Sine,
+                        EaseMode::InOut,
+                    )
+                },
+            )
+            .hint("Pulses group 1's decor red every 1.2 seconds"),
+            logic(
+                "Dye",
+                small,
+                MapTrigger {
+                    color: [96, 224, 255],
+                    amount: 70,
+                    ..motion(
+                        TriggerWhen::Signal,
+                        TriggerAction::Tint,
+                        1.,
+                        Curve::Sine,
+                        EaseMode::InOut,
+                    )
+                },
+            )
+            .hint("On signal 1, washes group 1's decor in cyan"),
+            logic(
+                "Grow",
+                [160., 160.],
+                MapTrigger {
+                    amount: 140,
+                    duration: 2.,
+                    seconds: 1.,
+                    ..motion(
+                        TriggerWhen::Enter,
+                        TriggerAction::Scale,
+                        0.4,
+                        Curve::Back,
+                        EaseMode::Out,
+                    )
+                },
+            )
+            .hint("Swells group 1's decor when a tank arrives, then shrinks it back"),
+            logic(
+                "Stop",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Signal,
+                    action: TriggerAction::Stop,
+                    ..Default::default()
+                },
+            )
+            .hint("On signal 1, stops group 1 where it is"),
+            logic(
+                "Quake",
+                area,
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Shake,
+                    amount: 45,
+                    tween: 0.8,
+                    seconds: 3.,
+                    ..Default::default()
+                },
+            )
+            .hint("Shakes the view of tanks that drive in"),
+            logic(
+                "Chime",
+                [160., 160.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Sound,
+                    sound: MapSound::Chime,
+                    amount: 80,
+                    seconds: 2.,
+                    ..Default::default()
+                },
+            )
+            .hint("Plays a chime here when a tank arrives"),
+            logic(
+                "Siren",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Signal,
+                    action: TriggerAction::Sound,
+                    sound: MapSound::Alarm,
+                    amount: 100,
+                    ..Default::default()
+                },
+            )
+            .hint("Sounds an alarm here on signal 1"),
+        ],
+        vec![
             marker(
                 "Spawn",
                 Object::Spawn(SpawnRegion {
@@ -1125,6 +1280,107 @@ pub fn trigger_badge(action: TriggerAction, r: Rect, lit: f32) {
                 );
             }
         }
+        TriggerAction::Tint => {
+            // A drop of colour.
+            draw_circle(c.x, c.y + u * 0.3, u * 0.62, ink);
+            draw_triangle(
+                vec2(c.x, c.y - u),
+                vec2(c.x - u * 0.56, c.y + u * 0.05),
+                vec2(c.x + u * 0.56, c.y + u * 0.05),
+                ink,
+            );
+        }
+        TriggerAction::Scale => {
+            // A small square inside a large one, with the corner pulled out.
+            draw_rectangle_lines(
+                c.x - u,
+                c.y - u,
+                u * 2.,
+                u * 2.,
+                line * 0.7,
+                alpha(ink, 0.55),
+            );
+            draw_rectangle(c.x - u, c.y + u * 0.1, u * 0.9, u * 0.9, ink);
+            draw_line(
+                c.x - u * 0.05,
+                c.y + u * 0.05,
+                c.x + u * 0.8,
+                c.y - u * 0.8,
+                line,
+                ink,
+            );
+            draw_triangle(
+                vec2(c.x + u, c.y - u),
+                vec2(c.x + u * 0.35, c.y - u * 0.9),
+                vec2(c.x + u * 0.9, c.y - u * 0.35),
+                ink,
+            );
+        }
+        TriggerAction::Animate => {
+            // A wave: something that keeps moving.
+            let steps = 12;
+            for i in 0..steps {
+                let x = |i: i32| c.x - u + 2. * u * i as f32 / steps as f32;
+                let y = |i: i32| {
+                    c.y - u * 0.55 * (i as f32 / steps as f32 * std::f32::consts::TAU).sin()
+                };
+                draw_line(x(i), y(i), x(i + 1), y(i + 1), line, ink);
+            }
+        }
+        TriggerAction::Stop => {
+            draw_poly_lines(c.x, c.y, 8, u, 22.5, line, ink);
+            draw_rectangle(c.x - u * 0.38, c.y - u * 0.38, u * 0.76, u * 0.76, ink);
+        }
+        TriggerAction::Shake => {
+            // A frame with tremor marks either side.
+            draw_rectangle_lines(c.x - u * 0.45, c.y - u * 0.6, u * 0.9, u * 1.2, line, ink);
+            for side in [-1., 1.] {
+                let x = c.x + side * u * 0.75;
+                for (from, to) in [(-0.6, -0.2), (-0.2, 0.2), (0.2, 0.6)] {
+                    let lean = if from < -0.5 || from > 0.1 {
+                        0.18
+                    } else {
+                        -0.18
+                    };
+                    draw_line(
+                        x - lean * u,
+                        c.y + from * u,
+                        x + lean * u,
+                        c.y + to * u,
+                        line * 0.75,
+                        ink,
+                    );
+                }
+            }
+        }
+        TriggerAction::Sound => {
+            // A speaker and its waves.
+            draw_rectangle(c.x - u, c.y - u * 0.3, u * 0.45, u * 0.6, ink);
+            draw_triangle(
+                vec2(c.x - u * 0.6, c.y - u * 0.3),
+                vec2(c.x - u * 0.05, c.y - u * 0.8),
+                vec2(c.x - u * 0.05, c.y + u * 0.8),
+                ink,
+            );
+            draw_triangle(
+                vec2(c.x - u * 0.6, c.y - u * 0.3),
+                vec2(c.x - u * 0.05, c.y + u * 0.8),
+                vec2(c.x - u * 0.6, c.y + u * 0.3),
+                ink,
+            );
+            for radius in [0.45, 0.85] {
+                draw_arc(
+                    c.x + u * 0.05,
+                    c.y,
+                    20,
+                    u * radius,
+                    -45.,
+                    line * 0.8,
+                    90.,
+                    ink,
+                );
+            }
+        }
         TriggerAction::Reset => {
             // A circular arrow: start again.
             draw_arc(c.x, c.y, 24, u * 0.8, 40., line, 280., ink);
@@ -1248,7 +1504,16 @@ pub fn thumbnail(brush: &Brush, r: Rect, map: &MapDef, settings: &Settings, time
             if item.kind == DecorKind::Label {
                 item.text = "Aa".into();
             }
-            scenery::decoration(&item, inner, 0., 0.4, &[0; MAP_COUNTERS as usize], 0., 1.);
+            scenery::decoration(
+                &item,
+                inner,
+                0.,
+                0.4,
+                &[0; MAP_COUNTERS as usize],
+                0.,
+                1.,
+                ([1.; 3], 0.),
+            );
         }
         Object::Trigger(t) => {
             let size = inner.w.min(inner.h) * 0.8;

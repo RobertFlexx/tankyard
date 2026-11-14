@@ -687,9 +687,19 @@ editor.tool {
                 group: 7,
                 ..Default::default()
             },
+            MapTrigger {
+                action: TriggerAction::Tint,
+                group: 3,
+                ..Default::default()
+            },
+            MapTrigger {
+                action: TriggerAction::Stop,
+                group: 4,
+                ..Default::default()
+            },
         ];
         let outcome = plugins.run(0, 0, &map, &[], &Context::default()).unwrap();
-        assert_eq!(outcome.messages, vec!["3".to_owned()]);
+        assert_eq!(outcome.messages, vec!["5".to_owned()]);
     }
 
     #[test]

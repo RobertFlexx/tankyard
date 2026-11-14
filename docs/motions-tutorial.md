@@ -4,7 +4,7 @@
 
 Choose **Motions** above the website's video player for chapters on doors, curves, chained motions, lights, particles and playtesting.
 
-This tutorial builds a small gatehouse in the Arena Workshop, one piece at a time. It covers what's new in 1.0: motions and easing curves, chained motions, moving decor, lights and particles. Allow about fifteen minutes. The [workshop guide](map-editor.md#motions) is the full reference; this page is the hands-on version. To get a feel for the curves first, the [Tank Yard website](https://robertflexx.github.io/tankyard-site/#motions) plays every curve and mode in your browser.
+This tutorial builds a small gatehouse in the Arena Workshop, one piece at a time. It covers motions and easing curves, chained motions, moving decor, lights and particles, and the effects added in 1.1.0: launch pads, animations, sounds and screen shake. Allow about twenty minutes. The [workshop guide](map-editor.md#motions) is the full reference; this page is the hands-on version. To get a feel for the curves first, the [Tank Yard website](https://robertflexx.github.io/tankyard-site/#motions) plays every curve and mode in your browser.
 
 The finished gatehouse:
 
@@ -13,8 +13,9 @@ The finished gatehouse:
 - Three barricades that land one after another as the round starts, then an announcement.
 - An arrow sign that turns, and a warning light that blinks each time the door comes to rest.
 - Flickering torches with rising embers, a fountain and fireflies.
+- A launch pad that flings tanks across the yard, a floating lantern, a chime at the door and a tremor as the last barricade lands.
 
-You need Tank Yard 1.0 or later.
+You need Tank Yard 1.1.0 or later. Steps 1 to 9 also work in 1.0.
 
 ## 1. Start a map
 
@@ -120,12 +121,24 @@ On arrive also acts when a group gets back from a trip, so a door with *Go back 
 
 Particles are drawn from seeds on each player's computer, so they cost the server nothing and send no network traffic. Players with Reduced motion on don't see map particles.
 
-## 10. Check and play
+## 10. Add effects
+
+Effects change how the yard looks, sounds and feels. Like Turn and Fade, the ones that act on decor never change collision.
+
+1. From **Pads**, drag out a **Launch pad** in the open part of the yard. Press **2**, click it, and under *Direction* pick the arrow that points across the yard. Its arrows light up in a wave along that direction. A tank that drives onto it is flung that way at speed and coasts for a moment before you can steer again. Keep it pointed away from walls you don't want tanks thrown at.
+2. Press **2**, click the **Lantern** and press **Ctrl+G** to put it in a new group, group 8. From **Effects**, place a **Float** and set its *Target group* to **8**. The lantern now bobs gently above the floor from the start of the round. In Object, *Size* sets how far it travels and *Times a second* how quickly; try **Orbit** and **Sway** in the style row, then go back to **Bob**.
+3. Place a **Chime** from Effects over the Door's area, the same size. Each time a tank arrives at the door, a chime plays there. Players near the door hear it clearly; players across the arena hear it faintly or not at all.
+4. Place a **Quake** from Effects and stretch its area across the yard, around the barricades. Change *When* to **On arrive** and *Watch group* to **5**. When the last barricade lands, the views of tanks in the yard shake for a moment. *Strength* and *For* set how hard and how long.
+5. Place a **Flash** from Effects, set its *Target group* to **7** and its *When* to **On arrive** with *Watch group* **1**. The neon now flashes white as it blinks: a tint and a fade play together, since each effect has its own channel.
+
+Press **P** and hold **T** in the Quake's area as the barricades land: the canvas shakes as a player's view would. Players can turn shaking down with Camera shake in Settings, and Reduced motion holds animations still and turns shaking off.
+
+## 11. Check and play
 
 1. Open the **Check** tab and fix anything red.
-2. Press **P** and watch the yard: the shuttle glides, the barricades land in turn, the arrow turns and the torches flicker. Objects away from home show a dashed outline where the map places them.
-3. Press **F5** to playtest. Drive through the door, then stand in the shuttle's path.
-4. **Save** the project and **Export** a pack when you're happy with it. Maps saved from 1.0 need Tank Yard 1.0 or later to open and play.
+2. Press **P** and watch the yard: the shuttle glides, the barricades land in turn, the arrow turns, the lantern floats and the torches flicker. Objects away from home show a dashed outline where the map places them.
+3. Press **F5** to playtest. Drive through the door, ride the launch pad, then stand in the shuttle's path.
+4. **Save** the project and **Export** a pack when you're happy with it. Maps with launch pads or effects need Tank Yard 1.1.0 or later to open and play.
 
 The workshop remembers how you left it, down to the palette tab and item, the inspector tab, the preview's speed and where you were looking.
 
@@ -146,4 +159,6 @@ The workshop remembers how you left it, down to the palette tab and item, the in
 
 - **Lift** and **Home** move a group to a set place on signals 1 and 2. **Then** sends a signal each time a group finishes a motion, out or back.
 - **Piston** punches a group out and pulls it back every 2 seconds. **Fader** fades a group's decor while tanks pass and brings it back after 5 seconds.
-- Scripts play motions with `move_map_group`, `turn_map_group` and `fade_map_group`, and JSON map packs use the `move`, `place`, `turn` and `fade` actions. See [Modding](modding.md#motions).
+- **Grow** swells a group's decor with an overshoot when a tank arrives and shrinks it back. **Alarm** flashes a group red every 1.2 seconds, and **Dye** tints it on a signal.
+- **Stop** halts a group where it is: a door half open stays half open, and a spinning sign freezes mid-turn. Pair it with a signal from a switch.
+- Scripts play motions with `move_map_group`, `turn_map_group` and `fade_map_group`, and effects with `tint_map_group`, `scale_map_group`, `animate_map_group`, `stop_map_group`, `shake_view` and `play_sound`. JSON map packs use the `move`, `place`, `turn`, `fade`, `tint`, `scale`, `animate`, `stop`, `shake` and `sound` actions. See [Modding](modding.md#motions).

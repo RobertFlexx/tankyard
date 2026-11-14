@@ -1,6 +1,6 @@
 //! Logic preview: the arena's triggers run in the editor with the same rule
 //! engine servers use, with a test tank at the pointer for area triggers.
-use tankyard_content::{GroupPoses, MAP_COUNTERS, MapDef, MapTrigger};
+use tankyard_content::{GroupPoses, MAP_COUNTERS, MapDef, MapSound, MapTrigger};
 use tankyard_core::{DT, LogicEffect, LogicInput, MapLogic, Occupant, V2, WorldConfig};
 
 /// A trigger's gate as the preview sees it now.
@@ -31,6 +31,11 @@ pub struct Preview {
     pub banner: Option<(f32, String)>,
     pub probe_team: u8,
     pub probe_bot: bool,
+    /// A Shake screen that reached the test tank: strength from 0 to 1, and
+    /// the round time it ends.
+    pub shake: Option<(f32, f32)>,
+    /// Play sound triggers since the editor last played them, with volume.
+    pub sounds: Vec<(MapSound, f32)>,
     /// Where the test tank was last, for gates that count tanks inside.
     probe: Option<V2>,
     logic: MapLogic,
@@ -54,6 +59,8 @@ impl Preview {
             banner: None,
             probe_team: 0,
             probe_bot: false,
+            shake: None,
+            sounds: Vec::new(),
             probe: None,
             logic: MapLogic::default(),
             acted: Vec::new(),
@@ -75,6 +82,8 @@ impl Preview {
         self.acted = vec![0; map.triggers.len()];
         self.events.clear();
         self.banner = None;
+        self.shake = None;
+        self.sounds.clear();
         self.triggers.clone_from(&map.triggers);
         self.seed = 0x7e57;
     }
@@ -255,6 +264,32 @@ impl Preview {
                     format!("Awards {points} points{}", tank_count(tanks.len())),
                     Some(V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5)),
                 ),
+                LogicEffect::Shake {
+                    tanks,
+                    strength,
+                    seconds,
+                } => {
+                    // Only the test tank has a view to shake.
+                    if !tanks.is_empty() {
+                        self.shake = Some((strength, self.time + seconds));
+                    }
+                    (
+                        format!(
+                            "Shakes the view{}",
+                            tank_count(tanks.len()).replace(" to ", " of ")
+                        ),
+                        None,
+                    )
+                }
+                LogicEffect::Sound { sound, volume, at } => {
+                    if self.sounds.len() < 8 {
+                        self.sounds.push((sound, volume));
+                    }
+                    (
+                        format!("Plays the {} sound", sound.name().to_lowercase()),
+                        Some(at),
+                    )
+                }
                 // Scripts run on servers; the preview only says it happened.
                 LogicEffect::Script {
                     name, tanks, area, ..

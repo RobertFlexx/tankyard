@@ -172,28 +172,134 @@ impl Easing {
     }
 }
 
+/// A motion's value. Each channel uses as many of the four numbers as it
+/// needs and leaves the rest at zero.
+pub type TweenValue = [f32; 4];
+
 /// What a group motion changes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TweenChannel {
     /// Where the group's cover, pads, decorations and trigger areas sit,
-    /// as an offset from where the map places them.
+    /// as an offset from where the map places them: `[x, y]`.
     #[default]
     Move,
-    /// How far the group's decorations are turned, in degrees.
+    /// How far the group's decorations are turned, in degrees: `[degrees]`.
     Turn,
-    /// How opaque the group's decorations are, 0 to 1.
+    /// How opaque the group's decorations are, 0 to 1: `[opacity]`.
     Fade,
+    // Newer channels go last: the wire format numbers variants in order.
+    /// A colour mixed into the group's decorations: `[red, green, blue,
+    /// strength]`, each 0 to 1. Strength 0 leaves their own colours.
+    Tint,
+    /// How large the group's decorations are drawn: `[factor]`, 1 as placed.
+    Scale,
+    /// A looping animation: `[size, cycles per second, phase]`. See
+    /// [`AnimateStyle`] for what size means for each.
+    Bob,
+    Sway,
+    Throb,
+    Shake,
+    Orbit,
 }
 impl TweenChannel {
+    pub const ALL: [Self; 10] = [
+        Self::Move,
+        Self::Turn,
+        Self::Fade,
+        Self::Tint,
+        Self::Scale,
+        Self::Bob,
+        Self::Sway,
+        Self::Throb,
+        Self::Shake,
+        Self::Orbit,
+    ];
     /// The value a group has before anything changes it.
-    pub fn rest(self) -> [f32; 2] {
+    pub fn rest(self) -> TweenValue {
         match self {
-            Self::Move | Self::Turn => [0., 0.],
-            Self::Fade => [1., 0.],
+            Self::Fade | Self::Scale => [1., 0., 0., 0.],
+            Self::Tint => [1., 1., 1., 0.],
+            _ => [0.; 4],
+        }
+    }
+    /// The animation this channel plays, if it is one.
+    pub fn style(self) -> Option<AnimateStyle> {
+        AnimateStyle::ALL
+            .into_iter()
+            .find(|style| style.channel() == self)
+    }
+}
+
+/// A looping animation an Animate trigger plays on a group's decorations.
+/// Animations only change how decorations look; cover never moves with them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnimateStyle {
+    /// Floats up and down by `size` world units.
+    #[default]
+    Bob,
+    /// Rocks back and forth by `size` degrees.
+    Sway,
+    /// Grows and shrinks by `size` percent.
+    Throb,
+    /// Trembles by up to `size` world units.
+    Shake,
+    /// Circles `size` world units from where it rests.
+    Orbit,
+}
+impl AnimateStyle {
+    pub const ALL: [Self; 5] = [Self::Bob, Self::Sway, Self::Throb, Self::Shake, Self::Orbit];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bob => "Bob",
+            Self::Sway => "Sway",
+            Self::Throb => "Throb",
+            Self::Shake => "Shake",
+            Self::Orbit => "Orbit",
+        }
+    }
+    pub fn channel(self) -> TweenChannel {
+        match self {
+            Self::Bob => TweenChannel::Bob,
+            Self::Sway => TweenChannel::Sway,
+            Self::Throb => TweenChannel::Throb,
+            Self::Shake => TweenChannel::Shake,
+            Self::Orbit => TweenChannel::Orbit,
+        }
+    }
+    /// What `size` counts, for the editor.
+    pub fn unit(self) -> &'static str {
+        match self {
+            Self::Sway => "°",
+            Self::Throb => "%",
+            _ => " units",
+        }
+    }
+    /// The largest size a map may ask for.
+    pub fn limit(self) -> i32 {
+        match self {
+            Self::Sway => 180,
+            Self::Throb => 100,
+            _ => ANIMATE_REACH,
+        }
+    }
+    /// The speed a new Animate trigger starts with, in cycles a second.
+    pub fn default_speed(self) -> f32 {
+        match self {
+            Self::Shake => 8.,
+            Self::Orbit => 0.5,
+            _ => 1.,
         }
     }
 }
+
+/// Largest Bob, Shake or Orbit, in world units.
+pub const ANIMATE_REACH: i32 = 400;
+/// Fastest animation, in cycles a second.
+pub const ANIMATE_SPEED: f32 = 12.;
+/// Largest Scale, as a factor.
+pub const SCALE_LIMIT: f32 = 4.;
 
 /// One group's motion on one channel, in round seconds. Holding its end
 /// value after it finishes, it also records where a group has come to rest.
@@ -201,22 +307,19 @@ impl TweenChannel {
 pub struct Tween {
     pub group: u8,
     pub channel: TweenChannel,
-    pub from: [f32; 2],
-    pub to: [f32; 2],
+    pub from: TweenValue,
+    pub to: TweenValue,
     pub start: f32,
     pub length: f32,
     pub easing: Easing,
 }
 impl Tween {
-    pub fn value(&self, now: f32) -> [f32; 2] {
+    pub fn value(&self, now: f32) -> TweenValue {
         if self.length <= 0. || now >= self.start + self.length {
             return self.to;
         }
         let k = self.easing.apply((now - self.start) / self.length);
-        [
-            self.from[0] + (self.to[0] - self.from[0]) * k,
-            self.from[1] + (self.to[1] - self.from[1]) * k,
-        ]
+        std::array::from_fn(|i| self.from[i] + (self.to[i] - self.from[i]) * k)
     }
     pub fn moving(&self, now: f32) -> bool {
         self.length > 0. && now < self.start + self.length && self.from != self.to
@@ -241,26 +344,76 @@ pub const TWEEN_SECONDS: f32 = 600.;
 /// a couple of arena widths and a turn within many full circles.
 pub const TWEEN_LIMIT: f32 = 1.0e5;
 /// Most motions a round keeps: one per group and channel.
-pub const TWEEN_SLOTS: usize = MAP_GROUPS as usize * 3;
+pub const TWEEN_SLOTS: usize = MAP_GROUPS as usize * TweenChannel::ALL.len();
 
-/// Every group's current offset, turn and opacity, found once per frame or
-/// tick so each object looks its group up instead of searching tweens.
+/// Where an animation of `style` is at `phase` cycles, scaled by `size`:
+/// an offset in world units, a turn in degrees and a change of scale.
+fn animation(style: AnimateStyle, size: f32, phase: f32) -> ([f32; 2], f32, f32) {
+    use std::f32::consts::TAU;
+    let wave = (phase * TAU).sin();
+    match style {
+        AnimateStyle::Bob => ([0., -size * wave], 0., 0.),
+        AnimateStyle::Sway => ([0., 0.], size * wave, 0.),
+        AnimateStyle::Throb => ([0., 0.], 0., size / 100. * wave),
+        AnimateStyle::Orbit => ([size * (phase * TAU).cos(), size * wave], 0., 0.),
+        AnimateStyle::Shake => (
+            [size * noise(phase, 0x9e37), size * noise(phase, 0x7f4a)],
+            0.,
+            0.,
+        ),
+    }
+}
+
+/// Smooth value noise from -1 to 1, one new value per whole `t`.
+fn noise(t: f32, seed: u32) -> f32 {
+    let hash = |n: i64| {
+        let mut x = (n as u32) ^ seed.wrapping_mul(0x2c1b_3c6d);
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x297a_2d39);
+        x ^= x >> 12;
+        x as f32 / u32::MAX as f32 * 2. - 1.
+    };
+    let step = t.floor();
+    let f = t - step;
+    let f = f * f * (3. - 2. * f);
+    let a = hash(step as i64);
+    a + (hash(step as i64 + 1) - a) * f
+}
+
+const SLOTS: usize = MAP_GROUPS as usize + 1;
+
+/// Every group's current offset, turn, opacity, tint, scale and animation,
+/// found once per frame or tick so each object looks its group up instead
+/// of searching tweens.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupPoses {
     /// Map-fraction offsets, by group; group 0 never moves.
-    pub offset: [[f32; 2]; MAP_GROUPS as usize + 1],
+    pub offset: [[f32; 2]; SLOTS],
     /// Degrees.
-    pub turn: [f32; MAP_GROUPS as usize + 1],
-    pub opacity: [f32; MAP_GROUPS as usize + 1],
+    pub turn: [f32; SLOTS],
+    pub opacity: [f32; SLOTS],
+    /// Red, green, blue and strength, each 0 to 1.
+    pub tint: [[f32; 4]; SLOTS],
+    pub scale: [f32; SLOTS],
+    /// Animated decorations' offsets in world units, turns in degrees and
+    /// changes of scale, as of the time these poses were found.
+    pub wobble: [[f32; 2]; SLOTS],
+    pub sway: [f32; SLOTS],
+    pub throb: [f32; SLOTS],
     /// Whether any group sits away from where the map placed it.
     pub moved: bool,
 }
 impl Default for GroupPoses {
     fn default() -> Self {
         Self {
-            offset: [[0.; 2]; MAP_GROUPS as usize + 1],
-            turn: [0.; MAP_GROUPS as usize + 1],
-            opacity: [1.; MAP_GROUPS as usize + 1],
+            offset: [[0.; 2]; SLOTS],
+            turn: [0.; SLOTS],
+            opacity: [1.; SLOTS],
+            tint: [[1., 1., 1., 0.]; SLOTS],
+            scale: [1.; SLOTS],
+            wobble: [[0.; 2]; SLOTS],
+            sway: [0.; SLOTS],
+            throb: [0.; SLOTS],
             moved: false,
         }
     }
@@ -276,14 +429,34 @@ impl GroupPoses {
             let value = tween.value(now);
             match tween.channel {
                 TweenChannel::Move => {
-                    poses.offset[group] = value;
-                    poses.moved |= value != [0., 0.];
+                    poses.offset[group] = [value[0], value[1]];
+                    poses.moved |= value[0] != 0. || value[1] != 0.;
                 }
                 TweenChannel::Turn => poses.turn[group] = value[0],
                 TweenChannel::Fade => poses.opacity[group] = value[0].clamp(0., 1.),
+                TweenChannel::Tint => poses.tint[group] = value.map(|v| v.clamp(0., 1.)),
+                TweenChannel::Scale => poses.scale[group] = value[0].clamp(0., SCALE_LIMIT),
+                channel => {
+                    let Some(style) = channel.style() else {
+                        continue;
+                    };
+                    let [size, speed, phase, _] = value;
+                    let ([x, y], turn, grow) = animation(style, size, now * speed + phase);
+                    let wobble = &mut poses.wobble[group];
+                    *wobble = [wobble[0] + x, wobble[1] + y];
+                    poses.sway[group] += turn;
+                    poses.throb[group] += grow;
+                }
             }
         }
         poses
+    }
+    /// The same poses with every animation at rest, for reduced motion.
+    pub fn still(mut self) -> Self {
+        self.wobble = [[0.; 2]; SLOTS];
+        self.sway = [0.; SLOTS];
+        self.throb = [0.; SLOTS];
+        self
     }
     pub fn offset(&self, group: u8) -> [f32; 2] {
         self.offset
@@ -301,6 +474,33 @@ impl GroupPoses {
     }
     pub fn opacity(&self, group: u8) -> f32 {
         self.opacity.get(usize::from(group)).copied().unwrap_or(1.)
+    }
+    /// The colour mixed into the group and how strongly, 0 to 1.
+    pub fn tint(&self, group: u8) -> ([f32; 3], f32) {
+        let [r, g, b, strength] = self
+            .tint
+            .get(usize::from(group))
+            .copied()
+            .unwrap_or([1., 1., 1., 0.]);
+        ([r, g, b], strength)
+    }
+    /// How large the group's decorations are drawn, Scale and Throb together.
+    pub fn scale(&self, group: u8) -> f32 {
+        let group = usize::from(group);
+        let scale = self.scale.get(group).copied().unwrap_or(1.);
+        let throb = self.throb.get(group).copied().unwrap_or(0.);
+        (scale * (1. + throb)).clamp(0., SCALE_LIMIT * 2.)
+    }
+    /// An animated decoration's extra offset, in world units.
+    pub fn wobble(&self, group: u8) -> [f32; 2] {
+        self.wobble
+            .get(usize::from(group))
+            .copied()
+            .unwrap_or_default()
+    }
+    /// An animated decoration's extra turn, in degrees.
+    pub fn sway(&self, group: u8) -> f32 {
+        self.sway.get(usize::from(group)).copied().unwrap_or(0.)
     }
 }
 
@@ -339,20 +539,20 @@ mod tests {
         let tween = Tween {
             group: 3,
             channel: TweenChannel::Move,
-            from: [0., 0.],
-            to: [0.2, -0.1],
+            from: [0.; 4],
+            to: [0.2, -0.1, 0., 0.],
             start: 10.,
             length: 2.,
             easing: Easing::LINEAR,
         };
-        assert_eq!(tween.value(9.), [0., 0.]);
-        assert_eq!(tween.value(11.), [0.1, -0.05]);
-        assert_eq!(tween.value(50.), [0.2, -0.1]);
+        assert_eq!(tween.value(9.), [0.; 4]);
+        assert_eq!(tween.value(11.), [0.1, -0.05, 0., 0.]);
+        assert_eq!(tween.value(50.), [0.2, -0.1, 0., 0.]);
         assert!(tween.moving(11.) && !tween.moving(12.));
         let fade = Tween {
             channel: TweenChannel::Fade,
-            from: [1., 0.],
-            to: [0., 0.],
+            from: [1., 0., 0., 0.],
+            to: [0.; 4],
             ..tween
         };
         let poses = GroupPoses::at(&[tween, fade], 12.);
@@ -364,10 +564,65 @@ mod tests {
         assert!(tween.valid());
         assert!(
             !Tween {
-                to: [f32::NAN, 0.],
+                to: [f32::NAN, 0., 0., 0.],
                 ..tween
             }
             .valid()
         );
+    }
+
+    #[test]
+    fn tints_scales_and_animations_pose_decorations_without_moving_cover() {
+        let at = |channel, to: TweenValue| Tween {
+            group: 2,
+            channel,
+            from: channel.rest(),
+            to,
+            start: 0.,
+            length: 0.,
+            easing: Easing::LINEAR,
+        };
+        let poses = GroupPoses::at(
+            &[
+                at(TweenChannel::Tint, [1., 0., 0., 0.5]),
+                at(TweenChannel::Scale, [2., 0., 0., 0.]),
+                // A quarter cycle in: bob at its height, sway at its widest.
+                at(TweenChannel::Bob, [10., 1., 0., 0.]),
+                at(TweenChannel::Sway, [15., 1., 0., 0.]),
+                at(TweenChannel::Throb, [50., 1., 0., 0.]),
+            ],
+            0.25,
+        );
+        assert_eq!(poses.tint(2), ([1., 0., 0.], 0.5));
+        assert_eq!(poses.tint(3), ([1., 1., 1.], 0.));
+        assert!((poses.wobble(2)[1] + 10.).abs() < 1e-4);
+        assert!((poses.sway(2) - 15.).abs() < 1e-4);
+        assert!((poses.scale(2) - 3.).abs() < 1e-4);
+        assert!(!poses.moved, "animations never move cover");
+        let still = poses.clone().still();
+        assert_eq!(still.wobble(2), [0., 0.]);
+        assert_eq!(still.scale(2), 2.);
+        assert_eq!(still.tint(2), poses.tint(2));
+        // Shake stays within its size and changes smoothly.
+        let mut last: Option<[f32; 2]> = None;
+        for step in 0..400 {
+            let poses = GroupPoses::at(
+                &[at(TweenChannel::Shake, [12., 8., 0., 0.])],
+                step as f32 / 120.,
+            );
+            let [x, y] = poses.wobble(2);
+            assert!(x.abs() <= 12.001 && y.abs() <= 12.001);
+            if let Some([lx, ly]) = last {
+                assert!((x - lx).abs() < 4. && (y - ly).abs() < 4.);
+            }
+            last = Some([x, y]);
+        }
+        for channel in TweenChannel::ALL {
+            assert_eq!(
+                channel.style().map(AnimateStyle::channel),
+                channel.style().map(|_| channel)
+            );
+        }
+        assert_eq!(TWEEN_SLOTS, 32 * 10);
     }
 }

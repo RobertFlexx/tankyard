@@ -285,6 +285,8 @@ impl World {
                     | EventKind::StasisRelease
                     | EventKind::BossAttack
                     | EventKind::PocketEject
+                    | EventKind::MapShake
+                    | EventKind::MapSound
             ) && let Some(index) = self
                 .events
                 .iter()

@@ -97,15 +97,19 @@ pub enum ZoneKind {
     Conveyor,
     /// Sends tanks to `exit`.
     Portal,
+    // Newer kinds go last: the wire format numbers variants in order.
+    /// Flings tanks along `angle`; they coast on after leaving it.
+    Launch,
 }
 impl ZoneKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Speed,
         Self::Mud,
         Self::Repair,
         Self::Hazard,
         Self::Shelter,
         Self::Conveyor,
+        Self::Launch,
         Self::Portal,
     ];
     pub fn name(self) -> &'static str {
@@ -117,7 +121,12 @@ impl ZoneKind {
             Self::Shelter => "Shelter",
             Self::Conveyor => "Conveyor",
             Self::Portal => "Portal",
+            Self::Launch => "Launch pad",
         }
+    }
+    /// Whether `angle` sets which way it acts.
+    pub fn aims(self) -> bool {
+        matches!(self, Self::Conveyor | Self::Launch)
     }
 }
 
@@ -131,7 +140,7 @@ pub struct MapZone {
     pub strength: f32,
     #[serde(default)]
     pub group: u8,
-    /// Conveyor direction in degrees: 0 right, 90 down.
+    /// Conveyor or launch direction in degrees: 0 right, 90 down.
     #[serde(default)]
     pub angle: f32,
     /// Where a portal sends tanks, normalized like positions.
@@ -143,6 +152,8 @@ fn unit() -> f32 {
 }
 /// World units per second a conveyor of strength 1 adds to a tank's motion.
 pub const CONVEYOR_SPEED: f32 = 150.;
+/// World units per second a launch pad of strength 1 flings a tank at.
+pub const LAUNCH_SPEED: f32 = 900.;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -519,9 +530,24 @@ pub enum TriggerAction {
     Turn,
     /// Fades group `group`'s decorations to `amount` percent opacity.
     Fade,
+    // Added in 1.1.0.
+    /// Mixes `color` into group `group`'s decorations at `amount` percent.
+    Tint,
+    /// Draws group `group`'s decorations at `amount` percent of their size.
+    Scale,
+    /// Plays the `style` animation on group `group`'s decorations, `amount`
+    /// in size at `speed` cycles a second; 0 settles it.
+    Animate,
+    /// Halts every motion and animation of group `group` where it is.
+    Stop,
+    /// Shakes the view of the noticed tanks in `rect`, `amount` percent hard
+    /// for `tween` seconds.
+    Shake,
+    /// Plays `sound` at `rect`, at `amount` percent volume.
+    Sound,
 }
 impl TriggerAction {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 27] = [
         Self::Toggle,
         Self::Show,
         Self::Hide,
@@ -529,6 +555,12 @@ impl TriggerAction {
         Self::Place,
         Self::Turn,
         Self::Fade,
+        Self::Tint,
+        Self::Scale,
+        Self::Animate,
+        Self::Stop,
+        Self::Shake,
+        Self::Sound,
         Self::Announce,
         Self::Boss,
         Self::Signal,
@@ -567,6 +599,12 @@ impl TriggerAction {
             Self::Place => "Move group to",
             Self::Turn => "Turn decor",
             Self::Fade => "Fade decor",
+            Self::Tint => "Tint decor",
+            Self::Scale => "Scale decor",
+            Self::Animate => "Animate decor",
+            Self::Stop => "Stop group",
+            Self::Shake => "Shake screen",
+            Self::Sound => "Play sound",
         }
     }
     /// Whether `group` names a map group, as opposed to a channel or counter.
@@ -580,6 +618,10 @@ impl TriggerAction {
                 | Self::Place
                 | Self::Turn
                 | Self::Fade
+                | Self::Tint
+                | Self::Scale
+                | Self::Animate
+                | Self::Stop
         )
     }
     /// Whether it shows or hides group `group`.
@@ -588,7 +630,23 @@ impl TriggerAction {
     }
     /// Whether it plays a motion, using `tween` and `easing`.
     pub fn animates(self) -> bool {
-        matches!(self, Self::Move | Self::Place | Self::Turn | Self::Fade)
+        matches!(
+            self,
+            Self::Move
+                | Self::Place
+                | Self::Turn
+                | Self::Fade
+                | Self::Tint
+                | Self::Scale
+                | Self::Animate
+        )
+    }
+    /// Whether it only changes how decorations look.
+    pub fn decor_only(self) -> bool {
+        matches!(
+            self,
+            Self::Turn | Self::Fade | Self::Tint | Self::Scale | Self::Animate
+        )
     }
     /// Whether it moves the group, using `travel`.
     pub fn moves(self) -> bool {
@@ -600,7 +658,7 @@ impl TriggerAction {
     }
     /// Whether it acts on the tanks standing in the trigger's area.
     pub fn affects_tanks(self) -> bool {
-        matches!(self, Self::Heal | Self::Hurt | Self::Award)
+        matches!(self, Self::Heal | Self::Hurt | Self::Award | Self::Shake)
     }
     /// Whether it sends on a run of `amount` channels from `group`.
     pub fn sends_range(self) -> bool {
@@ -618,6 +676,61 @@ impl TriggerAction {
             #[allow(clippy::reversed_empty_ranges)]
             _ => 1..=0,
         }
+    }
+}
+
+/// A sound a Play sound trigger makes. Each is synthesised by the game, so a
+/// map carries no audio.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MapSound {
+    /// A bright, rising two-note chime.
+    #[default]
+    Chime,
+    /// One clear, ringing bell.
+    Bell,
+    /// A short warning siren.
+    Alarm,
+    /// A mechanical click and clunk, for levers and doors.
+    Switch,
+    /// A rush of air, for launches and passing things.
+    Whoosh,
+    /// A deep, rolling rumble.
+    Rumble,
+    /// Three quick rising tones, for a win or a reward.
+    Fanfare,
+    /// A soft, low pulse, like a heartbeat or a distant drum.
+    Thump,
+}
+impl MapSound {
+    pub const ALL: [Self; 8] = [
+        Self::Chime,
+        Self::Bell,
+        Self::Alarm,
+        Self::Switch,
+        Self::Whoosh,
+        Self::Rumble,
+        Self::Fanfare,
+        Self::Thump,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Chime => "Chime",
+            Self::Bell => "Bell",
+            Self::Alarm => "Alarm",
+            Self::Switch => "Switch",
+            Self::Whoosh => "Whoosh",
+            Self::Rumble => "Rumble",
+            Self::Fanfare => "Fanfare",
+            Self::Thump => "Thump",
+        }
+    }
+    /// Its place in [`MapSound::ALL`], as events carry it.
+    pub fn index(self) -> u8 {
+        Self::ALL.iter().position(|&s| s == self).unwrap_or(0) as u8
+    }
+    pub fn from_index(index: u8) -> Option<Self> {
+        Self::ALL.get(usize::from(index)).copied()
     }
 }
 
@@ -1035,6 +1148,29 @@ pub struct MapTrigger {
     /// How a motion speeds up and slows down.
     #[serde(default, skip_serializing_if = "is_default")]
     pub easing: crate::Easing,
+    // Added in 1.1.0, and likewise left out when unused.
+    /// The colour Tint mixes in.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub color: [u8; 3],
+    /// The animation Animate plays.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub style: crate::AnimateStyle,
+    /// Animate's cycles a second; 0 uses the style's own pace.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub speed: f32,
+    /// The sound Play sound makes.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub sound: MapSound,
+}
+impl MapTrigger {
+    /// Animate's pace in cycles a second, after the style's default.
+    pub fn animate_speed(&self) -> f32 {
+        if self.speed > 0. {
+            self.speed.min(crate::ANIMATE_SPEED)
+        } else {
+            self.style.default_speed()
+        }
+    }
 }
 fn always() -> u8 {
     100
@@ -1080,6 +1216,10 @@ impl Default for MapTrigger {
             travel: [0., 0.],
             tween: 0.,
             easing: crate::Easing::default(),
+            color: [0, 0, 0],
+            style: crate::AnimateStyle::Bob,
+            speed: 0.,
+            sound: MapSound::Chime,
         }
     }
 }
@@ -1125,6 +1265,8 @@ pub const TRAVEL_LIMIT: f32 = 2.;
 pub const MOVE_SPEED_LIMIT: f32 = 1.;
 /// Most degrees one Turn trigger turns.
 pub const TURN_LIMIT: i32 = 3600;
+/// Longest Shake screen, in seconds.
+pub const SHAKE_SECONDS: f32 = 10.;
 /// The shortest glide, in tenths of a second, that keeps a move of
 /// `travel` within `MOVE_SPEED_LIMIT`.
 pub fn least_tween(travel: [f32; 2]) -> f32 {
@@ -1650,6 +1792,40 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         }
         TriggerAction::Fade if !(0..=100).contains(&trigger.amount) => {
             return Err("fade to 0 to 100 percent".into());
+        }
+        TriggerAction::Tint if !(0..=100).contains(&trigger.amount) => {
+            return Err("tint at 0 to 100 percent strength".into());
+        }
+        TriggerAction::Scale
+            if !(0..=(crate::SCALE_LIMIT * 100.) as i32).contains(&trigger.amount) =>
+        {
+            return Err(format!(
+                "scale to 0 to {} percent",
+                (crate::SCALE_LIMIT * 100.) as i32
+            ));
+        }
+        TriggerAction::Animate
+            if !(0..=trigger.style.limit()).contains(&trigger.amount)
+                || !range(trigger.speed, 0., crate::ANIMATE_SPEED) =>
+        {
+            return Err(format!(
+                "{} by 0 to {}{}, at most {} times a second",
+                trigger.style.name().to_lowercase(),
+                trigger.style.limit(),
+                trigger.style.unit(),
+                crate::ANIMATE_SPEED
+            ));
+        }
+        TriggerAction::Shake
+            if !(1..=100).contains(&trigger.amount)
+                || !range(trigger.tween, 0.1, SHAKE_SECONDS) =>
+        {
+            return Err(format!(
+                "shake at 1 to 100 percent for 0.1 to {SHAKE_SECONDS} seconds"
+            ));
+        }
+        TriggerAction::Sound if !(1..=100).contains(&trigger.amount) => {
+            return Err("play at 1 to 100 percent volume".into());
         }
         TriggerAction::Reset if trigger.group > MAP_GROUPS => {
             return Err(format!(

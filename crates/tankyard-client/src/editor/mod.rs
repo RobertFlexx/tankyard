@@ -718,6 +718,18 @@ impl Editor {
         }
         // View centers on the window; offset it to the canvas's center.
         self.view.shake = layout.canvas.center() - vec2(screen_width(), screen_height()) * 0.5;
+        // A Shake screen that reached the test tank shakes the canvas, as it
+        // would the player's view, while the preview runs.
+        if let Some((strength, until)) = self.preview.shake {
+            let left = until - self.preview.time;
+            if left <= 0. || settings.reduced_motion {
+                self.preview.shake = None;
+            } else if self.preview.running {
+                let t = get_time() as f32;
+                let level = strength * 40. * settings.shake * (left * 3.).min(1.);
+                self.view.shake += vec2((t * 73.).sin(), (t * 97.).cos()) * level;
+            }
+        }
         let dt = get_frame_time().min(0.1);
         if self.animate && !settings.reduced_motion {
             self.time += dt;
@@ -794,6 +806,11 @@ impl Editor {
         }
         let config = self.config();
         self.preview.advance(&self.doc.map, &config, dt, self.probe);
+    }
+
+    /// The preview's Play sound triggers since the last call, with volume.
+    pub fn take_sounds(&mut self) -> Vec<(tankyard_content::MapSound, f32)> {
+        std::mem::take(&mut self.preview.sounds)
     }
 
     /// Back from a playtest.

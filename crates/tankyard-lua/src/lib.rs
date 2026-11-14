@@ -695,7 +695,7 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
                 group: whole(arg(0), "group", 0, tankyard_content::MAP_GROUPS.into())? as u8,
             },
         ),
-        "move_map_group" | "turn_map_group" | "fade_map_group" => {
+        "move_map_group" | "turn_map_group" | "fade_map_group" | "scale_map_group" => {
             use tankyard_content::{TRAVEL_LIMIT, TURN_LIMIT, TWEEN_SECONDS, TriggerAction};
             let group = whole(arg(0), "group", 1, tankyard_content::MAP_GROUPS.into())? as u8;
             let within = |index: usize, what: &str, lo: f64, hi: f64| {
@@ -723,6 +723,19 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
                     ],
                     2,
                 ),
+                "scale_map_group" => (
+                    TriggerAction::Scale,
+                    [
+                        within(
+                            1,
+                            "percent",
+                            0.,
+                            f64::from(tankyard_content::SCALE_LIMIT) * 100.,
+                        )?,
+                        0.,
+                    ],
+                    2,
+                ),
                 _ => (
                     TriggerAction::Fade,
                     [within(1, "percent", 0., 100.)?, 0.],
@@ -740,8 +753,103 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
                 },
             )
         }
+        "tint_map_group" => {
+            let packed = whole(arg(1), "color", 0, 0xff_ffff)? as u32;
+            (
+                0,
+                Effect::MapTint {
+                    group: whole(arg(0), "group", 1, tankyard_content::MAP_GROUPS.into())? as u8,
+                    color: [(packed >> 16) as u8, (packed >> 8) as u8, packed as u8],
+                    percent: ranged(arg(2), "percent", 0., 100.)?,
+                    seconds: ranged(arg(3), "seconds", 0., tankyard_content::TWEEN_SECONDS)?,
+                    easing: easing(arg(4), arg(5))?,
+                },
+            )
+        }
+        "animate_map_group" => {
+            use tankyard_content::AnimateStyle;
+            let style = match arg(1) {
+                Some(Value::String(s)) => {
+                    let name = s.to_string_lossy();
+                    AnimateStyle::ALL
+                        .into_iter()
+                        .find(|style| style.name().eq_ignore_ascii_case(&name))
+                        .ok_or_else(|| {
+                            rt(format!(
+                                "unknown animation {name:?}; use bob, sway, throb, shake or orbit"
+                            ))
+                        })?
+                }
+                _ => return Err(rt("style must be a string")),
+            };
+            (
+                0,
+                Effect::MapAnimate {
+                    group: whole(arg(0), "group", 1, tankyard_content::MAP_GROUPS.into())? as u8,
+                    style,
+                    size: ranged(arg(2), "size", 0., style.limit() as f32)?,
+                    speed: ranged(arg(3), "speed", 0., tankyard_content::ANIMATE_SPEED)?,
+                    seconds: ranged(arg(4), "seconds", 0., tankyard_content::TWEEN_SECONDS)?,
+                    easing: easing(arg(5), arg(6))?,
+                },
+            )
+        }
+        "stop_map_group" => (
+            0,
+            Effect::MapStop {
+                group: whole(arg(0), "group", 1, tankyard_content::MAP_GROUPS.into())? as u8,
+            },
+        ),
+        "shake_view" => (
+            match arg(0) {
+                Some(Value::Integer(0)) => 0,
+                Some(Value::Number(n)) if *n == 0. => 0,
+                value => entity(value)?,
+            },
+            Effect::ShakeView {
+                percent: ranged(arg(1), "percent", 1., 100.)?,
+                seconds: ranged(arg(2), "seconds", 0.1, tankyard_content::SHAKE_SECONDS)?,
+            },
+        ),
+        "play_sound" => {
+            use tankyard_content::MapSound;
+            let sound = match arg(0) {
+                Some(Value::String(s)) => {
+                    let name = s.to_string_lossy();
+                    MapSound::ALL
+                        .into_iter()
+                        .find(|sound| sound.name().eq_ignore_ascii_case(&name))
+                        .ok_or_else(|| {
+                            rt(format!(
+                                "unknown sound {name:?}; use {}",
+                                MapSound::ALL
+                                    .map(|sound| sound.name().to_ascii_lowercase())
+                                    .join(", ")
+                            ))
+                        })?
+                }
+                _ => return Err(rt("sound must be a string")),
+            };
+            (
+                0,
+                Effect::PlaySound {
+                    sound,
+                    at: normalized(world, number(arg(1), "x")?, number(arg(2), "y")?)?,
+                    percent: ranged(arg(3), "percent", 1., 100.)?,
+                },
+            )
+        }
         _ => return Err(rt(format!("unknown command {op:?}"))),
     })
+}
+
+/// A finite number from `lo` to `hi`.
+fn ranged(value: Option<&Value>, what: &str, lo: f32, hi: f32) -> mlua::Result<f32> {
+    let n = number(value, what)?;
+    if !n.is_finite() || n < f64::from(lo) || n > f64::from(hi) {
+        return Err(rt(format!("{what} must be between {lo} and {hi}")));
+    }
+    Ok(n as f32)
 }
 
 /// An easing curve and mode by name, such as "sine" and "in_out".
@@ -948,6 +1056,25 @@ fn read(
             let group = whole(Some(a), "group", 1, tankyard_content::MAP_GROUPS.into())?;
             let bit = tankyard_content::MapDef::group_bit(group as u8);
             Value::Boolean(world.match_state.hidden_groups & bit == 0)
+        }
+        "map_pose" => {
+            let group = whole(Some(a), "group", 1, tankyard_content::MAP_GROUPS.into())? as u8;
+            let poses = world.group_poses();
+            let [x, y] = poses.offset(group);
+            let (color, strength) = poses.tint(group);
+            let t = lua.create_table_with_capacity(0, 7)?;
+            t.raw_set("x", x)?;
+            t.raw_set("y", y)?;
+            t.raw_set("angle", poses.turn(group))?;
+            t.raw_set("opacity", poses.opacity(group) * 100.)?;
+            t.raw_set("scale", poses.scale(group) * 100.)?;
+            let tint = lua.create_table_with_capacity(3, 0)?;
+            for (index, channel) in color.into_iter().enumerate() {
+                tint.raw_set(index + 1, (channel * 255.).round())?;
+            }
+            t.raw_set("tint", tint)?;
+            t.raw_set("tint_strength", strength * 100.)?;
+            Value::Table(t)
         }
         "arena" => {
             let t = lua.create_table()?;

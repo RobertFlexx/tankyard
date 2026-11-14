@@ -78,6 +78,9 @@ pub struct Effects {
     active_tanks: HashSet<EntityId>,
     seen: HashSet<(u64, u8, EntityId, u32, EntityId)>,
     pub shake: f32,
+    /// A map's Shake screen on the local tank: strength from 0 to 1, seconds
+    /// left and its full length.
+    map_shake: (f32, f32, f32),
     pub notice: String,
     pub notice_life: f32,
     pub boss_arrival: Option<(tankyard_core::BossKind, f32)>,
@@ -112,6 +115,7 @@ impl Effects {
             active_tanks: HashSet::new(),
             seen: HashSet::new(),
             shake: 0.0,
+            map_shake: (0., 0., 0.),
             notice: String::new(),
             notice_life: 0.0,
             boss_arrival: None,
@@ -200,6 +204,19 @@ impl Effects {
                 EventKind::StasisRelease => (CYAN, 24, true),
                 EventKind::BossAttack => (RED, 3, true),
                 EventKind::PocketEject => (AMBER, 6, true),
+                EventKind::MapShake => {
+                    if event.subject == local {
+                        let (strength, seconds) = tankyard_core::shake_of(event.value);
+                        // A stronger shake takes over; a weaker one waits its turn.
+                        if strength * seconds >= self.map_shake.0 * self.map_shake.1 {
+                            self.map_shake = (strength, seconds, seconds);
+                        }
+                    }
+                    (AMBER, 0, false)
+                }
+                // Heard rather than seen.
+                EventKind::MapSound => (AMBER, 0, false),
+                EventKind::Launch => (Color::from_rgba(166, 204, 60, 255), 8, true),
             };
             let count = (count as f32 * intensity) as usize;
             for _ in 0..count {
@@ -553,6 +570,14 @@ impl Effects {
             }
         }
         self.shake *= (-8.0 * dt).exp();
+        let (strength, left, total) = self.map_shake;
+        if left > 0. {
+            // Full strength until the last third, then easing away. Players'
+            // Camera shake setting scales this like any other shake.
+            let level = strength * 40. * (left / total.max(0.01) * 3.).min(1.);
+            self.shake = self.shake.max(level);
+            self.map_shake.1 = (left - dt).max(0.);
+        }
         self.notice_life = (self.notice_life - dt).max(0.0);
     }
     pub fn notice(&mut self, text: &str) {

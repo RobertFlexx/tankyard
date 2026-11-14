@@ -385,6 +385,30 @@ impl VoiceChat {
             mixer.alarm_volume = volume.clamp(0., 1.);
         }
     }
+    /// Play a map's sound once at `volume` (0 to 1, distance included). A
+    /// few may overlap; past that the oldest gives way.
+    pub fn map_sound(&mut self, sound: tankyard_content::MapSound, volume: f32) {
+        if self.disabled || volume <= 0.001 {
+            return;
+        }
+        if self.output.is_none()
+            && let Err(error) = self.start_output()
+        {
+            self.error = Some(format!("Audio unavailable: {error}"));
+            return;
+        }
+        let samples = crate::map_sounds::samples(sound);
+        if let Ok(mut mixer) = self.mixer.lock() {
+            if mixer.cues.len() >= CUE_LIMIT {
+                mixer.cues.remove(0);
+            }
+            mixer.cues.push(Cue {
+                samples,
+                at: 0,
+                gain: volume.clamp(0., 1.),
+            });
+        }
+    }
     pub fn preview_alarm(&mut self, volume: f32) -> Result<(), String> {
         if self.disabled {
             return Err("Audio is disabled by --no-audio.".into());
@@ -811,9 +835,20 @@ impl Playback {
     }
 }
 
+/// Map sounds that may play at once.
+const CUE_LIMIT: usize = 12;
+
+/// A map sound being played.
+struct Cue {
+    samples: Arc<[f32]>,
+    at: usize,
+    gain: f32,
+}
+
 #[derive(Default)]
 struct Mixer {
     voices: HashMap<u64, Playback>,
+    cues: Vec<Cue>,
     phase: f64,
     a: f32,
     b: f32,
@@ -827,13 +862,28 @@ impl Mixer {
         while self.phase >= 1. {
             self.phase -= 1.;
             self.a = self.b;
+            let mut cues = 0.;
+            let mut finished = false;
+            for cue in &mut self.cues {
+                cues += cue.samples.get(cue.at).copied().unwrap_or(0.) * cue.gain;
+                cue.at += 1;
+                finished |= cue.at >= cue.samples.len();
+            }
+            if finished {
+                self.cues.retain(|cue| cue.at < cue.samples.len());
+            }
             self.b = self.voices.values_mut().map(Playback::sample).sum::<f32>() * self.volume
                 + self.alarm.pop_front().unwrap_or(0.) * self.alarm_volume
-                + self.pocket.sample();
+                + self.pocket.sample()
+                + cues;
         }
         let sample = self.a + (self.b - self.a) * self.phase as f32;
         self.phase += f64::from(VOICE_SAMPLE_RATE) / f64::from(rate.max(1));
-        if self.volume == 0. && self.alarm.is_empty() && !self.pocket.audible() {
+        if self.volume == 0.
+            && self.alarm.is_empty()
+            && self.cues.is_empty()
+            && !self.pocket.audible()
+        {
             0.
         } else {
             soft_clip(sample)

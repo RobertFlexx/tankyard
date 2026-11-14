@@ -47,7 +47,7 @@ Map cover has distinct artwork, including Garden planters and Circuit Maze walls
 
 Settings → Display applies window sizes immediately; Save settings reapplies the selected size. In fullscreen, resolution selects rendering detail while the desktop stays on the current monitor. Native uses that display’s pixels. F11 preserves the current monitor and restores the selected window size when leaving fullscreen.
 
-Interface scale changes the actual menu and HUD size from 80% to 140%. Drag to preview the percentage; release to apply. The layout stays fixed while dragging, and the control stays in view after applying. Enlarged menus scroll with the mouse wheel or right-hand scrollbar; navigation and Save settings stay fixed. Colorblind palette changes both FFA and all four team colors and adds distinct team symbols. High-contrast labels use bright ink on solid dark backing in menus and gameplay. Accessibility includes a live preview of these changes. Reduced motion stops decorative spins, particles, menu animation, floating score text, camera easing, shake, and arrival flashes; combat movement and attack warnings remain visible.
+Interface scale changes the actual menu and HUD size from 80% to 140%. Drag to preview the percentage; release to apply. The layout stays fixed while dragging, and the control stays in view after applying. Enlarged menus scroll with the mouse wheel or right-hand scrollbar; navigation and Save settings stay fixed. Colorblind palette changes both FFA and all four team colors and adds distinct team symbols. High-contrast labels use bright ink on solid dark backing in menus and gameplay. Accessibility includes a live preview of these changes. Reduced motion stops decorative spins, particles, map animations, menu animation, floating score text, camera easing, shake (including shakes from maps and mods), and arrival flashes; combat movement, attack warnings and the colours and sizes maps give their decor remain visible.
 
 Effects intensity controls particles and impact flashes, and zero disables them. Shape quality changes curve detail. Frame limit and FPS display apply immediately in menus and matches. VSync and window antialiasing require a restart, as their labels indicate. Supported antialiasing also applies to fullscreen rendering at a selected resolution. Texture filtering affects mod textures; supported levels can be selected and saved before loading a texture pack. Unsupported hardware levels remain disabled. Built-in vector tanks do not change. Audio offers master, proximity voice, and boss-alarm volume, plus an alarm preview. Muted or unavailable audio reports why the preview cannot play.
 
@@ -177,13 +177,13 @@ The Graphics tab also names the GPU the game is drawing on, with its video memor
 
 ## Arena Workshop and community rules
 
-**Map editor** on the main menu opens the [Arena Workshop](map-editor.md). Build cover, pads (including conveyors and portals), decoration, particles and map logic; preview the logic in place with P, playtest with F5 and return with Escape. Save an editable project or export a pack for offline games and community servers. The Files panel can import packs or copy an existing arena as a template.
+**Map editor** on the main menu opens the [Arena Workshop](map-editor.md). Build cover, pads (including conveyors, portals and launch pads), decoration, particles, map logic, motions and effects; preview the logic in place with P, playtest with F5 and return with Escape. Save an editable project or export a pack for offline games and community servers. The Files panel can import packs or copy an existing arena as a template.
 
 The party roster includes **I'm ready** and a ready count. Readiness is shared with the party and resets for a new round; it does not pause the running match or grant host tools.
 
 Siege Engine, Skirmisher and Trapper add three boss encounters, each with a practice trial. Special attacks lock their aim during the warning. Heavy siege shots, a straight skirmisher charge and side-pocket mines each leave a different escape route. Boss models use distinct mechanical silhouettes rather than a shared stack of rotating armor.
 
-Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Server and client must both use protocol 26, which Tank Yard 1.0 uses.
+Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Server and client must both use protocol 28, which Tank Yard 1.1.0 uses.
 
 ## Bacteria’s pocket dimension
 

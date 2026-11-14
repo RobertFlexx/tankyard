@@ -1,0 +1,9 @@
+{
+  "api_version": 2,
+  "id": "arena_fx",
+  "name": "Arena Effects",
+  "version": "1.0",
+  "author": "Tank Yard",
+  "description": "Sounds and screen shake for the big moments of a round, and map effects any map can call on by name.",
+  "scripts": ["main.lua"]
+}

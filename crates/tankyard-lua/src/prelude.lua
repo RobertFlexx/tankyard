@@ -76,6 +76,8 @@ end
 -- Map logic: counters 1-8 and whether group 1-32 is shown.
 function tankyard.map_counter(counter) return read("map_counter", check("number", counter, "map_counter", "counter")) end
 function tankyard.map_group(group) return read("map_group", check("number", group, "map_group", "group")) end
+-- Where motions have put group 1-32: offset, turn, opacity, size and tint.
+function tankyard.map_pose(group) return read("map_pose", check("number", group, "map_pose", "group")) end
 function tankyard.projectiles(x, y, radius)
   return read("projectiles", check("number", x, "projectiles", "x"),
     check("number", y, "projectiles", "y"), check("number", radius, "projectiles", "radius"))
@@ -169,6 +171,25 @@ function tankyard.finish_round(team, reason)
   emit("finish_round", optional("number", team, "finish_round", "team") or 0,
     reason == nil and "Round over" or tostring(reason))
 end
+-- A color as "#rrggbb" or { r, g, b } (0-255), packed into one number.
+local function packed_color(call, value, what)
+  if value == nil then return nil end
+  if type(value) == "string" then
+    local hex = value:match("^#?(%x%x%x%x%x%x)$")
+    if not hex then error(("tankyard.%s: %s must be \"#rrggbb\" or { r, g, b }"):format(call, what), 3) end
+    return tonumber(hex, 16)
+  end
+  check("table", value, call, what)
+  local packed = 0
+  for index, key in ipairs({ "r", "g", "b" }) do
+    local channel = value[index] or value[key]
+    if type(channel) ~= "number" or channel < 0 or channel > 255 then
+      error(("tankyard.%s: %s needs red, green and blue from 0 to 255"):format(call, what), 3)
+    end
+    packed = packed * 256 + math.floor(channel)
+  end
+  return packed
+end
 -- Map logic requests take effect at the start of the next tick.
 function tankyard.map_signal(channel) emit("map_signal", number("map_signal", channel, "channel")) end
 function tankyard.set_map_counter(counter, value)
@@ -198,30 +219,43 @@ function tankyard.fade_map_group(group, percent, seconds, curve, mode)
   emit("fade_map_group", number("fade_map_group", group, "group"), number("fade_map_group", percent, "percent"),
     number("fade_map_group", seconds or 0, "seconds"), curve, mode)
 end
+function tankyard.scale_map_group(group, percent, seconds, curve, mode)
+  emit("scale_map_group", number("scale_map_group", group, "group"), number("scale_map_group", percent, "percent"),
+    number("scale_map_group", seconds or 0, "seconds"), curve, mode)
+end
+-- color is "#rrggbb" or { r, g, b }; percent 0 clears the tint.
+function tankyard.tint_map_group(group, color, percent, seconds, curve, mode)
+  emit("tint_map_group", number("tint_map_group", group, "group"),
+    packed_color("tint_map_group", color, "color") or 0xffffff,
+    number("tint_map_group", percent or 100, "percent"), number("tint_map_group", seconds or 0, "seconds"),
+    curve, mode)
+end
+-- style is "bob", "sway", "throb", "shake" or "orbit"; size 0 settles it and
+-- a nil or 0 speed keeps the style's own pace.
+function tankyard.animate_map_group(group, style, size, speed, seconds, curve, mode)
+  emit("animate_map_group", number("animate_map_group", group, "group"),
+    check("string", style, "animate_map_group", "style"), number("animate_map_group", size, "size"),
+    number("animate_map_group", speed or 0, "speed"), number("animate_map_group", seconds or 0, "seconds"),
+    curve, mode)
+end
+function tankyard.stop_map_group(group)
+  emit("stop_map_group", number("stop_map_group", group, "group"))
+end
+-- Shakes one player's view, or every player's without a tank.
+function tankyard.shake_view(tank, percent, seconds)
+  emit("shake_view", optional("number", tank, "shake_view", "tank id") or 0,
+    number("shake_view", percent or 50, "percent"), number("shake_view", seconds or 0.5, "seconds"))
+end
+-- sound is one of the map sounds, such as "chime"; it plays at x, y.
+function tankyard.play_sound(sound, x, y, percent)
+  emit("play_sound", check("string", sound, "play_sound", "sound"), number("play_sound", x, "x"),
+    number("play_sound", y, "y"), number("play_sound", percent or 100, "percent"))
+end
 function tankyard.set_score(tank, score) emit("set_score", id("set_score", tank), number("set_score", score, "score")) end
 function tankyard.set_team_score(team, score)
   emit("set_team_score", number("set_team_score", team, "team"), number("set_team_score", score, "score"))
 end
 
--- A color as "#rrggbb" or { r, g, b } (0-255), packed into one number.
-local function hud_color(value, what)
-  if value == nil then return nil end
-  if type(value) == "string" then
-    local hex = value:match("^#?(%x%x%x%x%x%x)$")
-    if not hex then error(("tankyard.hud: %s must be \"#rrggbb\" or { r, g, b }"):format(what), 3) end
-    return tonumber(hex, 16)
-  end
-  check("table", value, "hud", what)
-  local packed = 0
-  for index, key in ipairs({ "r", "g", "b" }) do
-    local channel = value[index] or value[key]
-    if type(channel) ~= "number" or channel < 0 or channel > 255 then
-      error(("tankyard.hud: %s needs red, green and blue from 0 to 255"):format(what), 3)
-    end
-    packed = packed * 256 + math.floor(channel)
-  end
-  return packed
-end
 -- Show, change or (with a nil widget) remove a HUD widget, on one tank's
 -- screen or, without a tank, on everyone's.
 function tankyard.hud(widget_id, widget, tank)
@@ -236,8 +270,8 @@ function tankyard.hud(widget_id, widget, tank)
   emit("hud", tank or 0, widget_id, text ~= nil and tostring(text) or "",
     optional("number", widget.x, "hud", "x"), optional("number", widget.y, "hud", "y"),
     optional("string", widget.align, "hud", "align"), optional("number", widget.size, "hud", "size"),
-    hud_color(widget.color, "color"), optional("number", widget.progress, "hud", "progress"),
-    hud_color(widget.bar_color, "bar_color"), optional("number", widget.width, "hud", "width"))
+    packed_color("hud", widget.color, "color"), optional("number", widget.progress, "hud", "progress"),
+    packed_color("hud", widget.bar_color, "bar_color"), optional("number", widget.width, "hud", "width"))
 end
 
 -- Definitions (load phase only; ignored while a round is running) ------------

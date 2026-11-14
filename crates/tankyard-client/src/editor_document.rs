@@ -518,7 +518,7 @@ impl Document {
                 size[1] / h,
             ]);
             match object {
-                Object::Zone(zone) if zone.kind == ZoneKind::Conveyor => {
+                Object::Zone(zone) if zone.kind.aims() => {
                     zone.angle = transform.angle(zone.angle);
                 }
                 Object::Zone(zone) if zone.kind == ZoneKind::Portal => {
@@ -1201,6 +1201,38 @@ fn seconds(value: f32) -> String {
         format!("{value:.1} s")
     }
 }
+/// A colour as `#rrggbb`.
+pub fn color_hex([r, g, b]: [u8; 3]) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+/// An animation's pace in words: "twice a second", "every 2 s".
+fn pace(cycles: f32) -> String {
+    match cycles {
+        c if (c - 1.).abs() < 0.01 => "once a second".into(),
+        c if (c - 2.).abs() < 0.01 => "twice a second".into(),
+        c if c >= 1. => format!("{} times a second", trim_number(c)),
+        c => format!("every {}", seconds(1. / c.max(0.01))),
+    }
+}
+fn trim_number(value: f32) -> String {
+    let text = format!("{value:.2}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+/// The tanks a tank action reaches, for its sentence.
+fn who_here(t: &MapTrigger) -> &'static str {
+    match t.who {
+        TriggerWho::Anyone => "the tanks",
+        TriggerWho::Players => "the players",
+        TriggerWho::Bots => "the bots",
+    }
+}
+fn team_here(t: &MapTrigger) -> String {
+    if t.team > 0 {
+        format!(" from team {}", t.team)
+    } else {
+        String::new()
+    }
+}
 /// The boss a Defeated trigger waits for, or `None` for any boss.
 pub fn defeated_boss(t: &MapTrigger) -> Option<&'static str> {
     usize::from(t.source)
@@ -1322,6 +1354,40 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         ),
         TriggerAction::Turn => format!("turn group {}'s decor {}\u{b0}", t.group, t.amount),
         TriggerAction::Fade => format!("fade group {}'s decor to {}%", t.group, t.amount),
+        TriggerAction::Tint if t.amount == 0 => format!("clear group {}'s tint", t.group),
+        TriggerAction::Tint => format!(
+            "tint group {}'s decor {} at {}%",
+            t.group,
+            color_hex(t.color),
+            t.amount
+        ),
+        TriggerAction::Scale => format!("scale group {}'s decor to {}%", t.group, t.amount),
+        TriggerAction::Animate if t.amount == 0 => format!(
+            "settle group {}'s {}",
+            t.group,
+            t.style.name().to_lowercase()
+        ),
+        TriggerAction::Animate => format!(
+            "{} group {}'s decor by {}{}, {}",
+            t.style.name().to_lowercase(),
+            t.group,
+            t.amount,
+            t.style.unit(),
+            pace(t.animate_speed())
+        ),
+        TriggerAction::Stop => format!("stop group {} where it is", t.group),
+        TriggerAction::Shake => format!(
+            "shake the view of {}{} here at {}% for {}",
+            who_here(t),
+            team_here(t),
+            t.amount,
+            seconds(t.tween)
+        ),
+        TriggerAction::Sound => format!(
+            "play the {} sound here at {}% volume",
+            t.sound.name().to_lowercase(),
+            t.amount
+        ),
     };
     if t.action.animates() {
         text += &if t.tween > 0. {
@@ -1540,6 +1606,13 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
         TriggerAction::Fade => format!("Fade {} {}%", t.group, t.amount),
         TriggerAction::Reset if t.group == 0 => "Reset all".into(),
         TriggerAction::Reset => format!("Reset G{}", t.group),
+        TriggerAction::Tint => format!("Tint {} {}%", t.group, t.amount),
+        TriggerAction::Scale => format!("Scale {} {}%", t.group, t.amount),
+        TriggerAction::Animate if t.amount == 0 => format!("Settle {}", t.group),
+        TriggerAction::Animate => format!("{} {} {}", t.style.name(), t.group, t.amount),
+        TriggerAction::Stop => format!("Stop {}", t.group),
+        TriggerAction::Shake => format!("Shake {}%", t.amount),
+        TriggerAction::Sound => t.sound.name().into(),
     };
     let mut tag = match gate_tag(t, compact) {
         Some(gate) => format!("{when} if {gate} \u{2192} {action}"),

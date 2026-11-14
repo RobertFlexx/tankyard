@@ -118,8 +118,9 @@ Click any slider's value to type an exact number, then press Enter (Esc cancels)
 - **Shelter:** incoming damage ÷ `(1 + 1.5 × strength)`.
 - **Conveyor:** carries tanks along its direction at `150 × strength` units a second, added to their own movement. Turning or flipping the pad turns its direction.
 - **Portal:** sends a tank to the exit marker. Drag the diamond to move the exit. The exit must sit in open floor, and a tank must leave and wait 1.2 seconds before using a portal again.
+- **Launch pad:** flings tanks along its direction at `900 × strength` units a second, then lets them coast for about half a second before steering takes over again. A tank already flying that way at most of that speed is left alone, so a pad launches once rather than on every frame a tank sits on it. Sideways motion is kept, so a tank crossing at an angle curves.
 
-Overlapping speed and mud pads multiply, and the final factor is clamped to 0.3–2.5. Overlapping conveyors add up to 600 units a second. Repair and hazard rates add; shelter pads multiply. Speed and conveyor effects run in shared code, so movement predicts smoothly online.
+Overlapping speed and mud pads multiply, and the final factor is clamped to 0.3–2.5. Overlapping conveyors add up to 600 units a second, and overlapping launch pads up to 1,800. Repair and hazard rates add; shelter pads multiply. Speed, conveyor and launch effects run in shared code, so movement predicts smoothly online.
 
 **Decor** includes tiles, stripes, lights, rings, arrows, labels and particle emitters. It has color, opacity, rotation, spin, pulse and an *above players* switch. It never changes collision. A label can show a counter: `{1}` to `{8}` are replaced with that counter's value.
 
@@ -146,7 +147,7 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **On change:** its counter changes value at all, by any trigger or script. Setting a counter to the value it already has is not a change.
 - **On shown / On hidden:** its group is shown or hidden, however that happened: a trigger, an *Undo after* timer or a script. The groups a round starts with don't count, so a group hidden from the start doesn't fire On hidden.
 - **On boss down:** a boss is defeated anywhere in the arena. Pick one boss, or *Any boss*.
-- **On arrive:** a motion of its group ends: a move, turn or fade, the trip back included. A motion cut short by another doesn't count, and neither does one with nowhere to go, such as a door told to open while it's open. See [Motions](#motions).
+- **On arrive:** a motion of its group ends: a move, turn, fade, tint, size change or an animation easing in or out, the trip back included. A motion cut short by another doesn't count, and neither does one with nowhere to go, such as a door told to open while it's open, or one that a Stop action halts. See [Motions](#motions).
 
 ### Actions
 
@@ -166,8 +167,11 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **Reset triggers:** makes every trigger in a group start afresh, as at the start of a round: *Once per round* triggers can act again, rest times and cooldowns end, delayed actions still waiting are dropped, timers start counting again from now and sequences go back to their first channel. Group 0 resets every trigger in the map. Counters and groups keep their state; set those with their own actions.
 
 - **Move group, Move group to, Turn decor, Fade decor:** animate a group. See [Motions](#motions).
+- **Tint decor, Scale decor, Animate decor, Stop group:** colour, resize, animate or halt a group's decor. See [Effects](#effects).
+- **Shake screen:** shakes the views of the noticed tanks inside the area. See [Effects](#effects).
+- **Play sound:** plays one of eight sounds at the trigger. See [Effects](#effects).
 
-The tank actions act on tanks inside the trigger's own area. On a timer, signal, counter, group or boss trigger, *Who* and *Team* appear under the action to choose those tanks.
+The tank actions and Shake screen act on tanks inside the trigger's own area. On a timer, signal, counter, group or boss trigger, *Who* and *Team* appear under the action to choose those tanks.
 
 ### Motions
 
@@ -203,6 +207,53 @@ The **Motion** tab in Build holds ready-made motions. Each acts on group 1; put 
 | Then | Sends signal 1 each time group 1 finishes a motion |
 
 Scripts can play motions too, with `move_map_group`, `turn_map_group` and `fade_map_group` (see [Modding](modding.md#changing-the-match)).
+
+### Effects
+
+Effects change how a group looks and how the arena feels without touching collision. Blocks and pads keep their shape and size; only decor, lights and particle emitters change. Tint, Scale and Animate play like motions, with **Over**, **Curve**, **Mode** and **Go back after**.
+
+- **Tint decor** mixes a colour into the group's decor, lights and particles. 100% paints them over completely; 0% removes the tint. A short Over and a short Go back after make a flash.
+- **Scale decor** draws the group's decor and emitters at 0–400% of their placed size, about their own centres. Particles come out larger or smaller to match.
+- **Animate decor** plays a looping animation on the group's decor:
+
+  | Style | Size | What it does |
+  | --- | --- | --- |
+  | Bob | 0–400 units | Floats up and down |
+  | Sway | 0–180 degrees | Rocks back and forth about its centre |
+  | Throb | 0–100% | Swells and shrinks |
+  | Shake | 0–400 units | Trembles |
+  | Orbit | 0–400 units | Circles around where it rests |
+
+  *Times a second* sets the pace, from 0.05 to 12. The five styles play together, so one group can bob and sway at once. Size 0 settles a style; with Over, it eases out. Changing the pace of a running animation keeps it where it is in its cycle, so it never jumps.
+- **Stop group** halts everything the group's motions are doing, where it is: moves, turns, fades, tints and sizes stop part way, animations freeze mid-pose, and any trip back is cancelled. Nothing that was stopped arrives, so On arrive triggers stay quiet. Play another motion to start the group again.
+- **Shake screen** shakes the views of the noticed tanks inside the area, at a strength from 1 to 100% for 0.1 to 10 seconds. A stronger shake replaces a weaker one. Players can turn shaking down with **Camera shake** in Settings, and Reduced motion turns it off.
+- **Play sound** plays Chime, Bell, Alarm, Switch, Whoosh, Rumble, Fanfare or Thump at the middle of the trigger's area, at 1–100% volume. Players nearby hear it at full volume and it fades out a little past the edge of the screen. It uses each player's Effects volume.
+
+Reduced motion holds animations still but keeps tints and sizes, since those carry meaning: a red door is still red. Tint, Scale and Animate need Tank Yard 1.1.0 or later on the server and every player.
+
+### The Effects palette
+
+The **Effects** tab in Build holds ready-made effects. Like the Motion pieces, each acts on group 1 unless you pick a group in the dock first.
+
+| Piece | What it does |
+| --- | --- |
+| Float | Bobs group 1's decor gently from the start of the round |
+| Sway | Rocks group 1's decor slowly from the start of the round |
+| Throb | Makes group 1's decor pulse in size from the start of the round |
+| Orbit | Circles group 1's decor slowly from the start of the round |
+| Quiver | Makes group 1's decor tremble for a second when a tank arrives |
+| Flash | Flashes group 1's decor white when a tank arrives |
+| Alarm | Flashes group 1's decor red every 1.2 seconds |
+| Dye | On signal 1, tints group 1's decor cyan |
+| Grow | Grows group 1's decor with an overshoot when a tank arrives, back after 2 seconds |
+| Stop | On signal 1, halts whatever group 1 is doing |
+| Quake | Shakes the views of tanks that enter its area, at most every 3 seconds |
+| Chime | Plays a chime when a tank arrives |
+| Siren | Plays the alarm on signal 1 |
+
+The logic preview plays effects too. With the test tank inside a Shake screen trigger's area, the canvas shakes while the preview runs, and Play sound triggers play through your speakers.
+
+Scripts have the same effects: `tint_map_group`, `scale_map_group`, `animate_map_group`, `stop_map_group`, `shake_view` and `play_sound` (see [Modding](modding.md#changing-the-match)).
 
 ### Conditions and gates
 
@@ -382,7 +433,7 @@ The workshop folder is `workshop/` inside Tank Yard's data directory. **Files �
 - `exports/<map-id>-<timestamp>.zip`: portable exports.
 - `prefs.json`: panel sizes, canvas switches, navigation settings, the palette tab and item, the inspector tab, the logic preview's speed, and where you were looking in the map you had open.
 
-Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings. It uses protocol 26, so 1.0 servers and players play only with each other, and maps saved or exported from 1.0 need 1.0 to open.
+Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings, and maps that use them need 1.0. Tank Yard 1.1.0 adds launch pads, Tint, Scale, Animate, Stop, Shake screen and Play sound; it uses protocol 28, so 1.1.0 servers and players play only with each other, and maps that use the new pieces need 1.1.0 to open. Maps from earlier versions open unchanged.
 
 For a dedicated server, put the ZIP in persistent storage, add its path to the top-level `mods` list, and run `reload-mods`. Then `maps` lists it and `map my_arena` selects it. Joining clients receive the checked map data automatically. See [Hosting](hosting.md) and [domain setup](hosting-domain.md).
 

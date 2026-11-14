@@ -1527,6 +1527,9 @@ impl Editor {
             Object::Zone(z) if z.kind == ZoneKind::Conveyor => {
                 Some(format!("Pushes tanks toward {:.0}°.", z.angle))
             }
+            Object::Zone(z) if z.kind == ZoneKind::Launch => {
+                Some(format!("Flings tanks toward {:.0}°.", z.angle))
+            }
             _ => None,
         };
         let width = 260. * s;

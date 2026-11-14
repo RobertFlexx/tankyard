@@ -318,6 +318,7 @@ Every event table also has `type` (the event name), `x`, `y` (where it happened)
 | `tankyard.class(id)` | `id`, `name`, `tier`, `level`, `ability`, `description`, `drones`, `upgrades`, `parents`; or `nil` |
 | `tankyard.map_counter(n)` | map counter `n` (1–8) |
 | `tankyard.map_group(group)` | whether map group 1–32 is shown |
+| `tankyard.map_pose(group)` | (1.1) where motions have put map group 1–32: `x`, `y` (offset from its place, as fractions of the arena's width and height), `angle` (degrees), `opacity`, `scale` and `tint_strength` (percent), and `tint` (`{ r, g, b }`, 0–255) |
 | `tankyard.tick()` | the current tick |
 | `tankyard.time()` | seconds since the round started (use it instead of `os.time`) |
 | `tankyard.distance(a, b)` | the distance between two tables with `x` and `y` |
@@ -374,8 +375,16 @@ All commands need a tank ID where they act on a tank. Values outside the bounds 
 | `move_map_group(group, x, y, seconds, curve, mode)` | (1.0) glides map group 1–32 to `x`, `y` from where the map places it, as fractions of the arena's width and height (±2; `0, 0` brings it home), over `seconds` (0–600; 0 or `nil` moves it at once). A glide faster than one arena a second is slowed to that speed. `curve` and `mode` are [easing](#motions) names; leave them out for `"sine"`, `"in_out"` |
 | `turn_map_group(group, degrees, seconds, curve, mode)` | (1.0) turns map group 1–32's decor `degrees` further (±3,600) |
 | `fade_map_group(group, percent, seconds, curve, mode)` | (1.0) fades map group 1–32's decor to `percent` opacity (0–100) |
+| `scale_map_group(group, percent, seconds, curve, mode)` | (1.1) draws map group 1–32's decor at `percent` of its placed size (0–400) |
+| `tint_map_group(group, color, percent, seconds, curve, mode)` | (1.1) mixes `color` (`"#rrggbb"` or `{ r, g, b }`) into map group 1–32's decor at `percent` (0–100, default 100); 0 clears the tint |
+| `animate_map_group(group, style, size, speed, seconds, curve, mode)` | (1.1) plays `"bob"`, `"sway"`, `"throb"`, `"shake"` or `"orbit"` on map group 1–32's decor. `size` is units for bob, shake and orbit (0–400), degrees for sway (0–180) and percent for throb (0–100); 0 settles it. `speed` is cycles a second (0–12; 0 or `nil` keeps the style's own pace). `seconds` eases the size in or out |
+| `stop_map_group(group)` | (1.1) halts map group 1–32's motions and animations where they are and cancels its trip back |
+| `shake_view(id, percent, seconds)` | (1.1) shakes one player's view, or every player's with `nil` or 0: `percent` 1–100 (50), `seconds` 0.1–10 (0.5). Players' Camera shake setting and Reduced motion still apply |
+| `play_sound(sound, x, y, percent)` | (1.1) plays `"chime"`, `"bell"`, `"alarm"`, `"switch"`, `"whoosh"`, `"rumble"`, `"fanfare"` or `"thump"` at world position `x`, `y`, at `percent` volume (1–100, default 100). Players hear it by distance, at their Effects volume |
 
 Commands are capped at 512 per pack per tick.
+
+Functions marked (1.1) need Tank Yard 1.1.0 or later. A pack that should also run on older servers can check first: `if tankyard.tint_map_group then ... end`.
 
 #### Map logic
 
@@ -715,7 +724,12 @@ Actions take the same bounds as the [Lua commands](#changing-the-match):
 | `map_counter` | `counter` (1–8), `value`, `add` (`true` adds, otherwise sets) |
 | `map_group` | `group` (1–32), `shown` |
 | `map_reset` | (0.16) `group` (0–32; 0 resets every trigger) |
-| `map_motion` | (1.0) `group` (1–32), `action` (`place`, `turn` or `fade`), `value: [x, y]` (the offset, or degrees or percent first, as in the script commands above), `seconds` (0–600) and `easing` (`{ "curve": "bounce", "mode": "out" }`) |
+| `map_motion` | (1.0) `group` (1–32), `action` (`place`, `turn`, `fade`, or (1.1) `scale`), `value: [x, y]` (the offset, or degrees or percent first, as in the script commands above), `seconds` (0–600) and `easing` (`{ "curve": "bounce", "mode": "out" }`) |
+| `map_tint` | (1.1) `group` (1–32), `color: [r, g, b]`, `percent` (0–100), `seconds` and `easing` |
+| `map_animate` | (1.1) `group` (1–32), `style` (`bob`, `sway`, `throb`, `shake` or `orbit`), `size`, `speed` (0–12), `seconds` and `easing`, bounded as in `animate_map_group` |
+| `map_stop` | (1.1) `group` (1–32) |
+| `shake_view` | (1.1) `percent` (1–100), `seconds` (0.1–10): shakes the target tank's view, or every player's for round events |
+| `play_sound` | (1.1) `sound`, `at: [x, y]` as fractions of the arena (0–1), `percent` (1–100, default 100) |
 
 A pack has at most 64 hooks, 16 conditions and 16 actions per hook, conditions nested four deep, 10,000 condition checks per tick, 4,096 counters and 16,384 cooldown entries. Hooks don't trigger other hooks. A pack whose batch fails validation is disabled without applying it. Counters and cooldowns reset each round.
 
@@ -782,9 +796,9 @@ The [Arena Workshop](map-editor.md) creates these definitions without writing co
 
 - `style`: `map`, `slate`, `garden`, `circuit`, `bastion`, `relay`, `orrery` or `sand`.
 - `blocks`: `{ "rect": [x,y,w,h], "style": "slate", "color": [r,g,b], "group": 0 }`. Color is optional; these are solid, axis-aligned rectangles.
-- `zones`: `{ "kind": "speed", "rect": [x,y,w,h], "strength": 1, "group": 0, "angle": 0, "exit": [x,y] }`. Kinds are `speed`, `mud`, `repair`, `hazard`, `shelter`, and (protocol 25) `conveyor` and `portal`; strength is 0.25–2. A conveyor pushes along `angle` in degrees (0 right, 90 down) at `150 × strength` units a second. A portal sends tanks to `exit`, a map-relative point that must be open floor. See the [pad formulas](map-editor.md#objects).
+- `zones`: `{ "kind": "speed", "rect": [x,y,w,h], "strength": 1, "group": 0, "angle": 0, "exit": [x,y] }`. Kinds are `speed`, `mud`, `repair`, `hazard`, `shelter`, (protocol 25) `conveyor` and `portal`, and (1.1) `launch`; strength is 0.25–2. A conveyor pushes along `angle` in degrees (0 right, 90 down) at `150 × strength` units a second, and a launch pad flings tanks along `angle` at `900 × strength`. A portal sends tanks to `exit`, a map-relative point that must be open floor. See the [pad formulas](map-editor.md#objects).
 - `decor`: `{ "kind": "tile", "rect": [x,y,w,h], "color": [120,160,190], "alpha": 255, "rotation": 0, "pulse": 0, "spin": 0, "flicker": 0, "above": false, "text": "", "effect": null, "group": 0 }`. Kinds: `tile`, `stripes`, `light`, `ring`, `arrow`, `label`, `emitter`. Rotation/spin are degrees; pulse is cycles/second. (1.0) `flicker`, 0–1, makes a `light` waver like a flame or a failing lamp. Text has at most 64 characters.
-- `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`, (protocol 25) `exit`, `signal`, `counter`, (0.15.1) `occupied` (every `seconds`, at least 0.25, while `threshold` tanks, 1–64, are inside), `cleared` (the last noticed tank leaves or dies) and `destroyed` (a noticed tank dies inside), and (0.16) `changed` (counter `source`, 1–8, changes value), `shown` and `hidden` (group `source`, 1–32, is shown or hidden during the round, by anything) and `defeated` (a boss is defeated; `source` 0 for any boss, or a boss's place in the list under `spawn_boss` counting from 1), and (1.0) `arrived` (a motion of group `source`, 1–32, ends). Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`), (protocol 25) `signal` (channel `group`), `count` (adds `amount` to counter `group`) and `shapes` (`amount` shapes, 1–24, inside `rect`), and (0.15.1) `set` (puts counter `group` at `amount`), `random` (signals one of `amount` channels, at least 2, starting at `group`), `heal` and `hurt` (`amount` percent of health, 1–100) and `award` (`amount` points, 1–100,000) for the noticed tanks inside `rect`, `calculate` (changes counter `group` with `math` and `amount`, or with counter `operand`) and `script` (raises the [`map_event`](#map-logic) script event named `text`: lowercase letters, digits and `_`, starting with a letter, up to 32), and (0.16) `sequence` (signals the next of `amount` channels starting at `group` each time, then starts over) and `reset` (makes group `group`'s triggers start afresh, or every trigger for 0, like `reset_map_triggers`), and (1.0) the [motions](#motions) `move`, `place`, `turn` and `fade`. Protocol 25 fields, all optional:
+- `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`, (protocol 25) `exit`, `signal`, `counter`, (0.15.1) `occupied` (every `seconds`, at least 0.25, while `threshold` tanks, 1–64, are inside), `cleared` (the last noticed tank leaves or dies) and `destroyed` (a noticed tank dies inside), and (0.16) `changed` (counter `source`, 1–8, changes value), `shown` and `hidden` (group `source`, 1–32, is shown or hidden during the round, by anything) and `defeated` (a boss is defeated; `source` 0 for any boss, or a boss's place in the list under `spawn_boss` counting from 1), and (1.0) `arrived` (a motion of group `source`, 1–32, ends). Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`), (protocol 25) `signal` (channel `group`), `count` (adds `amount` to counter `group`) and `shapes` (`amount` shapes, 1–24, inside `rect`), and (0.15.1) `set` (puts counter `group` at `amount`), `random` (signals one of `amount` channels, at least 2, starting at `group`), `heal` and `hurt` (`amount` percent of health, 1–100) and `award` (`amount` points, 1–100,000) for the noticed tanks inside `rect`, `calculate` (changes counter `group` with `math` and `amount`, or with counter `operand`) and `script` (raises the [`map_event`](#map-logic) script event named `text`: lowercase letters, digits and `_`, starting with a letter, up to 32), and (0.16) `sequence` (signals the next of `amount` channels starting at `group` each time, then starts over) and `reset` (makes group `group`'s triggers start afresh, or every trigger for 0, like `reset_map_triggers`), (1.0) the [motions](#motions) `move`, `place`, `turn` and `fade`, and (1.1) the [effects](#effects) `tint`, `scale`, `animate`, `stop`, `shake` and `sound`. Protocol 25 fields, all optional:
   - `member`: the trigger's own group; it is off while that group is hidden.
   - `who` (`anyone`, `players`, `bots`) and `team` (0–4): which tanks an area trigger notices, or which tanks a `heal`, `hurt` or `award` action reaches.
   - `source`: the signal channel (1–32) or counter (1–8) a trigger waits for. `threshold`: the counter value it waits for.
@@ -793,7 +807,7 @@ The [Arena Workshop](map-editor.md) creates these definitions without writing co
   - (0.16) `also_if`: up to three more conditions, shaped like `only_if`, which they need. `gate` says how all of them combine: `all` (AND, the default), `any` (OR), `not_all` (NAND), `none_of` (NOR) or `one` (XOR, exactly one holds). `otherwise`: a signal channel, 1–32, sent instead when the gate is shut; 0 or left out sends nothing.
   - (0.15.1) `math`: how `calculate` changes its counter: `add`, `subtract`, `multiply`, `divide` (rounds down), `remainder` (never negative), `lowest`, `highest`, `copy`, `random` (0 up to one less than the other value) or `flip` (0 becomes 1, anything else 0). Dividing by zero changes nothing. `operand`: use counter 1–8 instead of `amount`.
 
-  Trigger fields added in 0.15.1, 0.16 and 1.0 are left out of exported maps when unused. A map that uses them needs a server (or offline game) from that version; older ones refuse the map rather than run it wrongly. Decor and particles in 1.0 always carry their new fields, so maps from 1.0 need 1.0.
+  Trigger fields added in 0.15.1, 0.16, 1.0 and 1.1 are left out of exported maps when unused. A map that uses them needs a server (or offline game) from that version; older ones refuse the map rather than run it wrongly. Decor and particles in 1.0 always carry their new fields, so maps from 1.0 need 1.0.
 
   Counters 1–8 start at 0 each round and stay within ±99,999. Announcements and decor labels replace `{1}`–`{8}` with counter values. The [logic guide](map-editor.md#groups-and-logic) explains schedules, entry edges, chains and restoration.
 - `hidden_groups`: groups 1–32 hidden at round start. Group 0 is always visible. Blocks, zones and decor sharing a group change together.
@@ -816,7 +830,25 @@ A new motion on a group and channel takes over from the one playing, starting wh
   "duration": 4, "seconds": 1 }
 ```
 
-This is the workshop's Door piece, with group 3 as the door. The [motions tutorial](motions-tutorial.md) builds a gatehouse around one in the workshop, with moving cover, chained motions, lights and particles.
+This is the workshop's Door piece, with group 3 as the door. The [motions tutorial](motions-tutorial.md) builds a gatehouse around one in the workshop, with moving cover, chained motions, lights, particles and effects.
+
+#### Effects
+
+Tank Yard 1.1.0 (protocol 28) adds triggers that change how a group looks and how the arena feels. `tint`, `scale` and `animate` play like motions, with `tween`, `easing` and `duration`, and change only decor and emitters.
+
+- `tint` mixes `color` (`[r, g, b]`) into the group's decor, lights and particles at `amount` percent (0–100); 0 removes the tint.
+- `scale` draws the group's decor and emitters at `amount` percent of their placed size (0–400).
+- `animate` plays `style` on the group's decor: `bob`, `sway`, `throb`, `shake` or `orbit`. `amount` is its size: world units for `bob`, `shake` and `orbit` (0–400), degrees for `sway` (0–180) and percent for `throb` (0–100); 0 settles it. `speed` is cycles a second (0–12); 0 or left out uses the style's own pace (1, or 8 for `shake` and 0.5 for `orbit`). The five styles play together, and changing the speed keeps the animation's place in its cycle.
+- `stop` halts group `group`'s motions where they are, freezes its animations and cancels its trip back. What it halts never arrives.
+- `shake` shakes the views of the noticed tanks inside `rect` at `amount` percent (1–100) for `tween` seconds (0.1–10).
+- `sound` plays `sound` at the middle of `rect`, at `amount` percent volume (1–100). Sounds are `chime`, `bell`, `alarm`, `switch`, `whoosh`, `rumble`, `fanfare` and `thump`. Players hear it by distance, at their Effects volume.
+
+```json
+{ "when": "start", "action": "animate", "rect": [0.45, 0.4, 0.04, 0.05], "group": 2,
+  "style": "orbit", "amount": 40, "speed": 0.25, "tween": 1, "seconds": 0 }
+```
+
+This is the workshop's Orbit piece: group 2's decor eases into a slow circle 40 units wide as the round starts.
 
 Emitters' `effect` is an optional particle profile. Defaults are:
 

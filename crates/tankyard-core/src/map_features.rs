@@ -6,9 +6,10 @@
 //! the server's arithmetic.
 use crate::*;
 use tankyard_content::{
-    CONVEYOR_SPEED, COUNTER_LIMIT, Easing, GateState, GroupPoses, MAP_COUNTERS, MAP_GROUPS, MapDef,
-    MapTrigger, MapZone, MathOp, TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction, TriggerWhen,
-    TriggerWho, Tween, TweenChannel, ZoneKind,
+    AnimateStyle, CONVEYOR_SPEED, COUNTER_LIMIT, Easing, GateState, GroupPoses, LAUNCH_SPEED,
+    MAP_COUNTERS, MAP_GROUPS, MapDef, MapSound, MapTrigger, MapZone, MathOp, SCALE_LIMIT,
+    SHAKE_SECONDS, TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction, TriggerWhen, TriggerWho, Tween,
+    TweenChannel, TweenValue, ZoneKind,
 };
 
 /// A normalized map rectangle in world units, following animated borders the
@@ -60,6 +61,51 @@ fn push_of(zone: &MapZone) -> V2 {
     } else {
         V2::ZERO
     }
+}
+
+fn fling_of(zone: &MapZone) -> V2 {
+    if zone.kind == ZoneKind::Launch {
+        V2::from_angle(zone.angle.to_radians()) * LAUNCH_SPEED * zone.strength
+    } else {
+        V2::ZERO
+    }
+}
+
+/// The fling launch pads at `pos` give, in world units per second.
+pub fn terrain_launch(
+    map: &MapDef,
+    config: &WorldConfig,
+    hidden: u32,
+    poses: &GroupPoses,
+    pos: V2,
+) -> V2 {
+    if map.zones.is_empty() {
+        return V2::ZERO;
+    }
+    zones_at(map, config, hidden, poses, pos)
+        .fold(V2::ZERO, |sum, zone| sum + fling_of(zone))
+        .clamp_length(LAUNCH_SPEED * 2.)
+}
+
+/// How long a launched tank coasts before steering takes over again.
+pub const LAUNCH_COAST: f32 = 0.45;
+
+/// Fling `tank` along `fling` unless it already travels that way at most of
+/// that speed, so a pad launches once rather than every tick a tank is on it.
+/// Its sideways motion is kept. Returns whether it launched.
+pub fn launch_tank(tank: &mut Tank, fling: V2) -> bool {
+    let speed = fling.length();
+    if !speed.is_finite() || speed < 1. {
+        return false;
+    }
+    let direction = fling / speed;
+    let along = tank.vel.dot(direction);
+    if along >= speed * 0.8 {
+        return false;
+    }
+    tank.vel += direction * (speed - along);
+    tank.knockback = tank.knockback.max(LAUNCH_COAST);
+    true
 }
 
 /// How much faster (above 1) or slower a tank moves at `pos`.
@@ -156,6 +202,43 @@ pub enum LogicEffect {
         tanks: Vec<EntityId>,
         area: Rect,
     },
+    /// Shake `tanks`' views, `strength` from 0 to 1, for `seconds`.
+    Shake {
+        tanks: Vec<EntityId>,
+        strength: f32,
+        seconds: f32,
+    },
+    /// Play `sound` at `at`, `volume` from 0 to 1.
+    Sound {
+        sound: MapSound,
+        volume: f32,
+        at: V2,
+    },
+}
+
+/// A Shake screen as an event value: strength in percent in the low byte and
+/// length in tenths of a second above it.
+pub fn shake_event(strength: f32, seconds: f32) -> u32 {
+    let strength = (strength * 100.).round().clamp(1., 100.) as u32;
+    let tenths = (seconds * 10.).round().clamp(1., SHAKE_SECONDS * 10.) as u32;
+    strength | tenths << 8
+}
+/// Strength (0 to 1) and seconds from a [`shake_event`] value.
+pub fn shake_of(value: u32) -> (f32, f32) {
+    (
+        (value & 0xff).min(100) as f32 / 100.,
+        ((value >> 8) as f32 / 10.).min(SHAKE_SECONDS),
+    )
+}
+/// A Play sound as an event value: the sound in the low byte, volume in
+/// percent above it.
+pub fn sound_event(sound: MapSound, volume: f32) -> u32 {
+    u32::from(sound.index()) | ((volume * 100.).round().clamp(1., 100.) as u32) << 8
+}
+/// The sound and volume (0 to 1) from a [`sound_event`] value.
+pub fn sound_of(value: u32) -> Option<(MapSound, f32)> {
+    let sound = MapSound::from_index((value & 0xff) as u8)?;
+    Some((sound, ((value >> 8).min(100)) as f32 / 100.))
 }
 
 /// What scripts ask map logic to do; it happens at the start of the next
@@ -180,6 +263,26 @@ pub enum LogicInput {
     },
     /// A boss was defeated; the arena reports it for On boss down triggers.
     Defeated(BossKind),
+    /// Mix `color` into a group at `percent`, as a Tint trigger would.
+    Tint {
+        group: u8,
+        color: [u8; 3],
+        percent: f32,
+        seconds: f32,
+        easing: Easing,
+    },
+    /// Play or settle an animation, as an Animate trigger would; a `speed`
+    /// of 0 keeps the style's own pace.
+    Animate {
+        group: u8,
+        style: AnimateStyle,
+        size: f32,
+        speed: f32,
+        seconds: f32,
+        easing: Easing,
+    },
+    /// Halt a group's motions where they are, as a Stop trigger would.
+    Stop(u8),
 }
 
 /// A `map_event` raised this tick, for script packs.
@@ -362,6 +465,47 @@ impl MapLogic {
                     self.animate(&trigger, now);
                 }
                 LogicInput::Motion { .. } => {}
+                LogicInput::Tint {
+                    group,
+                    color,
+                    percent,
+                    seconds,
+                    easing,
+                } => self.animate(
+                    &MapTrigger {
+                        action: TriggerAction::Tint,
+                        group,
+                        color,
+                        amount: percent.round() as i32,
+                        tween: seconds,
+                        easing,
+                        duration: 0.,
+                        ..Default::default()
+                    },
+                    now,
+                ),
+                LogicInput::Animate {
+                    group,
+                    style,
+                    size,
+                    speed,
+                    seconds,
+                    easing,
+                } => self.animate(
+                    &MapTrigger {
+                        action: TriggerAction::Animate,
+                        group,
+                        style,
+                        speed,
+                        amount: size.round() as i32,
+                        tween: seconds,
+                        easing,
+                        duration: 0.,
+                        ..Default::default()
+                    },
+                    now,
+                ),
+                LogicInput::Stop(group) => self.stop(group, now),
                 LogicInput::Defeated(kind) => {
                     let number = tankyard_content::BOSS_IDS
                         .iter()
@@ -729,7 +873,7 @@ impl MapLogic {
     }
 
     /// The value `group` has on `channel` at `now`.
-    pub fn tween_value(&self, group: u8, channel: TweenChannel, now: f32) -> [f32; 2] {
+    pub fn tween_value(&self, group: u8, channel: TweenChannel, now: f32) -> TweenValue {
         self.tweens
             .iter()
             .find(|tween| tween.group == group && tween.channel == channel)
@@ -750,8 +894,14 @@ impl MapLogic {
                 true
             }
         });
-        for back in due {
-            let from = self.tween_value(back.group, back.channel, now);
+        for mut back in due {
+            let mut from = self.tween_value(back.group, back.channel, now);
+            if back.channel.style().is_some() {
+                // Settle at the pace it goes back to, from where the cycle is.
+                back.to[2] = keep_phase(now, from, back.to[1]);
+                from[1] = back.to[1];
+                from[2] = back.to[2];
+            }
             self.start_tween(Tween {
                 from,
                 start: now,
@@ -791,7 +941,8 @@ impl MapLogic {
         }
     }
 
-    /// Move, Move to, Turn or Fade: glide the group from where it is now.
+    /// Move, Move to, Turn, Fade, Tint, Scale or Animate: glide the group
+    /// from where it is now.
     fn animate(&mut self, trigger: &MapTrigger, now: f32) {
         let group = trigger.group;
         if !(1..=MAP_GROUPS).contains(&group) {
@@ -800,26 +951,52 @@ impl MapLogic {
         let channel = match trigger.action {
             TriggerAction::Turn => TweenChannel::Turn,
             TriggerAction::Fade => TweenChannel::Fade,
+            TriggerAction::Tint => TweenChannel::Tint,
+            TriggerAction::Scale => TweenChannel::Scale,
+            TriggerAction::Animate => trigger.style.channel(),
             _ => TweenChannel::Move,
         };
         let here = self.tween_value(group, channel, now);
         // Offsets stay within a few arenas however often a Move repeats, and
         // turns wrap so they never lose precision.
         let reach = tankyard_content::TRAVEL_LIMIT * 2.;
-        let (from, wrapped) = if channel == TweenChannel::Turn {
+        let (mut from, wrapped) = if channel == TweenChannel::Turn {
             let turn = here[0] % 360.;
-            ([turn, 0.], here[0] - turn)
+            ([turn, 0., 0., 0.], here[0] - turn)
         } else {
             (here, 0.)
         };
+        let percent = |high: i32| trigger.amount.clamp(0, high) as f32 / 100.;
         let to = match trigger.action {
             TriggerAction::Move => [
                 (from[0] + trigger.travel[0]).clamp(-reach, reach),
                 (from[1] + trigger.travel[1]).clamp(-reach, reach),
+                0.,
+                0.,
             ],
-            TriggerAction::Place => trigger.travel,
-            TriggerAction::Turn => [from[0] + trigger.amount as f32, 0.],
-            _ => [trigger.amount.clamp(0, 100) as f32 / 100., 0.],
+            TriggerAction::Place => [trigger.travel[0], trigger.travel[1], 0., 0.],
+            TriggerAction::Turn => [from[0] + trigger.amount as f32, 0., 0., 0.],
+            TriggerAction::Tint => {
+                let [r, g, b] = trigger.color.map(|c| f32::from(c) / 255.);
+                // A tint starting from none takes its colour at once, and one
+                // that ends keeps it, so neither passes through another hue.
+                if from[3] <= 0. {
+                    from = [r, g, b, 0.];
+                }
+                match percent(100) {
+                    0. => [from[0], from[1], from[2], 0.],
+                    strength => [r, g, b, strength],
+                }
+            }
+            TriggerAction::Scale => [percent((SCALE_LIMIT * 100.) as i32), 0., 0., 0.],
+            TriggerAction::Animate => {
+                let speed = trigger.animate_speed();
+                let phase = keep_phase(now, here, speed);
+                from = [here[0], speed, phase, 0.];
+                let size = trigger.amount.clamp(0, trigger.style.limit()) as f32;
+                [size, speed, phase, 0.]
+            }
+            _ => [percent(100), 0., 0., 0.],
         };
         // Going back takes the group to where it rested before it set off,
         // even when it sets off again on the way out or back: a door that
@@ -837,7 +1014,10 @@ impl MapLogic {
                     .flatten()
                     .map(|t| t.to)
             });
-        let home = rest.map_or(from, |rest| [rest[0] - wrapped, rest[1]]);
+        let home = rest.map_or(from, |mut rest| {
+            rest[0] -= wrapped;
+            rest
+        });
         let tween = Tween {
             group,
             channel,
@@ -863,6 +1043,32 @@ impl MapLogic {
             ));
         }
         self.start_tween(tween);
+    }
+
+    /// Stop: hold every motion of `group` where it is now, drop the trip back
+    /// it was waiting for and freeze its animations mid-cycle. Nothing it
+    /// was doing arrives.
+    fn stop(&mut self, group: u8, now: f32) {
+        if !(1..=MAP_GROUPS).contains(&group) {
+            return;
+        }
+        for tween in self.tweens.iter_mut().filter(|t| t.group == group) {
+            let mut here = tween.value(now);
+            if tween.channel.style().is_some() {
+                here[2] = (now * here[1] + here[2]).rem_euclid(1.);
+                here[1] = 0.;
+            }
+            *tween = Tween {
+                from: here,
+                to: here,
+                start: now,
+                length: 0.,
+                ..*tween
+            };
+        }
+        self.returns.retain(|(_, back)| back.group != group);
+        self.homeward.retain(|&(g, _)| g != group);
+        self.arrivals.retain(|&(_, g, _)| g != group);
     }
 
     /// Queue every trigger listening on signal channel `channel`.
@@ -949,7 +1155,19 @@ impl MapLogic {
             TriggerAction::Move
             | TriggerAction::Place
             | TriggerAction::Turn
-            | TriggerAction::Fade => self.animate(trigger, now),
+            | TriggerAction::Fade
+            | TriggerAction::Tint
+            | TriggerAction::Scale
+            | TriggerAction::Animate => self.animate(trigger, now),
+            TriggerAction::Stop => self.stop(trigger.group, now),
+            TriggerAction::Sound => {
+                let area = self.area(config, trigger);
+                effects.push(LogicEffect::Sound {
+                    sound: trigger.sound,
+                    volume: trigger.amount.clamp(1, 100) as f32 / 100.,
+                    at: V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5),
+                });
+            }
             TriggerAction::Announce => effects.push(LogicEffect::Announce(
                 tankyard_content::fill_counters(trigger.text.trim(), &self.counters).into_owned(),
             )),
@@ -1022,7 +1240,10 @@ impl MapLogic {
                     area,
                 });
             }
-            TriggerAction::Heal | TriggerAction::Hurt | TriggerAction::Award => {
+            TriggerAction::Heal
+            | TriggerAction::Hurt
+            | TriggerAction::Award
+            | TriggerAction::Shake => {
                 let area = self.area(config, trigger);
                 let ids = tanks
                     .iter()
@@ -1031,6 +1252,11 @@ impl MapLogic {
                     .collect();
                 let percent = trigger.amount.clamp(1, 100) as f32;
                 effects.push(match trigger.action {
+                    TriggerAction::Shake => LogicEffect::Shake {
+                        tanks: ids,
+                        strength: percent / 100.,
+                        seconds: trigger.tween.clamp(0.1, SHAKE_SECONDS),
+                    },
                     TriggerAction::Heal => LogicEffect::Repair {
                         tanks: ids,
                         percent,
@@ -1073,6 +1299,13 @@ impl MapLogic {
     pub fn waiting(&self) -> usize {
         self.pending.len()
     }
+}
+
+/// The phase that keeps an animation at the same point of its cycle at
+/// `now` when its pace changes to `speed`, so a new pace never jumps.
+fn keep_phase(now: f32, current: TweenValue, speed: f32) -> f32 {
+    let cycle = now * current[1] + current[2];
+    (cycle - now * speed).rem_euclid(1.)
 }
 
 /// When a trigger first fires on its own, for rounds starting at `from`.
@@ -1325,6 +1558,7 @@ impl World {
             }
             let (id, pos, radius) = (tank.id, tank.pos, tank.radius);
             let (mut terrain, mut push, mut repair, mut hazard) = (1., V2::ZERO, 0., 0.);
+            let mut fling = V2::ZERO;
             let mut portal = None;
             for &(zone_index, area) in &areas {
                 if !contains(area, pos) {
@@ -1333,6 +1567,7 @@ impl World {
                 let zone = &self.map.zones[zone_index];
                 terrain = speed_of(terrain, zone);
                 push += push_of(zone);
+                fling += fling_of(zone);
                 match zone.kind {
                     ZoneKind::Repair => repair += 0.06 * zone.strength,
                     ZoneKind::Hazard => hazard += 0.08 * zone.strength,
@@ -1343,8 +1578,13 @@ impl World {
             let tank = &mut self.tanks[index];
             tank.terrain = terrain.clamp(0.3, 2.5);
             tank.push = push.clamp_length(600.);
+            let launched = launch_tank(tank, fling.clamp_length(LAUNCH_SPEED * 2.));
             if repair > 0. && tank.health < tank.max_health {
                 tank.health = (tank.health + tank.max_health * repair * DT).min(tank.max_health);
+            }
+            if launched {
+                let team = self.tanks[index].team;
+                self.event(EventKind::Launch, pos, id, 0, team);
             }
             if let Some(exit) = portal
                 && !self.portal_rest.contains_key(&id)
@@ -1447,6 +1687,22 @@ impl World {
                     for id in tanks {
                         self.award(id, points, points);
                     }
+                }
+                LogicEffect::Shake {
+                    tanks,
+                    strength,
+                    seconds,
+                } => {
+                    let value = shake_event(strength, seconds);
+                    for id in tanks {
+                        if let Some(tank) = self.tanks.iter().find(|t| t.id == id && t.alive) {
+                            let (pos, team) = (tank.pos, tank.team);
+                            self.event(EventKind::MapShake, pos, id, value, team);
+                        }
+                    }
+                }
+                LogicEffect::Sound { sound, volume, at } => {
+                    self.event(EventKind::MapSound, at, 0, sound_event(sound, volume), 0);
                 }
                 LogicEffect::Script {
                     name,
@@ -1873,6 +2129,137 @@ mod tests {
     }
 
     #[test]
+    fn stop_holds_motions_where_they_are_and_cancels_the_trip_back() {
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                group: 3,
+                travel: [0.2, 0.],
+                tween: 2.,
+                duration: 4.,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Place)
+            },
+            MapTrigger {
+                group: 3,
+                delay: 1.,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Stop)
+            },
+            // Would count when the glide or the trip back arrives.
+            MapTrigger {
+                source: 3,
+                group: 1,
+                amount: 1,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Arrived, TriggerAction::Count)
+            },
+        ]);
+        bench.run(1.5, &[]);
+        let held = GroupPoses::at(&bench.logic.tweens, bench.now).offset(3)[0];
+        assert!(held > 0.01 && held < 0.19, "{held}");
+        bench.run(10., &[]);
+        let poses = GroupPoses::at(&bench.logic.tweens, bench.now);
+        assert_eq!(poses.offset(3)[0], held, "neither finishes nor goes back");
+        assert_eq!(bench.logic.counters[0], 0, "nothing arrived");
+    }
+
+    #[test]
+    fn animations_keep_their_place_in_the_cycle_when_changed_or_stopped() {
+        let animate = |speed: f32, tween: f32, seconds: f32| MapTrigger {
+            group: 2,
+            amount: 30,
+            speed,
+            style: AnimateStyle::Orbit,
+            tween,
+            seconds,
+            ..trigger(TriggerWhen::Start, TriggerAction::Animate)
+        };
+        let mut bench = Bench::new(vec![
+            // Eases in over a second, then speeds up at once.
+            animate(0.4, 1., 0.),
+            animate(2.5, 0., 1.3),
+            MapTrigger {
+                group: 2,
+                seconds: 2.1,
+                ..trigger(TriggerWhen::Start, TriggerAction::Stop)
+            },
+        ]);
+        let mut checked = 0;
+        for _ in 0..180 {
+            let before = bench.logic.tweens.clone();
+            bench.step(&[]);
+            // The pose at this instant is the same whether the change has
+            // happened or not: no jump.
+            let old = GroupPoses::at(&before, bench.now).wobble(2);
+            let new = GroupPoses::at(&bench.logic.tweens, bench.now).wobble(2);
+            if before != bench.logic.tweens {
+                checked += 1;
+                assert!(
+                    (old[0] - new[0]).abs() < 0.05 && (old[1] - new[1]).abs() < 0.05,
+                    "jumped from {old:?} to {new:?} at {}",
+                    bench.now
+                );
+            }
+        }
+        assert!(checked >= 3, "start, speed change and stop all checked");
+        // Stopped: it stays put however long passes.
+        let held = GroupPoses::at(&bench.logic.tweens, bench.now).wobble(2);
+        bench.run(3., &[]);
+        assert_eq!(
+            GroupPoses::at(&bench.logic.tweens, bench.now).wobble(2),
+            held
+        );
+        assert!((held[0].hypot(held[1]) - 30.).abs() < 0.1);
+    }
+
+    #[test]
+    fn shakes_reach_the_noticed_tanks_inside_and_sounds_play_at_the_area() {
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                amount: 40,
+                tween: 0.8,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Shake)
+            },
+            MapTrigger {
+                amount: 70,
+                sound: MapSound::Bell,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Sound)
+            },
+        ]);
+        let center = bench.center();
+        bench.step(&[
+            tank(1, center, false, 0),
+            tank(2, V2::new(5., 5.), false, 0),
+        ]);
+        let mut shaken = None;
+        let mut heard = None;
+        for effect in &bench.effects {
+            match effect {
+                LogicEffect::Shake {
+                    tanks,
+                    strength,
+                    seconds,
+                } => shaken = Some((tanks.clone(), *strength, *seconds)),
+                LogicEffect::Sound { sound, volume, at } => heard = Some((*sound, *volume, *at)),
+                _ => {}
+            }
+        }
+        assert_eq!(shaken, Some((vec![1], 0.4, 0.8)));
+        let (sound, volume, at) = heard.expect("the bell plays");
+        assert_eq!((sound, volume), (MapSound::Bell, 0.7));
+        assert!(at.distance(center) < 1.);
+        // Event values carry them to clients intact.
+        assert_eq!(shake_of(shake_event(0.4, 0.8)), (0.4, 0.8));
+        assert_eq!(
+            sound_of(sound_event(MapSound::Bell, 0.7)),
+            Some((MapSound::Bell, 0.7))
+        );
+        assert_eq!(sound_of(200), None);
+    }
+
+    #[test]
     fn arrivals_wake_watchers_once_each_motion_ends() {
         let count = |counter: u8, source: u8| MapTrigger {
             source,
@@ -2006,22 +2393,22 @@ mod tests {
         bench.run(1., &away);
         assert_eq!(
             at(&bench, 3, TweenChannel::Move),
-            [0., -0.12],
+            [0., -0.12, 0., 0.],
             "a Move goes a step further"
         );
         assert_eq!(
             at(&bench, 4, TweenChannel::Fade),
-            [0.15, 0.],
+            [0.15, 0., 0., 0.],
             "a fade holds"
         );
         assert_eq!(
             at(&bench, 5, TweenChannel::Move),
-            [0.05, 0.],
+            [0.05, 0., 0., 0.],
             "a Move to holds"
         );
         assert_eq!(
             at(&bench, 6, TweenChannel::Turn),
-            [440., 0.],
+            [440., 0., 0., 0.],
             "a turn goes on, wrapped"
         );
         bench.run(8., &away);
@@ -2107,6 +2494,61 @@ mod tests {
             world.step();
         }
         assert!(world.tanks[index].pos.x > center.x + 60., "carried right");
+    }
+
+    #[test]
+    fn launch_pads_fling_once_and_prediction_agrees() {
+        let mut world = world_with(|map| {
+            map.zones.push(MapZone {
+                kind: ZoneKind::Launch,
+                rect: [0.45, 0.45, 0.1, 0.1],
+                strength: 1.,
+                group: 0,
+                angle: 90.,
+                exit: [0., 0.],
+            });
+        });
+        let id = world.add_player("Pilot", false);
+        let index = world.tanks.iter().position(|t| t.id == id).unwrap();
+        let center = V2::new(world.config.width * 0.5, world.config.height * 0.5);
+        world.tanks[index].pos = center;
+        world.tanks[index].vel = V2::new(50., 0.);
+        // What a client predicts for the same tank.
+        let mut predicted = world.tanks[index].clone();
+        let fling = terrain_launch(
+            &world.map,
+            &world.config,
+            world.match_state.hidden_groups,
+            world.group_poses(),
+            center,
+        );
+        assert!(launch_tank(&mut predicted, fling));
+        world.update_zones();
+        let tank = &world.tanks[index];
+        assert_eq!(tank.vel, predicted.vel);
+        assert!((tank.vel.y - LAUNCH_SPEED).abs() < 1e-3, "flung down");
+        assert!((tank.vel.x - 50.).abs() < 1e-3, "sideways motion kept");
+        assert_eq!(tank.knockback, LAUNCH_COAST);
+        let launches = |world: &World| {
+            world
+                .events
+                .iter()
+                .filter(|e| matches!(e.kind, EventKind::Launch))
+                .count()
+        };
+        assert_eq!(launches(&world), 1);
+        // Still on the pad and already flying: no second launch.
+        world.events.clear();
+        world.update_zones();
+        assert_eq!(launches(&world), 0);
+        // A launch pad that is hidden flings nothing.
+        world.tanks[index].vel = V2::ZERO;
+        let mut hidden = world.map.clone();
+        hidden.zones[0].group = 4;
+        assert_eq!(
+            terrain_launch(&hidden, &world.config, 1 << 3, world.group_poses(), center),
+            V2::ZERO
+        );
     }
 
     #[test]

@@ -472,9 +472,10 @@ pub enum Effect {
     MapReset {
         group: u8,
     },
-    /// Glide, turn or fade map group `group` (1 to 32) as a `place`, `turn`
-    /// or `fade` trigger would, over `seconds`: to offset `value` from where
-    /// the map puts it, by `value[0]` degrees, or to `value[0]` percent.
+    /// Glide, turn, fade or scale map group `group` (1 to 32) as a `place`,
+    /// `turn`, `fade` or `scale` trigger would, over `seconds`: to offset
+    /// `value` from where the map puts it, by `value[0]` degrees, or to
+    /// `value[0]` percent.
     MapMotion {
         group: u8,
         action: tankyard_content::TriggerAction,
@@ -484,6 +485,53 @@ pub enum Effect {
         #[serde(default)]
         easing: tankyard_content::Easing,
     },
+    // Added in 1.1.0.
+    /// Mix `color` into map group `group`'s decor at `percent` (0 clears
+    /// it), as a `tint` trigger would.
+    MapTint {
+        group: u8,
+        color: [u8; 3],
+        percent: f32,
+        #[serde(default)]
+        seconds: f32,
+        #[serde(default)]
+        easing: tankyard_content::Easing,
+    },
+    /// Play an animation on map group `group`'s decor, as an `animate`
+    /// trigger would; `size` 0 settles it and `speed` 0 keeps the style's pace.
+    MapAnimate {
+        group: u8,
+        style: tankyard_content::AnimateStyle,
+        size: f32,
+        #[serde(default)]
+        speed: f32,
+        #[serde(default)]
+        seconds: f32,
+        #[serde(default)]
+        easing: tankyard_content::Easing,
+    },
+    /// Halt map group `group`'s motions where they are, as a `stop` trigger
+    /// would.
+    MapStop {
+        group: u8,
+    },
+    /// Shake the actor's view (every player's for actor 0), `percent` hard
+    /// for `seconds`.
+    ShakeView {
+        percent: f32,
+        seconds: f32,
+    },
+    /// Play a map sound at `at`, as fractions of the arena (0–1), at
+    /// `percent` volume.
+    PlaySound {
+        sound: tankyard_content::MapSound,
+        at: [f32; 2],
+        #[serde(default = "full_volume")]
+        percent: f32,
+    },
+}
+fn full_volume() -> f32 {
+    100.
 }
 /// Widgets one pack may show to one player (or to everyone).
 pub const MAX_HUD_WIDGETS: usize = 16;
@@ -630,8 +678,42 @@ impl Effect {
                         TriggerAction::Place => value.iter().all(|&v| within(v, TRAVEL_LIMIT)),
                         TriggerAction::Turn => within(value[0], TURN_LIMIT as f32),
                         TriggerAction::Fade => (0. ..=100.).contains(&value[0]),
+                        TriggerAction::Scale => {
+                            (0. ..=tankyard_content::SCALE_LIMIT * 100.).contains(&value[0])
+                        }
                         _ => false,
                     }
+            }
+            Self::MapTint {
+                group,
+                percent,
+                seconds,
+                ..
+            } => {
+                (1..=tankyard_content::MAP_GROUPS).contains(group)
+                    && (0. ..=100.).contains(percent)
+                    && (0. ..=tankyard_content::TWEEN_SECONDS).contains(seconds)
+            }
+            Self::MapAnimate {
+                group,
+                style,
+                size,
+                speed,
+                seconds,
+                ..
+            } => {
+                (1..=tankyard_content::MAP_GROUPS).contains(group)
+                    && (0. ..=style.limit() as f32).contains(size)
+                    && (0. ..=tankyard_content::ANIMATE_SPEED).contains(speed)
+                    && (0. ..=tankyard_content::TWEEN_SECONDS).contains(seconds)
+            }
+            Self::MapStop { group } => (1..=tankyard_content::MAP_GROUPS).contains(group),
+            Self::ShakeView { percent, seconds } => {
+                (1. ..=100.).contains(percent)
+                    && (0.1..=tankyard_content::SHAKE_SECONDS).contains(seconds)
+            }
+            Self::PlaySound { at, percent, .. } => {
+                vector(*at, 0., 1.) && (1. ..=100.).contains(percent)
             }
         };
         if !valid {
@@ -1205,5 +1287,49 @@ mod tests {
             };
         }
         assert!(!condition.validate(&c, 0));
+    }
+
+    #[test]
+    fn map_effects_from_hooks_are_parsed_and_bounded() {
+        let c = Content::builtin();
+        let parse = |json: &str| serde_json::from_str::<Effect>(json).map_err(|e| e.to_string());
+        for json in [
+            r#"{"type":"map_tint","group":2,"color":[255,0,0],"percent":60,"seconds":0.5}"#,
+            r#"{"type":"map_animate","group":2,"style":"orbit","size":40,"speed":0.5}"#,
+            r#"{"type":"map_motion","group":2,"action":"scale","value":[150,0]}"#,
+            r#"{"type":"map_stop","group":32}"#,
+            r#"{"type":"shake_view","percent":40,"seconds":1}"#,
+            r#"{"type":"play_sound","sound":"chime","at":[0.2,0.75]}"#,
+        ] {
+            let effect = parse(json).unwrap();
+            assert!(effect.validate(&c).is_ok(), "{json}");
+        }
+        for json in [
+            r#"{"type":"map_tint","group":0,"color":[255,0,0],"percent":60}"#,
+            r#"{"type":"map_tint","group":2,"color":[255,0,0],"percent":101}"#,
+            r#"{"type":"map_animate","group":2,"style":"sway","size":181}"#,
+            r#"{"type":"map_animate","group":2,"style":"bob","size":10,"speed":13}"#,
+            r#"{"type":"map_motion","group":2,"action":"scale","value":[401,0]}"#,
+            r#"{"type":"map_stop","group":33}"#,
+            r#"{"type":"shake_view","percent":40,"seconds":11}"#,
+            r#"{"type":"shake_view","percent":0,"seconds":1}"#,
+            r#"{"type":"play_sound","sound":"chime","at":[1.5,0]}"#,
+        ] {
+            let effect = parse(json).unwrap();
+            assert!(effect.validate(&c).is_err(), "{json}");
+        }
+        // Not a number at all never gets as far as validation.
+        assert!(parse(r#"{"type":"map_tint","group":2,"color":[256,0,0],"percent":1}"#).is_err());
+        assert!(parse(r#"{"type":"play_sound","sound":"kazoo","at":[0,0]}"#).is_err());
+        // NaN cannot hide in a range check.
+        let nan = Effect::MapAnimate {
+            group: 1,
+            style: tankyard_content::AnimateStyle::Bob,
+            size: f32::NAN,
+            speed: 0.,
+            seconds: 0.,
+            easing: Default::default(),
+        };
+        assert!(nan.validate(&c).is_err());
     }
 }

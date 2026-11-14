@@ -796,7 +796,7 @@ impl Editor {
                 f.heading("Pad");
                 f.pick("Kind", &mut z.kind, &ZoneKind::ALL, ZoneKind::name, 4);
                 f.number("Strength", &mut z.strength, [0.25, 2.], 0.05);
-                if z.kind == ZoneKind::Conveyor {
+                if z.kind.aims() {
                     label("Direction", x, f.y + 2. * s, 12. * s, muted_color());
                     f.y += 10. * s;
                     let names = ["→", "↘", "↓", "↙", "←", "↖", "↑", "↗"];
@@ -976,7 +976,7 @@ impl Editor {
                     f.heading("Pads");
                     f.pick("Kind", &mut z.kind, &ZoneKind::ALL, ZoneKind::name, 4);
                     f.number("Strength", &mut z.strength, [0.25, 2.], 0.05);
-                    if z.kind == ZoneKind::Conveyor {
+                    if z.kind.aims() {
                         f.number("Angle", &mut z.angle, [0., 359.], 1.);
                     }
                 }
@@ -2058,6 +2058,70 @@ fn trigger_form(
             motion_form(f, t);
             f.note("Fades the group's decor and emitters. Blocks and pads stay solid; hide the group to take them away.");
         }
+        TriggerAction::Tint => {
+            t.group = t.group.clamp(1, MAP_GROUPS);
+            f.stepper("Target group", &mut t.group, [1, MAP_GROUPS], None);
+            f.color(&mut t.color);
+            t.amount = t.amount.clamp(0, 100);
+            f.integer("Strength (%)", &mut t.amount, [0, 100]);
+            motion_form(f, t);
+            f.note("Mixes the colour into the group's decor, lights and particles; 100% paints them over completely and 0% clears the tint. A short Over and Go back after make a flash.");
+        }
+        TriggerAction::Scale => {
+            t.group = t.group.clamp(1, MAP_GROUPS);
+            f.stepper("Target group", &mut t.group, [1, MAP_GROUPS], None);
+            let most = (SCALE_LIMIT * 100.) as i32;
+            t.amount = t.amount.clamp(0, most);
+            f.integer("Size (% of placed)", &mut t.amount, [0, most]);
+            motion_form(f, t);
+            f.note("Grows or shrinks the group's decor and emitters about their own centres. Blocks and pads keep their size.");
+        }
+        TriggerAction::Animate => {
+            t.group = t.group.clamp(1, MAP_GROUPS);
+            f.stepper("Target group", &mut t.group, [1, MAP_GROUPS], None);
+            let style = t.style;
+            f.pick("", &mut t.style, &AnimateStyle::ALL, AnimateStyle::name, 5);
+            if t.style != style && t.speed == style.default_speed() {
+                t.speed = 0.;
+            }
+            t.amount = t.amount.clamp(0, t.style.limit());
+            f.integer(
+                &format!("Size ({})", t.style.unit().trim()),
+                &mut t.amount,
+                [0, t.style.limit()],
+            );
+            let mut speed = t.animate_speed();
+            if f.number("Times a second", &mut speed, [0.05, ANIMATE_SPEED], 0.05) {
+                t.speed = speed;
+            }
+            motion_form(f, t);
+            f.note(match t.style {
+                AnimateStyle::Bob => "Floats the group's decor up and down. Over eases it in; size 0 settles it.",
+                AnimateStyle::Sway => "Rocks the group's decor back and forth about their own centres. Size 0 settles it.",
+                AnimateStyle::Throb => "Swells and shrinks the group's decor, like a heartbeat. Size 0 settles it.",
+                AnimateStyle::Shake => "Makes the group's decor tremble. Use Go back after for a short jolt; size 0 settles it.",
+                AnimateStyle::Orbit => "Circles the group's decor around where it rests. Size 0 settles it.",
+            });
+            f.note("Animations play together, so one group can bob and sway at once. They only change how decor looks: blocks, pads and trigger areas stay put. Reduced motion holds them still.");
+        }
+        TriggerAction::Stop => {
+            t.group = t.group.clamp(1, MAP_GROUPS);
+            f.stepper("Target group", &mut t.group, [1, MAP_GROUPS], None);
+            f.note("Halts the group's moves, turns, fades, tints and sizes where they are, freezes its animations and cancels any trip back. Nothing it was doing arrives, so On arrive triggers stay quiet.");
+        }
+        TriggerAction::Shake => {
+            t.amount = t.amount.clamp(1, 100);
+            f.integer("Strength (%)", &mut t.amount, [1, 100]);
+            t.tween = t.tween.clamp(0.1, SHAKE_SECONDS);
+            f.number("For (s)", &mut t.tween, [0.1, SHAKE_SECONDS], 0.1);
+            f.note("Shakes only the views of the noticed tanks inside the area. Players can turn camera shake down in Settings, and reduced motion turns it off.");
+        }
+        TriggerAction::Sound => {
+            f.pick("", &mut t.sound, &MapSound::ALL, MapSound::name, 4);
+            t.amount = t.amount.clamp(1, 100);
+            f.integer("Volume (%)", &mut t.amount, [1, 100]);
+            f.note("Plays at the middle of this trigger's area, quieter for players further away. It uses the Effects volume.");
+        }
         TriggerAction::Reset => {
             t.group = t.group.min(MAP_GROUPS);
             f.stepper("Group (0 for all)", &mut t.group, [0, MAP_GROUPS], None);
@@ -2085,8 +2149,8 @@ fn trigger_form(
     f.toggle("Once per round", &mut t.once);
 }
 
-/// How a Move, Place, Turn or Fade plays: how long, along which curve, and
-/// whether it goes back.
+/// How a Move, Place, Turn, Fade, Tint, Scale or Animate plays: how long,
+/// along which curve, and whether it goes back.
 fn motion_form(f: &mut Form, t: &mut MapTrigger) {
     f.number(
         "Over (s, 0 at once)",

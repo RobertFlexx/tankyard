@@ -795,6 +795,13 @@ pub enum EventKind {
     StasisRelease,
     BossAttack,
     PocketEject,
+    /// A Shake screen trigger reached tank `subject`; see
+    /// [`crate::shake_of`] for `value`.
+    MapShake,
+    /// A Play sound trigger at `pos`; see [`crate::sound_of`] for `value`.
+    MapSound,
+    /// A launch pad flung tank `subject`.
+    Launch,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Elimination {

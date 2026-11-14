@@ -47,7 +47,18 @@ pub fn zone_color(kind: ZoneKind) -> Color {
         ZoneKind::Shelter => Color::from_rgba(141, 133, 204, 255),
         ZoneKind::Conveyor => Color::from_rgba(196, 158, 58, 255),
         ZoneKind::Portal => Color::from_rgba(196, 92, 172, 255),
+        ZoneKind::Launch => Color::from_rgba(166, 204, 60, 255),
     }
+}
+/// `rgb` with `tint` mixed in at `strength`, as Tint triggers colour decor.
+pub fn tinted(rgb: [u8; 3], (tint, strength): ([f32; 3], f32)) -> [u8; 3] {
+    if strength <= 0. {
+        return rgb;
+    }
+    std::array::from_fn(|i| {
+        let own = f32::from(rgb[i]) / 255.;
+        ((own + (tint[i] - own) * strength.min(1.)) * 255.).round() as u8
+    })
 }
 pub fn screen_rect(view: &View, config: &WorldConfig, rect: [f32; 4]) -> Rect {
     let r = tankyard_core::map_rect(config, rect);
@@ -78,11 +89,20 @@ pub fn floor(map: &MapDef, config: &WorldConfig, shown: &Shown, view: &View, tim
             continue;
         }
         let c = crate::accessibility::palette(zone_color(zone.kind));
+        // Launch arrows light up one after another towards where they fling.
+        let wave = |p: Vec2| {
+            if zone.kind != ZoneKind::Launch {
+                return 0.5;
+            }
+            let (sin, cos) = zone.angle.to_radians().sin_cos();
+            let along = ((p - r.center()).dot(vec2(cos, sin)) / spacing_of(view)).max(-64.);
+            0.35 + 0.55 * (1. - (time * 1.6 - along * 0.25).rem_euclid(1.))
+        };
         draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.13));
         draw_rectangle_lines(r.x, r.y, r.w, r.h, (2. * view.zoom).max(1.), alpha(c, 0.65));
         // A restrained repeating stencil makes pads distinguishable without
         // relying on colour. The count is capped even for arena-sized pads.
-        let spacing = (100. * view.zoom).max(24.);
+        let spacing = spacing_of(view);
         let cols = (r.w / spacing).ceil().clamp(1., 20.) as usize;
         let rows = (r.h / spacing).ceil().clamp(1., 20.) as usize;
         // Conveyor marks travel with the belt and wrap inside the pad.
@@ -112,14 +132,10 @@ pub fn floor(map: &MapDef, config: &WorldConfig, shown: &Shown, view: &View, tim
                 {
                     continue;
                 }
-                // Conveyor arrows stay readable when zoomed out.
-                let least = if zone.kind == ZoneKind::Conveyor {
-                    spacing * 0.3
-                } else {
-                    1.
-                };
+                // Arrows stay readable when zoomed out.
+                let least = if zone.kind.aims() { spacing * 0.3 } else { 1. };
                 let radius = (10. * view.zoom).min(r.w.min(r.h) * 0.18).max(least);
-                zone_mark(zone.kind, zone.angle, p, radius, alpha(c, 0.5));
+                zone_mark(zone.kind, zone.angle, p, radius, alpha(c, wave(p)));
                 marks_left -= 1;
             }
         }
@@ -173,8 +189,25 @@ fn portal(zone: &MapZone, rect: [f32; 4], config: &WorldConfig, view: &View, tim
     }
 }
 
+fn spacing_of(view: &View) -> f32 {
+    (100. * view.zoom).max(24.)
+}
+
 pub fn zone_mark(kind: ZoneKind, angle: f32, p: Vec2, r: f32, c: Color) {
     match kind {
+        ZoneKind::Launch => {
+            // A solid arrowhead over a short stem: a hard push, not a belt.
+            let (sin, cos) = angle.to_radians().sin_cos();
+            let turn = |v: Vec2| p + vec2(v.x * cos - v.y * sin, v.x * sin + v.y * cos);
+            draw_triangle(
+                turn(vec2(r * 0.9, 0.)),
+                turn(vec2(-r * 0.1, -r * 0.8)),
+                turn(vec2(-r * 0.1, r * 0.8)),
+                c,
+            );
+            let (a, b) = (turn(vec2(-r * 0.9, 0.)), turn(vec2(-r * 0.1, 0.)));
+            draw_line(a.x, a.y, b.x, b.y, (r * 0.36).max(1.5), c);
+        }
         ZoneKind::Speed => {
             for offset in [-0.5, 0.35] {
                 let x = p.x + offset * r;
@@ -244,17 +277,46 @@ pub fn decorations(
         if item.above != above || MapDef::group_bit(item.group) & shown.hidden != 0 {
             continue;
         }
-        let fade = shown.poses.opacity(item.group);
+        let poses = &shown.poses;
+        let fade = poses.opacity(item.group);
         if fade <= 0.004 {
             continue;
         }
-        let turn = shown.poses.turn(item.group);
-        let r = screen_rect(view, config, shown.poses.shift(item.rect, item.group));
+        // Reduced motion keeps Scale but holds animations at rest.
+        let (wobble, sway, scale) = if settings.reduced_motion {
+            let scale = poses
+                .scale
+                .get(usize::from(item.group))
+                .copied()
+                .unwrap_or(1.);
+            ([0., 0.], 0., scale)
+        } else {
+            (
+                poses.wobble(item.group),
+                poses.sway(item.group),
+                poses.scale(item.group),
+            )
+        };
+        if scale <= 0.004 {
+            continue;
+        }
+        let turn = poses.turn(item.group) + sway;
+        let tint = poses.tint(item.group);
+        let mut r = screen_rect(view, config, poses.shift(item.rect, item.group));
+        let center = r.center() + vec2(wobble[0], wobble[1]) * view.zoom;
+        r.w *= scale;
+        r.h *= scale;
+        r.x = center.x - r.w * 0.5;
+        r.y = center.y - r.h * 0.5;
         if item.kind == DecorKind::Emitter {
             if remaining == 0 || settings.reduced_motion {
                 continue;
             }
             let mut effect = item.effect.unwrap_or_default();
+            effect.color = tinted(effect.color, tint);
+            effect.end_color = tinted(effect.end_color, tint);
+            effect.size *= scale;
+            effect.end_size *= scale;
             effect.direction += item.rotation + turn + time * item.spin;
             let reach = (effect.speed * effect.lifetime
                 + effect.gravity.abs() * effect.lifetime.powi(2) * 0.5
@@ -279,15 +341,16 @@ pub fn decorations(
                 f32::from(item.alpha) / 255. * pulse * fade,
             );
         } else if visible(r, r.w.max(r.h) * 0.5) {
-            decoration(item, r, time, view.zoom, &shown.counters, turn, fade);
+            decoration(item, r, time, view.zoom, &shown.counters, turn, fade, tint);
         }
     }
     // Single pieces drawn elsewhere, such as palette previews, always shade.
     SHADED_LIGHTS.with(|left| left.set(u32::MAX));
 }
 
-/// One piece of decor in `r`, turned a further `turn` degrees and faded to
-/// `fade` by map logic.
+/// One piece of decor in `r`, turned a further `turn` degrees, faded to
+/// `fade` and tinted by map logic.
+#[allow(clippy::too_many_arguments)]
 pub fn decoration(
     item: &MapDecor,
     r: Rect,
@@ -296,6 +359,7 @@ pub fn decoration(
     counters: &[i32; MAP_COUNTERS as usize],
     turn: f32,
     fade: f32,
+    tint: ([f32; 3], f32),
 ) {
     let pulse = if item.pulse > 0. {
         0.8 + 0.2 * (time * item.pulse * std::f32::consts::TAU).cos()
@@ -303,7 +367,7 @@ pub fn decoration(
         1.
     };
     let c = alpha(
-        crate::accessibility::palette(color(item.color)),
+        crate::accessibility::palette(color(tinted(item.color, tint))),
         f32::from(item.alpha) / 255. * pulse * fade,
     );
     let p = r.center();

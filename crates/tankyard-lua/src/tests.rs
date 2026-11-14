@@ -663,6 +663,34 @@ fn map_events_reach_scripts_and_scripts_drive_map_logic() {
             "tankyard.turn_map_group(1, 90, 1, 'back', 'sideways')",
             "unknown ease mode",
         ),
+        (
+            "tankyard.scale_map_group(1, 500)",
+            "percent must be between 0 and 400",
+        ),
+        (
+            "tankyard.tint_map_group(1, '#12345', 50)",
+            "color must be \"#rrggbb\"",
+        ),
+        (
+            "tankyard.animate_map_group(1, 'spin', 10)",
+            "unknown animation \"spin\"",
+        ),
+        (
+            "tankyard.animate_map_group(1, 'sway', 200)",
+            "size must be between 0 and 180",
+        ),
+        (
+            "tankyard.shake_view(nil, 0, 1)",
+            "percent must be between 1 and 100",
+        ),
+        (
+            "tankyard.play_sound('kazoo', 0, 0)",
+            "unknown sound \"kazoo\"",
+        ),
+        (
+            "tankyard.map_pose(0)",
+            "group must be a whole number from 1 to 32",
+        ),
     ] {
         let (_, runtime) = run(&format!("tankyard.on('tick', function() {call} end)"), 1);
         let errors = runtime.errors.join(" | ");
@@ -690,6 +718,134 @@ fn scripts_glide_turn_and_fade_map_groups() {
     assert_eq!(poses.turn(4), 90.);
     assert!((poses.opacity(4) - 0.4).abs() < 1e-4);
     assert_eq!(world.match_state.tweens.len(), 3);
+}
+
+#[test]
+fn scripts_tint_scale_animate_and_stop_map_groups() {
+    let source = r##"
+        local ticks = 0
+        tankyard.on("tick", function()
+          ticks = ticks + 1
+          if ticks == 1 then
+            tankyard.tint_map_group(2, "#ff0000", 50)
+            tankyard.scale_map_group(2, 150)
+            tankyard.animate_map_group(5, "orbit", 40, 0.5)
+            tankyard.tint_map_group(6, { 0, 0, 255 }, 80, 2)
+          elseif ticks == 30 then
+            tankyard.stop_map_group(6)
+          elseif ticks == 60 then
+            local pose = tankyard.map_pose(2)
+            if pose.scale ~= 150 or pose.tint[1] ~= 255 or pose.tint[2] ~= 0
+              or math.abs(pose.tint_strength - 50) > 0.01 or pose.opacity ~= 100 then
+              error(("unexpected pose %s %s %s"):format(pose.scale, pose.tint[1], pose.tint_strength))
+            end
+          end
+        end)
+    "##;
+    let (world, runtime) = run(source, 90);
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    let poses = world.group_poses();
+    let (color, strength) = poses.tint(2);
+    assert_eq!(color, [1., 0., 0.]);
+    assert!((strength - 0.5).abs() < 1e-4);
+    assert!((poses.scale(2) - 1.5).abs() < 1e-4);
+    // An orbit moves decor around where it rests, never cover.
+    let [x, y] = poses.wobble(5);
+    assert!((x.hypot(y) - 40.).abs() < 0.5, "{x} {y}");
+    assert_eq!(poses.offset(5), [0., 0.]);
+    // Stopped a quarter of the way into a two second tint, and held there
+    // rather than finishing at 80%.
+    let (_, held) = poses.tint(6);
+    assert!(held > 0.02 && held < 0.4, "{held}");
+    assert!(
+        !world
+            .match_state
+            .tweens
+            .iter()
+            .any(|t| t.moving(world.match_state.elapsed))
+    );
+}
+
+#[test]
+fn scripts_shake_views_and_play_sounds() {
+    let source = r#"
+        tankyard.on("tick", function()
+          if tankyard.tick() == 3 then
+            tankyard.shake_view(nil, 60, 1.5)
+            tankyard.play_sound("fanfare", 100, 200, 40)
+          end
+        end)
+    "#;
+    let mut world = world();
+    world.add_player("Pilot", false);
+    world.add_player("Bot", true);
+    let mut runtime = ModRuntime::default();
+    runtime
+        .install(Box::new(
+            LuaPlugin::new(&info("test"), &pack(source), &Content::builtin(), 7).unwrap(),
+        ))
+        .unwrap();
+    let mut events = Vec::new();
+    for _ in 0..8 {
+        world.step_with(|w| runtime.before_step(w));
+        runtime.after_step(&mut world);
+        events.extend(world.events.iter().cloned());
+    }
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    let shakes: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e.kind, tankyard_core::EventKind::MapShake))
+        .collect();
+    // Bots have no view to shake.
+    assert_eq!(shakes.len(), 1);
+    assert_eq!(tankyard_core::shake_of(shakes[0].value), (0.6, 1.5));
+    let sound = events
+        .iter()
+        .find(|e| matches!(e.kind, tankyard_core::EventKind::MapSound))
+        .expect("the sound plays");
+    assert!(sound.pos.distance(tankyard_core::V2::new(100., 200.)) < 0.01);
+    assert_eq!(
+        tankyard_core::sound_of(sound.value),
+        Some((tankyard_content::MapSound::Fanfare, 0.4))
+    );
+}
+
+#[test]
+fn the_arena_effects_example_sounds_its_alarm() {
+    use tankyard_content::{MapTrigger, TriggerAction, TriggerWhen};
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/arena_fx");
+    let source = std::fs::read_to_string(dir.join("main.lua")).unwrap();
+    let mut world = world();
+    world.add_player("Pilot", false);
+    world.map.triggers = vec![MapTrigger {
+        when: TriggerWhen::Start,
+        action: TriggerAction::Script,
+        text: "alarm".into(),
+        rect: [0.4, 0.4, 0.2, 0.2],
+        seconds: 0.5,
+        ..Default::default()
+    }];
+    let mut runtime = ModRuntime::default();
+    runtime
+        .install(Box::new(
+            LuaPlugin::new(&info("arena_fx"), &pack(&source), &Content::builtin(), 7).unwrap(),
+        ))
+        .unwrap();
+    let mut alarm = false;
+    for _ in 0..90 {
+        world.step_with(|w| runtime.before_step(w));
+        runtime.after_step(&mut world);
+        alarm |= world.events.iter().any(|e| {
+            matches!(e.kind, tankyard_core::EventKind::MapSound)
+                && tankyard_core::sound_of(e.value)
+                    .is_some_and(|(sound, _)| sound == tankyard_content::MapSound::Alarm)
+        });
+    }
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    assert!(alarm, "the alarm sounds");
+    let (color, strength) = world.group_poses().tint(1);
+    assert_eq!(color, [1., 48. / 255., 48. / 255.]);
+    assert!((strength - 0.8).abs() < 1e-4);
 }
 
 #[test]

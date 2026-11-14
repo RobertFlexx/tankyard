@@ -1163,6 +1163,10 @@ fn predict_pads(
     let config = &snapshot.config;
     tank.terrain = tankyard_core::terrain_factor(map, config, hidden, poses, tank.pos);
     tank.push = tankyard_core::terrain_push(map, config, hidden, poses, tank.pos);
+    tankyard_core::launch_tank(
+        tank,
+        tankyard_core::terrain_launch(map, config, hidden, poses, tank.pos),
+    );
 }
 
 pub fn interpolate_position(previous: V2, current: V2, fraction: f32) -> V2 {
