@@ -815,6 +815,8 @@ A new motion on a group and channel takes over from the one playing, starting wh
   "duration": 4, "seconds": 1 }
 ```
 
+This is the workshop's Door piece, with group 3 as the door. The [motions tutorial](motions-tutorial.md) builds a gatehouse around one in the workshop, with moving cover, chained motions, lights and particles.
+
 Emitters' `effect` is an optional particle profile. Defaults are:
 
 ```json
