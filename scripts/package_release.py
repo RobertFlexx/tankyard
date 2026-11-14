@@ -46,7 +46,7 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
         if not platform.startswith("windows"):
             shutil.copy2(ROOT / "scripts/host_server.sh", payload / "host-server.sh")
             (payload / "host-server.sh").chmod(0o755)
-        for mod in ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler", "workshop_toolkit", "logic_kit"):
+        for mod in ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler", "workshop_toolkit", "logic_kit", "arena_fx", "effects_lab"):
             shutil.copytree(ROOT / "mods" / mod, payload / "mods" / mod)
         # The tutorial video stays on GitHub; it would add 15 MB to every package.
         shutil.copytree(ROOT / "docs", payload / "docs", ignore=shutil.ignore_patterns("*.mp4"))

@@ -1,3 +1,5 @@
+mod sandbox;
+
 use crate::ui::RED;
 use crate::{render, settings::Settings, ui::*};
 use macroquad::prelude::*;
@@ -403,6 +405,10 @@ pub struct Hud {
     pub evolution: bool,
     pub sandbox: bool,
     pub sandbox_page: usize,
+    sandbox_search: String,
+    sandbox_search_active: bool,
+    sandbox_tier: Option<u8>,
+    sandbox_scroll: f32,
     pub invulnerable: bool,
     pub boss_index: usize,
     pub speed: f32,
@@ -440,6 +446,10 @@ impl Hud {
             evolution: false,
             sandbox: false,
             sandbox_page: 0,
+            sandbox_search: String::new(),
+            sandbox_search_active: false,
+            sandbox_tier: None,
+            sandbox_scroll: 0.,
             invulnerable: false,
             boss_index: 0,
             speed: 1.0,
@@ -556,6 +566,7 @@ impl Hud {
         };
         let sandbox_controls = snapshot.config.mode == Mode::Sandbox && !self.practice;
         if !self.sandbox {
+            self.sandbox_search_active = false;
             self.sandbox_level_pending = None;
         }
         if !sandbox_controls || !tank.alive || snapshot.match_state.finished {
@@ -1401,197 +1412,6 @@ impl Hud {
             actions.push(HudAction::Encyclopedia);
         }
     }
-    fn sandbox_overlay(
-        &mut self,
-        tank: &Tank,
-        content: &Content,
-        actions: &mut Vec<HudAction>,
-        s: f32,
-    ) {
-        let (panel_rect, s) = sandbox_layout(screen_width(), screen_height(), s);
-        let Rect { x, y, w: width, .. } = panel_rect;
-        panel(panel_rect);
-        label("Sandbox", x + 20. * s, y + 32. * s, 24. * s, accent());
-        right_label(
-            "PgUp / PgDn · Shift: 15",
-            x + width - 20. * s,
-            y + 30. * s,
-            10. * s,
-            muted_color(),
-        );
-        let interactive = set_interactive(false);
-        set_interactive(interactive && self.sandbox_allowed);
-        if self.sandbox_level_pending == Some(tank.level) {
-            self.sandbox_level_pending = None;
-        }
-        let mut level = f32::from(self.sandbox_level_pending.unwrap_or(tank.level));
-        if slider_value(
-            Rect::new(x + 20. * s, y + 53. * s, width - 40. * s, 48. * s),
-            "Level",
-            &mut level,
-            [1., f32::from(tankyard_core::MAX_LEVEL)],
-            1.,
-            s * 0.85,
-            |value| format!("{value:.0}"),
-        ) {
-            self.sandbox_level_pending = Some(level.round() as u8);
-        }
-        let step = (width - 40. * s) / tankyard_core::UPGRADE_LEVELS.len() as f32;
-        for (index, level) in tankyard_core::UPGRADE_LEVELS.into_iter().enumerate() {
-            if small_button(
-                Rect::new(
-                    x + 20. * s + index as f32 * step,
-                    y + 109. * s,
-                    step - 7. * s,
-                    28. * s,
-                ),
-                &level.to_string(),
-                s * 0.85,
-            ) {
-                self.sandbox_level_pending = Some(level);
-            }
-        }
-        if let Some(level) = self.sandbox_level_pending
-            && get_time() - self.sandbox_level_at >= 0.11
-            && self.sandbox_allowed
-        {
-            self.sandbox_level_at = get_time();
-            actions.push(HudAction::SandboxLevel(level));
-        }
-        let page_count = content.classes.len().div_ceil(6);
-        self.sandbox_page = self.sandbox_page.min(page_count.saturating_sub(1));
-        label(
-            "Choose tank",
-            x + 20. * s,
-            y + 159. * s,
-            12. * s,
-            muted_color(),
-        );
-        for (row, class) in content
-            .classes
-            .iter()
-            .skip(self.sandbox_page * 6)
-            .take(6)
-            .enumerate()
-        {
-            if button(
-                Rect::new(
-                    x + 20. * s,
-                    y + 174. * s + row as f32 * 37. * s,
-                    width - 40. * s,
-                    31. * s,
-                ),
-                &class.name,
-                tank.class == class.id,
-                self.sandbox_allowed,
-                s * 0.75,
-            ) {
-                actions.push(HudAction::SandboxClass(class.id.clone()));
-            }
-        }
-        if small_button(
-            Rect::new(x + 20. * s, y + 407. * s, 65. * s, 30. * s),
-            "‹",
-            s,
-        ) {
-            self.sandbox_page = self.sandbox_page.saturating_sub(1);
-        }
-        center_label(
-            &format!("{} / {}", self.sandbox_page + 1, page_count),
-            x + width * 0.5,
-            y + 428. * s,
-            14. * s,
-            muted_color(),
-        );
-        if small_button(
-            Rect::new(x + width - 85. * s, y + 407. * s, 65. * s, 30. * s),
-            "›",
-            s,
-        ) {
-            self.sandbox_page = (self.sandbox_page + 1).min(page_count.saturating_sub(1));
-        }
-        if toggle(
-            Rect::new(x + 20. * s, y + 456. * s, width - 40. * s, 30. * s),
-            "Invulnerability",
-            &mut self.invulnerable,
-            s,
-        ) {
-            actions.push(HudAction::Invulnerable(self.invulnerable));
-        }
-        set_interactive(interactive && self.local_simulation);
-        let previous_speed = self.speed;
-        if slider_value(
-            Rect::new(x + 20. * s, y + 501. * s, width - 40. * s, 48. * s),
-            if self.local_simulation {
-                "Simulation speed"
-            } else {
-                "Server controls speed"
-            },
-            &mut self.speed,
-            [0.25, 2.],
-            0.25,
-            s * 0.85,
-            |value| format!("{value:.2}×"),
-        ) && self.speed != previous_speed
-        {
-            actions.push(HudAction::Speed(self.speed));
-        }
-        set_interactive(interactive && self.sandbox_allowed);
-        if small_button(
-            Rect::new(x + 20. * s, y + 563. * s, 180. * s, 31. * s),
-            "Add AI tank",
-            s * 0.85,
-        ) {
-            actions.push(HudAction::Bot);
-        }
-        set_interactive(interactive && self.local_simulation);
-        if small_button(
-            Rect::new(x + 220. * s, y + 563. * s, 180. * s, 31. * s),
-            "Reset speed",
-            s * 0.85,
-        ) {
-            self.speed = 1.;
-            actions.push(HudAction::Speed(1.));
-        }
-        set_interactive(interactive && self.sandbox_allowed);
-        let bosses = BossKind::ALL;
-        if small_button(
-            Rect::new(x + 20. * s, y + 611. * s, 240. * s, 31. * s),
-            bosses[self.boss_index].name(),
-            s * 0.8,
-        ) {
-            self.boss_index = (self.boss_index + 1) % bosses.len();
-        }
-        if small_button(
-            Rect::new(x + 280. * s, y + 611. * s, 120. * s, 31. * s),
-            "Spawn boss",
-            s * 0.85,
-        ) {
-            actions.push(HudAction::Boss(bosses[self.boss_index]));
-        }
-        label(
-            if self.local_simulation {
-                "Speed changes affect this offline session."
-            } else if self.sandbox_allowed {
-                "Level and spawning changes are applied by the server."
-            } else {
-                "Sandbox tools are disabled by this server."
-            },
-            x + 20. * s,
-            y + 674. * s,
-            11. * s,
-            muted_color(),
-        );
-        set_interactive(interactive);
-        if small_button(
-            Rect::new(x + 20. * s, y + 694. * s, width - 40. * s, 27. * s),
-            "Close [T]",
-            s * 0.85,
-        ) {
-            self.sandbox = false;
-            self.sandbox_level_pending = None;
-        }
-    }
     /// True while the killer card holds the camera on the wreck.
     pub fn holding_camera(&self) -> bool {
         self.card
@@ -1989,20 +1809,16 @@ pub(crate) fn boss_banner_layout(width: f32, s: f32) -> Rect {
     Rect::new((left + right - w) * 0.5, 112. * s, w, 62. * s)
 }
 fn sandbox_layout(width: f32, height: f32, scale: f32) -> (Rect, f32) {
-    let left = (22. + 246. + 8.) * scale;
-    let right = width - (380. + 8.) * scale;
-    let top = 178. * scale;
-    let available = (right - left).max(1.);
-    let vertical = (height - top - 16.).max(1.);
-    let s = scale.min(available / 420.).min(vertical / 744.);
-    let w = 420. * s;
-    let h = 744. * s;
+    let s = scale
+        .min((width - 40.).max(1.) / 920.)
+        .min((height - 40.).max(1.) / 640.);
+    let size = vec2(920., 640.) * s;
     (
         Rect::new(
-            left + (available - w) * 0.5,
-            top + (vertical - h) * 0.5,
-            w,
-            h,
+            (width - size.x) * 0.5,
+            (height - size.y) * 0.5,
+            size.x,
+            size.y,
         ),
         s,
     )
@@ -2055,7 +1871,7 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_and_boss_panels_fit_between_other_hud_regions_at_all_supported_scales() {
+    fn sandbox_is_centred_and_boss_banner_fits_at_all_supported_scales() {
         for (width, height) in [
             (800_f32, 600_f32),
             (1024., 768.),
@@ -2075,15 +1891,12 @@ mod tests {
                         && sandbox.x + sandbox.w <= width
                         && sandbox.y + sandbox.h <= height - 16.
                 );
-                assert!(
-                    sandbox.y + 0.001 >= boss.y + boss.h + 4. * s,
-                    "{width}x{height} at {scale}"
-                );
+                assert!((sandbox.x + sandbox.w * 0.5 - width * 0.5).abs() < 0.001);
+                assert!((sandbox.y + sandbox.h * 0.5 - height * 0.5).abs() < 0.001);
                 assert!((boss.x + boss.w * 0.5 - width * 0.5).abs() < 0.001);
                 assert!(boss.x >= 312. * s + 4. * s);
                 assert!(boss.x + boss.w <= width - 242. * s - 12. * s);
-                assert!(sandbox.x + 0.001 >= (22. + 246.) * s + 8. * s);
-                assert!(sandbox.x + sandbox.w <= width - 380. * s - 8. * s + 0.001);
+                assert!(sandbox.x >= 19.99 && sandbox.y >= 19.99);
             }
         }
     }

@@ -176,8 +176,14 @@ impl ServerSettings {
         }
         let text = String::from_utf8(bytes)
             .map_err(|_| NetError("server configuration is not UTF-8".into()))?;
-        let settings: Self = toml::from_str(&text)
-            .map_err(|e| NetError(format!("invalid server configuration: {e}")))?;
+        // TOML's formatted error includes the offending source line. A syntax
+        // error in a private config must not echo its password or server key.
+        let settings: Self = toml::from_str(&text).map_err(|e: toml::de::Error| {
+            NetError(format!(
+                "invalid server configuration near byte {}; check TOML syntax and setting types",
+                e.span().map_or(0, |span| span.start)
+            ))
+        })?;
         settings.validate()?;
         Ok(settings)
     }
@@ -424,6 +430,22 @@ pub fn difficulty_from_name(name: &str) -> Result<Difficulty, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn malformed_private_configs_never_quote_credential_lines() {
+        let path =
+            std::env::temp_dir().join(format!("tankyard-config-error-{}.toml", std::process::id()));
+        let marker = "test-value-that-must-not-appear-in-an-error";
+        for text in [
+            format!("netcode_private_key = \"{marker}\" ["),
+            format!("max_players = \"{marker}\""),
+        ] {
+            crate::storage::atomic_write(&path, text.as_bytes()).unwrap();
+            let error = ServerSettings::load(&path).unwrap_err().to_string();
+            assert!(!error.contains(marker));
+            assert!(error.contains("near byte"));
+        }
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn match_changes_validate_host_policy_and_map_before_replacing_settings() {
         let settings = ServerSettings::default();

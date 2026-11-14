@@ -1,0 +1,14 @@
+[mod]
+name = "Effects Lab"
+version = "1.0"
+description = "The playable map from the Animate and effects tutorial. Float and sway a lantern, grow an arrow, hear arrivals, stop a group and ride a launch pad."
+license = "MIT"
+icon = "icon.svg"
+tags = ["maps", "tutorial", "effects"]
+
+[creator]
+name = "Tank Yard"
+url = "https://github.com/RobertFlexx/tankyard"
+
+[links]
+source = "https://github.com/RobertFlexx/tankyard/tree/main/mods/effects_lab"

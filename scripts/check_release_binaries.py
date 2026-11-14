@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 BINARIES = ("tankyard", "tankyard-server", "tankyard-relay", "tankyard-load", "tankyard-tools")
-PACKS = ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler", "workshop_toolkit", "logic_kit")
+PACKS = ("fast_arena", "vampire", "bounty_hunt", "gravity_wells", "sprinkler", "workshop_toolkit", "logic_kit", "arena_fx", "effects_lab")
 ROOT = Path(__file__).resolve().parents[1]
 
 

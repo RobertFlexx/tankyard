@@ -36,6 +36,8 @@ Or download the Windows ZIP from [Releases](https://github.com/RobertFlexx/tanky
 
 ## Options
 
+If the game stops unexpectedly, run `tankyard --diagnostics-path` to find its local reports without opening a window. `last-crash.log` keeps the most recent Rust panic across later launches; `last-startup.log` describes the latest launch. Reports stay on your machine. Review a report before attaching it to an issue; driver or operating-system faults may need the system crash report too. Try `tankyard --safe-graphics` for graphics startup problems.
+
 Download the script first to inspect it or choose an install location:
 
 ~~~sh

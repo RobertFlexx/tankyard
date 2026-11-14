@@ -1,5 +1,25 @@
 # Server measurements
 
+## v1.1.0 reliability checks
+
+Measured on 2026-11-13 with Rust 1.100.0 release binaries, protocol 28, Linux and an Intel i7-9700. The server and load clients ran on the same machine, alongside local builds and UI checks.
+
+- A 600-second run with eight clients, twelve fixed bots, 100 ms emulated delay, 20 ms jitter and 5% imposed loss finished with all eight clients ready, none stale and all 19 scheduled reconnects completed. The server reported no skipped snapshots or dropped catch-up ticks. The combined process peaked at about 19.3 MiB resident memory; its timing reservoir stayed at 65,536 samples for 279,494 observations.
+- A 45-second loopback run with 64 clients split into four arenas finished with all 64 ready, none stale and 0.00% reported loss. Each arena kept 24 fixed bots. The server reported no skipped snapshots or dropped catch-up ticks. Its final status window measured average/p95/p99 simulation work of 279/213/620 µs, with a worst tick of 54.8 ms and a maximum snapshot batch of 6.15 ms. The combined process peaked at about 30.8 MiB resident memory. The timing spikes include contention with the other local work.
+
+These checks cover sustained joins, snapshot delivery and reconnect recovery. They do not establish internet performance or production capacity. Keep the default player limit until measurements on the intended host support raising it.
+
+Reproduce them with:
+
+```sh
+tankyard-load --local --clients 8 --bots 12 --fixed-bots --seconds 600 --latency-ms 100 --jitter-ms 20 --loss-percent 5 --reconnect-every 30 --output artifacts/soak.json
+tankyard-load --local --clients 64 --bots 24 --fixed-bots --seconds 45 --output artifacts/64-clients.json
+```
+
+`--output` writes the measured results, transport settings, reconnect counts and server status as JSON. Mean and maximum client-update times use every observation; percentiles use a bounded uniform sample. See [hosting](hosting.md#scaling-arenas) for arena limits and deployment choices.
+
+## Earlier measurements
+
 Measured on 2026-10-15 with release builds, Rust 1.99.0, Linux, and an Intel i7-9700. These are local tests, not a hosting capacity guarantee.
 
 The server reuses a bounded 512 KiB snapshot serialization buffer, client ID storage, and reliable-event storage. Join data is encoded once per content revision. Control broadcasts are encoded once, and shared message buffers avoid copying the same payload for every recipient. `status` counts skipped snapshots as well as dropped simulation ticks.

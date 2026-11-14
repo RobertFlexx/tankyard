@@ -162,6 +162,86 @@ mod tests {
 mod shipped_mods {
     use super::*;
 
+    #[test]
+    fn effects_tutorial_map_animates_stops_chimes_and_launches() {
+        use tankyard_core::{EventKind, Mode, V2, map_point, sound_of};
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/effects_lab");
+        let loaded = tankyard_lua::load(&[path]).unwrap();
+        let mut session = LocalSession::with_mods(
+            WorldConfig {
+                map: "effects_lab".into(),
+                mode: Mode::Sandbox,
+                target_count: 0,
+                spawn_protection: 0.,
+                dynamic_arena: false,
+                ..Default::default()
+            },
+            0,
+            loaded,
+        )
+        .unwrap();
+        let player = session.world.add_player("Visitor", false);
+        for _ in 0..80 {
+            session.step();
+        }
+        assert!(session.world.group_poses().wobble(1)[1].abs() > 1.);
+        assert!(session.world.group_poses().sway(1).abs() > 1.);
+
+        let visit = |session: &mut LocalSession, point| {
+            let pos = map_point(&session.world.config, point);
+            let tank = session
+                .world
+                .tanks
+                .iter_mut()
+                .find(|t| t.id == player)
+                .unwrap();
+            tank.pos = pos;
+            tank.vel = V2::ZERO;
+        };
+        visit(&mut session, [0.14, 0.68]);
+        session.step();
+        let held = (
+            session.world.group_poses().wobble(1),
+            session.world.group_poses().sway(1),
+        );
+        for _ in 0..60 {
+            session.step();
+        }
+        assert_eq!(session.world.group_poses().wobble(1), held.0);
+        assert_eq!(session.world.group_poses().sway(1), held.1);
+
+        visit(&mut session, [0.54, 0.66]);
+        let mut chimes = 0;
+        let mut flashed = false;
+        let mut shook = false;
+        let mut grew = false;
+        for _ in 0..210 {
+            session.step();
+            grew |= session.world.group_poses().scale(2) >= 1.39;
+            flashed |= session.world.group_poses().tint(3).1 > 0.1;
+            for event in &session.world.events {
+                if matches!(event.kind, EventKind::MapSound) {
+                    let (sound, volume) = sound_of(event.value).unwrap();
+                    assert_eq!(sound, tankyard_content::MapSound::Chime);
+                    assert!((volume - 0.8).abs() < 0.01);
+                    chimes += 1;
+                }
+                shook |= matches!(event.kind, EventKind::MapShake) && event.subject == player;
+            }
+        }
+        assert!(grew && flashed && shook);
+        assert_eq!(chimes, 2, "the outward and return arrivals each chime once");
+        assert!((session.world.group_poses().scale(2) - 1.).abs() < 0.001);
+        assert_eq!(session.world.group_poses().wobble(1), held.0);
+
+        visit(&mut session, [0.82, 0.70]);
+        session.step();
+        let tank = session.world.tanks.iter().find(|t| t.id == player).unwrap();
+        assert!(tank.vel.x > 100. && tank.vel.y < -100., "{:?}", tank.vel);
+        assert!(session.mods.errors.is_empty());
+    }
+
     /// Every pack in the repository loads together and runs a full bot match
     /// without a script error.
     #[test]

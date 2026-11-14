@@ -123,6 +123,8 @@ Particles are drawn from seeds on each player's computer, so they cost the serve
 
 ## 10. Add effects
 
+The [Animate and effects tutorial](effects-tutorial.md) walks through the new controls in more detail and includes a finished example pack.
+
 Effects change how the yard looks, sounds and feels. Like Turn and Fade, the ones that act on decor never change collision.
 
 1. From **Pads**, drag out a **Launch pad** in the open part of the yard. Press **2**, click it, and under *Direction* pick the arrow that points across the yard. Its arrows light up in a wave along that direction. A tank that drives onto it is flung that way at speed and coasts for a moment before you can steer again. Keep it pointed away from walls you don't want tanks thrown at.

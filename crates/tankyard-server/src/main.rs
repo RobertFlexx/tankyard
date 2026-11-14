@@ -72,6 +72,22 @@ struct Args {
     /// and exit. Edit it, then start with --config.
     #[arg(long)]
     write_config: Option<PathBuf>,
+    /// Generate a private key while writing a NEW config. Requires a public
+    /// address; keys and existing files are never replaced or printed.
+    #[arg(long, requires = "write_config", conflicts_with = "issue_token")]
+    secure: bool,
+    /// Reachable UDP endpoint advertised in connection tokens; repeat for IPv6.
+    #[arg(long = "public-address")]
+    public_addresses: Vec<SocketAddr>,
+    /// Write a short-lived connection invitation from this server's key, then
+    /// exit. Share this file privately; clients use --connect-token FILE.
+    #[arg(long, requires = "config", conflicts_with = "write_config")]
+    issue_token: Option<PathBuf>,
+    #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(10..=3600))]
+    token_seconds: u64,
+    /// Validate settings and print the transport mode without opening sockets.
+    #[arg(long, conflicts_with_all = ["write_config", "issue_token"])]
+    check_config: bool,
     /// Listen on all interfaces at this UDP port (shorthand for --bind).
     #[arg(long, conflicts_with = "bind")]
     port: Option<u16>,
@@ -191,10 +207,49 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !args.mods.is_empty() {
         settings.mods = args.mods;
     }
+    if !args.public_addresses.is_empty() {
+        settings.public_addresses = args.public_addresses;
+    }
     settings.validate()?;
     if let Some(path) = args.write_config {
-        settings.save(&path)?;
+        if args.secure {
+            tankyard_server::accounts::initialize_secure(&mut settings, &path)?;
+        } else {
+            settings.save(&path)?;
+        }
         println!("Wrote {}", path.display());
+        return Ok(());
+    }
+    if let Some(path) = args.issue_token {
+        tankyard_server::accounts::save_invitation(
+            &settings,
+            &path,
+            Duration::from_secs(args.token_seconds),
+        )?;
+        println!(
+            "Wrote a connection invitation to {} (expires in {} seconds).",
+            path.display(),
+            args.token_seconds
+        );
+        return Ok(());
+    }
+    if args.check_config {
+        println!(
+            "Settings valid: {} | UDP {} | {}",
+            settings.name,
+            settings.bind,
+            if settings.netcode_private_key.is_some() {
+                "authenticated connection tokens"
+            } else {
+                "guest connections"
+            }
+        );
+        if !settings.websocket.is_empty() {
+            println!(
+                "WebSocket listener: {} (TLS belongs at the reverse proxy)",
+                settings.websocket
+            );
+        }
         return Ok(());
     }
     if args

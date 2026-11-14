@@ -63,8 +63,8 @@ jobs:
       - name: Validate content and render offline
         run: |
           cargo run --locked -p tankyard-tools -- validate
-          cargo run --locked -p tankyard-tools -- validate-mods --mod mods/fast_arena --mod mods/vampire --mod mods/bounty_hunt --mod mods/gravity_wells --mod mods/sprinkler --mod mods/workshop_toolkit --mod mods/logic_kit
-          cargo run --locked -p tankyard-tools -- scan-mod mods/fast_arena mods/vampire mods/bounty_hunt mods/gravity_wells mods/sprinkler mods/workshop_toolkit mods/logic_kit
+          cargo run --locked -p tankyard-tools -- validate-mods --mod mods/fast_arena --mod mods/vampire --mod mods/bounty_hunt --mod mods/gravity_wells --mod mods/sprinkler --mod mods/workshop_toolkit --mod mods/logic_kit --mod mods/arena_fx --mod mods/effects_lab
+          cargo run --locked -p tankyard-tools -- scan-mod mods/fast_arena mods/vampire mods/bounty_hunt mods/gravity_wells mods/sprinkler mods/workshop_toolkit mods/logic_kit mods/arena_fx mods/effects_lab
           cargo build --locked -p tankyard-client --bin tankyard
           cargo build --locked -p tankyard-client --example clipboard_probe
           xvfb-run -a python3 scripts/check_clipboard.py target/debug/examples/clipboard_probe

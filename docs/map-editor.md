@@ -167,7 +167,7 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **Reset triggers:** makes every trigger in a group start afresh, as at the start of a round: *Once per round* triggers can act again, rest times and cooldowns end, delayed actions still waiting are dropped, timers start counting again from now and sequences go back to their first channel. Group 0 resets every trigger in the map. Counters and groups keep their state; set those with their own actions.
 
 - **Move group, Move group to, Turn decor, Fade decor:** animate a group. See [Motions](#motions).
-- **Tint decor, Scale decor, Animate decor, Stop group:** colour, resize, animate or halt a group's decor. See [Effects](#effects).
+- **Tint decor, Scale decor, Animate decor, Stop group:** color, resize, animate or halt a group's decor. See [Effects](#effects).
 - **Shake screen:** shakes the views of the noticed tanks inside the area. See [Effects](#effects).
 - **Play sound:** plays one of eight sounds at the trigger. See [Effects](#effects).
 
@@ -210,9 +210,11 @@ Scripts can play motions too, with `move_map_group`, `turn_map_group` and `fade_
 
 ### Effects
 
+Follow [Animate and effects](effects-tutorial.md) to build a floating lantern, combine animation styles, trigger an arrival chime and flash, freeze a group and add a launch pad. The bundled [Effects Lab](../mods/effects_lab) is the finished map.
+
 Effects change how a group looks and how the arena feels without touching collision. Blocks and pads keep their shape and size; only decor, lights and particle emitters change. Tint, Scale and Animate play like motions, with **Over**, **Curve**, **Mode** and **Go back after**.
 
-- **Tint decor** mixes a colour into the group's decor, lights and particles. 100% paints them over completely; 0% removes the tint. A short Over and a short Go back after make a flash.
+- **Tint decor** mixes a color into the group's decor, lights and particles. 100% paints them over completely; 0% removes the tint. A short Over and a short Go back after make a flash.
 - **Scale decor** draws the group's decor and emitters at 0–400% of their placed size, about their own centres. Particles come out larger or smaller to match.
 - **Animate decor** plays a looping animation on the group's decor:
 

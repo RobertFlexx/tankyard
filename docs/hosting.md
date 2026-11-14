@@ -9,7 +9,7 @@ Anyone can host a Tank Yard server: from the game in a few clicks, or as a dedic
 | It to start with the machine and restart if it stops | [Run it as a service](#run-it-as-a-service) | 10 minutes |
 | Players to join `play.example.com`, or no port forwarding | [Your own domain](hosting-domain.md) | 20 minutes |
 
-Players never install your mods: the server sends its checked mod data when they join. Clients and the server must use compatible protocol versions. Tank Yard 1.0.1 uses protocol 27; clients and servers must both update. Version 1.0.0 used protocol 26, and 0.15 and 0.16 used 25.
+Players never install your mods: the server sends its checked mod data when they join. Clients and the server must use compatible protocol versions. Tank Yard 1.1.0 uses protocol 28; clients and servers must both update. Version 1.0.0 used protocol 26, and 0.15 and 0.16 used 25.
 
 ## From the game
 
@@ -187,11 +187,11 @@ cargo build --locked --release -p tankyard-server --bin tankyard-server
 ./target/release/tankyard-server --config configs/server.toml
 ```
 
-**Security:** The example server runs without a `netcode_private_key`: this is the *unauthenticated* netcode mode, meant for local testing and private LAN games. Do not treat an ordinary server password as encryption or verified player identity. For internet deployment, use secure netcode tokens issued by a trusted backend as described below. The game does not ship a public account/token service.
+**Transport:** The default UDP server accepts guests. A server password does not encrypt the link or verify player identity. For a public domain, use the [WSS setup](hosting-domain.md) to protect the connection through TLS. For token-authenticated UDP invitations, use the setup below. Verified accounts still require an account service.
 
 The port is UDP 5000. Local players join `127.0.0.1:5000`; LAN players use the host's local address. Internet players need a reachable public address and a forwarded UDP port. IPv6 addresses use brackets, such as `[2001:db8::1234]:5000`.
 
-Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default; `snapshot_rate` takes 1 to 60, and higher rates are smoother at the cost of bandwidth. Tank Yard 1.0.1 uses protocol 27 and older clients must update before joining. Validated mod data is sent when joining, so clients do not need to install server packs.
+Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default; `snapshot_rate` takes 1 to 60, and higher rates are smoother at the cost of bandwidth. Tank Yard 1.1.0 uses protocol 28 and older clients must update before joining. Validated mod data is sent when joining, so clients do not need to install server packs.
 
 Inputs are sent as soon as each frame's update finishes, before drawing; menu commands go out before the frame ends. Movement abilities use shared prediction rules. Remote movement can bridge a packet gap for up to 75 ms, constrained by walls and the arena boundary; longer gaps freeze until a new snapshot arrives. The server reuses snapshot storage between viewers and bounds catch-up work during overload.
 
@@ -240,7 +240,33 @@ Dead players can follow living tanks; team modes restrict targets to teammates. 
 
 Set `kind = "Official"` for an official mode server. `configs/official.toml` is an accountless policy example. Accounts, matchmaking, the public server directory, and cloud provisioning remain separate services. Their integration points are `AccountVerifier`, `AccountContext`, `VerifiedAccount`, and `GlobalAuthority` in `tankyard_server::access`. Verification must check signed claims against the destination server and client ID, use cached revocation state, and avoid blocking network calls on the game thread. Override `AccountVerifier::is_current` to check cached revocations; active claims are rechecked once per second and expired or revoked sessions are removed.
 
-For authenticated connections, set a private 32-byte hexadecimal `netcode_private_key` and `public_addresses` matching the addresses in issued tokens. Install the verifier before players join, then enable `require_accounts`. Missing verifiers reject account credentials. Use a fresh random client ID for each connection. Backend kicks use that connection ID; community moderation requests also include the current round to reject stale targets. The backend issues short-lived tokens with `accounts::issue_connection_token`; clients use `NetworkClient::connect_authenticated` or `tankyard --connect-token session.token --account-token-file account.token`. Distribute tokens through your authenticated service. Server keys stay private and separate for each server.
+### Token-authenticated UDP
+
+Create a new private config with the public IP and UDP port that players reach:
+
+```sh
+tankyard-server --secure --public-address 203.0.113.10:5000 --write-config community-private.toml
+tankyard-server --config community-private.toml --check-config
+tankyard-server --config community-private.toml --no-console
+```
+
+Replace the example address with your own. The first command generates a fresh server key without printing it. It refuses existing files and configs that already have a key. Keep the config on the server; on Unix it is created with owner-only permissions. On Windows, store it in a folder restricted to the server account. UDP port forwarding and firewall rules still apply.
+
+In another terminal, create a five-minute invitation:
+
+```sh
+tankyard-server --config community-private.toml --issue-token friend.token --token-seconds 300
+```
+
+Send only `friend.token` through a private, trusted channel. The player joins with:
+
+```sh
+tankyard --connect-token friend.token
+```
+
+Each invitation gets a random connection ID. Existing invitation files are never overwritten. `--token-seconds` accepts 10–3600 seconds; issue another invitation for another connection. The server key stays in its config. Use the domain/WSS setup for ordinary hostname joins; the invitation command is for UDP endpoints.
+
+For verified accounts, install an `AccountVerifier` before players join, then enable `require_accounts`. Missing verifiers reject account credentials. An account backend issues short-lived tokens with `accounts::issue_connection_token`; clients use `NetworkClient::connect_authenticated` or `tankyard --connect-token session.token --account-token-file account.token`. Backend kicks use the connection ID; community moderation requests also include the current round to reject stale targets. Keep keys private and separate for each server.
 
 Global staff authority is a separate trusted backend gateway, restricted to official servers with authenticated transport and a private `global_audit_file`. It supports account suspension, official player removal, and community directory delisting. Staff credentials, roles, and actions have no client packet or user-facing panel. A community role cannot grant global access. The gateway must enforce revocation and propagate account suspensions to the other official servers. Global and community audit paths must differ.
 
@@ -255,6 +281,14 @@ cargo run --locked --release -p tankyard-server --bin tankyard-load -- --local -
 ```
 
 The load tool also supports `--latency-ms 100 --jitter-ms 20 --loss-percent 5`. It fails if clients cannot join, disconnect before the finish, or stop receiving snapshots for more than two seconds.
+
+For a longer run with reconnects and a JSON report:
+
+```sh
+tankyard-load --local --clients 8 --seconds 600 --latency-ms 100 --jitter-ms 20 --loss-percent 5 --reconnect-every 30 --output soak.json
+```
+
+Runs can last up to 24 hours. Timing samples stay bounded; mean and maximum use every observation, while p95 and p99 use a uniform sample of up to 65,536 observations. The report includes completed reconnects, stale clients and peak combined resident memory where the OS exposes it. Reconnect tests against a remote host need a spare connection slot while a lost disconnect expires. Loopback results do not establish internet or production capacity.
 
 ## Scaling arenas
 

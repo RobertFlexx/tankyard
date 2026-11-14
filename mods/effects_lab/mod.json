@@ -1,0 +1,310 @@
+{
+  "api_version": 2,
+  "id": "effects_lab",
+  "name": "Effects Lab",
+  "version": "1.0",
+  "maps": [
+    {
+      "id": "effects_lab",
+      "name": "Effects Lab",
+      "description": "A floating lantern, growing arrow, arrival chime, stop switch and launch pad. Follow docs/effects-tutorial.md.",
+      "width": 2400,
+      "height": 1600,
+      "capacity": 16,
+      "recommended_modes": [
+        "ffa",
+        "sandbox"
+      ],
+      "walls": [],
+      "procedural": "None",
+      "objective_positions": [],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.04,
+            0.8,
+            0.12,
+            0.12
+          ]
+        }
+      ],
+      "team_bases": [],
+      "background": "slate",
+      "blocks": [],
+      "hidden_groups": [],
+      "decor": [
+        {
+          "kind": "light",
+          "rect": [
+            0.25,
+            0.3,
+            0.12,
+            0.18
+          ],
+          "color": [
+            255,
+            232,
+            160
+          ],
+          "alpha": 255,
+          "group": 1
+        },
+        {
+          "kind": "tile",
+          "rect": [
+            0.304,
+            0.375,
+            0.012,
+            0.03
+          ],
+          "color": [
+            214,
+            170,
+            92
+          ],
+          "alpha": 255,
+          "group": 1
+        },
+        {
+          "kind": "arrow",
+          "rect": [
+            0.56,
+            0.3,
+            0.06,
+            0.05
+          ],
+          "color": [
+            100,
+            210,
+            250
+          ],
+          "alpha": 255,
+          "group": 2
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.55,
+            0.43,
+            0.08,
+            0.12
+          ],
+          "color": [
+            120,
+            240,
+            235
+          ],
+          "alpha": 255,
+          "group": 3
+        },
+        {
+          "kind": "label",
+          "rect": [
+            0.07,
+            0.56,
+            0.15,
+            0.04
+          ],
+          "color": [
+            245,
+            220,
+            145
+          ],
+          "alpha": 255,
+          "group": 0,
+          "text": "STOP LANTERN"
+        },
+        {
+          "kind": "label",
+          "rect": [
+            0.46,
+            0.54,
+            0.16,
+            0.04
+          ],
+          "color": [
+            245,
+            220,
+            145
+          ],
+          "alpha": 255,
+          "group": 0,
+          "text": "GROW + CHIME"
+        },
+        {
+          "kind": "label",
+          "rect": [
+            0.75,
+            0.57,
+            0.16,
+            0.04
+          ],
+          "color": [
+            245,
+            220,
+            145
+          ],
+          "alpha": 255,
+          "group": 0,
+          "text": "LAUNCH"
+        }
+      ],
+      "triggers": [
+        {
+          "when": "start",
+          "action": "animate",
+          "rect": [
+            0.24,
+            0.46,
+            0.025,
+            0.04
+          ],
+          "group": 1,
+          "seconds": 0,
+          "style": "bob",
+          "amount": 14,
+          "speed": 0.6,
+          "tween": 1,
+          "easing": {
+            "curve": "sine",
+            "mode": "in_out"
+          }
+        },
+        {
+          "when": "start",
+          "action": "animate",
+          "rect": [
+            0.28,
+            0.46,
+            0.025,
+            0.04
+          ],
+          "group": 1,
+          "seconds": 0,
+          "style": "sway",
+          "amount": 12,
+          "speed": 0.5,
+          "tween": 1,
+          "easing": {
+            "curve": "sine",
+            "mode": "in_out"
+          }
+        },
+        {
+          "when": "enter",
+          "action": "scale",
+          "rect": [
+            0.48,
+            0.6,
+            0.12,
+            0.12
+          ],
+          "group": 2,
+          "seconds": 1,
+          "amount": 140,
+          "tween": 0.4,
+          "duration": 2,
+          "easing": {
+            "curve": "back",
+            "mode": "out"
+          }
+        },
+        {
+          "when": "arrived",
+          "action": "sound",
+          "rect": [
+            0.56,
+            0.39,
+            0.03,
+            0.045
+          ],
+          "source": 2,
+          "seconds": 0.5,
+          "sound": "chime",
+          "amount": 80
+        },
+        {
+          "when": "arrived",
+          "action": "tint",
+          "rect": [
+            0.6,
+            0.47,
+            0.025,
+            0.04
+          ],
+          "source": 2,
+          "group": 3,
+          "seconds": 1,
+          "color": [
+            255,
+            255,
+            255
+          ],
+          "amount": 90,
+          "tween": 0.08,
+          "duration": 0.12,
+          "easing": {
+            "curve": "quad",
+            "mode": "out"
+          }
+        },
+        {
+          "when": "enter",
+          "action": "signal",
+          "rect": [
+            0.08,
+            0.62,
+            0.12,
+            0.12
+          ],
+          "group": 1,
+          "seconds": 1
+        },
+        {
+          "when": "signal",
+          "action": "stop",
+          "rect": [
+            0.25,
+            0.51,
+            0.025,
+            0.04
+          ],
+          "group": 1,
+          "source": 1
+        },
+        {
+          "when": "enter",
+          "action": "shake",
+          "rect": [
+            0.48,
+            0.6,
+            0.12,
+            0.12
+          ],
+          "amount": 30,
+          "tween": 0.6,
+          "seconds": 3
+        }
+      ],
+      "zones": [
+        {
+          "kind": "launch",
+          "rect": [
+            0.76,
+            0.64,
+            0.12,
+            0.12
+          ],
+          "strength": 1,
+          "group": 0,
+          "angle": 315,
+          "exit": [
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  ]
+}

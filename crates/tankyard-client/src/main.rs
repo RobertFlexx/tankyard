@@ -73,6 +73,9 @@ fn manual_fire(held: bool, queued_press: bool, over_ui: bool) -> bool {
 #[derive(Parser, Debug)]
 #[command(name = "tankyard", version, about = "Tank Yard - tank arena")]
 struct Cli {
+    /// Print the local startup/crash-report folder without opening a window.
+    #[arg(long)]
+    diagnostics_path: bool,
     /// Start windowed with multisampling and anisotropic filtering disabled.
     #[arg(long)]
     safe_graphics: bool,
@@ -1234,6 +1237,7 @@ impl App {
         };
         let voice = !menu
             && !self.paused
+            && !self.hud.sandbox
             && !self.creator.open
             && !self.community.admin_open
             && session.failure.is_none()
@@ -1292,6 +1296,10 @@ impl App {
                 return;
             }
             if is_key_pressed(KeyCode::Escape) {
+                if self.hud.sandbox {
+                    self.hud.close_sandbox();
+                    return;
+                }
                 self.finish_session();
                 self.editor_playtest = false;
                 if let Some(editor) = &mut self.editor {
@@ -1393,6 +1401,7 @@ impl App {
             let playing = session.failure.is_none()
                 && !self.paused
                 && !self.menu_over_game
+                && !self.hud.sandbox_typing()
                 && session.display.as_ref().is_some_and(|snapshot| {
                     !snapshot.match_state.finished
                         && snapshot
@@ -1532,11 +1541,19 @@ impl App {
                 && !self.community.focused()
                 && is_key_pressed(KeyCode::Escape)
             {
-                self.paused = !self.paused;
-                self.hud.evolution = false;
-                self.hud.sandbox = false;
+                if self.hud.sandbox {
+                    self.hud.close_sandbox();
+                } else {
+                    self.paused = !self.paused;
+                    self.hud.evolution = false;
+                }
             }
-            if !self.paused && !community_key && !self.creator.open && !self.community.focused() {
+            if !self.paused
+                && !community_key
+                && !self.creator.open
+                && !self.community.focused()
+                && !self.hud.sandbox_typing()
+            {
                 if is_key_pressed(KeyCode::M) {
                     self.voice.toggle();
                 }
@@ -2424,6 +2441,7 @@ impl App {
             && !self.menu_over_game
             && !self.creator.open
             && !self.community.admin_open
+            && !self.hud.sandbox
             && let Some(session) = &self.session
             && session.failure.is_none()
             && session.display.is_some()
@@ -2656,6 +2674,10 @@ impl App {
 }
 fn main() {
     let cli = Cli::parse();
+    if cli.diagnostics_path {
+        println!("{}", startup::diagnostics_directory().display());
+        return;
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     hardware::prepare(&Settings::load(), cli.safe_graphics);
     let conf = window_conf(&cli);

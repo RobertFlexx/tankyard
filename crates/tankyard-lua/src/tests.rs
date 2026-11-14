@@ -230,6 +230,72 @@ fn scripts_change_gameplay_through_validated_commands() {
 }
 
 #[test]
+fn hostile_effect_arguments_discard_the_entire_event_batch() {
+    for call in [
+        "tankyard.animate_map_group(1, 'bob', 0/0, 1)",
+        "tankyard.animate_map_group(1, 'not_an_animation', 5, 1)",
+        "tankyard.play_sound('alarm', 0/0, 0, 50)",
+        "tankyard.play_sound('missing_sound', 0, 0, 50)",
+        "tankyard.shake_view(nil, math.huge, 1)",
+        "tankyard.scale_map_group(1, -10)",
+        "tankyard.tint_map_group(1, '#ffffff', 1000)",
+        "tankyard.stop_map_group(33)",
+    ] {
+        let source = format!(
+            "tankyard.on('tick', function() tankyard.set_level(tankyard.tanks()[1].id, 40); {call} end)"
+        );
+        let (world, runtime) = run(&source, 3);
+        assert_eq!(runtime.errors.len(), 1, "{call}: {:?}", runtime.errors);
+        assert_eq!(world.tanks[0].level, 1, "partial batch escaped: {call}");
+        assert!(world.match_state.tweens.is_empty());
+        assert!(!world.events.iter().any(|e| matches!(
+            e.kind,
+            tankyard_core::EventKind::MapSound | tankyard_core::EventKind::MapShake
+        )));
+    }
+}
+
+#[test]
+fn pack_module_cycles_and_paths_cannot_escape_or_poison_another_pack() {
+    let mut cyclic = pack(
+        "assert(not pcall(require,'alpha')); for _, name in ipairs({'../secret','/etc/passwd','file://secret','..','a\\\\b'}) do assert(not pcall(require,name)) end",
+    );
+    cyclic
+        .sources
+        .insert("alpha.lua".into(), "return require('beta')".into());
+    cyclic
+        .sources
+        .insert("beta.lua".into(), "return require('alpha')".into());
+    LuaPlugin::new(&info("cycles"), &cyclic, &Content::builtin(), 1).unwrap();
+    let mut first = pack(
+        "require('shared').mark='first'; _G.cross_pack='first'; math.floor=function() return -999 end",
+    );
+    first
+        .sources
+        .insert("shared.lua".into(), "return {}".into());
+    let mut second = pack(
+        "assert(_G.cross_pack==nil); assert(require('shared').mark==nil); assert(math.floor(3.9)==3); tankyard.on('tick',function() tankyard.set_level(tankyard.tanks()[1].id,2) end)",
+    );
+    second
+        .sources
+        .insert("shared.lua".into(), "return {}".into());
+    let mut runtime = ModRuntime::default();
+    for (id, script) in [("first", first), ("second", second)] {
+        runtime
+            .install(Box::new(
+                LuaPlugin::new(&info(id), &script, &Content::builtin(), 1).unwrap(),
+            ))
+            .unwrap();
+    }
+    let mut world = world();
+    world.add_player("Pilot", false);
+    world.step_with(|w| runtime.before_step(w));
+    runtime.after_step(&mut world);
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    assert_eq!(world.tanks[0].level, 2);
+}
+
+#[test]
 fn invalid_requests_disable_the_pack_without_partial_effects() {
     let (world, runtime) = run(
         r#"
