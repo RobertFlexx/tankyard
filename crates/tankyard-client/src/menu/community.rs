@@ -63,7 +63,7 @@ impl Menu {
             );
             y += 52.0 * s;
             let mut value = f32::from(server.max_players);
-            slider_value(
+            slider_integer_value(
                 Rect::new(px, y, pw, 50.0 * s),
                 "Max players",
                 &mut value,
@@ -75,7 +75,7 @@ impl Menu {
             server.max_players = value as u16;
             y += 50.0 * s;
             let mut value = f32::from(server.lobby_size);
-            slider_value(
+            slider_integer_value(
                 Rect::new(px, y, pw, 50.0 * s),
                 "Lobby size",
                 &mut value,
@@ -93,7 +93,7 @@ impl Menu {
             server.lobby_size = value as u16;
             y += 50.0 * s;
             let mut value = f32::from(server.bots);
-            slider_value(
+            slider_integer_value(
                 Rect::new(px, y, pw, 50.0 * s),
                 "Bots per lobby",
                 &mut value,

@@ -13,6 +13,9 @@ const SAMPLES: usize = 5;
 const SPACING: Duration = Duration::from_millis(90);
 /// How long the last request may take to come back.
 const GRACE: Duration = Duration::from_millis(1200);
+// A replying server must not keep the receive loop busy past the deadline
+// by sending junk continuously. Match the bridge's bounded pump batches.
+const RECEIVE_BATCH: usize = 32;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Probe {
@@ -25,8 +28,8 @@ pub struct Probe {
     pub loss: f32,
 }
 
-/// Query `address` and measure its connection. Blocks for up to about two
-/// seconds; call it from a background thread.
+/// Query `address` and measure its connection. Sampling takes about two
+/// seconds after DNS/relay connection setup; call it from a background thread.
 pub fn probe(address: &str) -> Result<Probe, NetError> {
     let address = address.trim();
     if address.is_empty() || address.len() > 256 || address.starts_with("tankyard://") {
@@ -66,7 +69,7 @@ pub fn probe(address: &str) -> Result<Probe, NetError> {
                 let _ = socket.send_to(&status_request(base.wrapping_add(index as u64)), target);
             }
         }
-        loop {
+        for _ in 0..RECEIVE_BATCH {
             match socket.recv_from(&mut buffer) {
                 Ok((len, from)) if from == target => {
                     let Some((nonce, reply)) = parse_status_reply(&buffer[..len]) else {
@@ -107,4 +110,51 @@ pub fn probe(address: &str) -> Result<Probe, NetError> {
         jitter_ms,
         loss: 1. - rtts.len() as f32 / SAMPLES as f32,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    #[test]
+    fn junk_floods_do_not_extend_the_probe_deadline() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let address = server.local_addr().unwrap().to_string();
+        server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        server.set_nonblocking(false).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let finished = stop.clone();
+        let flood = std::thread::spawn(move || {
+            let mut request = [0; 2048];
+            let (_, client) = server.recv_from(&mut request).unwrap();
+            let until = Instant::now() + Duration::from_secs(4);
+            let mut sent = 0;
+            while !finished.load(Ordering::Relaxed) && Instant::now() < until {
+                for _ in 0..256 {
+                    if server.send_to(&[0xff; 32], client).is_ok() {
+                        sent += 1;
+                    }
+                }
+                std::thread::yield_now();
+            }
+            sent
+        });
+        let start = Instant::now();
+        let result = probe(&address);
+        let elapsed = start.elapsed();
+        stop.store(true, Ordering::Relaxed);
+        let sent = flood.join().unwrap();
+        assert!(sent > 100, "fixture must exercise a busy socket");
+        assert!(result.is_err());
+        assert!(
+            elapsed < Duration::from_millis(3500),
+            "probe took {elapsed:?}"
+        );
+    }
 }

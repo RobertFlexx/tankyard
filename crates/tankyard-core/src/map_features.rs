@@ -931,8 +931,22 @@ impl MapLogic {
         } else {
             return;
         }
-        self.arrivals
-            .retain(|&(_, group, channel)| group != tween.group || channel != tween.channel);
+        // A return or replacement may begin on the same tick the old motion
+        // finished. Preserve that completed arrival for the watchers below,
+        // while cancelling future superseded arrivals. One completed entry
+        // per channel keeps chains bounded even with many instant motions.
+        let mut completed = false;
+        self.arrivals.retain(|&(at, group, channel)| {
+            if group != tween.group || channel != tween.channel {
+                return true;
+            }
+            if at <= tween.start && !completed {
+                completed = true;
+                true
+            } else {
+                false
+            }
+        });
         // A motion with nowhere to go, like a door told to open while it is
         // open, arrives nowhere.
         if tween.from != tween.to {
@@ -2126,6 +2140,38 @@ mod tests {
         assert!((poses.opacity(2) - 0.25).abs() < 1e-3);
         assert_eq!(poses.offset(3), [0.2, 0.1]);
         assert_eq!(poses.offset(2), [0., 0.]);
+    }
+
+    #[test]
+    fn short_return_delays_do_not_swallow_the_outward_arrival() {
+        for action in [TriggerAction::Scale, TriggerAction::Animate] {
+            let mut bench = Bench::new(vec![
+                MapTrigger {
+                    group: 2,
+                    amount: if action == TriggerAction::Scale {
+                        140
+                    } else {
+                        14
+                    },
+                    tween: 0.02,
+                    duration: 0.001,
+                    seconds: 0.,
+                    ..trigger(TriggerWhen::Start, action)
+                },
+                MapTrigger {
+                    source: 2,
+                    group: 1,
+                    amount: 1,
+                    seconds: 0.,
+                    ..trigger(TriggerWhen::Arrived, TriggerAction::Count)
+                },
+            ]);
+            bench.run(0.3, &[]);
+            assert_eq!(
+                bench.logic.counters[0], 2,
+                "{action:?}: outward and return each arrive"
+            );
+        }
     }
 
     #[test]

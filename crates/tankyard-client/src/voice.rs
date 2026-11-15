@@ -51,17 +51,25 @@ pub struct VoiceChat {
     decoders: HashMap<u64, VoiceDecoder>,
     capture_enabled: Arc<AtomicBool>,
     mixer: Arc<Mutex<Mixer>>,
-    errors: Receiver<String>,
-    report_error: SyncSender<String>,
+    errors: Receiver<DeviceError>,
+    report_error: SyncSender<DeviceError>,
     error: Option<String>,
-    output_failed: bool,
+    output_retry: Option<Instant>,
     speaking: Option<Instant>,
     microphone: Texture2D,
     microphone_off: Texture2D,
 }
 
+enum DeviceError {
+    Input(String),
+    Output(String),
+}
+
 impl VoiceChat {
     pub fn new(disabled: bool) -> Self {
+        if !disabled {
+            crate::map_sounds::prepare();
+        }
         let (report_error, errors) = mpsc::sync_channel(4);
         let microphone = Texture2D::from_file_with_format(
             include_bytes!("../../../assets/icons/lucide/mic.png"),
@@ -89,7 +97,7 @@ impl VoiceChat {
             errors,
             report_error,
             error: None,
-            output_failed: false,
+            output_retry: None,
             speaking: None,
             microphone,
             microphone_off,
@@ -102,7 +110,7 @@ impl VoiceChat {
         self.session = None;
         self.active = false;
         self.sequence = 0;
-        self.output_failed = false;
+        self.output_retry = None;
         self.error = None;
         self.decoders.clear();
         if let Ok(mut mixer) = self.mixer.lock() {
@@ -121,6 +129,7 @@ impl VoiceChat {
     }
 
     pub fn toggle(&mut self) {
+        self.poll_errors();
         if !self.muted {
             self.mute();
             return;
@@ -129,7 +138,6 @@ impl VoiceChat {
             return;
         }
         self.error = None;
-        self.output_failed = false;
         match self.start_input() {
             Ok(()) => self.muted = false,
             Err(error) => {
@@ -156,12 +164,7 @@ impl VoiceChat {
             && client.voice_enabled
             && !client.voice_muted
             && playing;
-        while let Ok(error) = self.errors.try_recv() {
-            self.mute();
-            self.output = None;
-            self.output_failed = true;
-            self.error = Some(error);
-        }
+        self.poll_errors();
         if !client.voice_enabled || client.voice_muted || !client.is_ready() {
             self.mute();
         }
@@ -215,11 +218,10 @@ impl VoiceChat {
         }
         if !client.voice_packets.is_empty()
             && self.output.is_none()
-            && !self.output_failed
+            && self.output_retry_ready()
             && let Err(error) = self.start_output()
         {
             self.error = Some(format!("Voice playback unavailable: {error}"));
-            self.output_failed = true;
         }
         self.decoders.retain(|player, voice| {
             !muted_players.contains(player) && voice.received.elapsed() < Duration::from_secs(1)
@@ -315,14 +317,42 @@ impl VoiceChat {
                     }
                 },
                 move |error| {
-                    let _ = errors.try_send(format!("Microphone disconnected: {error}"));
+                    let _ = errors.try_send(DeviceError::Input(error.to_string()));
                 },
                 None,
             )
             .map_err(|e| e.to_string())
     }
 
+    // Poll from every playback path, including offline games and workshop
+    // previews. Microphone failures must not tear down healthy speakers.
+    fn poll_errors(&mut self) {
+        while let Ok(error) = self.errors.try_recv() {
+            match error {
+                DeviceError::Input(error) => {
+                    self.mute();
+                    self.error = Some(format!("Microphone disconnected: {error}"));
+                }
+                DeviceError::Output(error) => {
+                    self.output = None;
+                    self.output_retry = Some(Instant::now() + Duration::from_secs(2));
+                    if let Ok(mut mixer) = self.mixer.lock() {
+                        mixer.cues.clear();
+                        mixer.alarm.clear();
+                        mixer.voices.clear();
+                        mixer.a = 0.;
+                        mixer.b = 0.;
+                    }
+                    self.error = Some(format!("Audio output disconnected: {error}"));
+                }
+            }
+        }
+    }
+    fn output_retry_ready(&self) -> bool {
+        self.output_retry.is_none_or(|at| Instant::now() >= at)
+    }
     fn start_output(&mut self) -> Result<(), String> {
+        self.output_retry = Some(Instant::now() + Duration::from_secs(2));
         let device = cpal::default_host()
             .default_output_device()
             .ok_or("No output device")?;
@@ -337,18 +367,27 @@ impl VoiceChat {
         }?;
         stream.play().map_err(|e| e.to_string())?;
         self.output = Some(stream);
+        self.output_retry = None;
+        if self.error.as_deref().is_some_and(|e| {
+            e.starts_with("Audio unavailable:")
+                || e.starts_with("Voice playback unavailable:")
+                || e.starts_with("Audio output disconnected:")
+        }) {
+            self.error = None;
+        }
         Ok(())
     }
 
     pub fn pocket_ambience(&mut self, active: bool, volume: f32) {
+        self.poll_errors();
         let active = active && !self.disabled;
         if active
+            && volume.is_finite()
             && volume > 0.
             && self.output.is_none()
-            && !self.output_failed
+            && self.output_retry_ready()
             && let Err(error) = self.start_output()
         {
-            self.output_failed = true;
             log::warn!("Pocket audio unavailable: {error}");
         }
         if let Ok(mut mixer) = self.mixer.lock() {
@@ -358,19 +397,29 @@ impl VoiceChat {
 
     pub fn effects_volume(&mut self, volume: f32) {
         if let Ok(mut mixer) = self.mixer.lock() {
-            mixer.alarm_volume = volume.clamp(0., 1.);
+            let volume = if volume.is_finite() {
+                volume.clamp(0., 1.)
+            } else {
+                0.
+            };
+            mixer.alarm_volume = volume;
+            mixer.cue_volume = volume;
         }
     }
 
     pub fn boss_alarm(&mut self, volume: f32) {
-        if self.disabled || volume <= 0. {
+        self.poll_errors();
+        if self.disabled || !volume.is_finite() || volume <= 0. {
             return;
         }
-        if self.output.is_none()
-            && let Err(error) = self.start_output()
-        {
-            self.error = Some(format!("Audio unavailable: {error}"));
-            return;
+        if self.output.is_none() {
+            if !self.output_retry_ready() {
+                return;
+            }
+            if let Err(error) = self.start_output() {
+                self.error = Some(format!("Audio unavailable: {error}"));
+                return;
+            }
         }
         if let Ok(mut mixer) = self.mixer.lock() {
             let wav = include_bytes!("../../../assets/audio/boss-arrival.wav");
@@ -385,37 +434,42 @@ impl VoiceChat {
             mixer.alarm_volume = volume.clamp(0., 1.);
         }
     }
-    /// Play a map's sound once at `volume` (0 to 1, distance included). A
-    /// few may overlap; past that the oldest gives way.
-    pub fn map_sound(&mut self, sound: tankyard_content::MapSound, volume: f32) {
-        if self.disabled || volume <= 0.001 {
+    /// Play a map sound with its trigger/distance gain and the current effects
+    /// volume. Bursts coalesce and already playing cues follow volume changes.
+    pub fn map_sound(&mut self, sound: tankyard_content::MapSound, gain: f32, volume: f32) {
+        self.poll_errors();
+        self.effects_volume(volume);
+        if self.disabled
+            || !volume.is_finite()
+            || volume <= 0.001
+            || !gain.is_finite()
+            || gain <= 0.001
+        {
             return;
         }
-        if self.output.is_none()
-            && let Err(error) = self.start_output()
-        {
-            self.error = Some(format!("Audio unavailable: {error}"));
-            return;
+        if self.output.is_none() {
+            if !self.output_retry_ready() {
+                return;
+            }
+            if let Err(error) = self.start_output() {
+                self.error = Some(format!("Audio unavailable: {error}"));
+                return;
+            }
         }
         let samples = crate::map_sounds::samples(sound);
         if let Ok(mut mixer) = self.mixer.lock() {
-            if mixer.cues.len() >= CUE_LIMIT {
-                mixer.cues.remove(0);
-            }
-            mixer.cues.push(Cue {
-                samples,
-                at: 0,
-                gain: volume.clamp(0., 1.),
-            });
+            mixer.cue(samples, gain);
         }
     }
+
     pub fn preview_alarm(&mut self, volume: f32) -> Result<(), String> {
         if self.disabled {
             return Err("Audio is disabled by --no-audio.".into());
         }
-        if volume <= 0. {
-            return Err("Raise Master volume and Boss alarm to hear the preview.".into());
+        if !volume.is_finite() || volume <= 0. {
+            return Err("Raise Master volume and Effects volume to hear the preview.".into());
         }
+        self.output_retry = None; // An explicit preview may retry a newly connected device.
         self.boss_alarm(volume);
         if self.output.is_none() {
             Err(self
@@ -453,7 +507,7 @@ impl VoiceChat {
                     }
                 },
                 move |error| {
-                    let _ = errors.try_send(format!("Audio output disconnected: {error}"));
+                    let _ = errors.try_send(DeviceError::Output(error.to_string()));
                 },
                 None,
             )
@@ -849,6 +903,7 @@ struct Cue {
 struct Mixer {
     voices: HashMap<u64, Playback>,
     cues: Vec<Cue>,
+    cue_volume: f32,
     phase: f64,
     a: f32,
     b: f32,
@@ -858,6 +913,25 @@ struct Mixer {
     pocket: crate::pocket_audio::PocketAudio,
 }
 impl Mixer {
+    fn cue(&mut self, samples: Arc<[f32]>, gain: f32) {
+        if !gain.is_finite() || gain <= 0.001 {
+            return;
+        }
+        let gain = gain.clamp(0., 1.);
+        if let Some(cue) = self.cues.iter_mut().rev().find(|cue| {
+            Arc::ptr_eq(&cue.samples, &samples) && cue.at < VOICE_SAMPLE_RATE as usize / 40
+        }) {
+            cue.gain = cue.gain.max(gain);
+            return;
+        }
+        if self.cues.len() < CUE_LIMIT {
+            self.cues.push(Cue {
+                samples,
+                at: 0,
+                gain,
+            });
+        }
+    }
     fn sample(&mut self, rate: u32) -> f32 {
         while self.phase >= 1. {
             self.phase -= 1.;
@@ -875,7 +949,7 @@ impl Mixer {
             self.b = self.voices.values_mut().map(Playback::sample).sum::<f32>() * self.volume
                 + self.alarm.pop_front().unwrap_or(0.) * self.alarm_volume
                 + self.pocket.sample()
-                + cues;
+                + cues * self.cue_volume;
         }
         let sample = self.a + (self.b - self.a) * self.phase as f32;
         self.phase += f64::from(VOICE_SAMPLE_RATE) / f64::from(rate.max(1));
@@ -903,6 +977,73 @@ fn soft_clip(sample: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_cues_coalesce_bursts_without_restarting_and_respect_the_mix_budget() {
+        let mut mixer = Mixer {
+            cue_volume: 1.,
+            ..Default::default()
+        };
+        let chime = crate::map_sounds::samples(tankyard_content::MapSound::Chime);
+        mixer.cue(chime.clone(), 0.2);
+        for _ in 0..480 {
+            mixer.sample(48_000);
+        }
+        let at = mixer.cues[0].at;
+        for _ in 0..100 {
+            mixer.cue(chime.clone(), 0.6);
+        }
+        assert_eq!(mixer.cues.len(), 1);
+        assert_eq!(mixer.cues[0].at, at);
+        assert_eq!(mixer.cues[0].gain, 0.6);
+        for _ in 0..1200 {
+            mixer.sample(48_000);
+        }
+        mixer.cue(chime, 0.3);
+        assert_eq!(mixer.cues.len(), 2, "a later trigger plays separately");
+        let oldest = mixer.cues[0].samples.clone();
+        for _ in 0..100 {
+            mixer.cue(Arc::from(vec![0.2; 100]), 0.5);
+        }
+        assert_eq!(mixer.cues.len(), CUE_LIMIT);
+        assert!(Arc::ptr_eq(&oldest, &mixer.cues[0].samples));
+        for gain in [f32::NAN, f32::INFINITY, -1., 0.] {
+            mixer.cue(Arc::from(vec![0.2; 100]), gain);
+        }
+        for rate in [44_100, 48_000, 96_000] {
+            for _ in 0..rate * 2 {
+                let sample = mixer.sample(rate);
+                assert!(sample.is_finite() && sample.abs() <= 1.);
+            }
+        }
+        assert!(mixer.cues.is_empty());
+        assert_eq!(mixer.sample(48_000), 0.);
+    }
+
+    #[test]
+    fn volume_changes_and_mute_apply_to_map_cues_already_playing() {
+        let mut mixer = Mixer {
+            cue_volume: 0.5,
+            ..Default::default()
+        };
+        mixer.cue(Arc::from(vec![0.4; 100]), 0.5);
+        for _ in 0..8 {
+            mixer.sample(48_000);
+        }
+        assert!((mixer.sample(48_000) - 0.1).abs() < 1e-6);
+        mixer.cue_volume = 0.;
+        // The resampler retains its two preceding samples, then reaches silence.
+        for _ in 0..3 {
+            mixer.sample(48_000);
+        }
+        assert_eq!(mixer.sample(48_000), 0.);
+        assert!(!mixer.cues.is_empty());
+        mixer.cue_volume = 1.;
+        for _ in 0..3 {
+            mixer.sample(48_000);
+        }
+        assert!((mixer.sample(48_000) - 0.2).abs() < 1e-6);
+    }
 
     #[test]
     fn capture_resamples_common_devices_and_never_sends_silence() {

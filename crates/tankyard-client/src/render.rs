@@ -81,15 +81,15 @@ fn dashed_rect(view: &View, rect: tankyard_core::Rect, color: Color, thickness: 
 
 pub fn team_color(team: u8, local: bool, colorblind: bool) -> Color {
     if colorblind {
-        use crate::accessibility::{BLUE, GREEN, ORANGE, PURPLE};
-        return match team {
-            0 if local => BLUE,
-            0 => ORANGE,
-            1 => BLUE,
-            2 => ORANGE,
-            3 => PURPLE,
-            _ => GREEN,
-        };
+        let colors = crate::accessibility::team_palette();
+        return colors[match team {
+            0 if local => 0,
+            0 => 1,
+            1 => 0,
+            2 => 1,
+            3 => 2,
+            _ => 3,
+        }];
     }
     if team == 0 {
         if local { PLAYER_BLUE } else { RED }
@@ -132,7 +132,7 @@ pub fn team_marker(team: u8, local: bool, p: Vec2, radius: f32) {
             sides,
             (radius - edge).max(0.),
             angle,
-            team_color(team, local, true),
+            team_color(team, local, crate::accessibility::colorblind()),
         );
     }
 }
@@ -212,7 +212,13 @@ fn class_model_animated(
                 && body_color == color
                 && let Some(texture) = &class.body_texture
             {
-                crate::graphics::body(texture, center, radius, angle, color.a);
+                crate::graphics::body(
+                    texture,
+                    crate::ui_layout::position(center),
+                    radius,
+                    angle,
+                    color.a,
+                );
             }
         },
     );
@@ -607,6 +613,9 @@ pub fn world(
             2.0 * z,
             c,
         );
+        if objective.team > 0 && crate::accessibility::team_symbols() {
+            team_marker(objective.team, false, p, 7. * z);
+        }
         if objective.contested {
             center_label(
                 "CONTESTED",
@@ -1015,7 +1024,7 @@ pub fn world(
         if local != 0 && tank.id != local {
             arcade_player_label(tank, "", vec2(p.x, p.y - r - 14. * z), 320. * z, 15. * z);
         }
-        if settings.colorblind {
+        if crate::accessibility::team_symbols() {
             team_marker(
                 tank.team,
                 tank.id == local,

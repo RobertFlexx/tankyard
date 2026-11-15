@@ -80,7 +80,7 @@ impl Menu {
         let total = screen_width() - 80. * s;
         let column = (total - 36. * s) / 3.;
         let mut bots = self.bots as f32;
-        slider_value(
+        slider_integer_value(
             Rect::new(x, by + 80. * s, column, 48. * s),
             if self.party_active || self.party_setup {
                 "Team slots (friends + AI)"
@@ -542,7 +542,7 @@ impl Menu {
             {
                 render::class_model(
                     class,
-                    crate::ui_layout::position(vec2(r.x + r.w - 66.0 * s, r.y + 68.0 * s)),
+                    vec2(r.x + r.w - 66.0 * s, r.y + 68.0 * s),
                     26.0 * s,
                     -0.4,
                     0.0,

@@ -140,7 +140,7 @@ Every parameter needs an `id` of 1 to 32 UTF-8 bytes. `name` defaults to the ID 
 { id = "spacing", name = "Spacing", type = "number", min = 0, max = 400, step = 10, default = 80 }
 ```
 
-`min` defaults to 0 and `max` to 100, with `min < max`. `default` defaults to `min` and is clamped into the interval. `step` defaults to the larger of `(max - min) / 100` and `0.01`, and must be positive. These numeric fields must be finite and within ±10,000,000. The callback receives a number.
+`min` defaults to 0 and `max` to 100, with `min < max`. `default` defaults to `min` and is clamped into the interval. `step` defaults to the larger of `(max - min) / 100` and `0.01`, and must be positive. These numeric fields must be finite and within ±10,000,000. The callback receives a number. The drag step controls pointer adjustments; authors can still type a finer value, such as `12.5` with a step of `10`. Use Integer when fractions are not meaningful. Click the value box to enter a number or calculation, then press Enter to apply or Escape to cancel.
 
 ### Integer
 

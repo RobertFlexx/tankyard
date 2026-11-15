@@ -134,6 +134,21 @@ impl World {
         if !enabled {
             self.projectiles.retain(|p| p.owner != player);
         }
+        // Form changes must not carry a class's pocket, cloak or temporary
+        // combat effects into Axiom (or back out). Placement above is checked
+        // first, so a failed transformation leaves the current life intact.
+        let tank = &mut self.tanks[index];
+        tank.pocket = 0.;
+        tank.pocket_echoes.clear();
+        tank.protection = 0.;
+        tank.spawn_immunity = false;
+        tank.shield = 0.;
+        tank.boost = 0.;
+        tank.stasis = 0.;
+        tank.charge = 0.;
+        tank.knockback = 0.;
+        tank.terrain = 1.;
+        tank.push = V2::ZERO;
         self.tanks[index].creator_boss = enabled;
         self.tanks[index].creator_attacks = [0.; ATTACK_COUNT];
         self.tanks[index].pos = pos;
@@ -164,11 +179,51 @@ impl World {
             Attack::GravityWell => (12, 180., 18., 12., 4., ProjectileKind::Homing),
             Attack::RiftDash | Attack::Reforge => (0, 0., 0., 0., 0., ProjectileKind::Bullet),
         };
-        if count > 0 && self.projectiles.len().saturating_add(count) > self.config.max_projectiles {
-            return Err("Projectile limit reached. Try again shortly.".into());
-        }
         let tank = &self.tanks[index];
         let (origin, aim, team, radius_tank) = (tank.pos, tank.aim, tank.team, tank.radius);
+        if attack == Attack::Reforge && tank.health >= tank.max_health {
+            return Err("Axiom is already at full health.".into());
+        }
+        let mut shots = Vec::with_capacity(count);
+        for i in 0..count {
+            let angle = if matches!(attack, Attack::Starfall | Attack::MeteorShower) {
+                aim + (i as f32 - (count - 1) as f32 * 0.5) * 0.065
+            } else {
+                aim + i as f32 * std::f32::consts::TAU / count as f32
+            };
+            let direction = V2::from_angle(angle);
+            let offset = match attack {
+                Attack::NovaMines => 100.,
+                Attack::StarLattice => 60.,
+                Attack::SolarTurrets => 180.,
+                _ => 8.,
+            };
+            let pos = origin + direction * (radius_tank + radius + offset);
+            if self.position_clear(pos, radius) {
+                shots.push((pos, direction));
+            }
+        }
+        let retained = if attack == Attack::Repulse {
+            self.projectiles
+                .iter()
+                .filter(|p| {
+                    p.owner == player
+                        || (team > 0 && p.team == team)
+                        || p.pos.distance(origin) > 360.
+                })
+                .count()
+        } else {
+            self.projectiles.len()
+        };
+        let slots = self.config.max_projectiles.saturating_sub(retained);
+        if attack == Attack::Repulse {
+            shots.truncate(slots);
+        } else if shots.len() > slots {
+            return Err("Projectile limit reached. Try again shortly.".into());
+        }
+        if count > 0 && shots.is_empty() && attack != Attack::Repulse {
+            return Err("No clear space to launch that attack.".into());
+        }
         if matches!(attack, Attack::Repulse) {
             self.projectiles.retain(|p| {
                 p.owner == player || (team > 0 && p.team == team) || p.pos.distance(origin) > 360.
@@ -211,24 +266,7 @@ impl World {
             let tank = &mut self.tanks[index];
             tank.health = (tank.health + tank.max_health * 0.08).min(tank.max_health);
         }
-        for i in 0..count {
-            let angle = if matches!(attack, Attack::Starfall | Attack::MeteorShower) {
-                aim + (i as f32 - (count - 1) as f32 * 0.5) * 0.065
-            } else {
-                aim + i as f32 * std::f32::consts::TAU / count as f32
-            };
-            let direction = V2::from_angle(angle);
-            let offset = match attack {
-                Attack::NovaMines => 100.,
-                Attack::StarLattice => 60.,
-                Attack::SolarTurrets => 180.,
-                _ => 8.,
-            };
-            let pos = origin + direction * (radius_tank + radius + offset);
-            // Never emit a shot inside a wall or outside the arena.
-            if !self.position_clear(pos, radius) {
-                continue;
-            }
+        for (pos, direction) in shots {
             let shot = self.simple_projectile(
                 player,
                 team,
@@ -281,6 +319,9 @@ mod tests {
         assert_eq!(world.tanks[0].health, HEALTH);
         assert_eq!(world.tanks[0].radius, RADIUS);
         for attack in Attack::ALL {
+            if attack == Attack::Reforge {
+                world.tanks[0].health -= 1.;
+            }
             world.creator_attack(id, attack).unwrap();
             let count = world.projectiles.len();
             assert!(world.creator_attack(id, attack).is_err());
@@ -308,6 +349,119 @@ mod tests {
         world.creator_form(id, true).unwrap();
         world.tanks[0].pos = world.config.bounds().center();
         (world, id)
+    }
+    #[test]
+    fn form_changes_clear_class_effects_and_disable_the_underlying_ability() {
+        let (mut world, id) = event_world();
+        world.creator_form(id, false).unwrap();
+        let tank = &mut world.tanks[0];
+        tank.class = "bacteria".into();
+        tank.pocket = 8.;
+        tank.protection = 2.;
+        tank.spawn_immunity = true;
+        tank.shield = 3.;
+        tank.boost = 4.;
+        tank.stasis = 5.;
+        tank.charge = 1.;
+        tank.knockback = 0.3;
+        tank.terrain = 2.;
+        tank.push = V2::new(100., 30.);
+        world.creator_form(id, true).unwrap();
+        let tank = &world.tanks[0];
+        assert_eq!(tank.pocket, 0.);
+        assert!(tank.pocket_echoes.is_empty());
+        assert_eq!(tank.protection, 0.);
+        assert!(!tank.spawn_immunity);
+        assert_eq!(
+            [
+                tank.shield,
+                tank.boost,
+                tank.stasis,
+                tank.charge,
+                tank.knockback
+            ],
+            [0.; 5]
+        );
+        assert_eq!(tank.terrain, 1.);
+        assert_eq!(tank.push, V2::ZERO);
+        world.tanks[0].input.ability = true;
+        world.step();
+        assert_eq!(world.tanks[0].pocket, 0.);
+        let mut predicted = world.tanks[0].clone();
+        crate::physics::predict_tank(
+            &mut predicted,
+            &world.content,
+            &world.config,
+            &world.walls,
+            world.tick,
+            DT,
+        );
+        assert_eq!(predicted.pocket, 0.);
+        world.creator_form(id, false).unwrap();
+        world.tanks[0].ability_cooldown = 0.;
+        world.step();
+        assert!(world.tanks[0].pocket > 9.);
+    }
+    #[test]
+    fn failed_form_placement_preserves_the_current_life() {
+        let (mut world, id) = event_world();
+        world.creator_form(id, false).unwrap();
+        world.tanks[0].pocket = 4.;
+        world.tanks[0].boost = 2.;
+        let before = world.tanks[0].pos;
+        world.walls = vec![world.config.bounds()];
+        assert!(world.creator_form(id, true).is_err());
+        assert!(!world.tanks[0].creator_boss);
+        assert_eq!(world.tanks[0].pos, before);
+        assert_eq!(world.tanks[0].pocket, 4.);
+        assert_eq!(world.tanks[0].boost, 2.);
+    }
+    #[test]
+    fn blocked_attacks_and_full_health_reforge_do_not_spend_cooldowns() {
+        let (mut world, id) = event_world();
+        world.events.clear();
+        assert!(world.creator_attack(id, Attack::Reforge).is_err());
+        world.walls = vec![world.config.bounds()];
+        assert!(world.creator_attack(id, Attack::CometLance).is_err());
+        assert!(world.projectiles.is_empty());
+        assert!(world.events.is_empty());
+        assert_eq!(world.tanks[0].creator_attacks, [0.; ATTACK_COUNT]);
+    }
+    #[test]
+    fn repulse_clears_hostile_shots_even_when_the_projectile_budget_is_full() {
+        let (mut world, id) = event_world();
+        world.config.max_projectiles = 4;
+        world.tanks[0].team = 1;
+        let origin = world.tanks[0].pos;
+        for (owner, team, distance) in [
+            (id, 1, 250.),
+            (999, 1, 250.),
+            (998, 2, 500.),
+            (997, 2, 250.),
+        ] {
+            let shot = world.simple_projectile(
+                owner,
+                team,
+                origin + V2::new(distance, 0.),
+                V2::ZERO,
+                ProjectileKind::Bullet,
+                1.,
+                5.,
+                2.,
+                1.,
+            );
+            world.projectiles.push(shot);
+        }
+        world.creator_attack(id, Attack::Repulse).unwrap();
+        assert_eq!(world.projectiles.len(), 4);
+        assert!(world.projectiles.iter().any(|p| p.owner == 999));
+        assert!(world.projectiles.iter().any(|p| p.owner == 998));
+        assert!(!world.projectiles.iter().any(|p| p.owner == 997));
+        assert_eq!(
+            world.projectiles.iter().filter(|p| p.owner == id).count(),
+            2
+        );
+        assert!(world.tanks[0].creator_attacks[Attack::Repulse.index()] > 0.);
     }
     #[test]
     fn rift_dash_sweeps_the_colossal_body_against_walls_and_borders() {

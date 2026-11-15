@@ -18,7 +18,7 @@ impl Menu {
             if let Some(class) = self.practice_content.class("vector") {
                 render::class_model(
                     class,
-                    crate::ui_layout::position(vec2(x, r.y + 65. * s)),
+                    vec2(x, r.y + 65. * s),
                     15. * s,
                     -0.4 + (time * 0.7).sin() * 0.2,
                     0.,
@@ -27,15 +27,16 @@ impl Menu {
                     time,
                 );
             }
-            if settings.colorblind {
-                render::team_marker(
-                    team,
-                    false,
-                    crate::ui_layout::position(vec2(x, r.y + 70. * s)),
-                    3. * s,
-                );
+            if settings.colorblind || settings.team_symbols {
+                render::team_marker(team, false, vec2(x, r.y + 70. * s), 4.5 * s);
             }
-            center_label(&format!("Team {team}"), x, r.y + 104. * s, 11. * s, color);
+            center_label(
+                &format!("Team {team}"),
+                x,
+                r.y + 104. * s,
+                11. * s,
+                text_color(),
+            );
         }
         label(
             "Your tank",
@@ -166,7 +167,7 @@ impl Menu {
         let (w, h) = (screen_width(), screen_height());
         let physical = miniquad::window::screen_size();
         let ratio = (physical.0 / w.max(1.0)).max(1.0);
-        slider_value(
+        slider_percent_value(
             Rect::new(x, by + 82.0 * s, col, 48.0 * s),
             "Render scale",
             &mut settings.render_scale,
@@ -342,7 +343,7 @@ impl Menu {
         anchor: f32,
     ) {
         let mut preview = self.scale_edit.preview(settings.ui_scale);
-        if slider_value(
+        if slider_percent_value(
             rect,
             "Interface scale",
             &mut preview,
@@ -791,20 +792,44 @@ impl Menu {
                     &mut settings.colorblind,
                     s,
                 );
+                let palettes = crate::accessibility::VisionPalette::ALL;
+                for (i, palette) in palettes.into_iter().enumerate() {
+                    if button(
+                        Rect::new(
+                            x + i as f32 * col / 3.,
+                            by + 46. * s,
+                            col / 3. - 4. * s,
+                            30. * s,
+                        ),
+                        palette.name(),
+                        settings.colorblind && settings.colorblind_palette == palette,
+                        true,
+                        s * 0.64,
+                    ) {
+                        settings.colorblind_palette = palette;
+                        settings.colorblind = true;
+                    }
+                }
                 toggle(
-                    Rect::new(x, by + 58.0 * s, col, 33.0 * s),
+                    Rect::new(x, by + 98. * s, col, 33. * s),
+                    "Always show team symbols",
+                    &mut settings.team_symbols,
+                    s,
+                );
+                toggle(
+                    Rect::new(x, by + 156.0 * s, col, 33.0 * s),
                     "Reduced motion",
                     &mut settings.reduced_motion,
                     s,
                 );
                 toggle(
-                    Rect::new(x, by + 116.0 * s, col, 33.0 * s),
+                    Rect::new(x, by + 214.0 * s, col, 33.0 * s),
                     "High-contrast labels",
                     &mut settings.high_contrast,
                     s,
                 );
                 self.interface_scale(
-                    Rect::new(x, by + 188.0 * s, col, 48.0 * s),
+                    Rect::new(x, by + 286.0 * s, col, 48.0 * s),
                     settings,
                     s,
                     442.,
@@ -817,15 +842,42 @@ impl Menu {
                     17.0 * s,
                     text_color(),
                 );
+                if small_button(
+                    Rect::new(x, by + 354. * s, col, 30. * s),
+                    "Reset accessibility",
+                    s * 0.85,
+                ) {
+                    let defaults = Settings::default();
+                    settings.colorblind = defaults.colorblind;
+                    settings.colorblind_palette = defaults.colorblind_palette;
+                    settings.team_symbols = defaults.team_symbols;
+                    settings.high_contrast = defaults.high_contrast;
+                    settings.reduced_motion = defaults.reduced_motion;
+                    settings.ui_scale = defaults.ui_scale;
+                    self.scale_edit.cancel();
+                    cancel_numeric();
+                }
                 crate::accessibility::configure(
                     settings.colorblind,
                     settings.high_contrast,
                     settings.reduced_motion,
                 );
+                crate::accessibility::configure_vision(
+                    settings.colorblind_palette,
+                    settings.team_symbols,
+                );
                 self.accessibility_preview(
                     Rect::new(rx, by + 112. * s, col, 180. * s),
                     settings,
                     s,
+                );
+                wrap(
+                    "Choose the preview that is easiest to distinguish. Symbols identify teams independently of color; palettes can stay off if you prefer the original colors.",
+                    x,
+                    by + 405. * s,
+                    col,
+                    13. * s,
+                    muted_color(),
                 );
                 label("LOCAL PROFILE", rx, by + 310.0 * s, 13.0 * s, accent());
                 label(
@@ -867,11 +919,18 @@ impl Menu {
                 );
                 slider(
                     Rect::new(rx, by + 210. * s, col, 48. * s),
-                    "Boss alarm",
+                    "Effects volume",
                     &mut settings.effects_volume,
                     0.,
                     1.,
                     s,
+                );
+                label(
+                    "Map sounds, boss alarms and pocket ambience",
+                    rx,
+                    by + 276. * s,
+                    12. * s,
+                    muted_color(),
                 );
                 if button(
                     Rect::new(rx, by + 294. * s, col, 34. * s),

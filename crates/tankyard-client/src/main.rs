@@ -1291,11 +1291,13 @@ impl App {
             })
     }
     fn update(&mut self, dt: f32, s: f32) {
+        self.voice
+            .effects_volume(self.settings.master_volume * self.settings.effects_volume);
         if self.editor.is_some() {
             if !self.editor_playtest {
                 return;
             }
-            if is_key_pressed(KeyCode::Escape) {
+            if is_key_pressed(KeyCode::Escape) && !ui::numeric_active() {
                 if self.hud.sandbox {
                     self.hud.close_sandbox();
                     return;
@@ -1365,8 +1367,6 @@ impl App {
             self.menu.error = error;
         }
         self.effects.update(dt, self.settings.reduced_motion);
-        self.voice
-            .effects_volume(self.settings.master_volume * self.settings.effects_volume);
         if self.show_achievement_toasts() {
             self.achievement_feed.update(dt);
         }
@@ -1402,6 +1402,7 @@ impl App {
                 && !self.paused
                 && !self.menu_over_game
                 && !self.hud.sandbox_typing()
+                && !ui::numeric_active()
                 && session.display.as_ref().is_some_and(|snapshot| {
                     !snapshot.match_state.finished
                         && snapshot
@@ -1539,6 +1540,7 @@ impl App {
             if !community_key
                 && !self.creator.open
                 && !self.community.focused()
+                && !ui::numeric_active()
                 && is_key_pressed(KeyCode::Escape)
             {
                 if self.hud.sandbox {
@@ -1553,6 +1555,7 @@ impl App {
                 && !self.creator.open
                 && !self.community.focused()
                 && !self.hud.sandbox_typing()
+                && !ui::numeric_active()
             {
                 if is_key_pressed(KeyCode::M) {
                     self.voice.toggle();
@@ -1829,11 +1832,12 @@ impl App {
                 if matches!(event.kind, tankyard_core::EventKind::MapSound)
                     && let Some((sound, volume)) = tankyard_core::sound_of(event.value)
                 {
-                    let gain = volume
-                        * map_sounds::falloff(event.pos.distance(listener))
-                        * self.settings.master_volume
-                        * self.settings.effects_volume;
-                    self.voice.map_sound(sound, gain);
+                    let gain = volume * map_sounds::falloff(event.pos.distance(listener));
+                    self.voice.map_sound(
+                        sound,
+                        gain,
+                        self.settings.master_volume * self.settings.effects_volume,
+                    );
                 }
             }
         }
@@ -1869,7 +1873,8 @@ impl App {
             for (sound, volume) in editor.take_sounds() {
                 self.voice.map_sound(
                     sound,
-                    volume * self.settings.master_volume * self.settings.effects_volume,
+                    volume,
+                    self.settings.master_volume * self.settings.effects_volume,
                 );
             }
             match action {
@@ -2743,6 +2748,7 @@ async fn run(cli: Cli) {
     macroquad::texture::set_default_filter_mode(FilterMode::Linear);
     let mut pacer = FramePacer::default();
     loop {
+        ui::begin_frame();
         if is_quit_requested() {
             break;
         }
@@ -2802,6 +2808,7 @@ async fn run(cli: Cli) {
             app.settings.high_contrast,
             app.settings.reduced_motion,
         );
+        accessibility::configure_vision(app.settings.colorblind_palette, app.settings.team_symbols);
         let s = app.scale();
         app.update(dt, s);
         // Send this frame's input now; drawing takes a few milliseconds
@@ -2816,6 +2823,7 @@ async fn run(cli: Cli) {
         app.presentation.begin(&app.settings);
         app.draw(s);
         app.presentation.finish();
+        ui::end_frame();
         // Discard characters that no field consumed this frame.
         while get_char_pressed().is_some() {}
         if let Some(session) = &mut app.session {

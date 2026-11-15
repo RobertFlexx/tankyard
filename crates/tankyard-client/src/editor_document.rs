@@ -589,6 +589,64 @@ impl Document {
             object.set_rect(r);
         });
     }
+    /// Space centers evenly between the outermost centers; the end objects
+    /// stay put. Sorting does not change drawing order or trigger order.
+    pub fn distribute(&mut self, keys: &[Key], axis: usize) {
+        if axis > 1 {
+            return;
+        }
+        let mut items: Vec<_> = keys
+            .iter()
+            .filter_map(|&key| self.rect(key).map(|r| (key, r)))
+            .collect();
+        items.sort_by_key(|(key, _)| *key);
+        items.dedup_by_key(|(key, _)| *key);
+        items.sort_by(|(ka, a), (kb, b)| {
+            (a[axis] + a[axis + 2] * 0.5)
+                .total_cmp(&(b[axis] + b[axis + 2] * 0.5))
+                .then(ka.cmp(kb))
+        });
+        if items.len() < 3 {
+            return;
+        }
+        let first = items[0].1[axis] + items[0].1[axis + 2] * 0.5;
+        let last = items.last().unwrap().1;
+        let span = last[axis] + last[axis + 2] * 0.5 - first;
+        let count = items.len() - 1;
+        for (index, (key, mut r)) in items.into_iter().enumerate() {
+            r[axis] = first + span * index as f32 / count as f32 - r[axis + 2] * 0.5;
+            if let Some(mut object) = self.object(key) {
+                object.set_rect(r);
+                self.replace(key, object);
+            }
+        }
+    }
+    /// Match the widest/tallest selected rectangle, keeping centers wherever
+    /// the arena bounds allow. Point markers keep their fixed handles.
+    pub fn match_size(&mut self, keys: &[Key], axis: usize) {
+        if axis > 1 {
+            return;
+        }
+        let size = keys
+            .iter()
+            .filter_map(|&key| self.object(key))
+            .filter(|o| !o.is_point())
+            .map(|o| o.rect()[axis + 2])
+            .fold(0f32, f32::max);
+        if size <= 0. {
+            return;
+        }
+        self.edit_each(keys, |object, mut r| {
+            if object.is_point() {
+                return;
+            }
+            let center = r[axis] + r[axis + 2] * 0.5;
+            r[axis + 2] = size;
+            r[axis] = center - size * 0.5;
+            object.set_rect(r);
+        });
+    }
+
     /// Move the objects of `keys` to the end of their lists (drawn on top and,
     /// for triggers, run last) or the start. Returns their new keys.
     pub fn order(&mut self, keys: &[Key], front: bool) -> Vec<Key> {
@@ -1627,6 +1685,38 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spacing_keeps_the_end_centers_and_drawing_order_with_unequal_sizes() {
+        let mut doc = Document::default();
+        doc.map.walls = vec![
+            [0.1, 0.2, 0.1, 0.1],
+            [0.2, 0.3, 0.2, 0.1],
+            [0.7, 0.4, 0.2, 0.1],
+        ];
+        let keys = [Key::Wall(2), Key::Wall(0), Key::Wall(1), Key::Wall(1)];
+        let ends = (doc.map.walls[0], doc.map.walls[2]);
+        doc.distribute(&keys, 0);
+        assert!(close(doc.map.walls[0], ends.0) && close(doc.map.walls[2], ends.1));
+        let centers: Vec<_> = doc.map.walls.iter().map(|r| r[0] + r[2] * 0.5).collect();
+        assert!((centers[1] - (centers[0] + centers[2]) * 0.5).abs() < 1e-5);
+        assert_eq!(doc.map.walls[1][2..], [0.2, 0.1]);
+        assert_eq!(doc.map.walls[1][1], 0.3);
+    }
+    #[test]
+    fn matching_sizes_respects_the_arena_and_leaves_point_markers_alone() {
+        let mut doc = Document::default();
+        doc.map.walls = vec![[0.01, 0.3, 0.1, 0.1], [0.5, 0.4, 0.3, 0.2]];
+        doc.map.objective_positions = vec![[0.9, 0.9]];
+        let keys = [Key::Wall(0), Key::Wall(1), Key::Objective(0)];
+        doc.match_size(&keys, 0);
+        assert_eq!(doc.map.walls[0], [0., 0.3, 0.3, 0.1]);
+        assert!((doc.map.walls[1][0] - 0.5).abs() < 1e-5);
+        assert_eq!(doc.map.objective_positions, [[0.9, 0.9]]);
+        let before = doc.clone();
+        doc.distribute(&keys, 5);
+        doc.match_size(&keys, 5);
+        assert_eq!(doc, before);
+    }
     #[test]
     fn map_ids_follow_names_within_the_id_rules() {
         assert_eq!(map_id("Switch Yard 2"), "switch_yard_2");

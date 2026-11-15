@@ -1154,19 +1154,42 @@ pub fn validate_hooks(hooks: &[Hook], content: &Content) -> Result<(), String> {
 pub fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
     read_bounded_limit(path, MAX_PACK_BYTES).map_err(|e| e.replace("2 MiB", "1 MiB"))
 }
-pub(crate) fn read_bounded_limit(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
+/// Read a regular disk file with a byte limit. Special files are rejected
+/// before reading, and Unix opens are nonblocking to tolerate replacement by
+/// a named pipe. Used by pack, settings and project readers.
+pub fn read_bounded_limit(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     let megabytes = limit / (1024 * 1024);
-    if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > limit as u64 {
-        return Err(format!("mod file exceeds {megabytes} MiB"));
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("sources must be regular files".into());
+    }
+    if metadata.len() > limit as u64 {
+        return Err(format!("file exceeds {megabytes} MiB"));
     }
     use std::io::Read;
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut bytes = Vec::new();
-    file.take((limit + 1) as u64)
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A file replaced by a FIFO between metadata and open must not block
+        // the loader. O_NONBLOCK has no effect on ordinary disk files.
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|e| e.to_string())?;
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("sources must be regular files".into());
+    }
+    if metadata.len() > limit as u64 {
+        return Err(format!("file exceeds {megabytes} MiB"));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(limit.saturating_add(1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() > limit {
-        return Err(format!("mod file grew beyond {megabytes} MiB"));
+        return Err(format!("file grew beyond {megabytes} MiB"));
     }
     Ok(bytes)
 }
@@ -1195,7 +1218,7 @@ pub fn digest(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn test_dir() -> PathBuf {
+    pub(crate) fn test_dir() -> PathBuf {
         static ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
             "tankyard-mod-test-{}-{}",

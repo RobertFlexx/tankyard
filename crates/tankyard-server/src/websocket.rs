@@ -97,9 +97,9 @@ fn config() -> WebSocketConfig {
         .max_frame_size(Some(MAX_DATAGRAM + 8))
 }
 
-// A per-read timeout alone lets a slow sender hold a handshake slot forever.
-// Bound the entire upgrade; remove the deadline once the sockets are nonblocking.
-struct RelayStream {
+// Bound the complete handshake on both sides, including TLS reads. A per-read
+// timeout alone lets a peer extend an upgrade forever by trickling bytes.
+pub(crate) struct RelayStream {
     tcp: TcpStream,
     deadline: Option<Instant>,
 }
@@ -140,14 +140,20 @@ impl Write for RelayStream {
 }
 
 pub(crate) enum Stream {
-    Plain(TcpStream),
-    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+    Plain(RelayStream),
+    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, RelayStream>>),
 }
 impl Stream {
     fn tcp(&self) -> &TcpStream {
         match self {
-            Self::Plain(tcp) => tcp,
-            Self::Tls(tls) => &tls.sock,
+            Self::Plain(stream) => &stream.tcp,
+            Self::Tls(tls) => &tls.sock.tcp,
+        }
+    }
+    fn finish_handshake(&mut self) {
+        match self {
+            Self::Plain(stream) => stream.deadline = None,
+            Self::Tls(tls) => tls.sock.deadline = None,
         }
     }
 }
@@ -189,6 +195,10 @@ fn tls_config() -> Result<Arc<rustls::ClientConfig>, NetError> {
 }
 
 pub(crate) fn open(url: &str) -> Result<WebSocket<Stream>, NetError> {
+    open_with_timeout(url, CONNECT_TIMEOUT)
+}
+
+fn open_with_timeout(url: &str, timeout: Duration) -> Result<WebSocket<Stream>, NetError> {
     let request = url
         .into_client_request()
         .map_err(|e| NetError(format!("invalid server URL: {e}")))?;
@@ -202,18 +212,19 @@ pub(crate) fn open(url: &str) -> Result<WebSocket<Stream>, NetError> {
         .to_owned();
     let port = uri.port_u16().unwrap_or(if tls { 443 } else { 80 });
     let mut last_error = None;
-    let tcp = (host.as_str(), port)
+    let mut addresses = (host.as_str(), port)
         .to_socket_addrs()
-        .map_err(|e| NetError(format!("could not resolve {host}: {e}")))?
-        .find_map(
-            |addr| match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
-                Ok(tcp) => Some(tcp),
-                Err(e) => {
-                    last_error = Some(e);
-                    None
-                }
-            },
-        )
+        .map_err(|e| NetError(format!("could not resolve {host}: {e}")))?;
+    // Keep address fallback: a failed IPv6 attempt must not prevent trying
+    // IPv4. The upgrade gets one absolute budget once TCP is connected.
+    let tcp = addresses
+        .find_map(|addr| match TcpStream::connect_timeout(&addr, timeout) {
+            Ok(tcp) => Some(tcp),
+            Err(error) => {
+                last_error = Some(error);
+                None
+            }
+        })
         .ok_or_else(|| {
             NetError(match last_error {
                 Some(e) => format!("could not reach {host}:{port}: {e}"),
@@ -221,8 +232,10 @@ pub(crate) fn open(url: &str) -> Result<WebSocket<Stream>, NetError> {
             })
         })?;
     tcp.set_nodelay(true)?;
-    tcp.set_read_timeout(Some(CONNECT_TIMEOUT))?;
-    tcp.set_write_timeout(Some(CONNECT_TIMEOUT))?;
+    let tcp = RelayStream {
+        tcp,
+        deadline: Some(Instant::now() + timeout),
+    };
     let stream = if tls {
         let name = rustls::pki_types::ServerName::try_from(host.clone())
             .map_err(|e| NetError(format!("invalid TLS server name {host}: {e}")))?;
@@ -232,8 +245,11 @@ pub(crate) fn open(url: &str) -> Result<WebSocket<Stream>, NetError> {
     } else {
         Stream::Plain(tcp)
     };
-    let (socket, _) = tungstenite::client::client_with_config(request, stream, Some(config()))
+    let (mut socket, _) = tungstenite::client::client_with_config(request, stream, Some(config()))
         .map_err(|e| NetError(format!("WebSocket handshake with {host} failed: {e}")))?;
+    socket.get_mut().finish_handshake();
+    socket.get_ref().tcp().set_read_timeout(None)?;
+    socket.get_ref().tcp().set_write_timeout(None)?;
     socket.get_ref().tcp().set_nonblocking(true)?;
     Ok(socket)
 }
@@ -732,6 +748,84 @@ mod tests {
         );
         stream.deadline = None;
         assert_eq!(stream.remaining().unwrap(), None);
+    }
+
+    #[test]
+    fn a_trickling_server_cannot_extend_the_client_handshake() {
+        for tls in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = format!(
+                "{}://{}",
+                if tls { "wss" } else { "ws" },
+                listener.local_addr().unwrap()
+            );
+            let stop = Arc::new(AtomicBool::new(false));
+            let finished = stop.clone();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_millis(100)))
+                    .unwrap();
+                if tls {
+                    // A valid TLS handshake-record header whose body never
+                    // completes. This exercises rustls's internal read loop
+                    // without weakening certificate verification for tests.
+                    stream.write_all(&[0x16, 0x03, 0x03, 0x10, 0x00]).unwrap();
+                }
+                let until = Instant::now() + Duration::from_secs(3);
+                let mut bytes = b"HTTP/1.1 101 Switching Protocols\r\nX-Slow: "
+                    .iter()
+                    .copied()
+                    .chain(std::iter::repeat(b'x'));
+                while !finished.load(Ordering::Relaxed) && Instant::now() < until {
+                    let byte = if tls { 0 } else { bytes.next().unwrap() };
+                    if stream.write_all(&[byte]).is_err() {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(15));
+                }
+            });
+            let started = Instant::now();
+            let result = open_with_timeout(&address, Duration::from_millis(250));
+            let elapsed = started.elapsed();
+            stop.store(true, Ordering::Relaxed);
+            server.join().unwrap();
+            assert!(result.is_err());
+            assert!(
+                elapsed >= Duration::from_millis(100),
+                "fixture must exercise a partial handshake"
+            );
+            assert!(
+                elapsed < Duration::from_secs(2),
+                "slow upgrade took {elapsed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_completed_client_upgrade_outlives_its_connection_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("ws://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            thread::sleep(Duration::from_millis(700));
+            let _ = socket.send(Message::Binary(b"still connected".to_vec().into()));
+        });
+        let mut socket = open_with_timeout(&address, Duration::from_millis(500)).unwrap();
+        let until = Instant::now() + Duration::from_secs(3);
+        let result = loop {
+            match socket.read() {
+                Err(error) if would_block(&error) && Instant::now() < until => {
+                    thread::sleep(Duration::from_millis(2))
+                }
+                result => break result,
+            }
+        };
+        server.join().unwrap();
+        assert!(
+            matches!(result, Ok(Message::Binary(bytes)) if bytes.as_ref() == b"still connected")
+        );
     }
 
     #[test]

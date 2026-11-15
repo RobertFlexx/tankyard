@@ -57,6 +57,7 @@ pub async fn show(settings: &Settings) -> Option<Ambient> {
         settings.high_contrast,
         settings.reduced_motion,
     );
+    crate::accessibility::configure_vision(settings.colorblind_palette, settings.team_symbols);
     graphics::set_quality(settings.shape_quality);
     // It animates like a game: at the chosen frame cap, or battery saver's,
     // and otherwise as smoothly as the display allows.

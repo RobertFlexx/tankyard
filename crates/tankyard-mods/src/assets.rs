@@ -135,6 +135,13 @@ fn svg(bytes: &[u8]) -> Result<RgbaImage, String> {
     // No system fonts or external files: text without outlines is skipped.
     let options = usvg::Options {
         resources_dir: None,
+        // resources_dir=None only changes relative-path resolution. The
+        // default resolver still reads arbitrary local files, so deny string
+        // references explicitly; self-contained data URLs keep working.
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_string: Box::new(|_, _| None),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let tree = usvg::Tree::from_data(bytes, &options).map_err(|e| format!("invalid SVG: {e}"))?;
@@ -903,6 +910,34 @@ mod tests {
         assert_eq!(middle.0[3], 255);
         assert!(middle.0[2] > 200);
         assert_eq!(image.get_pixel(0, 0).0[3], 0);
+    }
+
+    #[test]
+    fn vector_images_cannot_read_files_outside_the_pack() {
+        let root = crate::tests::test_dir();
+        let external = root.join("outside.svg");
+        std::fs::write(&external, br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="red"/></svg>"#).unwrap();
+        let path = external
+            .to_string_lossy()
+            .replace('&', "&amp;")
+            .replace('"', "&quot;");
+        let source = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="40" height="40"><rect width="10" height="10" fill="blue"/><image x="20" y="20" width="20" height="20" xlink:href="{path}"/></svg>"#
+        );
+        let encoded: String = source.bytes().map(|byte| format!("%{byte:02X}")).collect();
+        let nested = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="40" height="40"><image width="40" height="40" xlink:href="data:image/svg+xml,{encoded}"/></svg>"#
+        );
+        for source in [source, nested] {
+            let image = decode("pack/icon.svg", source.as_bytes(), &none).unwrap();
+            assert_eq!(image.get_pixel(32, 32).0, [0, 0, 255, 255]);
+            assert_eq!(
+                image.get_pixel(200, 200).0[3],
+                0,
+                "an SVG image must not load a local file"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

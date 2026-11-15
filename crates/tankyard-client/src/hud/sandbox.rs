@@ -227,7 +227,7 @@ impl Hud {
             self.sandbox_level_pending = None;
         }
         let mut level = f32::from(self.sandbox_level_pending.unwrap_or(tank.level));
-        if slider_value(
+        if slider_integer_value(
             Rect::new(right, r.y + 96. * s, right_w, 48. * s),
             "Level",
             &mut level,

@@ -82,6 +82,8 @@ pub struct Settings {
     pub shake: f32,
     pub reduced_motion: bool,
     pub colorblind: bool,
+    pub colorblind_palette: crate::accessibility::VisionPalette,
+    pub team_symbols: bool,
     pub high_contrast: bool,
     pub dark_arena: bool,
     pub theme_chosen: bool,
@@ -159,7 +161,11 @@ impl CommunityServer {
             self.lobby_size = self.lobby_size.max(self.max_players.div_ceil(16));
         }
         self.bots = self.bots.min(48);
-        self.password.truncate(64);
+        let mut end = self.password.len().min(64);
+        while !self.password.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.password.truncate(end);
     }
 }
 impl Default for Settings {
@@ -195,6 +201,8 @@ impl Default for Settings {
             shake: 0.25,
             reduced_motion: false,
             colorblind: false,
+            colorblind_palette: Default::default(),
+            team_symbols: false,
             high_contrast: false,
             dark_arena: false,
             theme_chosen: false,
@@ -271,10 +279,8 @@ impl Settings {
             .map(|p| p.config_dir().join("settings.json"))
             .unwrap_or_else(|| PathBuf::from("shellvector-settings.json"));
         let path = if current.exists() { current } else { legacy };
-        let mut value = std::fs::metadata(&path)
+        let mut value = tankyard_mods::read_bounded(&path)
             .ok()
-            .filter(|metadata| metadata.len() <= 1024 * 1024)
-            .and_then(|_| std::fs::read(&path).ok())
             .and_then(|bytes| {
                 let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
                 let mut value: Self = serde_json::from_value(json.clone()).ok()?;
@@ -295,9 +301,7 @@ impl Settings {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
-        let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
-        std::fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
-        std::fs::rename(&temporary, &path).map_err(|e| e.to_string())
+        write_settings(&path, &bytes)
     }
     pub fn validate(&mut self) {
         self.bot_difficulty = self.bot_difficulty.min(3);
@@ -328,9 +332,10 @@ impl Settings {
         if !matches!(self.anti_aliasing, 1 | 4 | 8) {
             self.anti_aliasing = 4;
         }
-        // Snap to the steps the slider offers.
+        // Typed values can be finer than the drag step. Keep their precision
+        // when saving/reloading, subject to the renderer's supported range.
         self.render_scale = if self.render_scale.is_finite() {
-            (self.render_scale.clamp(0.5, 2.0) * 20.).round() / 20.
+            self.render_scale.clamp(0.5, 2.0)
         } else {
             1.0
         };
@@ -493,6 +498,33 @@ fn clean_address(value: &str) -> String {
         .take(128)
         .collect()
 }
+// Settings may hold a community server password. A new private temporary
+// file avoids following stale temp-file links and replaces the saved profile
+// only after the complete write succeeds.
+fn write_settings(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = path.with_extension(format!("json.{}.{stamp}.tmp", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary).map_err(|e| e.to_string())?;
+    let result = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    let result = result.and_then(|()| std::fs::rename(&temporary, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result.map_err(|e| e.to_string())
+}
+
 fn finite_clamp(value: f32, lo: f32, hi: f32, default: f32) -> f32 {
     if value.is_finite() {
         value.clamp(lo, hi)
@@ -674,6 +706,37 @@ mod tests {
     }
 
     #[test]
+    fn accessibility_choices_round_trip_and_old_colorblind_profiles_keep_their_palette() {
+        let old: Settings = serde_json::from_str(r#"{"colorblind":true}"#).unwrap();
+        assert!(old.colorblind);
+        assert_eq!(
+            old.colorblind_palette,
+            crate::accessibility::VisionPalette::RedGreen
+        );
+        assert!(!old.team_symbols);
+        for palette in crate::accessibility::VisionPalette::ALL {
+            let settings = Settings {
+                colorblind_palette: palette,
+                team_symbols: true,
+                ..Default::default()
+            };
+            let saved = serde_json::to_string(&settings).unwrap();
+            let loaded: Settings = serde_json::from_str(&saved).unwrap();
+            assert_eq!(loaded.colorblind_palette, palette);
+            assert!(loaded.team_symbols);
+        }
+        let unknown: Settings = serde_json::from_str(
+            r#"{"colorblind_palette":"future_palette","player_name":"Pilot"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            unknown.colorblind_palette,
+            crate::accessibility::VisionPalette::RedGreen
+        );
+        assert_eq!(unknown.player_name, "Pilot");
+    }
+
+    #[test]
     fn practice_records_round_trip_and_reject_invalid_or_duplicate_entries() {
         let mut settings: Settings = serde_json::from_str(
             r#"{"practice_records":[
@@ -712,6 +775,80 @@ mod tests {
         assert_eq!(settings.server_address.chars().count(), 128);
         assert!(settings.favorites.is_empty());
         assert_eq!(settings.key(0), KeyCode::W);
+    }
+
+    #[test]
+    fn community_password_limits_preserve_unicode_boundaries() {
+        for password in [
+            "界".repeat(32),
+            "🙂".repeat(24),
+            format!("{}🙂tail", "a".repeat(63)),
+            "ascii".into(),
+        ] {
+            let mut config = CommunityServer {
+                password: password.clone(),
+                ..Default::default()
+            };
+            config.clean();
+            assert!(config.password.len() <= 64);
+            assert!(password.starts_with(&config.password));
+            let next = password[config.password.len()..].chars().next();
+            assert!(next.is_none_or(|c| config.password.len() + c.len_utf8() > 64));
+        }
+    }
+
+    #[test]
+    fn precise_render_scale_survives_profile_validation_and_round_trip() {
+        let mut settings = Settings {
+            render_scale: 1.23,
+            ..Default::default()
+        };
+        settings.validate();
+        let mut loaded: Settings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        loaded.validate();
+        assert_eq!(loaded.render_scale, 1.23);
+    }
+
+    #[test]
+    fn profile_writes_are_private_atomic_and_remove_failed_temporaries() {
+        let root = std::env::temp_dir().join(format!(
+            "tankyard-settings-write-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("settings.json");
+        std::fs::write(&path, b"old profile").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        write_settings(&path, br#"{"width":1280}"#).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), br#"{"width":1280}"#);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let blocked = root.join("cannot-replace-directory");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("keep.txt"), b"keep").unwrap();
+        assert!(write_settings(&blocked, b"incomplete").is_err());
+        assert_eq!(std::fs::read(blocked.join("keep.txt")).unwrap(), b"keep");
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            2,
+            "failed writes must clean their own temporary file"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

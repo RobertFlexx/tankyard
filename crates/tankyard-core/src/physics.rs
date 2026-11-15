@@ -415,7 +415,8 @@ pub fn predict_tank(
     let Some(class) = content.class(&tank.class) else {
         return;
     };
-    let activate = tank.pocket <= 0.
+    let activate = !tank.creator_boss
+        && tank.pocket <= 0.
         && tank.input.ability
         && tank.ability_cooldown <= 0.0
         && class.ability != Ability::None;

@@ -451,7 +451,7 @@ impl Menu {
             self.page == Page::Mods && (self.mod_review.is_some() || self.mod_viewer.is_some());
         let interactive = set_interactive(false);
         set_interactive(interactive && !reviewing);
-        if is_key_pressed(KeyCode::Tab) && self.binding.is_none() {
+        if is_key_pressed(KeyCode::Tab) && self.binding.is_none() && !numeric_active() {
             self.focus_next(is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift));
         }
         self.servers.poll(get_time());
@@ -714,7 +714,7 @@ impl Menu {
         if let Some(basic) = content.class(showcase).or_else(|| content.class("vector")) {
             render::class_model(
                 basic,
-                crate::ui_layout::position(vec2(center, y - 25.0 * s)),
+                vec2(center, y - 25.0 * s),
                 25.0 * s,
                 -0.4 + (self.motion_time * 0.26).sin() * 0.16,
                 0.0,

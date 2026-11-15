@@ -95,7 +95,13 @@ The **Grid** switch cycles through 10, 20, 40, 80, 160 and 320 world units; Shif
 
 ## Inspector
 
-Click any slider's value to type an exact number, then press Enter (Esc cancels). With several objects selected, a change applies to every object that has that setting. Repeated edits to one setting undo as one step.
+Click a slider's value box to type an exact number. **Enter** applies it, **Escape** cancels, and **Tab / Shift+Tab** applies it and moves to the next or previous number. The inspector scrolls to keep the focused field visible. A valid edit also applies when you click elsewhere; invalid entries stay out of the map.
+
+Simple calculations work: `4000/2`, `(120+40)*2`, or `+=50`, `-=10`, `*=2`, `/=2` relative to the value you started editing. Values must fit the range shown by the control. Typed floating-point values can be finer than the slider's drag step, including subunit positions and sizes. Counts, channels, colors and other whole-number settings still round to whole numbers. Use Up/Down to step, Shift for larger steps or Alt for smaller ones. Hold Shift while dragging a slider for fine adjustment.
+
+Group and team numbers have the same entry boxes. Color controls accept `#RGB` or `#RRGGBB` as well as swatches and RGB sliders. Drag the inspector's scrollbar, or point inside it and use Page Up, Page Down, Home or End when no field has focus.
+
+With several objects selected, a change applies to every object that has that setting. **Space X evenly / Space Y evenly** spreads their centers between the two outermost objects. **Match widest / Match tallest** copies the largest selected dimension to the other rectangles. Each arrangement is one undo step; fixed-size point markers keep their size. Each committed numeric edit also undoes separately; a continuous slider drag remains one step.
 
 - **Map:** name, id, description, size, recommended players, wall style, floor, and the groups hidden when a round starts. Objects keep their relative place when the size changes.
 - **Object:** position, size, group and the settings for the selected kind. A group's *starts hidden* switch is available here, so a gate needs no trip to Map.
@@ -147,7 +153,7 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **On change:** its counter changes value at all, by any trigger or script. Setting a counter to the value it already has is not a change.
 - **On shown / On hidden:** its group is shown or hidden, however that happened: a trigger, an *Undo after* timer or a script. The groups a round starts with don't count, so a group hidden from the start doesn't fire On hidden.
 - **On boss down:** a boss is defeated anywhere in the arena. Pick one boss, or *Any boss*.
-- **On arrive:** a motion of its group ends: a move, turn, fade, tint, size change or an animation easing in or out, the trip back included. A motion cut short by another doesn't count, and neither does one with nowhere to go, such as a door told to open while it's open, or one that a Stop action halts. See [Motions](#motions).
+- **On arrive:** a motion of its group ends: a move, turn, fade, tint, size change or an animation easing in or out, the trip back included. Several motions ending for the same group in one simulation tick produce one event. A motion cut short by another doesn't count, and neither does one with nowhere to go, such as a door told to open while it's open, or one that a Stop action halts. See [Motions](#motions).
 
 ### Actions
 
@@ -229,7 +235,7 @@ Effects change how a group looks and how the arena feels without touching collis
   *Times a second* sets the pace, from 0.05 to 12. The five styles play together, so one group can bob and sway at once. Size 0 settles a style; with Over, it eases out. Changing the pace of a running animation keeps it where it is in its cycle, so it never jumps.
 - **Stop group** halts everything the group's motions are doing, where it is: moves, turns, fades, tints and sizes stop part way, animations freeze mid-pose, and any trip back is cancelled. Nothing that was stopped arrives, so On arrive triggers stay quiet. Play another motion to start the group again.
 - **Shake screen** shakes the views of the noticed tanks inside the area, at a strength from 1 to 100% for 0.1 to 10 seconds. A stronger shake replaces a weaker one. Players can turn shaking down with **Camera shake** in Settings, and Reduced motion turns it off.
-- **Play sound** plays Chime, Bell, Alarm, Switch, Whoosh, Rumble, Fanfare or Thump at the middle of the trigger's area, at 1–100% volume. Players nearby hear it at full volume and it fades out a little past the edge of the screen. It uses each player's Effects volume.
+- **Play sound** plays Chime, Bell, Alarm, Switch, Whoosh, Rumble, Fanfare or Thump at the middle of the trigger's area, at 1–100% volume. Players nearby hear it at full volume and it fades out a little past the edge of the screen. It uses each player's Effects volume. Bursts of the same sound within 25 milliseconds share a cue, with the loudest volume retained. Up to twelve cues overlap; additional sounds in a full mix are skipped, so sounds already playing can finish.
 
 Reduced motion holds animations still but keeps tints and sizes, since those carry meaning: a red door is still red. Tint, Scale and Animate need Tank Yard 1.1.0 or later on the server and every player.
 

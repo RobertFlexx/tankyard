@@ -150,52 +150,55 @@ impl Form<'_> {
             if is_mouse_button_pressed(MouseButton::Left) {
                 *self.focus = Some(id);
                 *self.entry = text;
+                reset_field(self.entry);
+                select_field_all(self.entry);
                 *self.seen = true;
             }
         }
     }
     /// A slider whose value can also be clicked and typed.
     pub fn number(&mut self, title: &str, value: &mut f32, limits: [f32; 2], step: f32) -> bool {
+        self.numeric(title, value, limits, step, false)
+    }
+    fn numeric(
+        &mut self,
+        title: &str,
+        value: &mut f32,
+        limits: [f32; 2],
+        step: f32,
+        integer: bool,
+    ) -> bool {
         let before = *value;
-        let s = self.s;
-        let format = move |v: f32| {
-            if step >= 1. {
+        let previous = numeric_scope(self.id(title));
+        let rect = Rect::new(self.x, self.y, self.w, 31. * self.s);
+        if integer {
+            slider_integer_value(rect, title, value, limits, step, self.s * 0.8, |v| {
                 format!("{v:.0}")
-            } else if step >= 0.1 {
-                format!("{v:.1}")
-            } else {
-                format!("{v:.2}")
-            }
-        };
-        let id = self.id(title);
-        let typing = *self.focus == Some(id);
-        slider_value(
-            Rect::new(self.x, self.y, self.w, 31. * s),
-            title,
-            value,
-            limits,
-            step,
-            s * 0.74,
-            |v| if typing { String::new() } else { format(v) },
-        );
-        let field = Rect::new(self.x + self.w - 86. * s, self.y - 4. * s, 86. * s, 24. * s);
-        if let Some(text) = self.typed(id, field) {
-            if let Ok(typed) = text.parse::<f32>()
-                && typed.is_finite()
-            {
-                let typed = if step >= 1. { typed.round() } else { typed };
-                *value = typed.clamp(limits[0], limits[1]);
-            }
+            });
         } else {
-            self.open(id, field, format(*value));
+            slider_value(rect, title, value, limits, step, self.s * 0.8, |v| {
+                format!("{v:.3}")
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_owned()
+            });
         }
-        self.y += 48. * s;
+        numeric_scope(previous);
+        self.y += 48. * self.s;
         *value != before
     }
     pub fn integer(&mut self, title: &str, value: &mut i32, limits: [i32; 2]) -> bool {
         let mut v = *value as f32;
-        let changed = self.number(title, &mut v, [limits[0] as f32, limits[1] as f32], 1.);
-        *value = (v.round() as i32).clamp(limits[0], limits[1]);
+        self.numeric(
+            title,
+            &mut v,
+            [limits[0] as f32, limits[1] as f32],
+            1.,
+            true,
+        );
+        let next = (v.round() as i32).clamp(limits[0], limits[1]);
+        let changed = *value != next;
+        *value = next;
         changed
     }
     pub fn text(&mut self, title: &str, value: &mut String, max: usize) -> bool {
@@ -307,7 +310,7 @@ impl Form<'_> {
         let before = *value;
         let h = 28. * s;
         let free_w = if free.is_some() { 52. * s } else { 0. };
-        let box_w = 46. * s;
+        let box_w = 60. * s;
         let start = self.x + self.w - free_w - box_w - h * 2. - 8. * s;
         label(
             &fitted_label(title, 13. * s, start - self.x - 6. * s),
@@ -316,35 +319,33 @@ impl Form<'_> {
             13. * s,
             text_color(),
         );
-        if button(
+        let decrease = button(
             Rect::new(start, self.y, h, h),
             "−",
             false,
             *value > range[0],
             s * 0.8,
-        ) {
-            *value -= 1;
-        }
+        );
         let field = Rect::new(start + h + 2. * s, self.y, box_w, h);
-        let id = self.id(title);
-        if let Some(text) = self.typed(id, field) {
-            if let Ok(typed) = text.parse::<u8>() {
-                *value = typed.clamp(range[0], range[1]);
-            }
+        let shown = if *value == 0 && range[0] == 0 && free.is_some() {
+            "none".to_owned()
         } else {
-            let shown = if *value == 0 && range[0] == 0 && free.is_some() {
-                "none".to_owned()
-            } else {
-                value.to_string()
-            };
-            center_label(
-                &shown,
-                field.center().x,
-                field.y + h * 0.68,
-                14. * s,
-                text_color(),
-            );
-            self.open(id, field, value.to_string());
+            value.to_string()
+        };
+        let previous = numeric_scope(self.id(title));
+        let mut exact = f32::from(*value);
+        number_box(
+            field,
+            title,
+            &mut exact,
+            range.map(f32::from),
+            s * 0.85,
+            &shown,
+        );
+        numeric_scope(previous);
+        *value = exact.round() as u8;
+        if decrease {
+            *value = value.saturating_sub(1).max(range[0]);
         }
         if button(
             Rect::new(field.right() + 2. * s, self.y, h, h),
@@ -401,9 +402,57 @@ impl Form<'_> {
             }
         }
         self.y += (size * 0.6 + 5. * s) * 2. + 8. * s;
+        let field = Rect::new(self.x + 44. * s, self.y, self.w - 44. * s, 28. * s);
+        label("Hex", self.x, self.y + 19. * s, 12. * s, muted_color());
+        let id = self.id("Hex color");
+        let mut invalid = false;
+        if let Some(text) = self.typed(id, field) {
+            if let Some(color) = tankyard_client::number_input::hex_color(&text) {
+                *rgb = color;
+            } else if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
+                *self.focus = Some(id);
+                *self.seen = true;
+                invalid = true;
+            }
+        } else if *self.focus != Some(id) {
+            draw_rectangle(
+                field.x,
+                field.y,
+                field.w,
+                field.h,
+                mix(surface_color(), bg_color(), 0.35),
+            );
+            draw_rectangle_lines(field.x, field.y, field.w, field.h, 1., line_color());
+            label(
+                &format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]),
+                field.x + 7. * s,
+                field.y + 19. * s,
+                13. * s,
+                text_color(),
+            );
+            self.open(
+                id,
+                field,
+                format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]),
+            );
+        }
+        if *self.focus == Some(id)
+            && (invalid || tankyard_client::number_input::hex_color(self.entry).is_none())
+        {
+            draw_rectangle_lines(field.x, field.y, field.w, field.h, 1., RED);
+            label(
+                "Use #RGB or #RRGGBB",
+                self.x,
+                self.y + 40. * s,
+                10. * s,
+                RED,
+            );
+            self.y += 12. * s;
+        }
+        self.y += 40. * s;
         for (i, title) in ["Red", "Green", "Blue"].into_iter().enumerate() {
-            let mut value = f32::from(rgb[i]);
-            self.number(title, &mut value, [0., 255.], 1.);
+            let mut value = i32::from(rgb[i]);
+            self.integer(title, &mut value, [0, 255]);
             rgb[i] = value as u8;
         }
         *rgb != before
@@ -445,6 +494,8 @@ enum Request {
     Fire(usize),
     RunTool(usize, usize),
     ReloadPlugins,
+    Distribute(usize),
+    MatchSize(usize),
     Notice(String),
 }
 
@@ -506,7 +557,26 @@ impl Editor {
             }
         }
         let clip = Rect::new(r.x + 6. * s, r.y + 46. * s, r.w - 12. * s, r.h - 52. * s);
-        if clip.contains(ui_layout::pointer()) && !pointer_captured() {
+        if !is_mouse_button_down(MouseButton::Left) {
+            self.scroll_drag = None;
+        }
+        if clip.contains(ui_layout::pointer()) && !self.typing() {
+            let page = clip.h * 0.85;
+            if is_key_pressed(KeyCode::PageDown) {
+                self.scroll += page;
+            }
+            if is_key_pressed(KeyCode::PageUp) {
+                self.scroll -= page;
+            }
+            if is_key_pressed(KeyCode::Home) {
+                self.scroll = 0.;
+            }
+            if is_key_pressed(KeyCode::End) {
+                self.scroll = (self.content_height - clip.h).max(0.);
+            }
+        }
+        if clip.contains(ui_layout::pointer()) && !pointer_captured() && self.scroll_drag.is_none()
+        {
             self.scroll = (self.scroll - ui_layout::wheel_lines().y * 56. * s)
                 .clamp(0., (self.content_height - clip.h).max(0.));
         }
@@ -525,18 +595,62 @@ impl Editor {
                 Tab::Tools => self.tools_tab(x, y, width, s),
             }
         };
+        if let Some(focus) = numeric_focus_rect() {
+            let margin = 8. * s;
+            if focus.y < clip.y + margin {
+                self.scroll -= clip.y + margin - focus.y;
+            } else if focus.bottom() > clip.bottom() - margin {
+                self.scroll += focus.bottom() - clip.bottom() + margin;
+            }
+        }
         self.content_height = (end - clip.y + 22. * s).max(0.);
-        self.scroll = self.scroll.min((self.content_height - clip.h).max(0.));
+        self.scroll = self
+            .scroll
+            .clamp(0., (self.content_height - clip.h).max(0.));
         if self.content_height > clip.h {
             let h = (clip.h * clip.h / self.content_height).max(20. * s);
             let at = self.scroll / (self.content_height - clip.h).max(1.) * (clip.h - h);
-            draw_rectangle(r.right() - 5. * s, clip.y + at, 3. * s, h, accent_color());
+            let track = Rect::new(r.right() - 18. * s, clip.y, 12. * s, clip.h);
+            let thumb = Rect::new(track.x, clip.y + at, track.w, h);
+            if contains(track) && is_mouse_button_pressed(MouseButton::Left) {
+                self.scroll_drag = Some(if contains(thumb) {
+                    ui_layout::pointer().y - thumb.y
+                } else {
+                    h * 0.5
+                });
+            }
+            if let Some(grab) = self.scroll_drag {
+                self.scroll = ((ui_layout::pointer().y - track.y - grab) / (track.h - h).max(1.))
+                    .clamp(0., 1.)
+                    * (self.content_height - clip.h);
+            }
+            let at = self.scroll / (self.content_height - clip.h).max(1.) * (clip.h - h);
+            let thick = if contains(track) || self.scroll_drag.is_some() {
+                8. * s
+            } else {
+                4. * s
+            };
+            draw_rectangle(
+                track.center().x - thick * 0.5,
+                clip.y + at,
+                thick,
+                h,
+                accent_color(),
+            );
         }
         self.fulfil(request);
     }
     fn fulfil(&mut self, request: Request) {
         match request {
             Request::None => {}
+            Request::Distribute(axis) => self.apply(|editor| {
+                let keys = editor.selection.clone();
+                editor.doc.distribute(&keys, axis);
+            }),
+            Request::MatchSize(axis) => self.apply(|editor| {
+                let keys = editor.selection.clone();
+                editor.doc.match_size(&keys, axis);
+            }),
             Request::Locate(key) => {
                 self.set_selection(vec![key]);
                 self.center_on(key);
@@ -840,8 +954,8 @@ impl Editor {
                 f.number("Rotation", &mut d.rotation, [0., 359.], 1.);
                 f.number("Spin per second", &mut d.spin, [-720., 720.], 5.);
                 f.number("Pulse per second", &mut d.pulse, [0., 4.], 0.1);
-                let mut opacity = f32::from(d.alpha);
-                f.number("Opacity", &mut opacity, [0., 255.], 1.);
+                let mut opacity = i32::from(d.alpha);
+                f.integer("Opacity", &mut opacity, [0, 255]);
                 d.alpha = opacity as u8;
                 if d.kind == DecorKind::Light {
                     f.number("Flicker", &mut d.flicker, [0., 1.], 0.05);
@@ -982,8 +1096,8 @@ impl Editor {
                 }
                 Object::Decor(d) => {
                     f.heading("Decorations");
-                    let mut opacity = f32::from(d.alpha);
-                    f.number("Opacity", &mut opacity, [0., 255.], 1.);
+                    let mut opacity = i32::from(d.alpha);
+                    f.integer("Opacity", &mut opacity, [0, 255]);
                     d.alpha = opacity as u8;
                     f.number("Rotation", &mut d.rotation, [0., 359.], 1.);
                     f.toggle("Above tanks", &mut d.above);
@@ -991,8 +1105,8 @@ impl Editor {
                 }
                 Object::Trigger(t) => {
                     f.heading("Triggers");
-                    let mut chance = f32::from(t.chance);
-                    f.number("Chance %", &mut chance, [1., 100.], 1.);
+                    let mut chance = i32::from(t.chance);
+                    f.integer("Chance %", &mut chance, [1, 100]);
                     t.chance = chance as u8;
                     f.number("Delay (s)", &mut t.delay, [0., 3600.], 0.5);
                     f.toggle("Once per round", &mut t.once);
@@ -1006,6 +1120,13 @@ impl Editor {
             f.note("Select objects of one type to edit their settings together.");
         }
         f.heading("Arrange");
+        if let Some(axis) = f.buttons(&["Space X evenly", "Space Y evenly"], objects.len() >= 3) {
+            request = Request::Distribute(axis);
+        }
+        if let Some(axis) = f.buttons(&["Match widest", "Match tallest"], true) {
+            request = Request::MatchSize(axis);
+        }
+        f.note("Spacing keeps the outermost centers fixed. Matching sizes keeps centers where the map bounds allow. Each action is one undo step.");
         f.note("The Edit dock turns, flips, aligns and scales the selection together. Arrow keys or WASD nudge it; Shift moves one unit.");
         let end = f.y;
         if template != first {
@@ -2143,8 +2264,8 @@ fn trigger_form(
     gate_form(f, t, live, free_channel);
     f.heading("Timing");
     f.number("Delay before acting (s)", &mut t.delay, [0., 3600.], 0.5);
-    let mut chance = f32::from(t.chance);
-    f.number("Chance %", &mut chance, [1., 100.], 1.);
+    let mut chance = i32::from(t.chance);
+    f.integer("Chance %", &mut chance, [1, 100]);
     t.chance = chance as u8;
     f.toggle("Once per round", &mut t.once);
 }

@@ -572,7 +572,7 @@ impl CommunityUi {
                 self.submit(client, ServerCommand::Mute { player, minutes: 0 });
             }
         }
-        slider_value(
+        slider_integer_value(
             Rect::new(x + 145. * s, r.y + 226. * s, 262. * s, 48. * s),
             "Duration (minutes)",
             &mut self.minutes,

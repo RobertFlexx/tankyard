@@ -16,7 +16,7 @@ use crate::{
 };
 use macroquad::prelude::*;
 use std::{
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
 };
 use tankyard_client::editor_document::{Document, Key, Object, Problem, Transform};
@@ -157,6 +157,7 @@ pub struct Editor {
     tab: Tab,
     scroll: f32,
     content_height: f32,
+    scroll_drag: Option<f32>,
     text_focus: Option<u64>,
     focus_seen: bool,
     entry: String,
@@ -268,6 +269,7 @@ impl Editor {
                 .unwrap_or(Tab::Object),
             scroll: 0.,
             content_height: 0.,
+            scroll_drag: None,
             text_focus: None,
             focus_seen: false,
             entry: String::new(),
@@ -341,6 +343,9 @@ impl Editor {
         }
     }
     fn edit_property(&mut self, change: impl FnOnce(&mut Document)) {
+        if numeric_committed() {
+            self.property_edit = false;
+        }
         if !self.property_edit {
             self.undo.push(self.doc.clone());
             if self.undo.len() > HISTORY {
@@ -381,7 +386,7 @@ impl Editor {
         self.notice_at = get_time();
     }
     fn typing(&self) -> bool {
-        self.text_focus.is_some()
+        self.text_focus.is_some() || numeric_active()
     }
     fn set_selection(&mut self, mut keys: Vec<Key>) {
         keys.sort_unstable();
@@ -661,6 +666,10 @@ impl Editor {
         }
     }
     fn open(&mut self, doc: Document, path: Option<PathBuf>, notice: &str) {
+        cancel_numeric();
+        self.text_focus = None;
+        self.scroll = 0.;
+        self.scroll_drag = None;
         self.apply(|editor| editor.doc = doc);
         if path.is_some() {
             self.saved_revision = self.revision;
@@ -1183,6 +1192,8 @@ impl Editor {
                 ("1  2  3  4", "Build, Edit, Delete, Pan"),
                 ("Click", "Build one, select, or delete"),
                 ("Drag", "Draw a size, move, or sweep a region"),
+                ("Click a number", "Type a value or calculation"),
+                ("Shift-drag slider", "Make a fine adjustment"),
                 ("Swipe", "Paint or erase as you drag"),
                 ("Right-click", "Build copies of that object"),
                 ("Shift-click", "Add to or remove from the selection"),
@@ -1207,6 +1218,9 @@ impl Editor {
                 ("Ctrl A,  Shift A", "Select everything shown, or alike"),
                 ("Ctrl Z  Y", "Undo, redo"),
                 ("Ctrl S", "Save the project"),
+                ("Enter / Esc", "Apply a number, cancel its edit"),
+                ("Tab / Shift Tab", "Next / previous numeric field"),
+                ("Up / Down in field", "Adjust; Shift larger, Alt finer"),
                 ("Ctrl R", "Run the last plugin tool again"),
                 ("Wheel, Ctrl-scroll", "Zoom at the pointer"),
                 ("Trackpad scroll", "Pan (Scroll setting in Pan, 4)"),
@@ -1222,6 +1236,8 @@ impl Editor {
         ];
         let col_w = (w - 66. * s) * 0.5;
         let keys_w = 150. * s;
+        let rows = columns.iter().map(|c| c.len()).max().unwrap_or(1) as f32;
+        let row_h = ((h - 90. * s) / rows).min(28. * s);
         for (c, entries) in columns.into_iter().enumerate() {
             let x = r.x + 22. * s + c as f32 * (col_w + 22. * s);
             let mut y = r.y + 70. * s;
@@ -1234,7 +1250,7 @@ impl Editor {
                     13. * s,
                     text_color(),
                 );
-                y += 28. * s;
+                y += row_h;
             }
         }
         if button(
@@ -1389,14 +1405,7 @@ fn directory() -> Result<PathBuf, String> {
     Ok(path)
 }
 fn read_document(path: &Path) -> Result<Document, String> {
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    if file.metadata().map_err(|e| e.to_string())?.len() > 2 * 1024 * 1024 {
-        return Err("Editor project exceeds 2 MiB.".into());
-    }
-    let mut bytes = Vec::new();
-    file.take(2 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
+    let bytes = tankyard_mods::read_bounded_limit(path, 2 * 1024 * 1024)?;
     Document::from_json(&bytes)
 }
 fn write_document(path: &Path, doc: &Document) -> Result<(), String> {

@@ -20,3 +20,6 @@ asefile = "0.3.8"
 psd = "0.3.5"
 gltf = { version = "1.4", default-features = false, features = ["utils"] }
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -1294,7 +1294,11 @@ impl Hud {
         }
         for objective in &snapshot.objectives {
             let p = point(objective.pos);
-            draw_circle_lines(p.x, p.y, 5.0 * s, 1.0, AMBER);
+            if objective.team > 0 && crate::accessibility::team_symbols() {
+                render::team_marker(objective.team, false, p, 3.5 * s);
+            } else {
+                draw_circle_lines(p.x, p.y, 5.0 * s, 1.0, AMBER);
+            }
         }
         for boss in &snapshot.bosses {
             let p = point(boss.pos);

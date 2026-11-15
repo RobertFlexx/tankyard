@@ -31,15 +31,13 @@ impl PackFiles {
         if metadata.is_dir() {
             return Self::read_dir(path);
         }
+        if !metadata.is_file() {
+            return Err("mod sources must be regular files or folders".into());
+        }
         if metadata.len() > MAX_ARCHIVE_BYTES as u64 {
             return Err("mod archive exceeds 8 MiB".into());
         }
-        let mut bytes = Vec::new();
-        std::fs::File::open(path)
-            .map_err(|e| format!("{}: {e}", path.display()))?
-            .take(MAX_ARCHIVE_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
+        let bytes = crate::read_bounded_limit(path, MAX_ARCHIVE_BYTES)?;
         let mut pack = Self::from_zip(&bytes)?;
         pack.origin = path.to_path_buf();
         Ok(pack)
@@ -120,17 +118,18 @@ impl PackFiles {
         let mut pending = vec![(root.clone(), 0_usize)];
         let mut entries = 0_usize;
         while let Some((directory, depth)) = pending.pop() {
-            let mut children: Vec<_> = std::fs::read_dir(&directory)
+            let mut children = Vec::new();
+            for entry in std::fs::read_dir(&directory)
                 .map_err(|e| format!("{}: {e}", directory.display()))?
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .collect();
-            children.sort();
-            for path in children {
+            {
                 entries += 1;
                 if entries > MAX_ENTRIES {
                     return Err("mod folder has too many entries".into());
                 }
+                children.push(entry.map_err(|e| e.to_string())?.path());
+            }
+            children.sort();
+            for path in children {
                 let relative = path
                     .strip_prefix(&root)
                     .map_err(|_| "mod file escaped its folder".to_string())?
@@ -382,6 +381,66 @@ pub(crate) fn zip_bytes(files: &[(&str, &[u8])]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folder_and_archive_readers_keep_the_same_content_and_digest() {
+        let root = crate::tests::test_dir();
+        std::fs::create_dir(root.join("scripts")).unwrap();
+        let files: &[(&str, &[u8])] = &[
+            ("mod.json", b"{}"),
+            ("scripts/b.lua", b"return 2"),
+            ("a.txt", b"notes"),
+        ];
+        for (name, bytes) in files {
+            std::fs::write(root.join(name), bytes).unwrap();
+        }
+        std::fs::write(root.join(".DS_Store"), b"ignored metadata").unwrap();
+        let directory = PackFiles::read(&root).unwrap();
+        let archive = PackFiles::from_zip(&zip_bytes(files)).unwrap();
+        assert_eq!(directory.content_digest(), archive.content_digest());
+        assert_eq!(directory.len(), files.len());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn excessive_directory_entries_fail_before_loading_contents() {
+        let root = crate::tests::test_dir();
+        for i in 0..=MAX_ENTRIES {
+            std::fs::write(root.join(format!("._ignored{i}")), b"").unwrap();
+        }
+        assert!(
+            PackFiles::read(&root)
+                .unwrap_err()
+                .contains("too many entries")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn named_pipes_are_rejected_without_blocking_the_loader() {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt, sync::mpsc, time::Duration};
+        let root = crate::tests::test_dir();
+        let pipe = root.join("main.lua");
+        let name = CString::new(pipe.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a valid, terminated path in this test's private directory.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (tx, rx) = mpsc::channel();
+        let folder = root.clone();
+        std::thread::spawn(move || {
+            tx.send([
+                PackFiles::read(&folder).unwrap_err(),
+                PackFiles::read(&pipe).unwrap_err(),
+                crate::read_bounded(&pipe).unwrap_err(),
+            ])
+            .unwrap();
+        });
+        let errors = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("file loading must not wait for a pipe writer");
+        assert!(errors.iter().all(|error| error.contains("regular files")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn approval_digests_change_with_any_byte_and_keep_file_boundaries() {

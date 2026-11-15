@@ -219,7 +219,11 @@ impl World {
             if tank.spawn_immunity && tank.protection > 0. {
                 continue;
             }
-            if tank.input.ability && tank.ability_cooldown <= 0. && class.ability != Ability::None {
+            if !tank.creator_boss
+                && tank.input.ability
+                && tank.ability_cooldown <= 0.
+                && class.ability != Ability::None
+            {
                 tank.ability_cooldown = class.ability_cooldown;
                 abilities.push((index, class.ability));
                 if class.ability == Ability::Pocket {

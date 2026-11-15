@@ -5,6 +5,7 @@ pub mod clipboard;
 pub mod credential_vault;
 pub mod editor_document;
 pub mod map_model;
+pub mod number_input;
 pub mod party_network;
 pub mod practice;
 pub mod staff_pack;

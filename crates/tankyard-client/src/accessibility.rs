@@ -2,10 +2,61 @@ use macroquad::prelude::*;
 use std::cell::Cell;
 
 thread_local! {
+    static VISION: Cell<VisionPalette> = const { Cell::new(VisionPalette::RedGreen) };
+    static SYMBOLS: Cell<bool> = const { Cell::new(false) };
     static COLORBLIND: Cell<bool> = const { Cell::new(false) };
     static CONTRAST: Cell<bool> = const { Cell::new(false) };
     static REDUCED: Cell<bool> = const { Cell::new(false) };
 }
+/// Alternate team palettes; symbols remain available with original colors.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisionPalette {
+    BlueYellow,
+    Separated,
+    #[default]
+    #[serde(other)]
+    RedGreen,
+}
+impl VisionPalette {
+    pub const ALL: [Self; 3] = [Self::RedGreen, Self::BlueYellow, Self::Separated];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::RedGreen => "Red/green",
+            Self::BlueYellow => "Blue/yellow",
+            Self::Separated => "Separated",
+        }
+    }
+    fn colors(self) -> [Color; 4] {
+        let rgb = |r: u8, g: u8, b: u8| Color::from_rgba(r, g, b, 255);
+        match self {
+            Self::RedGreen => [BLUE, ORANGE, PURPLE, GREEN],
+            Self::BlueYellow => [
+                rgb(0, 160, 150),
+                rgb(218, 76, 72),
+                rgb(95, 88, 154),
+                rgb(240, 174, 190),
+            ],
+            Self::Separated => [
+                rgb(63, 126, 208),
+                rgb(245, 180, 42),
+                rgb(221, 113, 178),
+                rgb(220, 230, 237),
+            ],
+        }
+    }
+}
+pub fn configure_vision(palette: VisionPalette, symbols: bool) {
+    VISION.with(|v| v.set(palette));
+    SYMBOLS.with(|v| v.set(symbols));
+}
+pub fn team_symbols() -> bool {
+    colorblind() || SYMBOLS.with(Cell::get)
+}
+pub fn team_palette() -> [Color; 4] {
+    VISION.with(|v| v.get().colors())
+}
+
 pub const BLUE: Color = Color::new(0., 114. / 255., 178. / 255., 1.);
 pub const ORANGE: Color = Color::new(230. / 255., 159. / 255., 0., 1.);
 pub const PURPLE: Color = Color::new(204. / 255., 121. / 255., 167. / 255., 1.);
@@ -60,11 +111,19 @@ pub fn palette(color: Color) -> Color {
     }
     let rgb = [color.r, color.g, color.b];
     let mut replacement = color;
+    let colors = team_palette();
     for (from, to) in [
-        (crate::ui::CYAN, BLUE),
-        (crate::ui::RED, ORANGE),
-        (crate::ui::AMBER, YELLOW),
-        (crate::ui::VIOLET, PURPLE),
+        (crate::ui::CYAN, colors[0]),
+        (crate::ui::RED, colors[1]),
+        (
+            crate::ui::AMBER,
+            if VISION.with(Cell::get) == VisionPalette::RedGreen {
+                YELLOW
+            } else {
+                colors[3]
+            },
+        ),
+        (crate::ui::VIOLET, colors[2]),
     ] {
         if rgb == [from.r, from.g, from.b] {
             replacement = to;
@@ -99,6 +158,35 @@ pub fn label_ink(color: Color) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn palettes_preserve_four_identities_and_symbols_work_with_original_colors() {
+        for palette in VisionPalette::ALL {
+            configure(true, false, false);
+            configure_vision(palette, false);
+            let colors = team_palette();
+            for (i, color) in colors.iter().enumerate() {
+                assert!(colors[..i].iter().all(|previous| previous != color));
+                assert_eq!(crate::render::team_color(i as u8 + 1, false, true), *color);
+            }
+            let translucent = Color {
+                a: 0.35,
+                ..crate::ui::CYAN
+            };
+            let mapped = super::palette(translucent);
+            assert_eq!(mapped.a, 0.35);
+            assert_eq!(
+                [mapped.r, mapped.g, mapped.b],
+                [colors[0].r, colors[0].g, colors[0].b]
+            );
+            assert!(team_symbols());
+        }
+        configure(false, false, false);
+        configure_vision(VisionPalette::Separated, true);
+        assert!(team_symbols());
+        assert_eq!(palette(crate::ui::CYAN), crate::ui::CYAN);
+        configure_vision(VisionPalette::default(), false);
+        assert!(!team_symbols());
+    }
     #[test]
     fn high_contrast_keeps_semantic_colors_readable_on_its_solid_backplate() {
         for c in [

@@ -181,6 +181,13 @@ impl ScrollPanel {
         {
             self.offset -= wheel_lines().y * 56. * s;
         }
+        if let Some(focus) = crate::ui::numeric_focus_rect() {
+            if focus.y < top + 8. * s {
+                self.offset -= top + 8. * s - focus.y;
+            } else if focus.bottom() > bottom - 8. * s {
+                self.offset += focus.bottom() - bottom + 8. * s;
+            }
+        }
         self.offset = self.offset.clamp(0., maximum);
         if maximum > 0. {
             let track = Rect::new(

@@ -41,7 +41,7 @@ impl World {
         let guard = boss.pos
             + V2::from_angle(drone_phase(drone) + self.tick as f32 * DT * 0.25)
                 * (boss.radius + 55.);
-        if pos.distance(boss.pos) > leash {
+        if (pos - boss.pos).length_squared() > leash * leash {
             return guard;
         }
         // Acquire from the drone, but never chain pursuit across the map. The
@@ -54,18 +54,26 @@ impl World {
                     && tank.protection <= 0.
                     && !self.config.base_protected(tank.team, tank.pos, tank.radius)
                     && self.hostile(team, tank.team)
-                    && (tank.level >= 15
-                        || tank.id == boss.last_attacker
-                        || tank.pos.distance(boss.pos) < 420.)
-                    && tank.pos.distance(pos) <= acquisition
-                    && tank.pos.distance(boss.pos) <= leash - 100.
-                    && self
+            })
+            .filter_map(|tank| {
+                // Cache squared distances once per candidate; drones make
+                // these decisions every tick, and ordering needs no roots.
+                let from_boss = (tank.pos - boss.pos).length_squared();
+                let from_drone = (tank.pos - pos).length_squared();
+                if (tank.level < 15 && tank.id != boss.last_attacker && from_boss >= 420. * 420.)
+                    || from_drone > acquisition * acquisition
+                    || from_boss > (leash - 100.) * (leash - 100.)
+                    || self
                         .walls
                         .iter()
-                        .all(|&wall| sweep_rect(pos, tank.pos, 2., wall).is_none())
+                        .any(|&wall| sweep_rect(pos, tank.pos, 2., wall).is_some())
+                {
+                    return None;
+                }
+                Some((from_drone, tank.pos))
             })
-            .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
-            .map_or(guard, |tank| tank.pos)
+            .min_by(|(a, _), (b, _)| a.total_cmp(b))
+            .map_or(guard, |(_, pos)| pos)
     }
 
     pub(crate) fn random_boss_event(&mut self) {

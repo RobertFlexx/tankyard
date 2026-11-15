@@ -213,8 +213,12 @@ impl CreatorUi {
             .enumerate()
         {
             let remaining = cooldowns[attack.index()];
-            let ready = remaining <= 0.;
-            let text = if ready {
+            let full = attack == tankyard_core::creator_boss::Attack::Reforge
+                && tank.health >= tank.max_health;
+            let ready = remaining <= 0. && !full;
+            let text = if full {
+                "Reforge · hull full".to_owned()
+            } else if ready {
                 attack.name().to_owned()
             } else {
                 format!("{} · {:.1}s", attack.name(), remaining)
@@ -690,7 +694,7 @@ impl CreatorUi {
                         }
                     }
                 }
-                if slider_value(
+                if slider_integer_value(
                     Rect::new(x, y + 300. * s, width, 48. * s),
                     "Level",
                     &mut self.level,
@@ -779,7 +783,7 @@ impl CreatorUi {
                         },
                     );
                 }
-                if slider_value(
+                if slider_integer_value(
                     Rect::new(x, y + 254. * s, width, 48. * s),
                     "Bot population",
                     &mut self.bots,
@@ -887,7 +891,7 @@ impl CreatorUi {
                     s * 0.8,
                     false,
                 );
-                slider_value(
+                slider_integer_value(
                     Rect::new(x, y + 91. * s, width, 48. * s),
                     "Duration (minutes)",
                     &mut self.minutes,

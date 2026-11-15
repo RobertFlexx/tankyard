@@ -1,6 +1,5 @@
-//! The sounds a map's Play sound triggers make. Each is synthesised once, at
-//! the mixer's 48 kHz, the first time any map sound plays; the audio callback
-//! only reads the finished samples.
+//! Synthesised map cues, cached independently and warmed on a background
+//! worker. The audio callback only reads finished samples.
 use std::sync::{Arc, OnceLock};
 use tankyard_content::MapSound;
 
@@ -8,14 +7,25 @@ const RATE: f32 = 48_000.;
 
 /// The samples for `sound`, peaking a little below full scale.
 pub fn samples(sound: MapSound) -> Arc<[f32]> {
-    static BANK: OnceLock<Vec<Arc<[f32]>>> = OnceLock::new();
-    BANK.get_or_init(|| {
-        MapSound::ALL
-            .iter()
-            .map(|&s| normalised(synth(s)))
-            .collect()
-    })[usize::from(sound.index())]
-    .clone()
+    static BANK: [OnceLock<Arc<[f32]>>; MapSound::ALL.len()] =
+        [const { OnceLock::new() }; MapSound::ALL.len()];
+    BANK[usize::from(sound.index())]
+        .get_or_init(|| normalised(synth(sound)))
+        .clone()
+}
+
+/// Prepare fixed-size clips without holding up the first map trigger.
+pub fn prepare() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    if STARTED.set(()).is_ok() {
+        let _ = std::thread::Builder::new()
+            .name("map-sounds".into())
+            .spawn(|| {
+                for sound in MapSound::ALL {
+                    let _ = samples(sound);
+                }
+            });
+    }
 }
 
 /// How loud a sound `distance` world units away is: full within a screen's
@@ -94,6 +104,7 @@ fn synth(sound: MapSound) -> Vec<f32> {
     let mut noise = Noise(0x2545_f491);
     let mut low = 0.;
     let mut band = 0.;
+    let mut alarm_phase = 0.;
     (0..count)
         .map(|i| {
             let t = i as f32 / RATE;
@@ -109,8 +120,11 @@ fn synth(sound: MapSound) -> Vec<f32> {
                     } else {
                         660.
                     };
+                    // Keep phase continuous when the pitch changes; switching
+                    // sin(pitch * time) jumps the waveform and clicks.
+                    alarm_phase = (alarm_phase + TAU * pitch / RATE) % TAU;
                     let envelope = (t / 0.02).min(1.) * ((1.5 - t) / 0.12).clamp(0., 1.);
-                    ((TAU * pitch * t).sin() * 2.2).tanh() * envelope * 0.6
+                    (alarm_phase.sin() * 2.2).tanh() * envelope * 0.6
                 }
                 MapSound::Switch => {
                     let click = noise.next() * strike(t, 0.0005, 0.004);
@@ -168,9 +182,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn alarm_pitch_changes_do_not_jump_the_waveform() {
+        let alarm = samples(MapSound::Alarm);
+        for beat in 1..7 {
+            let at = (beat as f32 * 0.19 * RATE) as usize;
+            for pair in alarm[at - 3..at + 4].windows(2) {
+                assert!((pair[1] - pair[0]).abs() < 0.25);
+            }
+        }
+    }
+
+    #[test]
     fn every_sound_is_short_finite_and_ends_in_silence() {
         for sound in MapSound::ALL {
             let samples = samples(sound);
+            assert!(Arc::ptr_eq(&samples, &super::samples(sound)));
             assert!(
                 samples.len() > 4_000 && samples.len() < 3 * 48_000,
                 "{sound:?}"

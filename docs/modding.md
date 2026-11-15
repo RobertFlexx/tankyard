@@ -124,6 +124,8 @@ Every field is optional. Links must be `http://` or `https://`, so a pack can ne
 
 **View files** in the game shows a pack's contents to anyone who installs it. `[source]` hides contents there: `private` takes exact paths, `folder/` for a whole folder, `*` for any part of a name and `**` for any number of folders (`**/keys.json`). Private files are still listed, with a lock. If `tankyard.toml` can't be read, every file is treated as private. Hiding a file only affects the viewer: the file is still in the pack for anyone who unzips it, and the safety review still reads it.
 
+Folder packs contain ordinary disk files and folders. Pipes, devices and other special files are rejected, and directory entries count toward the pack limits even when they are ignored metadata.
+
 ### Layout
 
 ```
@@ -871,7 +873,7 @@ Boss IDs are `sentinel`, `prism`, `foundry`, `tempest`, `bastion`, `eclipse`, `g
 
 ### Textures and models
 
-Textures are body skins. A texture entry has an `id` and a relative `file`, and a tank uses it through `body_texture`. The texture's right side faces where the tank aims. Paths can't leave the pack, even through links. Sources up to 4096 pixels on a side are shrunk to fit 256 × 256, keeping their shape. The server decodes the art and sends pixels, so players need nothing installed.
+Textures are body skins. A texture entry has an `id` and a relative `file`, and a tank uses it through `body_texture`. The texture's right side faces where the tank aims. Paths can't leave the pack, even through links. Sources up to 4096 pixels on a side are shrunk to fit 256 × 256, keeping their shape. The server decodes the art and sends pixels, so players need nothing installed. SVGs must be self-contained: image references to local filesystem paths are ignored, including references inside embedded SVGs.
 
 | Kind | Formats |
 | --- | --- |

@@ -1,4 +1,10 @@
+#[path = "ui_number.rs"]
+mod number;
 use macroquad::prelude::*;
+pub use number::{
+    begin_frame, cancel_numeric, end_frame, numeric_active, numeric_committed, numeric_focus_rect,
+    numeric_scope,
+};
 use std::{borrow::Cow, cell::Cell};
 
 // Translate vertices and hit testing in the same logical space. Keeping this
@@ -610,23 +616,51 @@ pub fn toggle(rect: Rect, text: &str, value: &mut bool, s: f32) -> bool {
     click
 }
 pub fn slider(rect: Rect, text: &str, value: &mut f32, lo: f32, hi: f32, s: f32) -> bool {
-    slider_value(rect, text, value, [lo, hi], 0., s, |value| {
-        let percent = if (lo - 0.8).abs() < f32::EPSILON && (hi - 1.4).abs() < f32::EPSILON {
-            value * 100.
-        } else {
-            (value - lo) / (hi - lo) * 100.
-        };
-        format!("{percent:.0}%")
-    })
+    let units = if (lo - 0.8).abs() < f32::EPSILON && (hi - 1.4).abs() < f32::EPSILON {
+        number::Units::PERCENT
+    } else {
+        let scale = 100. / (hi - lo);
+        number::Units {
+            scale,
+            offset: -lo * scale,
+        }
+    };
+    slider_control(
+        rect,
+        text,
+        value,
+        SliderRange {
+            limits: [lo, hi],
+            step: 0.,
+            units,
+            integer: false,
+        },
+        s,
+        |value| {
+            let percent = if (lo - 0.8).abs() < f32::EPSILON && (hi - 1.4).abs() < f32::EPSILON {
+                value * 100.
+            } else {
+                (value - lo) / (hi - lo) * 100.
+            };
+            format!("{percent:.0}%")
+        },
+    )
+}
+struct SliderDrag {
+    id: u64,
+    name: String,
+    raw: f32,
+    pointer: f32,
 }
 thread_local! {
-    static ACTIVE_SLIDER: std::cell::RefCell<Option<(u64, String)>> = const { std::cell::RefCell::new(None) };
+    static ACTIVE_SLIDER: std::cell::RefCell<Option<SliderDrag>> = const { std::cell::RefCell::new(None) };
     static POINTER_SCOPE: Cell<u64> = const { Cell::new(0) };
 }
 pub fn pointer_scope(scope: u64) {
     POINTER_SCOPE.with(|value| value.set(scope));
 }
 pub fn cancel_pointer_capture() {
+    cancel_numeric();
     ACTIVE_SLIDER.with(|value| value.borrow_mut().take());
 }
 pub fn pointer_captured() -> bool {
@@ -634,7 +668,7 @@ pub fn pointer_captured() -> bool {
 }
 pub fn active_slider(label: &str) -> bool {
     pointer_captured()
-        && ACTIVE_SLIDER.with(|s| s.borrow().as_ref().is_some_and(|(_, name)| name == label))
+        && ACTIVE_SLIDER.with(|s| s.borrow().as_ref().is_some_and(|drag| drag.name == label))
 }
 fn slider_amount(x: f32, origin: f32, width: f32, limits: [f32; 2], step: f32) -> f32 {
     let [lo, hi] = limits;
@@ -654,43 +688,168 @@ pub fn slider_value(
     s: f32,
     format: impl FnOnce(f32) -> String,
 ) -> bool {
+    slider_control(
+        rect,
+        text,
+        value,
+        SliderRange {
+            limits,
+            step,
+            units: number::Units::RAW,
+            integer: false,
+        },
+        s,
+        format,
+    )
+}
+/// A whole-number slider; drag steps do not determine the value type.
+pub fn slider_integer_value(
+    rect: Rect,
+    text: &str,
+    value: &mut f32,
+    limits: [f32; 2],
+    step: f32,
+    s: f32,
+    format: impl FnOnce(f32) -> String,
+) -> bool {
+    slider_control(
+        rect,
+        text,
+        value,
+        SliderRange {
+            limits,
+            step,
+            units: number::Units::RAW,
+            integer: true,
+        },
+        s,
+        format,
+    )
+}
+/// A slider displayed and typed as a percentage of its underlying value.
+pub fn slider_percent_value(
+    rect: Rect,
+    text: &str,
+    value: &mut f32,
+    limits: [f32; 2],
+    step: f32,
+    s: f32,
+    format: impl FnOnce(f32) -> String,
+) -> bool {
+    slider_control(
+        rect,
+        text,
+        value,
+        SliderRange {
+            limits,
+            step,
+            units: number::Units::PERCENT,
+            integer: false,
+        },
+        s,
+        format,
+    )
+}
+/// A standalone exact-value field for compact group and team controls.
+pub fn number_box(
+    rect: Rect,
+    text: &str,
+    value: &mut f32,
+    limits: [f32; 2],
+    s: f32,
+    display: &str,
+) -> bool {
+    let committed = number::take_commit(number::id(text), value);
+    number::field(
+        rect,
+        text,
+        value,
+        SliderRange {
+            limits,
+            step: 1.,
+            units: number::Units::RAW,
+            integer: true,
+        },
+        s,
+        display,
+        rect,
+    ) || committed
+}
+#[derive(Clone, Copy)]
+struct SliderRange {
+    limits: [f32; 2],
+    step: f32,
+    units: number::Units,
+    integer: bool,
+}
+fn slider_control(
+    rect: Rect,
+    text: &str,
+    value: &mut f32,
+    range: SliderRange,
+    s: f32,
+    format: impl FnOnce(f32) -> String,
+) -> bool {
+    let SliderRange { limits, step, .. } = range;
     let [lo, hi] = limits;
     let track = Rect::new(rect.x, rect.y + 32. * s, rect.w, 5. * s);
-    let hit = Rect::new(rect.x, rect.y + 24. * s, rect.w, 24. * s);
-    let scope = POINTER_SCOPE.with(Cell::get);
-    let interactive = INTERACTIVE.with(|state| state.get());
+    let hit = Rect::new(rect.x, rect.y + 26. * s, rect.w, 22. * s);
+    let id = number::id(text);
+    let committed = number::take_commit(id, value);
+    let interactive = INTERACTIVE.with(Cell::get);
     let down = is_mouse_button_down(MouseButton::Left);
     let pressed = is_mouse_button_pressed(MouseButton::Left);
     let released = is_mouse_button_released(MouseButton::Left);
+    let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+    let pointer = crate::ui_layout::pointer().x;
     let dragged = ACTIVE_SLIDER.with(|active| {
         let mut active = active.borrow_mut();
         if !down && !pressed && !released {
             *active = None;
         }
         if interactive && contains(hit) && pressed {
-            *active = Some((scope, text.to_owned()));
+            *active = Some(SliderDrag {
+                id,
+                name: text.to_owned(),
+                raw: if shift {
+                    *value
+                } else {
+                    slider_amount(pointer, track.x, track.w, limits, 0.)
+                },
+                pointer,
+            });
         }
-        let mine = interactive
-            && active
-                .as_ref()
-                .is_some_and(|(id, label)| *id == scope && label == text);
-        let dragged = mine && (down || pressed || released);
+        let mine = interactive && active.as_ref().is_some_and(|drag| drag.id == id);
+        if mine && (down || pressed || released) {
+            let drag = active.as_mut().unwrap();
+            drag.raw = (drag.raw
+                + (pointer - drag.pointer) / track.w.max(1.)
+                    * (hi - lo)
+                    * if shift { 0.1 } else { 1. })
+            .clamp(lo, hi);
+            drag.pointer = pointer;
+            let step = if shift && step > 0. {
+                if step >= 1. { 1. } else { step * 0.1 }
+            } else {
+                step
+            };
+            *value = if step > 0. {
+                (lo + ((drag.raw - lo) / step).round() * step).clamp(lo, hi)
+            } else {
+                drag.raw
+            };
+        }
         if mine && !down {
             *active = None;
         }
-        dragged
+        mine && (down || pressed || released)
     });
-    if dragged {
-        *value = slider_amount(
-            crate::ui_layout::pointer().x,
-            track.x,
-            track.w,
-            limits,
-            step,
-        );
-    }
     let display = format(*value);
-    let available = (rect.w - label_width(&display, 16. * s) - 12. * s).max(0.);
+    let available = (rect.w
+        - (label_width(&display, 16. * s) + 18. * s)
+            .clamp((96. * s).min(rect.w * 0.6), rect.w * 0.6)
+        - 10. * s)
+        .max(0.);
     label(
         &fitted_label(text, 18. * s, available),
         rect.x,
@@ -698,13 +857,10 @@ pub fn slider_value(
         18. * s,
         text_color(),
     );
-    right_label(
-        &display,
-        rect.x + rect.w,
-        rect.y + 18. * s,
-        16. * s,
-        muted_color(),
-    );
+    let width =
+        (label_width(&display, 16. * s) + 18. * s).clamp((96. * s).min(rect.w * 0.6), rect.w * 0.6);
+    let field = Rect::new(rect.right() - width, rect.y - 4. * s, width, 28. * s);
+    let typed = number::field(rect, text, value, range, s, &display, field);
     let fraction = ((*value - lo) / (hi - lo)).clamp(0., 1.);
     draw_rectangle(track.x, track.y, track.w, track.h, line_color());
     draw_rectangle(track.x, track.y, track.w * fraction, track.h, accent());
@@ -714,7 +870,7 @@ pub fn slider_value(
         5. * s,
         accent(),
     );
-    dragged
+    committed || dragged || typed
 }
 
 #[derive(Default)]
@@ -794,6 +950,29 @@ fn field_hit(shown: &str, visible: std::ops::Range<usize>, x: f32, size: f32) ->
         previous = width;
     }
     visible.end
+}
+pub fn reset_field(value: &mut String) {
+    FIELDS.with(|fields| {
+        fields
+            .borrow_mut()
+            .remove(&(value as *const String as usize));
+    });
+}
+pub fn select_field_all(value: &mut String) {
+    FIELDS.with(|fields| {
+        let mut fields = fields.borrow_mut();
+        let field = fields.entry(value as *const String as usize).or_default();
+        field.editor.edit(
+            value,
+            tankyard_client::text_edit::Edit::SelectAll,
+            false,
+            false,
+        );
+        field.active = true;
+        // Programmatic selection owns this click. Continuing its mouse drag
+        // on later held frames would shrink "select all" to a partial range.
+        field.dragging = false;
+    });
 }
 pub fn text_field(
     rect: Rect,
