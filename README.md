@@ -8,11 +8,11 @@ A tank arena by RobertFlexx, inspired by Diep.io and Arras.io. Play online, host
 
 **[Download](https://github.com/RobertFlexx/tankyard/releases/latest)** · [Installation](docs/installing.md) · [How to play](docs/playing.md) · [Hosting](docs/hosting.md) · [Modding](docs/modding.md)
 
-Mods are scripted in [Luau](https://luau.org); packs written for the earlier LuaJIT sandbox still run unchanged.
-
-Choose **Play** for the public server or **Play offline** for a local game.
+Choose **Play** for the public server or **Play offline** for a local game. Mods are scripted in [Luau](https://luau.org); packs written for the earlier LuaJIT sandbox still run unchanged.
 
 [Bacteria](docs/bacteria.md) is a level-55 escape tank with up to ten seconds in a pocket dimension: a private maze of yellow rooms where you can repair and reposition.
+
+## Download
 
 Windows (64-bit): [NSIS installer (.exe)](https://github.com/RobertFlexx/tankyard/releases/download/v1.4.0/tankyard-v1.4.0-windows-x86_64-setup.exe) · [Portable ZIP](https://github.com/RobertFlexx/tankyard/releases/download/v1.4.0/tankyard-v1.4.0-windows-x86_64.zip). For the portable version, extract the ZIP and open `tankyard.exe`.
 
@@ -22,7 +22,7 @@ macOS 11+ (Apple silicon and Intel): [Installer package (.pkg)](https://github.c
 curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/install-macos.sh | sh
 ```
 
-Already downloaded the `.pkg`? Run `sh install-macos.sh --file ~/Downloads/tankyard-v1.4.0-macos-universal.pkg` to verify it and open the installer. You can also open **System Settings → Privacy & Security** after macOS blocks it and click **Open Anyway**.
+Already downloaded the `.pkg`? Run `sh install-macos.sh --file ~/Downloads/tankyard-v1.4.0-macos-universal.pkg` to verify it and open the installer. If macOS still blocks it, open **System Settings → Privacy & Security** and click **Open Anyway**.
 
 Install or update on Linux and macOS:
 
@@ -47,6 +47,16 @@ cargo build --locked --release --workspace
 
 See [Linux build requirements](docs/linux-builds.md), [building on FreeBSD](docs/freebsd.md#building-from-source) and [third-party notices](NOTICE.md).
 
+## What's in it
+
+The [Arena Workshop](docs/map-editor.md) builds custom maps in the game: pads, conveyors, portals, ice, gravity wells, lights and darkness, particles, push doors and crates, moving cover and keyframed paths. Map logic runs and can be tested in place: watchers, pressure plates, sequences, and AND, OR and XOR gates. You can also design on-screen widgets, from score counters to shop menus whose choices drive the map.
+
+[Hosting](docs/hosting.md) covers a dedicated server in five minutes, running it as a service, and a community on your own hostname with the [domain setup guide](docs/hosting-domain.md).
+
+[Editor tutorial video](docs/arena-workshop-tutorial.mp4) · [Logic gates video](docs/logic-gates-tutorial.mp4) · [Logic gates tutorial](docs/logic-gates-tutorial.md) · [Motions video](docs/motions-tutorial.mp4) · [Motions tutorial](docs/motions-tutorial.md) · [Animate and effects tutorial](docs/effects-tutorial.md) · [Physics and lighting video](docs/physics-tutorial.mp4) · [Physics and lighting tutorial](docs/physics-tutorial.md) · [Editor plugin API and full guide](docs/editor-plugins.md)
+
+The logic gates walkthrough builds a vault; the motions tutorial builds a gatehouse with sliding doors, moving cover, lights and particles.
+
 ## Tank you!
 
 Tank Yard has been years in the making. Thank you to everyone who’s played, shared ideas, and supported it.
@@ -54,9 +64,3 @@ Tank Yard has been years in the making. Thank you to everyone who’s played, sh
 entirely made by one guy. (me! :D)
 
 > dual licensed, pick what you wanna abide by :D
-
-The [Arena Workshop](docs/map-editor.md) builds custom maps in the game, with pads, conveyors, portals, ice, gravity wells, lights, darkness, particle effects, push doors and crates, moving cover on eased motions and keyframed paths, map logic you can test in place: watchers, pressure plates, sequences and AND, OR and XOR gates, and on-screen widgets you design yourself, from score counters to shop menus whose choices drive the map. [Hosting](docs/hosting.md) covers a dedicated server in five minutes, running it as a service, and a community on your own hostname with the [domain setup guide](docs/hosting-domain.md).
-
-[Editor tutorial video](docs/arena-workshop-tutorial.mp4) · [Logic gates video](docs/logic-gates-tutorial.mp4) · [Logic gates tutorial](docs/logic-gates-tutorial.md) · [Motions video](docs/motions-tutorial.mp4) · [Motions tutorial](docs/motions-tutorial.md) · [Animate and effects tutorial](docs/effects-tutorial.md) · [Physics and lighting video](docs/physics-tutorial.mp4) · [Physics and lighting tutorial](docs/physics-tutorial.md) · [Editor plugin API and full guide](docs/editor-plugins.md)
-
-The logic gates walkthrough builds a vault with the gates, watchers and sequences added in 0.16, and the motions tutorial builds a gatehouse with the sliding doors, moving cover, lights and particles added in 1.0.
