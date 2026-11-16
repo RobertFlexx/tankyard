@@ -52,6 +52,8 @@ pub struct BuildLearning {
     /// its results with that class. Unlike the shared-shape network, this is
     /// personal: one bot can sour on a branch another bot loves.
     verdicts: Vec<Verdict>,
+    /// Training samples each network held when it last took pooled weights.
+    adopted: (u32, u32),
 }
 
 #[derive(Clone, Copy)]
@@ -105,6 +107,23 @@ fn build_features(class: &ClassDef, stats: [u8; 8]) -> [f32; 13] {
 }
 
 impl BuildLearning {
+    /// Adds what this bot learned about tanks and builds to the pool.
+    pub(crate) fn share(&self, models: &mut crate::knowledge::SharedModels) {
+        crate::knowledge::pool(&mut models.classes, &self.classes, self.adopted.0);
+        crate::knowledge::pool(&mut models.builds, &self.builds, self.adopted.1);
+        models.class_outcomes = models.class_outcomes.max(self.class_outcomes);
+        models.build_outcomes = models.build_outcomes.max(self.outcomes);
+    }
+
+    /// Starts from the pooled networks. Personal verdicts stay this bot's own.
+    pub(crate) fn adopt(&mut self, models: &crate::knowledge::SharedModels) {
+        self.classes = models.classes.clone();
+        self.builds = models.builds.clone();
+        self.adopted = (self.classes.samples, self.builds.samples);
+        self.class_outcomes = self.class_outcomes.max(models.class_outcomes);
+        self.outcomes = self.outcomes.max(models.build_outcomes);
+    }
+
     pub(crate) fn inherit_models(&mut self, previous: &Self) {
         // Reuse trained weights, not per-player sightings or reward windows.
         self.classes = previous.classes.clone();
@@ -438,7 +457,16 @@ mod tests {
         eligible_tank.level = 15;
         eligible_tank.points = 0;
         let mut commands = Vec::new();
-        crate::progression_commands(&world, &eligible_tank, &choice, &learning, &mut commands);
+        let knowledge = crate::Knowledge::default();
+        crate::progression_commands(
+            &world,
+            &eligible_tank,
+            &choice,
+            &learning,
+            &knowledge,
+            1.,
+            &mut commands,
+        );
         assert!(matches!(&commands[0], crate::Command::Evolve(_, id) if id == &good.id));
 
         // Hold the class fixed to prove the skill model learns allocation,
@@ -460,7 +488,15 @@ mod tests {
         eligible_tank.points = 1;
         eligible_tank.class = good.id.clone();
         commands.clear();
-        crate::progression_commands(&world, &eligible_tank, good, &learning, &mut commands);
+        crate::progression_commands(
+            &world,
+            &eligible_tank,
+            good,
+            &learning,
+            &knowledge,
+            1.,
+            &mut commands,
+        );
         assert!(matches!(commands[0], crate::Command::Stat(_, 5)));
         for index in 0..8 {
             assert!(learning.skill_value(good, [0; 8], index).abs() <= 0.18);

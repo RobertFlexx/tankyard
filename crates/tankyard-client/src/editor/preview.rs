@@ -290,6 +290,34 @@ impl Preview {
                         Some(at),
                     )
                 }
+                LogicEffect::Shove { group, .. } => (
+                    format!("Shoves body {group}; playtest to feel it slide"),
+                    None,
+                ),
+                LogicEffect::Fling { tanks, .. } => (
+                    format!("Flings{}", tank_count(tanks.len()).replace(" to ", " ")),
+                    None,
+                ),
+                LogicEffect::Blast {
+                    tanks,
+                    center,
+                    speed,
+                } => (
+                    format!(
+                        "{}{}",
+                        if speed < 0. { "Pulls in" } else { "Blasts" },
+                        tank_count(tanks.len()).replace(" to ", " ")
+                    ),
+                    Some(center),
+                ),
+                LogicEffect::Zoom { tanks, scale, .. } => (
+                    format!(
+                        "Zooms the view to {}%{}",
+                        (scale * 100.).round(),
+                        tank_count(tanks.len()).replace(" to ", " of ")
+                    ),
+                    None,
+                ),
                 // Scripts run on servers; the preview only says it happened.
                 LogicEffect::Script {
                     name, tanks, area, ..
@@ -314,6 +342,10 @@ impl Preview {
         if self.events.len() > 40 {
             self.events.drain(..self.events.len() - 40);
         }
+    }
+    /// Where the test tank was last, in world units.
+    pub fn probe(&self) -> Option<V2> {
+        self.probe
     }
     /// When trigger `index` next acts on its own schedule, if it has one.
     pub fn next_at(&self, index: usize) -> Option<f32> {

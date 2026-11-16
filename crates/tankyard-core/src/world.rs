@@ -57,6 +57,10 @@ pub struct World {
     pub(crate) zone_areas: Vec<(usize, Rect)>,
     /// Seconds before each tank may use a portal again; never replicated.
     pub(crate) portal_rest: BTreeMap<EntityId, f32>,
+    /// How each of the map's bodies has been pushed, in the map's order.
+    pub(crate) bodies: Vec<crate::map_features::BodyState>,
+    /// Shoves shots gave bodies this step, by group.
+    pub(crate) body_hits: Vec<(u8, V2)>,
     pub objectives: Vec<Objective>,
     pub match_state: MatchState,
     pub events: Vec<GameEvent>,
@@ -199,6 +203,8 @@ impl World {
             map_events: Vec::new(),
             zone_areas: Vec::new(),
             portal_rest: BTreeMap::new(),
+            bodies: Vec::new(),
+            body_hits: Vec::new(),
             objectives: vec![],
             match_state: MatchState {
                 elapsed: 0.,
@@ -216,6 +222,7 @@ impl World {
                 hidden_groups: map.starting_mask(),
                 counters: [0; tankyard_content::MAP_COUNTERS as usize],
                 tweens: Vec::new(),
+                bodies: Vec::new(),
             },
             config,
             content,
@@ -369,6 +376,7 @@ impl World {
             knockback: 0.,
             speed_scale: 1.,
             terrain: 1.,
+            grip: 1.,
             push: V2::ZERO,
             reload_scale: 1.,
             damage_scale: 1.,
@@ -686,6 +694,7 @@ impl World {
         self.run_triggers();
         self.update_zones();
         self.update_tanks();
+        self.update_bodies();
         self.update_targets();
         self.update_bosses();
         self.update_base_guards();
@@ -1611,6 +1620,7 @@ impl World {
         self.drone_contacts.prepare_walls(&self.walls);
         self.wall_index.sync(&self.walls);
         let mut spawned = Vec::new();
+        let mut strikes = Vec::new();
         let mut hits = std::mem::take(&mut self.collision_hits);
         let count = self.projectiles.len();
         let moving_padding = self
@@ -1660,11 +1670,13 @@ impl World {
                 end = p.pos;
             } else {
                 let mut wallhit = None;
+                let mut struck = None;
                 for &wall in self.wall_index.query(start, end, radius) {
                     if let Some((t, n)) = sweep_rect(start, end, radius, self.walls[wall])
                         && wallhit.is_none_or(|h: (f32, V2)| t < h.0)
                     {
                         wallhit = Some((t, n));
+                        struck = Some(wall);
                     }
                 }
                 for (t, n) in boundary_hits(start, end, radius, &self.config)
@@ -1673,7 +1685,11 @@ impl World {
                 {
                     if wallhit.is_none_or(|h| t < h.0) {
                         wallhit = Some((t, n));
+                        struck = None;
                     }
+                }
+                if let (Some(wall), true) = (struck, wallhit.is_some()) {
+                    strikes.push((wall, p.vel, p.damage));
                 }
                 if let Some((t, n)) = wallhit {
                     end = start + (end - start) * t;
@@ -1907,6 +1923,11 @@ impl World {
             .saturating_sub(self.projectiles.len());
         self.projectiles.extend(spawned.into_iter().take(room));
         self.collision_hits = hits;
+        if !self.map.bodies.is_empty() {
+            for (wall, velocity, damage) in strikes {
+                self.shot_hit_wall(wall, velocity, damage);
+            }
+        }
     }
     /// Earliest contact between projectile `i`'s sweep and one candidate body.
     #[allow(clippy::too_many_arguments)]

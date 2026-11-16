@@ -5,6 +5,7 @@ pub mod accounts;
 mod admin;
 mod administration;
 pub mod arena;
+pub mod bot_memory;
 mod chat;
 mod client;
 mod community;

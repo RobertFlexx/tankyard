@@ -81,6 +81,9 @@ pub struct Effects {
     /// A map's Shake screen on the local tank: strength from 0 to 1, seconds
     /// left and its full length.
     map_shake: (f32, f32, f32),
+    /// A map's Zoom view on the local tank: the zoom, seconds left and its
+    /// full length.
+    map_zoom: (f32, f32, f32),
     pub notice: String,
     pub notice_life: f32,
     pub boss_arrival: Option<(tankyard_core::BossKind, f32)>,
@@ -116,6 +119,7 @@ impl Effects {
             seen: HashSet::new(),
             shake: 0.0,
             map_shake: (0., 0., 0.),
+            map_zoom: (1., 0., 0.),
             notice: String::new(),
             notice_life: 0.0,
             boss_arrival: None,
@@ -211,6 +215,14 @@ impl Effects {
                         if strength * seconds >= self.map_shake.0 * self.map_shake.1 {
                             self.map_shake = (strength, seconds, seconds);
                         }
+                    }
+                    (AMBER, 0, false)
+                }
+                EventKind::MapZoom => {
+                    if event.subject == local {
+                        let (scale, seconds) = tankyard_core::zoom_of(event.value);
+                        // The newest zoom takes over from wherever the view is.
+                        self.map_zoom = (scale, seconds, seconds);
                     }
                     (AMBER, 0, false)
                 }
@@ -578,7 +590,22 @@ impl Effects {
             self.shake = self.shake.max(level);
             self.map_shake.1 = (left - dt).max(0.);
         }
+        self.map_zoom.1 = (self.map_zoom.1 - dt).max(0.);
         self.notice_life = (self.notice_life - dt).max(0.0);
+    }
+    /// How much a map's Zoom view scales the camera now: it eases in over
+    /// the first half second, holds, and eases back over the last.
+    pub fn map_zoom(&self) -> f32 {
+        let (scale, left, total) = self.map_zoom;
+        if left <= 0. || total <= 0. {
+            return 1.;
+        }
+        let ease = |t: f32| {
+            let t = t.clamp(0., 1.);
+            t * t * (3. - 2. * t)
+        };
+        let blend = ease((total - left) / 0.5).min(ease(left / 0.5));
+        1. + (scale.clamp(0.25, 4.) - 1.) * blend
     }
     pub fn notice(&mut self, text: &str) {
         self.notice = text.into();

@@ -942,6 +942,1001 @@
         }
       ],
       "background": "sand"
+    },
+    {
+      "id": "foundry",
+      "name": "Foundry",
+      "description": "A dim works floor around a furnace that blows tanks back every ten seconds, with belts, cranes and press rooms behind push doors.",
+      "width": 3200,
+      "height": 2400,
+      "capacity": 24,
+      "recommended_modes": [
+        "ffa",
+        "two_teams",
+        "four_teams",
+        "deathmatch",
+        "sandbox",
+        "random_events"
+      ],
+      "walls": [],
+      "procedural": "None",
+      "objective_positions": [],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.03,
+            0.3,
+            0.12,
+            0.4
+          ]
+        },
+        {
+          "team": 0,
+          "rect": [
+            0.85,
+            0.3,
+            0.12,
+            0.4
+          ]
+        },
+        {
+          "team": 0,
+          "rect": [
+            0.3,
+            0.03,
+            0.3,
+            0.1
+          ]
+        },
+        {
+          "team": 0,
+          "rect": [
+            0.4,
+            0.87,
+            0.3,
+            0.1
+          ]
+        },
+        {
+          "team": 1,
+          "rect": [
+            0.02,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 2,
+          "rect": [
+            0.88,
+            0.83,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 3,
+          "rect": [
+            0.88,
+            0.02,
+            0.1,
+            0.15
+          ]
+        },
+        {
+          "team": 4,
+          "rect": [
+            0.02,
+            0.83,
+            0.1,
+            0.15
+          ]
+        }
+      ],
+      "team_bases": [
+        {
+          "team": 1,
+          "position": [
+            0.065,
+            0.085
+          ]
+        },
+        {
+          "team": 2,
+          "position": [
+            0.935,
+            0.915
+          ]
+        },
+        {
+          "team": 3,
+          "position": [
+            0.935,
+            0.085
+          ]
+        },
+        {
+          "team": 4,
+          "position": [
+            0.065,
+            0.915
+          ]
+        }
+      ],
+      "background": "sand",
+      "blocks": [
+        {
+          "rect": [
+            0.6,
+            0.27,
+            0.18,
+            0.02
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.22,
+            0.71,
+            0.18,
+            0.02
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.76,
+            0.27,
+            0.02,
+            0.18
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.22,
+            0.55,
+            0.02,
+            0.18
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.6,
+            0.43,
+            0.18,
+            0.02
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.22,
+            0.55,
+            0.18,
+            0.02
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.6,
+            0.29,
+            0.014,
+            0.14
+          ],
+          "group": 2,
+          "color": [
+            214,
+            150,
+            70
+          ]
+        },
+        {
+          "rect": [
+            0.386,
+            0.57,
+            0.014,
+            0.14
+          ],
+          "group": 3,
+          "color": [
+            214,
+            150,
+            70
+          ]
+        },
+        {
+          "rect": [
+            0.38,
+            0.3,
+            0.1,
+            0.025
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.52,
+            0.675,
+            0.1,
+            0.025
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.27,
+            0.28,
+            0.04,
+            0.055
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.69,
+            0.665,
+            0.04,
+            0.055
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.22,
+            0.44,
+            0.1,
+            0.03
+          ],
+          "group": 4,
+          "color": [
+            120,
+            150,
+            180
+          ]
+        },
+        {
+          "rect": [
+            0.68,
+            0.53,
+            0.1,
+            0.03
+          ],
+          "group": 5,
+          "color": [
+            120,
+            150,
+            180
+          ]
+        }
+      ],
+      "zones": [
+        {
+          "kind": "hazard",
+          "rect": [
+            0.47,
+            0.46,
+            0.06,
+            0.08
+          ],
+          "strength": 1,
+          "group": 0,
+          "angle": 0,
+          "exit": [
+            0,
+            0
+          ]
+        },
+        {
+          "kind": "conveyor",
+          "rect": [
+            0.2,
+            0.17,
+            0.46,
+            0.05
+          ],
+          "strength": 1,
+          "group": 0,
+          "angle": 0,
+          "exit": [
+            0,
+            0
+          ]
+        },
+        {
+          "kind": "conveyor",
+          "rect": [
+            0.34,
+            0.78,
+            0.46,
+            0.05
+          ],
+          "strength": 1,
+          "group": 0,
+          "angle": 180,
+          "exit": [
+            0,
+            0
+          ]
+        },
+        {
+          "kind": "repair",
+          "rect": [
+            0.65,
+            0.31,
+            0.08,
+            0.1
+          ],
+          "strength": 1,
+          "group": 0,
+          "angle": 0,
+          "exit": [
+            0,
+            0
+          ]
+        },
+        {
+          "kind": "repair",
+          "rect": [
+            0.27,
+            0.59,
+            0.08,
+            0.1
+          ],
+          "strength": 1,
+          "group": 0,
+          "angle": 0,
+          "exit": [
+            0,
+            0
+          ]
+        },
+        {
+          "kind": "launch",
+          "rect": [
+            0.14,
+            0.86,
+            0.06,
+            0.07
+          ],
+          "strength": 1,
+          "group": 0,
+          "angle": 0,
+          "exit": [
+            0,
+            0
+          ]
+        },
+        {
+          "kind": "launch",
+          "rect": [
+            0.8,
+            0.07,
+            0.06,
+            0.07
+          ],
+          "strength": 1,
+          "group": 0,
+          "angle": 180,
+          "exit": [
+            0,
+            0
+          ]
+        }
+      ],
+      "decor": [
+        {
+          "kind": "grid",
+          "rect": [
+            0.36,
+            0.33,
+            0.28,
+            0.34
+          ],
+          "color": [
+            255,
+            170,
+            90
+          ],
+          "alpha": 40,
+          "group": 0
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.38,
+            0.35,
+            0.24,
+            0.3
+          ],
+          "color": [
+            255,
+            130,
+            50
+          ],
+          "alpha": 230,
+          "group": 0,
+          "pulse": 0.6,
+          "flicker": 0.1
+        },
+        {
+          "kind": "ring",
+          "rect": [
+            0.44,
+            0.41,
+            0.12,
+            0.18
+          ],
+          "color": [
+            255,
+            150,
+            70
+          ],
+          "alpha": 200,
+          "group": 1
+        },
+        {
+          "kind": "hexagon",
+          "rect": [
+            0.485,
+            0.48,
+            0.03,
+            0.04
+          ],
+          "color": [
+            255,
+            200,
+            120
+          ],
+          "alpha": 220,
+          "group": 0,
+          "spin": 30
+        },
+        {
+          "kind": "emitter",
+          "rect": [
+            0.47,
+            0.47,
+            0.06,
+            0.02
+          ],
+          "color": [
+            255,
+            170,
+            70
+          ],
+          "alpha": 255,
+          "group": 0,
+          "effect": {
+            "shape": "soft",
+            "glow": true,
+            "rate": 9.0,
+            "lifetime": 1.6,
+            "speed": 60.0,
+            "direction": 270.0,
+            "spread": 50.0,
+            "gravity": -30.0,
+            "drag": 0.4,
+            "size": 7.0,
+            "end_size": 1.5,
+            "color": [
+              255,
+              170,
+              70
+            ],
+            "end_color": [
+              200,
+              60,
+              30
+            ],
+            "fade": true,
+            "wobble": 20.0,
+            "twinkle": 0.3
+          }
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.01,
+            0.01,
+            0.14,
+            0.19
+          ],
+          "color": [
+            255,
+            214,
+            150
+          ],
+          "alpha": 200,
+          "group": 0
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.85,
+            0.8,
+            0.14,
+            0.19
+          ],
+          "color": [
+            255,
+            214,
+            150
+          ],
+          "alpha": 200,
+          "group": 0
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.85,
+            0.01,
+            0.14,
+            0.19
+          ],
+          "color": [
+            255,
+            214,
+            150
+          ],
+          "alpha": 200,
+          "group": 0
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.01,
+            0.8,
+            0.14,
+            0.19
+          ],
+          "color": [
+            255,
+            214,
+            150
+          ],
+          "alpha": 200,
+          "group": 0
+        },
+        {
+          "kind": "spotlight",
+          "rect": [
+            0.22,
+            0.02,
+            0.2,
+            0.16
+          ],
+          "color": [
+            255,
+            226,
+            180
+          ],
+          "alpha": 180,
+          "group": 0,
+          "rotation": 60
+        },
+        {
+          "kind": "spotlight",
+          "rect": [
+            0.58,
+            0.82,
+            0.2,
+            0.16
+          ],
+          "color": [
+            255,
+            226,
+            180
+          ],
+          "alpha": 180,
+          "group": 0,
+          "rotation": 240
+        },
+        {
+          "kind": "beam",
+          "rect": [
+            0.2,
+            0.165,
+            0.46,
+            0.006
+          ],
+          "color": [
+            255,
+            170,
+            60
+          ],
+          "alpha": 170,
+          "group": 0
+        },
+        {
+          "kind": "beam",
+          "rect": [
+            0.34,
+            0.829,
+            0.46,
+            0.006
+          ],
+          "color": [
+            255,
+            170,
+            60
+          ],
+          "alpha": 170,
+          "group": 0
+        },
+        {
+          "kind": "beam",
+          "rect": [
+            0.2,
+            0.219,
+            0.46,
+            0.006
+          ],
+          "color": [
+            255,
+            170,
+            60
+          ],
+          "alpha": 170,
+          "group": 0
+        },
+        {
+          "kind": "beam",
+          "rect": [
+            0.34,
+            0.775,
+            0.46,
+            0.006
+          ],
+          "color": [
+            255,
+            170,
+            60
+          ],
+          "alpha": 170,
+          "group": 0
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.64,
+            0.3,
+            0.1,
+            0.13
+          ],
+          "color": [
+            120,
+            255,
+            170
+          ],
+          "alpha": 180,
+          "group": 0
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.26,
+            0.57,
+            0.1,
+            0.13
+          ],
+          "color": [
+            120,
+            255,
+            170
+          ],
+          "alpha": 180,
+          "group": 0
+        },
+        {
+          "kind": "tile",
+          "rect": [
+            0.6,
+            0.27,
+            0.18,
+            0.18
+          ],
+          "color": [
+            58,
+            46,
+            40
+          ],
+          "alpha": 235,
+          "group": 0,
+          "above": true,
+          "react": "fade",
+          "reach": 120
+        },
+        {
+          "kind": "tile",
+          "rect": [
+            0.22,
+            0.55,
+            0.18,
+            0.18
+          ],
+          "color": [
+            58,
+            46,
+            40
+          ],
+          "alpha": 235,
+          "group": 0,
+          "above": true,
+          "react": "fade",
+          "reach": 120
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.24,
+            0.41,
+            0.06,
+            0.09
+          ],
+          "color": [
+            255,
+            190,
+            110
+          ],
+          "alpha": 170,
+          "group": 4
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.7,
+            0.5,
+            0.06,
+            0.09
+          ],
+          "color": [
+            255,
+            190,
+            110
+          ],
+          "alpha": 170,
+          "group": 5
+        }
+      ],
+      "triggers": [
+        {
+          "when": "start",
+          "action": "path",
+          "rect": [
+            0.495,
+            0.495,
+            0.01,
+            0.01
+          ],
+          "group": 4,
+          "amount": 1,
+          "seconds": 0
+        },
+        {
+          "when": "start",
+          "action": "path",
+          "rect": [
+            0.495,
+            0.495,
+            0.01,
+            0.01
+          ],
+          "group": 5,
+          "amount": 2,
+          "seconds": 0
+        },
+        {
+          "when": "every",
+          "action": "tint",
+          "rect": [
+            0.38,
+            0.35,
+            0.24,
+            0.3
+          ],
+          "group": 1,
+          "amount": 100,
+          "color": [
+            255,
+            60,
+            40
+          ],
+          "tween": 0.8,
+          "duration": 0.6,
+          "seconds": 10,
+          "offset": 4,
+          "easing": {
+            "curve": "sine",
+            "mode": "in_out"
+          }
+        },
+        {
+          "when": "every",
+          "action": "blast",
+          "rect": [
+            0.38,
+            0.35,
+            0.24,
+            0.3
+          ],
+          "amount": 600,
+          "seconds": 10,
+          "offset": 5
+        },
+        {
+          "when": "every",
+          "action": "shake",
+          "rect": [
+            0.38,
+            0.35,
+            0.24,
+            0.3
+          ],
+          "amount": 20,
+          "tween": 0.35,
+          "seconds": 10,
+          "offset": 5
+        },
+        {
+          "when": "every",
+          "action": "scale",
+          "rect": [
+            0.38,
+            0.35,
+            0.24,
+            0.3
+          ],
+          "group": 1,
+          "amount": 150,
+          "tween": 0.2,
+          "duration": 0.35,
+          "seconds": 10,
+          "offset": 5,
+          "easing": {
+            "curve": "back",
+            "mode": "out"
+          }
+        },
+        {
+          "when": "every",
+          "action": "sound",
+          "rect": [
+            0.38,
+            0.35,
+            0.24,
+            0.3
+          ],
+          "sound": "rumble",
+          "amount": 55,
+          "seconds": 10,
+          "offset": 5
+        }
+      ],
+      "paths": [
+        {
+          "name": "West crane",
+          "repeat": "bounce",
+          "points": [
+            {
+              "at": [
+                0.08,
+                0.0
+              ],
+              "seconds": 3.0,
+              "pause": 1.0,
+              "easing": {
+                "curve": "sine",
+                "mode": "in_out"
+              }
+            },
+            {
+              "at": [
+                -0.04,
+                0.0
+              ],
+              "seconds": 3.0,
+              "pause": 1.0,
+              "easing": {
+                "curve": "sine",
+                "mode": "in_out"
+              }
+            }
+          ]
+        },
+        {
+          "name": "East crane",
+          "repeat": "bounce",
+          "points": [
+            {
+              "at": [
+                -0.08,
+                0.0
+              ],
+              "seconds": 3.0,
+              "pause": 1.0,
+              "easing": {
+                "curve": "sine",
+                "mode": "in_out"
+              }
+            },
+            {
+              "at": [
+                0.04,
+                0.0
+              ],
+              "seconds": 3.0,
+              "pause": 1.0,
+              "easing": {
+                "curve": "sine",
+                "mode": "in_out"
+              }
+            }
+          ]
+        }
+      ],
+      "bodies": [
+        {
+          "group": 2,
+          "reach": [
+            0,
+            0,
+            0.1,
+            0
+          ],
+          "axis": "across",
+          "weight": 1.0,
+          "spring": 0.15,
+          "friction": 8.0
+        },
+        {
+          "group": 3,
+          "reach": [
+            0.1,
+            0,
+            0,
+            0
+          ],
+          "axis": "across",
+          "weight": 1.0,
+          "spring": 0.15,
+          "friction": 8.0
+        }
+      ],
+      "ambient": {
+        "darkness": 0.35,
+        "color": [
+          40,
+          20,
+          8
+        ]
+      },
+      "group_names": [
+        {
+          "group": 1,
+          "name": "Furnace ring"
+        },
+        {
+          "group": 2,
+          "name": "East press door"
+        },
+        {
+          "group": 3,
+          "name": "West press door"
+        },
+        {
+          "group": 4,
+          "name": "West crane"
+        },
+        {
+          "group": 5,
+          "name": "East crane"
+        }
+      ]
     }
   ]
 }

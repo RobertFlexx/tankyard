@@ -6,6 +6,8 @@ pub(super) fn progression_commands(
     tank: &Tank,
     class: &ClassDef,
     learning: &policy::BuildLearning,
+    knowledge: &knowledge::Knowledge,
+    insight: f32,
     commands: &mut Vec<Command>,
 ) {
     let melee = class.multipliers[2] >= 2.;
@@ -50,13 +52,16 @@ pub(super) fn progression_commands(
                 .is_some_and(|next| tank.level >= next.min_level)
         })
     };
+    // Shared memory steers toward branches that lead to the tanks earning
+    // the most, and a little toward ones it hasn't seen enough of yet.
+    let score = |next: &ClassDef| {
+        learning.class_score(tank, next)
+            + knowledge.path_value(next) * 0.6 * insight
+            + (1. - knowledge.certainty(next)) * 0.08
+    };
     if let Some(next) = eligible()
         .filter_map(|id| world.content.class(id))
-        .max_by(|a, b| {
-            learning
-                .class_score(tank, a)
-                .total_cmp(&learning.class_score(tank, b))
-        })
+        .max_by(|a, b| score(a).total_cmp(&score(b)))
     {
         commands.push(Command::Evolve(tank.id, next.id.clone()));
     }

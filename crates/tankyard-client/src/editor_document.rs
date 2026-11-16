@@ -250,10 +250,10 @@ impl Document {
             || doc.map.description.len() > 2048
             || !(900. ..=16000.).contains(&doc.map.width)
             || !(700. ..=16000.).contains(&doc.map.height)
-            || doc.map.walls.len() + doc.map.blocks.len() > 2048
-            || doc.map.zones.len() > 256
-            || doc.map.decor.len() > 1024
-            || doc.map.triggers.len() > 128
+            || doc.map.walls.len() + doc.map.blocks.len() > tankyard_content::MAP_BLOCKS
+            || doc.map.zones.len() > tankyard_content::MAP_ZONES
+            || doc.map.decor.len() > tankyard_content::MAP_DECOR
+            || doc.map.triggers.len() > tankyard_content::MAP_TRIGGERS
             || doc.map.spawn_regions.len() > 32
             || doc.map.team_bases.len() > 4
             || doc.map.objective_positions.len() > 32
@@ -818,6 +818,33 @@ impl Document {
                     false,
                 );
             }
+            if trigger.action == TriggerAction::Shove
+                && members(trigger.group)
+                && m.body(trigger.group).is_none()
+            {
+                note(
+                    key,
+                    format!(
+                        "{name} shoves group {}, which isn't pushable. Turn on Pushable in the group's Body settings.",
+                        trigger.group
+                    ),
+                    false,
+                );
+            }
+            if trigger.action == TriggerAction::Path
+                && m.paths
+                    .get(usize::try_from(trigger.amount - 1).unwrap_or(usize::MAX))
+                    .is_none_or(|path| path.points.is_empty())
+            {
+                note(
+                    key,
+                    format!(
+                        "{name} plays path {}, which has no points yet. Add them in the Map tab, under Paths.",
+                        trigger.amount
+                    ),
+                    false,
+                );
+            }
             let senders = |channel: u8| {
                 m.triggers.iter().any(|t| {
                     t.action.channels(t.group, t.amount).contains(&channel)
@@ -837,9 +864,9 @@ impl Document {
                     .any(|t| t.action.switches_group() && t.group == group)
             };
             let animated = |group: u8| {
-                m.triggers
-                    .iter()
-                    .any(|t| t.action.animates() && t.group == group)
+                m.triggers.iter().any(|t| {
+                    (t.action.animates() || t.action == TriggerAction::Path) && t.group == group
+                })
             };
             match trigger.when {
                 TriggerWhen::Signal if !senders(trigger.source) => note(
@@ -869,7 +896,7 @@ impl Document {
                 TriggerWhen::Arrived if !animated(trigger.source) => note(
                     key,
                     format!(
-                        "{name} waits for group {} to arrive, but nothing moves, turns or fades it.",
+                        "{name} waits for group {} to arrive, but nothing moves, turns, fades or sends it along a path.",
                         trigger.source
                     ),
                     false,
@@ -1034,20 +1061,20 @@ impl Document {
     pub fn insert(&mut self, object: Object) -> Option<Key> {
         let m = &mut self.map;
         Some(match object {
-            Object::Wall(o) if m.walls.len() + m.blocks.len() < 2048 => {
+            Object::Wall(o) if m.walls.len() + m.blocks.len() < tankyard_content::MAP_BLOCKS => {
                 m.walls.push(o);
                 Key::Wall(m.walls.len() - 1)
             }
-            Object::Block(o) if m.walls.len() + m.blocks.len() < 2048 => {
+            Object::Block(o) if m.walls.len() + m.blocks.len() < tankyard_content::MAP_BLOCKS => {
                 m.blocks.push(o);
                 Key::Block(m.blocks.len() - 1)
             }
-            Object::Zone(o) if m.zones.len() < 256 => {
+            Object::Zone(o) if m.zones.len() < tankyard_content::MAP_ZONES => {
                 m.zones.push(o);
                 Key::Zone(m.zones.len() - 1)
             }
             Object::Decor(o)
-                if m.decor.len() < 1024
+                if m.decor.len() < tankyard_content::MAP_DECOR
                     && (o.kind != DecorKind::Emitter
                         || m.decor
                             .iter()
@@ -1058,7 +1085,7 @@ impl Document {
                 m.decor.push(o);
                 Key::Decor(m.decor.len() - 1)
             }
-            Object::Trigger(o) if m.triggers.len() < 128 => {
+            Object::Trigger(o) if m.triggers.len() < tankyard_content::MAP_TRIGGERS => {
                 m.triggers.push(o);
                 Key::Trigger(m.triggers.len() - 1)
             }
@@ -1358,6 +1385,8 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         TriggerWhen::Shown => format!("When group {} is shown", t.source),
         TriggerWhen::Hidden => format!("When group {} is hidden", t.source),
         TriggerWhen::Arrived => format!("When group {} finishes a motion", t.source),
+        TriggerWhen::Touch => format!("When group {}'s blocks reach here", t.source),
+        TriggerWhen::Release => format!("When group {}'s blocks leave here", t.source),
         TriggerWhen::Defeated => match defeated_boss(t) {
             Some(id) => format!("When the {} is defeated", boss_name(id)),
             None => "When a boss is defeated".into(),
@@ -1446,6 +1475,45 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
             t.sound.name().to_lowercase(),
             t.amount
         ),
+        TriggerAction::Shove => format!(
+            "shove body {} {} at {} units a second",
+            t.group,
+            heading(t.angle),
+            t.amount
+        ),
+        TriggerAction::Fling => format!(
+            "fling {}{} here {} at {} units a second",
+            who_here(t),
+            team_here(t),
+            heading(t.angle),
+            t.amount
+        ),
+        TriggerAction::Blast if t.amount < 0 => format!(
+            "pull {}{} here toward the middle at {} units a second",
+            who_here(t),
+            team_here(t),
+            t.amount.unsigned_abs()
+        ),
+        TriggerAction::Blast => format!(
+            "throw {}{} here outward at {} units a second",
+            who_here(t),
+            team_here(t),
+            t.amount
+        ),
+        TriggerAction::Zoom => format!(
+            "zoom the view of {}{} here to {}% for {}",
+            who_here(t),
+            team_here(t),
+            t.amount,
+            seconds(t.tween)
+        ),
+        TriggerAction::Light if t.amount == 0 => "light the arena fully".into(),
+        TriggerAction::Light => format!(
+            "darken the arena to {}%, tinted {}",
+            t.amount,
+            color_hex(t.color)
+        ),
+        TriggerAction::Path => format!("send group {} along path {}", t.group, t.amount),
     };
     if t.action.animates() {
         text += &if t.tween > 0. {
@@ -1459,7 +1527,7 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
             " at once".into()
         };
     }
-    if t.action.targets_group() && t.duration > 0. {
+    if (t.action.targets_group() || t.action == TriggerAction::Light) && t.duration > 0. {
         text += &if t.action.animates() {
             format!(", returning after {}", seconds(t.duration))
         } else {
@@ -1483,6 +1551,56 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         text += &format!(" Off while group {} is hidden.", t.member);
     }
     text
+}
+/// [`describe_trigger`], with the groups it mentions called by their names:
+/// "hide group 4 (Vault gate)", and "Crate's blocks" for "group 3's blocks".
+/// Quoted announcement and script text is left as written.
+pub fn describe_trigger_named(t: &MapTrigger, names: &[GroupName]) -> String {
+    name_groups(&describe_trigger(t), names)
+}
+fn name_groups(text: &str, names: &[GroupName]) -> String {
+    if names.is_empty() {
+        return text.to_owned();
+    }
+    let named = |group: &str| {
+        let group: u8 = group.parse().ok()?;
+        names
+            .iter()
+            .find(|n| n.group == group && !n.name.trim().is_empty())
+            .map(|n| n.name.trim())
+    };
+    let mut out = String::with_capacity(text.len() + 32);
+    let mut quoted = false;
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let word_start = !out.ends_with(|c: char| c.is_alphanumeric());
+        let prefix = ["group ", "body "]
+            .into_iter()
+            .find(|p| !quoted && word_start && rest.starts_with(p));
+        if let Some(prefix) = prefix {
+            let after = &rest[prefix.len()..];
+            let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            if let Some(name) = (digits > 0).then(|| named(&after[..digits])).flatten() {
+                let number = &after[..digits];
+                let tail = &after[digits..];
+                if tail.starts_with("'s ") {
+                    out.push_str(name);
+                } else {
+                    out.push_str(&format!("{prefix}{number} ({name})"));
+                }
+                rest = tail;
+                continue;
+            }
+        }
+        quoted = match c {
+            '\u{201c}' => true,
+            '\u{201d}' => false,
+            _ => quoted,
+        };
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
 }
 /// A move in words: "12% right and 5% up", as fractions of the arena.
 pub fn describe_travel([x, y]: [f32; 2]) -> String {
@@ -1589,6 +1707,34 @@ fn describe_math(t: &MapTrigger) -> String {
         MathOp::Flip => format!("flip counter {c} between 0 and 1"),
     }
 }
+/// A direction in words: "right", "up and left", or degrees between.
+pub fn heading(angle: f32) -> String {
+    const NAMES: [&str; 8] = [
+        "right",
+        "down and right",
+        "down",
+        "down and left",
+        "left",
+        "up and left",
+        "up",
+        "up and right",
+    ];
+    let degrees = angle.rem_euclid(360.);
+    let step = (degrees / 45.).round();
+    if (degrees - step * 45.).abs() < 0.5 {
+        format!("toward {}", NAMES[step as usize % 8])
+    } else {
+        format!("toward {}\u{b0}", degrees.round())
+    }
+}
+/// A direction as one arrow, for badges.
+fn arrow(angle: f32) -> &'static str {
+    const ARROWS: [&str; 8] = [
+        "\u{2192}", "\u{2198}", "\u{2193}", "\u{2199}", "\u{2190}", "\u{2196}", "\u{2191}",
+        "\u{2197}",
+    ];
+    ARROWS[(angle.rem_euclid(360.) / 45.).round() as usize % 8]
+}
 /// A trigger in a few characters, for lists.
 pub fn trigger_tag(t: &MapTrigger) -> String {
     tag(t, false)
@@ -1614,6 +1760,8 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
         TriggerWhen::Hidden => format!("G{} hidden", t.source),
         TriggerWhen::Defeated => "Boss down".into(),
         TriggerWhen::Arrived => format!("G{} arrives", t.source),
+        TriggerWhen::Touch => format!("G{} touches", t.source),
+        TriggerWhen::Release => format!("G{} leaves", t.source),
     };
     let action = match t.action {
         TriggerAction::Toggle => format!("Toggle {}", t.group),
@@ -1671,6 +1819,13 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
         TriggerAction::Stop => format!("Stop {}", t.group),
         TriggerAction::Shake => format!("Shake {}%", t.amount),
         TriggerAction::Sound => t.sound.name().into(),
+        TriggerAction::Shove => format!("Shove {} {}", t.group, arrow(t.angle)),
+        TriggerAction::Fling => format!("Fling {}", arrow(t.angle)),
+        TriggerAction::Blast if t.amount < 0 => "Pull in".into(),
+        TriggerAction::Blast => "Blast".into(),
+        TriggerAction::Zoom => format!("Zoom {}%", t.amount),
+        TriggerAction::Light => format!("Dark {}%", t.amount),
+        TriggerAction::Path => format!("Path {} on {}", t.amount, t.group),
     };
     let mut tag = match gate_tag(t, compact) {
         Some(gate) => format!("{when} if {gate} \u{2192} {action}"),
@@ -2083,5 +2238,50 @@ mod tests {
             doc.replace(Key::Trigger(0), Object::Trigger(first));
         }
         assert!(!doc.problems().iter().any(|p| p.text.contains("each other")));
+    }
+
+    #[test]
+    fn summaries_call_groups_by_name_but_leave_quotes_alone() {
+        let names = [
+            GroupName {
+                group: 3,
+                name: "Crate".into(),
+            },
+            GroupName {
+                group: 4,
+                name: "Vault gate".into(),
+            },
+        ];
+        let plate = MapTrigger {
+            when: TriggerWhen::Touch,
+            action: TriggerAction::Hide,
+            source: 3,
+            group: 4,
+            ..Default::default()
+        };
+        assert_eq!(
+            describe_trigger_named(&plate, &names),
+            "When Crate's blocks reach here: hide group 4 (Vault gate)."
+        );
+        // Group 34 isn't group 3, and quoted text is the author's own.
+        let announce = MapTrigger {
+            action: TriggerAction::Announce,
+            text: "group 3 is open".into(),
+            member: 34,
+            ..Default::default()
+        };
+        let text = describe_trigger_named(&announce, &names);
+        assert!(text.contains("\u{201c}group 3 is open\u{201d}"), "{text}");
+        assert_eq!(
+            describe_trigger_named(&announce, &[]),
+            describe_trigger(&announce)
+        );
+        let flash = MapTrigger {
+            action: TriggerAction::Light,
+            tween: 0.05,
+            duration: 0.15,
+            ..Default::default()
+        };
+        assert!(describe_trigger(&flash).contains("returning after"));
     }
 }

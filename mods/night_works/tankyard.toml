@@ -1,0 +1,14 @@
+[mod]
+name = "Night Works"
+version = "1.0"
+description = "A dark playable map built from the 1.3 workshop: push doors, a crate on a pressure plate, a ferry on a path, ice, a gravity well, roofs and spotlights."
+license = "MIT"
+icon = "icon.svg"
+tags = ["maps", "tutorial", "physics", "lighting"]
+
+[creator]
+name = "Tank Yard"
+url = "https://github.com/RobertFlexx/tankyard"
+
+[links]
+source = "https://github.com/RobertFlexx/tankyard/tree/main/mods/night_works"

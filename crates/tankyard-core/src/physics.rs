@@ -203,12 +203,18 @@ pub fn steer_tank(tank: &mut Tank, content: &Content, config: &WorldConfig, dt: 
     let desired = tank.input.movement.clamp_length(1.) * speed + push;
     // Acceleration and coast are exponential, so prediction and the server
     // agree at every frame rate. Keep enough inertia for recoil and dodging.
+    // Ice takes the grip away from starting, turning and stopping alike.
+    let grip = if tank.grip.is_finite() {
+        tank.grip.clamp(0.05, 1.)
+    } else {
+        1.
+    };
     let rate = if tank.knockback > 0. {
         1.6
     } else if desired.length_squared() > 0.1 {
-        config.rules.acceleration
+        config.rules.acceleration * grip
     } else {
-        config.rules.coast
+        config.rules.coast * grip
     };
     tank.vel = tank
         .vel
@@ -398,6 +404,7 @@ pub fn predict_tank(
         // pads belong to the other layer, including on the returning tick.
         tank.terrain = 1.;
         tank.push = V2::ZERO;
+        tank.grip = 1.;
     }
     tank.ability_cooldown = (tank.ability_cooldown - dt).max(0.0);
     tank.shield = (tank.shield - dt).max(0.0);
@@ -550,6 +557,7 @@ pub(crate) fn apply_personal_ability(
             tank.charge = 0.;
             tank.terrain = 1.;
             tank.push = V2::ZERO;
+            tank.grip = 1.;
             crate::with_pocket_layout(config, |layout| {
                 constrain_tank(tank, config, &layout.walls);
             });

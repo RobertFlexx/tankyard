@@ -1,6 +1,7 @@
 //! Reproducible, headless validation and measurement tools.
 mod allocations;
 mod drones;
+mod train;
 #[global_allocator]
 static ALLOCATOR: allocations::CountingAllocator = allocations::CountingAllocator;
 use clap::{Parser, Subcommand};
@@ -83,6 +84,36 @@ enum Command {
     },
     /// Nominal weapon throughput; combat outcomes still require playtesting.
     Balance,
+    /// Train the bots' driving network by self-play and write the best
+    /// weights as Rust source.
+    TrainDriver {
+        #[arg(long, default_value_t = 120)]
+        generations: u32,
+        /// Pairs of weight changes tried each generation.
+        #[arg(long, default_value_t = 12)]
+        pairs: usize,
+        /// Size of each change.
+        #[arg(long, default_value_t = 0.08)]
+        sigma: f32,
+        /// Step size.
+        #[arg(long, default_value_t = 0.02)]
+        rate: f32,
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+        /// Bots on each side of every match.
+        #[arg(long, default_value_t = 6)]
+        bots: usize,
+        #[arg(long, default_value_t = 4800)]
+        ticks: u64,
+        #[arg(long, default_value_t = 8)]
+        threads: usize,
+        /// Where to write the best weights, e.g. crates/tankyard-ai/src/driver_weights.rs.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Start from the weights bots ship with instead of the initial ones.
+        #[arg(long)]
+        resume: bool,
+    },
     /// Run a bot arena and report real class usage, kills and scores.
     Tournament {
         #[arg(long, default_value_t = 24)]
@@ -527,6 +558,31 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if !session.mods.errors.is_empty() {
                 return Err(session.mods.errors.join("; ").into());
             }
+        }
+        Command::TrainDriver {
+            generations,
+            pairs,
+            sigma,
+            rate,
+            seed,
+            bots,
+            ticks,
+            threads,
+            out,
+            resume,
+        } => {
+            train::train_driver(&train::Options {
+                generations,
+                pairs,
+                sigma,
+                rate,
+                seed,
+                bots,
+                ticks,
+                threads,
+                out,
+                start: resume.then(|| tankyard_ai::driver::trained().weights()),
+            })?;
         }
         Command::Tournament { bots, ticks, seed } => {
             if !(2..=128).contains(&bots) || ticks > 1_000_000 {

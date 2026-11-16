@@ -147,6 +147,9 @@ pub struct UdpServer {
     pub(crate) party_roster_checked_at: Option<u64>,
     pub(crate) party_roster: Vec<PartyMember>,
     owner_extension: Option<OwnerExtension>,
+    /// What bots learn, shared by every arena and saved now and then.
+    pub(crate) bot_memory: tankyard_ai::SharedKnowledge,
+    bot_memory_saved: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -176,6 +179,9 @@ impl UdpServer {
         )
         .map_err(NetError)?;
         session.bots.difficulty = settings.difficulty;
+        let bot_memory =
+            crate::bot_memory::load(settings.bot_memory_path(), &session.bundle.content);
+        session.bots.share_knowledge(bot_memory.clone());
         if let Some(rules) = settings.rules_override {
             session.world.set_rules(rules).map_err(NetError)?;
         }
@@ -253,6 +259,8 @@ impl UdpServer {
             chat,
             accounts_checked_at: 0,
             owner_extension: None,
+            bot_memory,
+            bot_memory_saved: Duration::ZERO,
         })
     }
 
@@ -341,7 +349,30 @@ impl UdpServer {
             }
         }
         self.transport.send_packets(&mut self.server);
+        if self.elapsed.saturating_sub(self.bot_memory_saved)
+            >= Duration::from_secs(crate::bot_memory::SAVE_SECONDS)
+        {
+            self.bot_memory_saved = self.elapsed;
+            self.save_bot_memory();
+        }
         Ok(())
+    }
+
+    /// Lets bots here learn into `memory`, shared with the game hosting this
+    /// server, instead of their own.
+    pub fn share_bot_memory(&mut self, memory: tankyard_ai::SharedKnowledge) {
+        for arena in &mut self.arenas {
+            arena.session.bots.share_knowledge(memory.clone());
+        }
+        self.bot_memory = memory;
+    }
+
+    /// Writes what bots learned, if anything, to the configured file.
+    pub fn save_bot_memory(&self) {
+        let path = self.settings.bot_memory_path();
+        if let Err(error) = crate::bot_memory::save(path, &self.bot_memory) {
+            log::warn!("Couldn't save bot memory to {}: {error}", path.display());
+        }
     }
 
     pub fn player_count(&self) -> usize {
@@ -1986,6 +2017,7 @@ impl UdpServer {
         self.transport.send_packets(&mut self.server);
         self.transport.disconnect_all(&mut self.server);
         self.shutting_down = true;
+        self.save_bot_memory();
     }
 }
 
@@ -2090,22 +2122,11 @@ fn bounded_snapshot(
     }
 }
 
-/// The game data players receive and the hash their welcome carries. Map
-/// triggers run only on the server, so they stay here: players need none of
-/// them, and newer trigger kinds then never reach clients that predate them.
+/// The game data players receive and the hash their welcome carries, both
+/// without map logic (see [`players_bundle`]).
 fn player_game_data(bundle: &tankyard_mods::GameBundle) -> Result<(u64, Bytes), NetError> {
-    let shared;
-    let bundle = if bundle.maps.iter().any(|map| !map.triggers.is_empty()) {
-        let mut stripped = bundle.clone();
-        for map in &mut stripped.maps {
-            map.triggers.clear();
-        }
-        shared = stripped;
-        &shared
-    } else {
-        bundle
-    };
-    let message = game_data(bundle).map_err(|e| NetError(e.to_string()))?;
+    let bundle = players_bundle(bundle);
+    let message = game_data(&bundle).map_err(|e| NetError(e.to_string()))?;
     let bytes = encode(&message, MAX_SERVER_CONTROL_BYTES)
         .map(Bytes::from)
         .map_err(|e| NetError(e.to_string()))?;
@@ -2130,6 +2151,10 @@ mod tests {
             rect: [0.4, 0.4, 0.2, 0.2],
             ..Default::default()
         });
+        bundle.maps[0].paths.push(tankyard_content::MapPath {
+            points: vec![tankyard_content::PathPoint::default()],
+            ..Default::default()
+        });
         let (hash, bytes) = player_game_data(&bundle).unwrap();
         let ServerControl::GameData { compressed } =
             decode(&bytes, MAX_SERVER_CONTROL_BYTES).unwrap()
@@ -2137,7 +2162,12 @@ mod tests {
             panic!("game data message");
         };
         let received = decode_game_data(&compressed).unwrap();
-        assert!(received.maps.iter().all(|map| map.triggers.is_empty()));
+        assert!(
+            received
+                .maps
+                .iter()
+                .all(|map| map.triggers.is_empty() && map.paths.is_empty())
+        );
         assert_eq!(received.fingerprint(), hash);
         assert_eq!(bundle.maps[0].triggers.len(), 1, "the server keeps them");
     }

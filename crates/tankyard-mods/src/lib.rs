@@ -529,6 +529,34 @@ pub enum Effect {
         #[serde(default = "full_volume")]
         percent: f32,
     },
+    // Added in 1.3.0.
+    /// Send map group `group` along the map's path `path`, counting from 1,
+    /// as a Play path trigger would.
+    MapPath {
+        group: u8,
+        path: u8,
+    },
+    /// Change the arena's lighting to `darkness` percent (0 to 95) tinted
+    /// `color`, as a Lighting trigger would.
+    MapLight {
+        color: [u8; 3],
+        darkness: f32,
+        #[serde(default)]
+        seconds: f32,
+        #[serde(default)]
+        easing: tankyard_content::Easing,
+    },
+    /// Push body `group` at `velocity`, in world units a second, as a Shove
+    /// body trigger would.
+    MapShove {
+        group: u8,
+        velocity: [f32; 2],
+    },
+    /// Fling the actor's tank at `velocity`, in world units a second, as a
+    /// launch pad does.
+    Fling {
+        velocity: [f32; 2],
+    },
 }
 fn full_volume() -> f32 {
     100.
@@ -714,6 +742,25 @@ impl Effect {
             }
             Self::PlaySound { at, percent, .. } => {
                 vector(*at, 0., 1.) && (1. ..=100.).contains(percent)
+            }
+            Self::MapPath { group, path } => {
+                (1..=tankyard_content::MAP_GROUPS).contains(group)
+                    && (1..=tankyard_content::MAP_PATHS).contains(&usize::from(*path))
+            }
+            Self::MapLight {
+                darkness, seconds, ..
+            } => {
+                (0. ..=tankyard_content::DARKNESS_LIMIT * 100.).contains(darkness)
+                    && (0. ..=tankyard_content::TWEEN_SECONDS).contains(seconds)
+            }
+            Self::MapShove { group, velocity } => {
+                let limit = tankyard_content::SHOVE_LIMIT as f32;
+                (1..=tankyard_content::MAP_GROUPS).contains(group)
+                    && vector(*velocity, -limit, limit)
+            }
+            Self::Fling { velocity } => {
+                let limit = tankyard_content::FLING_LIMIT as f32;
+                vector(*velocity, -limit, limit)
             }
         };
         if !valid {

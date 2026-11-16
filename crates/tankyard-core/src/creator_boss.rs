@@ -149,6 +149,7 @@ impl World {
         tank.knockback = 0.;
         tank.terrain = 1.;
         tank.push = V2::ZERO;
+        tank.grip = 1.;
         self.tanks[index].creator_boss = enabled;
         self.tanks[index].creator_attacks = [0.; ATTACK_COUNT];
         self.tanks[index].pos = pos;

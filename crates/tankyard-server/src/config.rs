@@ -40,6 +40,12 @@ pub struct ServerSettings {
     pub bot_count: usize,
     pub adaptive_bots: bool,
     pub difficulty: Difficulty,
+    /// Where bots keep what they learn between restarts: which tanks earn
+    /// the most, which beat which, and their pooled networks. The
+    /// `tankyard-server` program uses `bot-memory.json` when this is unset;
+    /// empty forgets everything when the server stops.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_memory_file: Option<String>,
     pub password: String,
     pub allow_sandbox: bool,
     pub snapshot_rate: u32,
@@ -83,6 +89,7 @@ impl Default for ServerSettings {
             bot_count: 12,
             adaptive_bots: true,
             difficulty: Difficulty::Normal,
+            bot_memory_file: None,
             password: String::new(),
             allow_sandbox: false,
             snapshot_rate: 20,
@@ -106,6 +113,11 @@ impl ServerSettings {
         toml::from_str(include_str!("../../../configs/central.toml"))
             .expect("built-in central server configuration")
     }
+    /// Where bot memory lives; empty when it isn't kept.
+    pub fn bot_memory_path(&self) -> &Path {
+        Path::new(self.bot_memory_file.as_deref().unwrap_or_default())
+    }
+
     pub fn central_owner_enabled(&self) -> bool {
         self.central_owner_admin.unwrap_or(
             self.server_id == "tankyard-central"
@@ -238,6 +250,11 @@ impl ServerSettings {
         if (!self.server_id.is_empty() && !crate::access::account_id(&self.server_id))
             || (!self.access_file.is_empty() && self.server_id.is_empty())
             || self.access_file.len() > 512
+            || self.bot_memory_path().as_os_str().len() > 512
+            || self
+                .bot_memory_file
+                .as_deref()
+                .is_some_and(|path| path.chars().any(char::is_control))
             || self.audit_file.len() > 512
             || self.global_audit_file.len() > 512
             || (!self.global_audit_file.is_empty() && self.audit_file == self.global_audit_file)

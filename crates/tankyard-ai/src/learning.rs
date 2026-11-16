@@ -25,6 +25,10 @@ pub struct Learning {
     deaths: u32,
     feedback_tick: Option<u64>,
     last_hit: Option<(u64, EntityId)>,
+    /// Whether this bot has taken the pooled networks yet, and how many
+    /// samples its motion network held then.
+    pub(crate) adopted: bool,
+    adopted_motion: u32,
 }
 impl Default for Learning {
     fn default() -> Self {
@@ -40,10 +44,31 @@ impl Default for Learning {
             deaths: 0,
             feedback_tick: None,
             last_hit: None,
+            adopted: false,
+            adopted_motion: 0,
         }
     }
 }
 impl Learning {
+    /// Pools this bot's networks with every other bot's, then carries on
+    /// from the pooled result: bots build on what all of them learned.
+    pub(crate) fn share(&mut self, models: &mut crate::knowledge::SharedModels) {
+        if self.adopted {
+            self.build.share(models);
+            self.tactics.share(models);
+            crate::knowledge::pool(&mut models.motion, &self.neural, self.adopted_motion);
+        }
+        self.adopt(models);
+    }
+
+    pub(crate) fn adopt(&mut self, models: &crate::knowledge::SharedModels) {
+        self.build.adopt(models);
+        self.tactics.adopt(models);
+        self.neural = models.motion.clone();
+        self.adopted_motion = self.neural.samples;
+        self.adopted = true;
+    }
+
     pub(crate) fn inherit_models(&mut self, previous: &Self) {
         self.neural = previous.neural.clone();
         self.build.inherit_models(&previous.build);

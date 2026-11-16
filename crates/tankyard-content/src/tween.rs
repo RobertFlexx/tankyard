@@ -201,9 +201,13 @@ pub enum TweenChannel {
     Throb,
     Shake,
     Orbit,
+    // Added in 1.3.0.
+    /// The arena's lighting, on group 0: `[red, green, blue, darkness]`,
+    /// each 0 to 1.
+    Ambient,
 }
 impl TweenChannel {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Move,
         Self::Turn,
         Self::Fade,
@@ -214,6 +218,7 @@ impl TweenChannel {
         Self::Throb,
         Self::Shake,
         Self::Orbit,
+        Self::Ambient,
     ];
     /// The value a group has before anything changes it.
     pub fn rest(self) -> TweenValue {
@@ -327,12 +332,17 @@ impl Tween {
     /// Whether every field holds a value a map could have produced, so a
     /// snapshot cannot hand a client a motion it would trip over.
     pub fn valid(&self) -> bool {
-        (1..=MAP_GROUPS).contains(&self.group)
-            && self
-                .from
-                .iter()
-                .chain(&self.to)
-                .all(|v| v.is_finite() && v.abs() <= TWEEN_LIMIT)
+        // Lighting belongs to the whole arena, group 0; everything else to
+        // a group.
+        (if self.channel == TweenChannel::Ambient {
+            self.group == 0
+        } else {
+            (1..=MAP_GROUPS).contains(&self.group)
+        }) && self
+            .from
+            .iter()
+            .chain(&self.to)
+            .all(|v| v.is_finite() && v.abs() <= TWEEN_LIMIT)
             && self.start.is_finite()
             && (0. ..=TWEEN_SECONDS).contains(&self.length)
     }
@@ -402,6 +412,9 @@ pub struct GroupPoses {
     pub throb: [f32; SLOTS],
     /// Whether any group sits away from where the map placed it.
     pub moved: bool,
+    /// Lighting set by a Lighting trigger: red, green, blue and darkness,
+    /// each 0 to 1. None keeps the map's own.
+    pub ambient: Option<[f32; 4]>,
 }
 impl Default for GroupPoses {
     fn default() -> Self {
@@ -415,6 +428,7 @@ impl Default for GroupPoses {
             sway: [0.; SLOTS],
             throb: [0.; SLOTS],
             moved: false,
+            ambient: None,
         }
     }
 }
@@ -423,6 +437,11 @@ impl GroupPoses {
         let mut poses = Self::default();
         for tween in tweens {
             let group = usize::from(tween.group);
+            if tween.channel == TweenChannel::Ambient {
+                let value = tween.value(now).map(|v| v.clamp(0., 1.));
+                poses.ambient = Some(value);
+                continue;
+            }
             if group == 0 || group > usize::from(MAP_GROUPS) {
                 continue;
             }
@@ -436,6 +455,7 @@ impl GroupPoses {
                 TweenChannel::Fade => poses.opacity[group] = value[0].clamp(0., 1.),
                 TweenChannel::Tint => poses.tint[group] = value.map(|v| v.clamp(0., 1.)),
                 TweenChannel::Scale => poses.scale[group] = value[0].clamp(0., SCALE_LIMIT),
+                TweenChannel::Ambient => {}
                 channel => {
                     let Some(style) = channel.style() else {
                         continue;
@@ -457,6 +477,25 @@ impl GroupPoses {
         self.sway = [0.; SLOTS];
         self.throb = [0.; SLOTS];
         self
+    }
+    /// Moves `group` a further `by`, as a pushed body moves on top of its
+    /// motions.
+    pub fn nudge(&mut self, group: u8, by: [f32; 2]) {
+        if let Some(offset) = self.offset.get_mut(usize::from(group))
+            && group != 0
+            && (by[0] != 0. || by[1] != 0.)
+        {
+            *offset = [offset[0] + by[0], offset[1] + by[1]];
+            self.moved = true;
+        }
+    }
+    /// The lighting at this moment: red, green, blue and darkness, each 0
+    /// to 1, with `map` used when no trigger has changed it.
+    pub fn lighting(&self, map: &crate::MapAmbient) -> [f32; 4] {
+        self.ambient.unwrap_or_else(|| {
+            let [r, g, b] = map.color.map(|c| f32::from(c) / 255.);
+            [r, g, b, map.darkness.clamp(0., crate::DARKNESS_LIMIT)]
+        })
     }
     pub fn offset(&self, group: u8) -> [f32; 2] {
         self.offset
@@ -623,6 +662,7 @@ mod tests {
                 channel.style().map(|_| channel)
             );
         }
-        assert_eq!(TWEEN_SLOTS, 32 * 10);
+        // Ten channels per group, and lighting, which only the whole arena uses.
+        assert_eq!(TWEEN_SLOTS, 32 * 11);
     }
 }

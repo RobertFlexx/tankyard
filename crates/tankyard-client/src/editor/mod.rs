@@ -191,6 +191,8 @@ pub struct Editor {
     last_pointer: Option<V2>,
     /// Where the canvas was last drawn, for plugins that ask what is in view.
     canvas_area: Rect,
+    /// The path and point the Map tab is editing, from 0.
+    path_pick: (usize, usize),
 }
 
 impl Editor {
@@ -297,6 +299,7 @@ impl Editor {
             workshop: plugins::Workshop::default(),
             last_pointer: None,
             canvas_area: Rect::default(),
+            path_pick: (0, 0),
         };
         editor.say(if restored {
             "Recovered your last draft. Press F1 for shortcuts."

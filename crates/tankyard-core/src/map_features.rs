@@ -6,11 +6,16 @@
 //! the server's arithmetic.
 use crate::*;
 use tankyard_content::{
-    AnimateStyle, CONVEYOR_SPEED, COUNTER_LIMIT, Easing, GateState, GroupPoses, LAUNCH_SPEED,
-    MAP_COUNTERS, MAP_GROUPS, MapDef, MapSound, MapTrigger, MapZone, MathOp, SCALE_LIMIT,
-    SHAKE_SECONDS, TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction, TriggerWhen, TriggerWho, Tween,
-    TweenChannel, TweenValue, ZoneKind,
+    AnimateStyle, CONVEYOR_SPEED, COUNTER_LIMIT, Easing, GateState, GroupPoses, ICE_GRIP,
+    LAUNCH_SPEED, MAP_COUNTERS, MAP_GROUPS, MapDef, MapSound, MapTrigger, MapZone, MathOp,
+    PULL_SPEED, SCALE_LIMIT, SHAKE_SECONDS, TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction,
+    TriggerWhen, TriggerWho, Tween, TweenChannel, TweenValue, ZOOM_SECONDS, ZoneKind,
 };
+
+mod bodies;
+mod paths;
+pub use bodies::{BodyState, snapshot_poses};
+use paths::PathPlay;
 
 /// A normalized map rectangle in world units, following animated borders the
 /// same way walls do.
@@ -28,6 +33,11 @@ pub fn map_rect(config: &WorldConfig, r: [f32; 4]) -> Rect {
 pub fn map_point(config: &WorldConfig, p: [f32; 2]) -> V2 {
     let r = map_rect(config, [p[0], p[1], 0., 0.]);
     V2::new(r.x, r.y)
+}
+
+/// Whether two normalized rectangles overlap.
+fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
 }
 
 fn contains(rect: Rect, p: V2) -> bool {
@@ -55,11 +65,34 @@ fn speed_of(factor: f32, zone: &MapZone) -> f32 {
         _ => factor,
     }
 }
-fn push_of(zone: &MapZone) -> V2 {
-    if zone.kind == ZoneKind::Conveyor {
-        V2::from_angle(zone.angle.to_radians()) * CONVEYOR_SPEED * zone.strength
+/// What a pad adds to the motion of a tank at `pos`: conveyors carry it
+/// along, gravity wells draw it toward their center, harder near the middle.
+fn push_of(zone: &MapZone, area: Rect, pos: V2) -> V2 {
+    match zone.kind {
+        ZoneKind::Conveyor => {
+            V2::from_angle(zone.angle.to_radians()) * CONVEYOR_SPEED * zone.strength
+        }
+        ZoneKind::Pull => {
+            let center = V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5);
+            let toward = center - pos;
+            let reach = (area.w.min(area.h) * 0.5).max(1.);
+            let distance = toward.length();
+            if distance < 4. {
+                return V2::ZERO;
+            }
+            let closeness = (1. - distance / reach).clamp(0., 1.);
+            toward / distance * PULL_SPEED * zone.strength * (1. + closeness)
+        }
+        _ => V2::ZERO,
+    }
+}
+
+/// How firmly a tank on `zone` grips, 1 for full grip.
+fn grip_of(grip: f32, zone: &MapZone) -> f32 {
+    if zone.kind == ZoneKind::Ice {
+        grip * ICE_GRIP.powf(zone.strength.sqrt())
     } else {
-        V2::ZERO
+        grip
     }
 }
 
@@ -124,7 +157,8 @@ pub fn terrain_factor(
         .clamp(0.3, 2.5)
 }
 
-/// The velocity conveyors at `pos` add, in world units per second.
+/// The velocity conveyors and gravity wells at `pos` add, in world units
+/// per second.
 pub fn terrain_push(
     map: &MapDef,
     config: &WorldConfig,
@@ -136,8 +170,27 @@ pub fn terrain_push(
         return V2::ZERO;
     }
     zones_at(map, config, hidden, poses, pos)
-        .fold(V2::ZERO, |sum, zone| sum + push_of(zone))
+        .fold(V2::ZERO, |sum, zone| {
+            let area = map_rect(config, poses.shift(zone.rect, zone.group));
+            sum + push_of(zone, area, pos)
+        })
         .clamp_length(600.)
+}
+
+/// How firmly a tank at `pos` grips the floor: 1, or less on ice.
+pub fn terrain_grip(
+    map: &MapDef,
+    config: &WorldConfig,
+    hidden: u32,
+    poses: &GroupPoses,
+    pos: V2,
+) -> f32 {
+    if map.zones.is_empty() {
+        return 1.;
+    }
+    zones_at(map, config, hidden, poses, pos)
+        .fold(1., grip_of)
+        .clamp(0.05, 1.)
 }
 
 /// Damage taken at `pos` as a fraction; Shelter pads reduce it.
@@ -214,6 +267,44 @@ pub enum LogicEffect {
         volume: f32,
         at: V2,
     },
+    /// Push body `group` at `velocity`, in world units a second.
+    Shove {
+        group: u8,
+        velocity: V2,
+    },
+    /// Fling `tanks` at `velocity`, in world units a second.
+    Fling {
+        tanks: Vec<EntityId>,
+        velocity: V2,
+    },
+    /// Throw `tanks` away from `center` at `speed`, or pull them toward it
+    /// when `speed` is negative.
+    Blast {
+        tanks: Vec<EntityId>,
+        center: V2,
+        speed: f32,
+    },
+    /// Zoom `tanks`' views to `scale` (1 as usual) for `seconds`.
+    Zoom {
+        tanks: Vec<EntityId>,
+        scale: f32,
+        seconds: f32,
+    },
+}
+
+/// A Zoom view as an event value: the zoom in percent in the low 16 bits
+/// and its length in tenths of a second above them.
+pub fn zoom_event(scale: f32, seconds: f32) -> u32 {
+    let percent = (scale * 100.).round().clamp(1., 1000.) as u32;
+    let tenths = (seconds * 10.).round().clamp(1., ZOOM_SECONDS * 10.) as u32;
+    percent | tenths << 16
+}
+/// The zoom (1 as usual) and seconds from a [`zoom_event`] value.
+pub fn zoom_of(value: u32) -> (f32, f32) {
+    (
+        ((value & 0xffff).clamp(1, 1000)) as f32 / 100.,
+        ((value >> 16) as f32 / 10.).min(ZOOM_SECONDS),
+    )
 }
 
 /// A Shake screen as an event value: strength in percent in the low byte and
@@ -283,6 +374,20 @@ pub enum LogicInput {
     },
     /// Halt a group's motions where they are, as a Stop trigger would.
     Stop(u8),
+    /// Send `group` along path `path`, counting from 1, as a Play path
+    /// trigger would.
+    Path {
+        group: u8,
+        path: u8,
+    },
+    /// Change the lighting, as a Lighting trigger would: `darkness` 0 to
+    /// 0.95, tinted `color`.
+    Light {
+        color: [u8; 3],
+        darkness: f32,
+        seconds: f32,
+        easing: Easing,
+    },
 }
 
 /// A `map_event` raised this tick, for script packs.
@@ -391,6 +496,14 @@ pub struct MapLogic {
     /// How many times each trigger has acted this round.
     pub acted: Vec<u32>,
     pub counters: [i32; MAP_COUNTERS as usize],
+    /// Whether each On touch or On release trigger's group overlapped its
+    /// area last step; None until it first looks.
+    touching: Vec<Option<bool>>,
+    /// Groups travelling along paths.
+    paths: Vec<PathPlay>,
+    /// Where pushed bodies sit, by group, in arena fractions; the world
+    /// fills this in before each step so areas ride along with them.
+    pub body_offsets: Vec<(u8, [f32; 2])>,
 }
 
 /// The tanks an area trigger or tank action notices.
@@ -506,6 +619,15 @@ impl MapLogic {
                     now,
                 ),
                 LogicInput::Stop(group) => self.stop(group, now),
+                LogicInput::Path { group, path } => {
+                    self.play_path(map, group, i32::from(path), now);
+                }
+                LogicInput::Light {
+                    color,
+                    darkness,
+                    seconds,
+                    easing,
+                } => self.light(map, color, darkness, (seconds, 0.), easing, now),
                 LogicInput::Defeated(kind) => {
                     let number = tankyard_content::BOSS_IDS
                         .iter()
@@ -537,6 +659,11 @@ impl MapLogic {
                 true
             }
         });
+        // A group on its way along a path arrives at the end, not at each
+        // point.
+        for play in &self.paths {
+            arrived &= !MapDef::group_bit(play.group);
+        }
         for &index in &self.listeners.arrived {
             if MapDef::group_bit(map.triggers[index].source) & arrived != 0 {
                 self.queue.push(index);
@@ -579,6 +706,8 @@ impl MapLogic {
         self.inside = vec![Vec::new(); count];
         self.steps = vec![0; count];
         self.acted = vec![0; count];
+        self.touching = vec![None; count];
+        self.paths.clear();
         self.listeners = Listeners::new(map);
         self.seen = hidden;
         self.reverts.clear();
@@ -614,10 +743,13 @@ impl MapLogic {
                 tweens: std::mem::take(&mut self.tweens),
                 returns: std::mem::take(&mut self.returns),
                 homeward: std::mem::take(&mut self.homeward),
+                paths: std::mem::take(&mut self.paths),
+                body_offsets: std::mem::take(&mut self.body_offsets),
                 ..Self::default()
             };
             kept.take_inputs(map, now, hidden);
-            kept.poses = GroupPoses::at(&kept.tweens, now);
+            kept.advance_paths(map, now);
+            kept.poses = kept.current_poses(now);
             *self = kept;
             return;
         }
@@ -627,7 +759,7 @@ impl MapLogic {
         self.alive.extend(tanks.iter().map(|tank| tank.id));
         self.alive.sort_unstable();
         self.take_inputs(map, now, hidden);
-        self.poses = GroupPoses::at(&self.tweens, now);
+        self.poses = self.current_poses(now);
         self.reverts.retain(|&(at, group, hide)| {
             if now < at {
                 return true;
@@ -658,6 +790,7 @@ impl MapLogic {
             // Track every crossing, even while spent or cooling down, so a tank
             // already standing inside never counts as entering later.
             let crossed = trigger.when.watches_area() && self.track(index, map, config, tanks);
+            let touched = trigger.when.watches_blocks() && self.touch(index, map, *hidden);
             if self.spent[index] || now < self.next[index] {
                 continue;
             }
@@ -686,6 +819,12 @@ impl MapLogic {
                 | TriggerWhen::Exit
                 | TriggerWhen::Cleared
                 | TriggerWhen::Destroyed => crossed,
+                TriggerWhen::Touch | TriggerWhen::Release => {
+                    if touched {
+                        self.next[index] = now + trigger.seconds.max(0.25);
+                    }
+                    touched
+                }
                 TriggerWhen::Signal
                 | TriggerWhen::Counter
                 | TriggerWhen::Changed
@@ -705,7 +844,36 @@ impl MapLogic {
         // Motions that end now wake their watchers once per step, so a
         // chain of instant motions moves on a step at a time.
         self.notice_arrivals(map, now);
+        self.advance_paths(map, now);
         self.follow(map, config, now, hidden, tanks, random, effects);
+    }
+
+    /// Where every group stands at `now`: its motions, and its pushes if it
+    /// is a body.
+    fn current_poses(&self, now: f32) -> GroupPoses {
+        let mut poses = GroupPoses::at(&self.tweens, now);
+        for &(group, offset) in &self.body_offsets {
+            poses.nudge(group, offset);
+        }
+        poses
+    }
+
+    /// Update whether trigger `index`'s group overlaps its area; true on the
+    /// change it waits for. The first look only notes where things stand.
+    fn touch(&mut self, index: usize, map: &MapDef, hidden: u32) -> bool {
+        let trigger = &map.triggers[index];
+        let area = self.poses.shift(trigger.rect, trigger.member);
+        let group = trigger.source;
+        let now_touching = MapDef::group_bit(group) & hidden == 0
+            && map.blocks.iter().any(|block| {
+                block.group == group && overlaps(self.poses.shift(block.rect, group), area)
+            });
+        let before = self.touching[index].replace(now_touching);
+        match (before, trigger.when) {
+            (Some(false), TriggerWhen::Touch) => now_touching,
+            (Some(true), TriggerWhen::Release) => !now_touching,
+            _ => false,
+        }
     }
 
     /// Fire the triggers that signals and counters woke, in order.
@@ -757,7 +925,7 @@ impl MapLogic {
             return;
         }
         self.prepare(map, now, *hidden);
-        self.poses = GroupPoses::at(&self.tweens, now);
+        self.poses = self.current_poses(now);
         self.budget = CHAIN_BUDGET;
         self.alive.clear();
         self.alive.extend(tanks.iter().map(|tank| tank.id));
@@ -915,7 +1083,7 @@ impl MapLogic {
 
     /// Whether any group has moved, turned or faded, or will go back.
     pub fn in_motion(&self) -> bool {
-        !self.tweens.is_empty() || !self.returns.is_empty()
+        !self.tweens.is_empty() || !self.returns.is_empty() || !self.paths.is_empty()
     }
 
     /// Play `tween`, replacing whatever that group was doing on its channel.
@@ -970,6 +1138,9 @@ impl MapLogic {
             TriggerAction::Animate => trigger.style.channel(),
             _ => TweenChannel::Move,
         };
+        if channel == TweenChannel::Move {
+            self.paths.retain(|play| play.group != group);
+        }
         let here = self.tween_value(group, channel, now);
         // Offsets stay within a few arenas however often a Move repeats, and
         // turns wrap so they never lose precision.
@@ -1083,6 +1254,7 @@ impl MapLogic {
         self.returns.retain(|(_, back)| back.group != group);
         self.homeward.retain(|&(g, _)| g != group);
         self.arrivals.retain(|&(_, g, _)| g != group);
+        self.paths.retain(|play| play.group != group);
     }
 
     /// Queue every trigger listening on signal channel `channel`.
@@ -1174,6 +1346,20 @@ impl MapLogic {
             | TriggerAction::Scale
             | TriggerAction::Animate => self.animate(trigger, now),
             TriggerAction::Stop => self.stop(trigger.group, now),
+            TriggerAction::Path => self.play_path(map, trigger.group, trigger.amount, now),
+            TriggerAction::Light => self.light(
+                map,
+                trigger.color,
+                trigger.amount as f32 / 100.,
+                (trigger.tween, trigger.duration),
+                trigger.easing,
+                now,
+            ),
+            TriggerAction::Shove => effects.push(LogicEffect::Shove {
+                group: trigger.group,
+                velocity: V2::from_angle(trigger.angle.to_radians())
+                    * trigger.amount.clamp(1, tankyard_content::SHOVE_LIMIT) as f32,
+            }),
             TriggerAction::Sound => {
                 let area = self.area(config, trigger);
                 effects.push(LogicEffect::Sound {
@@ -1257,7 +1443,10 @@ impl MapLogic {
             TriggerAction::Heal
             | TriggerAction::Hurt
             | TriggerAction::Award
-            | TriggerAction::Shake => {
+            | TriggerAction::Shake
+            | TriggerAction::Fling
+            | TriggerAction::Blast
+            | TriggerAction::Zoom => {
                 let area = self.area(config, trigger);
                 let ids = tanks
                     .iter()
@@ -1265,7 +1454,29 @@ impl MapLogic {
                     .map(|tank| tank.id)
                     .collect();
                 let percent = trigger.amount.clamp(1, 100) as f32;
+                let speed = trigger.amount.clamp(
+                    -tankyard_content::FLING_LIMIT,
+                    tankyard_content::FLING_LIMIT,
+                ) as f32;
                 effects.push(match trigger.action {
+                    TriggerAction::Fling => LogicEffect::Fling {
+                        tanks: ids,
+                        velocity: V2::from_angle(trigger.angle.to_radians()) * speed.abs(),
+                    },
+                    TriggerAction::Blast => LogicEffect::Blast {
+                        tanks: ids,
+                        center: V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5),
+                        speed,
+                    },
+                    TriggerAction::Zoom => LogicEffect::Zoom {
+                        tanks: ids,
+                        scale: trigger.amount.clamp(
+                            tankyard_content::ZOOM_RANGE.0,
+                            tankyard_content::ZOOM_RANGE.1,
+                        ) as f32
+                            / 100.,
+                        seconds: trigger.tween.clamp(0.1, ZOOM_SECONDS),
+                    },
                     TriggerAction::Shake => LogicEffect::Shake {
                         tanks: ids,
                         strength: percent / 100.,
@@ -1444,7 +1655,13 @@ impl World {
         // A motion that ended where the map placed its group tells clients
         // nothing, so snapshots leave it out; a second's grace lets clients
         // that draw a little behind the server finish drawing it.
-        let shown = |t: &&Tween| t.to != t.channel.rest() || now < t.start + t.length + 1.;
+        // Lighting always travels: its rest is the map's own, not the
+        // channel's.
+        let shown = |t: &&Tween| {
+            t.channel == TweenChannel::Ambient
+                || t.to != t.channel.rest()
+                || now < t.start + t.length + 1.
+        };
         if !self
             .match_state
             .tweens
@@ -1456,7 +1673,7 @@ impl World {
                 .tweens
                 .extend(self.logic.tweens.iter().filter(shown));
         }
-        let poses = GroupPoses::at(&self.match_state.tweens, now);
+        let poses = self.composed_poses(now);
         if poses == self.poses {
             return;
         }
@@ -1539,6 +1756,7 @@ impl World {
             for tank in &mut self.tanks {
                 tank.terrain = 1.;
                 tank.push = V2::ZERO;
+                tank.grip = 1.;
             }
             return;
         }
@@ -1568,10 +1786,12 @@ impl World {
             if !tank.tangible() {
                 self.tanks[index].terrain = 1.;
                 self.tanks[index].push = V2::ZERO;
+                self.tanks[index].grip = 1.;
                 continue;
             }
             let (id, pos, radius) = (tank.id, tank.pos, tank.radius);
             let (mut terrain, mut push, mut repair, mut hazard) = (1., V2::ZERO, 0., 0.);
+            let mut grip = 1.;
             let mut fling = V2::ZERO;
             let mut portal = None;
             for &(zone_index, area) in &areas {
@@ -1580,7 +1800,8 @@ impl World {
                 }
                 let zone = &self.map.zones[zone_index];
                 terrain = speed_of(terrain, zone);
-                push += push_of(zone);
+                push += push_of(zone, area, pos);
+                grip = grip_of(grip, zone);
                 fling += fling_of(zone);
                 match zone.kind {
                     ZoneKind::Repair => repair += 0.06 * zone.strength,
@@ -1592,6 +1813,7 @@ impl World {
             let tank = &mut self.tanks[index];
             tank.terrain = terrain.clamp(0.3, 2.5);
             tank.push = push.clamp_length(600.);
+            tank.grip = grip.clamp(0.05, 1.);
             let launched = launch_tank(tank, fling.clamp_length(LAUNCH_SPEED * 2.));
             if repair > 0. && tank.health < tank.max_health {
                 tank.health = (tank.health + tank.max_health * repair * DT).min(tank.max_health);
@@ -1626,6 +1848,17 @@ impl World {
         self.zone_areas = areas;
     }
 
+    /// Fling tank `id` at `velocity`, as launch pads do.
+    pub(crate) fn fling_tank(&mut self, id: EntityId, velocity: V2) {
+        let Some(tank) = self.tanks.iter_mut().find(|t| t.id == id && t.tangible()) else {
+            return;
+        };
+        if launch_tank(tank, velocity) {
+            let (pos, team) = (tank.pos, tank.team);
+            self.event(EventKind::Launch, pos, id, 0, team);
+        }
+    }
+
     /// Run map logic for this tick and carry out what it asks.
     pub(crate) fn run_triggers(&mut self) {
         if self.map.triggers.is_empty() && !self.logic.has_input() && !self.logic.in_motion() {
@@ -1648,6 +1881,7 @@ impl World {
         let mut hidden = self.map_hidden();
         let mut effects = Vec::new();
         let mut logic = std::mem::take(&mut self.logic);
+        self.body_offsets(&mut logic.body_offsets);
         let mut rng = self.rng;
         logic.step(
             &self.map,
@@ -1718,6 +1952,46 @@ impl World {
                 LogicEffect::Sound { sound, volume, at } => {
                     self.event(EventKind::MapSound, at, 0, sound_event(sound, volume), 0);
                 }
+                LogicEffect::Shove { group, velocity } => {
+                    self.shove_body(group, velocity);
+                }
+                LogicEffect::Fling { tanks, velocity } => {
+                    for id in tanks {
+                        self.fling_tank(id, velocity);
+                    }
+                }
+                LogicEffect::Blast {
+                    tanks,
+                    center,
+                    speed,
+                } => {
+                    for id in tanks {
+                        let Some(tank) = self.tanks.iter().find(|t| t.id == id && t.alive) else {
+                            continue;
+                        };
+                        let away = tank.pos - center;
+                        // A tank right at the center goes the way it faces.
+                        let direction = if away.length_squared() > 1. {
+                            away.normalized()
+                        } else {
+                            V2::from_angle(tank.aim)
+                        };
+                        self.fling_tank(id, direction * speed);
+                    }
+                }
+                LogicEffect::Zoom {
+                    tanks,
+                    scale,
+                    seconds,
+                } => {
+                    let value = zoom_event(scale, seconds);
+                    for id in tanks {
+                        if let Some(tank) = self.tanks.iter().find(|t| t.id == id && t.alive) {
+                            let (pos, team) = (tank.pos, tank.team);
+                            self.event(EventKind::MapZoom, pos, id, value, team);
+                        }
+                    }
+                }
                 LogicEffect::Script {
                     name,
                     trigger,
@@ -1741,12 +2015,6 @@ impl World {
         }
         self.follow_group_motion();
     }
-}
-
-/// Where map logic has put each group at round time `now`, as a client
-/// replays it from a snapshot.
-pub fn snapshot_poses(snapshot: &Snapshot, now: f32) -> GroupPoses {
-    GroupPoses::at(&snapshot.match_state.tweens, now)
 }
 
 /// `snapshot`'s walls where map logic has moved them at round time `now`.
@@ -3491,5 +3759,129 @@ mod tests {
         bench.run(4., &[]);
         // Restarted at 1 s, it fires again at 1.1 s and acts 2 s later.
         assert_eq!(bench.logic.counters[0], 1);
+    }
+
+    #[test]
+    fn ice_slows_turns_and_gravity_wells_draw_tanks_in() {
+        let pad = |kind| MapZone {
+            kind,
+            rect: [0.4, 0.4, 0.2, 0.2],
+            strength: 1.,
+            group: 0,
+            angle: 0.,
+            exit: [0., 0.],
+        };
+        let speed_after = |kind: Option<ZoneKind>| {
+            let mut world = world_with(|map| map.zones.extend(kind.map(pad)));
+            world.add_player("Driver", false);
+            let center = V2::new(world.config.width * 0.5, world.config.height * 0.5);
+            world.tanks[0].pos = center;
+            world.tanks[0].vel = V2::ZERO;
+            world.tanks[0].input.movement = V2::new(1., 0.);
+            for _ in 0..6 {
+                world.step();
+            }
+            (world.tanks[0].vel.length(), world.tanks[0].grip)
+        };
+        let (dry, dry_grip) = speed_after(None);
+        let (icy, icy_grip) = speed_after(Some(ZoneKind::Ice));
+        assert_eq!(dry_grip, 1.);
+        assert!((icy_grip - ICE_GRIP).abs() < 1e-4, "{icy_grip}");
+        assert!(icy < dry * 0.6, "slow to get going on ice: {icy} vs {dry}");
+
+        let mut world = world_with(|map| map.zones.push(pad(ZoneKind::Pull)));
+        world.add_player("Drifter", false);
+        let center = V2::new(world.config.width * 0.5, world.config.height * 0.5);
+        let start = center + V2::new(250., 0.);
+        world.tanks[0].pos = start;
+        world.tanks[0].vel = V2::ZERO;
+        for _ in 0..30 {
+            world.step();
+        }
+        let pos = world.tanks[0].pos;
+        assert!(pos.x < start.x - 20., "drawn toward the middle: {pos:?}");
+        assert!((pos.y - start.y).abs() < 2., "straight in");
+        // Prediction sees the same pull.
+        let push = terrain_push(
+            &world.map,
+            &world.config,
+            world.match_state.hidden_groups,
+            world.group_poses(),
+            start,
+        );
+        assert!(push.x < 0. && push.y.abs() < 1e-3);
+    }
+
+    #[test]
+    fn maps_reject_physics_and_lighting_out_of_range() {
+        let check = |edit: &dyn Fn(&mut MapDef)| {
+            let mut maps = tankyard_content::builtin_maps();
+            edit(&mut maps[0]);
+            tankyard_content::validate_maps(&maps)
+        };
+        let shove = |map: &mut MapDef| {
+            map.triggers.push(MapTrigger {
+                group: 4,
+                amount: 500,
+                ..trigger(TriggerWhen::Start, TriggerAction::Shove)
+            })
+        };
+        // Unfinished but harmless: a shove with no body to move.
+        assert!(check(&shove).is_ok());
+        assert!(
+            check(&|map| {
+                shove(map);
+                map.bodies.push(tankyard_content::MapBody {
+                    group: 4,
+                    ..Default::default()
+                });
+            })
+            .is_ok()
+        );
+        assert!(
+            check(&|map| {
+                map.bodies.push(tankyard_content::MapBody::default());
+                map.bodies.push(tankyard_content::MapBody::default());
+            })
+            .is_err(),
+            "one body per group"
+        );
+        // So is a path trigger whose path isn't drawn yet, but not one
+        // past the most paths a map can hold.
+        assert!(
+            check(&|map| map.triggers.push(MapTrigger {
+                group: 1,
+                amount: 1,
+                ..trigger(TriggerWhen::Start, TriggerAction::Path)
+            }))
+            .is_ok()
+        );
+        assert!(
+            check(&|map| map.triggers.push(MapTrigger {
+                group: 1,
+                amount: tankyard_content::MAP_PATHS as i32 + 1,
+                ..trigger(TriggerWhen::Start, TriggerAction::Path)
+            }))
+            .is_err()
+        );
+        assert!(check(&|map| map.ambient.darkness = 0.99).is_err());
+        assert!(check(&|map| map.ambient.darkness = 0.7).is_ok());
+        assert!(
+            check(&|map| map.triggers.push(MapTrigger {
+                amount: 500,
+                angle: f32::NAN,
+                ..trigger(TriggerWhen::Enter, TriggerAction::Fling)
+            }))
+            .is_err()
+        );
+        assert!(
+            check(&|map| map.triggers.push(MapTrigger {
+                amount: 10,
+                tween: 2.,
+                ..trigger(TriggerWhen::Enter, TriggerAction::Zoom)
+            }))
+            .is_err(),
+            "zoom stays within its range"
+        );
     }
 }

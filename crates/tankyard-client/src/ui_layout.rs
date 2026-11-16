@@ -255,6 +255,17 @@ impl Drop for CanvasGuard {
     }
 }
 
+/// Run `draw` with no clip, then put back the clip of the canvas or region
+/// being drawn, if any: for work that draws into a target of its own.
+pub fn unclipped<R>(draw: impl FnOnce() -> R) -> R {
+    scissor(None);
+    let result = draw();
+    if let Some(canvas) = CANVAS.with(Cell::get) {
+        scissor(Some(canvas.clip));
+    }
+    result
+}
+
 /// Clip following draws to `rect`, in window coordinates, on whichever
 /// target they draw into.
 fn scissor(rect: Option<Rect>) {

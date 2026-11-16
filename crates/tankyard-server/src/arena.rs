@@ -153,6 +153,7 @@ impl UdpServer {
         )
         .map_err(NetError)?;
         session.bots.difficulty = self.settings.difficulty;
+        session.bots.share_knowledge(self.bot_memory.clone());
         if let Some(rules) = self.settings.rules_override {
             session.world.set_rules(rules).map_err(NetError)?;
         }

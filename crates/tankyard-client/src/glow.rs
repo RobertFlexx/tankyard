@@ -14,6 +14,9 @@ pub enum Blend {
     Glow,
     /// Shapes as drawn, added to what is under them: glowing sparks.
     Add,
+    /// A texture multiplied into what is under it: a light map over the
+    /// arena, darkening where no light falls.
+    Multiply,
 }
 
 const VERTEX: &str = r#"#version 100
@@ -49,6 +52,15 @@ varying lowp vec4 tint;
 varying mediump vec2 uv;
 void main() {
     gl_FragColor = tint;
+}"#;
+
+const TEXTURED: &str = r#"#version 100
+precision mediump float;
+varying lowp vec4 tint;
+varying mediump vec2 uv;
+uniform sampler2D Texture;
+void main() {
+    gl_FragColor = texture2D(Texture, uv * 0.5 + 0.5) * tint;
 }"#;
 
 const MSL: &str = r#"#include <metal_stdlib>
@@ -92,13 +104,21 @@ fragment float4 fragmentShader(Varyings in [[stage_in]]) {
 }
 "#;
 
+const TEXTURED_MSL: &str = r#"
+fragment float4 fragmentShader(Varyings in [[stage_in]],
+                               texture2d<float> Texture [[texture(0)]], sampler smp [[sampler(0)]]) {
+    return Texture.sample(smp, in.uv * 0.5 + 0.5) * in.tint;
+}
+"#;
+
 struct Materials {
     soft: Material,
     glow: Material,
     add: Material,
+    multiply: Material,
 }
 
-fn material(fragment: &str, msl: &str, additive: bool) -> Result<Material, String> {
+fn material(fragment: &str, msl: &str, blend: Blend) -> Result<Material, String> {
     let program = format!("{MSL}{msl}");
     let mut pipeline_params = PipelineParams {
         color_blend: Some(BlendState::new(
@@ -108,7 +128,19 @@ fn material(fragment: &str, msl: &str, additive: bool) -> Result<Material, Strin
         )),
         ..Default::default()
     };
-    if additive {
+    if blend == Blend::Multiply {
+        pipeline_params.color_blend = Some(BlendState::new(
+            Equation::Add,
+            BlendFactor::Value(BlendValue::DestinationColor),
+            BlendFactor::Zero,
+        ));
+        pipeline_params.alpha_blend = Some(BlendState::new(
+            Equation::Add,
+            BlendFactor::Zero,
+            BlendFactor::One,
+        ));
+    }
+    if matches!(blend, Blend::Glow | Blend::Add) {
         pipeline_params.color_blend = Some(BlendState::new(
             Equation::Add,
             BlendFactor::Value(BlendValue::SourceAlpha),
@@ -141,13 +173,19 @@ fn material(fragment: &str, msl: &str, additive: bool) -> Result<Material, Strin
 thread_local! {
     static MATERIALS: Option<Materials> = (|| {
         Ok::<_, String>(Materials {
-            soft: material(SOFT, SOFT_MSL, false)?,
-            glow: material(SOFT, SOFT_MSL, true)?,
-            add: material(FLAT, FLAT_MSL, true)?,
+            soft: material(SOFT, SOFT_MSL, Blend::Soft)?,
+            glow: material(SOFT, SOFT_MSL, Blend::Glow)?,
+            add: material(FLAT, FLAT_MSL, Blend::Add)?,
+            multiply: material(TEXTURED, TEXTURED_MSL, Blend::Multiply)?,
         })
     })()
     .map_err(|error| log::warn!("Soft lighting unavailable: {error}"))
     .ok();
+}
+
+/// Whether the shaders loaded, so `begin` can work.
+pub fn available() -> bool {
+    MATERIALS.with(Option::is_some)
 }
 
 /// Draw with `blend` until `end`. False when shaders are unavailable, and
@@ -161,6 +199,7 @@ pub fn begin(blend: Blend) -> bool {
             Blend::Soft => &materials.soft,
             Blend::Glow => &materials.glow,
             Blend::Add => &materials.add,
+            Blend::Multiply => &materials.multiply,
         });
         true
     })

@@ -90,6 +90,59 @@ impl<const INPUTS: usize, const OUTPUTS: usize> Network<INPUTS, OUTPUTS> {
         }
         self.samples = self.samples.saturating_add(1);
     }
+
+    /// How many weights [`Self::weights`] returns.
+    pub const WEIGHTS: usize = HIDDEN * INPUTS + OUTPUTS * (HIDDEN + 1);
+
+    /// Every weight, hidden layer first, for saving and pooling.
+    pub fn weights(&self) -> Vec<f32> {
+        self.hidden
+            .iter()
+            .flatten()
+            .chain(self.output.iter().flatten())
+            .copied()
+            .collect()
+    }
+
+    /// Replaces every weight. Leaves the network unchanged and returns false
+    /// unless `weights` has exactly [`Self::WEIGHTS`] finite values.
+    pub fn set_weights(&mut self, weights: &[f32]) -> bool {
+        if weights.len() != Self::WEIGHTS || weights.iter().any(|w| !w.is_finite()) {
+            return false;
+        }
+        let mut values = weights.iter().map(|w| w.clamp(-2.0, 2.0));
+        for weight in self.hidden.iter_mut().flatten() {
+            *weight = values.next().unwrap_or_default();
+        }
+        for weight in self.output.iter_mut().flatten() {
+            *weight = values.next().unwrap_or_default();
+        }
+        true
+    }
+
+    /// Moves every weight `rate` of the way toward `other`'s. Networks that
+    /// started from the same weights pool what each learned this way.
+    pub fn blend_toward(&mut self, other: &Self, rate: f32) {
+        let rate = if rate.is_finite() {
+            rate.clamp(0.0, 1.0)
+        } else {
+            return;
+        };
+        let pairs = self
+            .hidden
+            .iter_mut()
+            .flatten()
+            .zip(other.hidden.iter().flatten())
+            .chain(
+                self.output
+                    .iter_mut()
+                    .flatten()
+                    .zip(other.output.iter().flatten()),
+            );
+        for (mine, theirs) in pairs {
+            *mine += (theirs - *mine) * rate;
+        }
+    }
 }
 
 #[cfg(test)]

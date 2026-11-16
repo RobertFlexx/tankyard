@@ -32,6 +32,11 @@ fn touching(world: &World, pos: V2, radius: f32) -> bool {
 }
 
 pub fn run(mode: Mode, map: &str, bots: usize, ticks: usize) -> Report {
+    run_with(mode, map, bots, ticks, true)
+}
+
+/// `run`, with or without the trained driving network.
+pub fn run_with(mode: Mode, map: &str, bots: usize, ticks: usize, network: bool) -> Report {
     let mut world = World::new(
         WorldConfig {
             mode,
@@ -47,6 +52,9 @@ pub fn run(mode: Mode, map: &str, bots: usize, ticks: usize) -> Report {
         world.add_player(&format!("Bot {n}"), true);
     }
     let mut controller = BotController::new(Difficulty::Normal);
+    if !network {
+        controller.set_driver(None);
+    }
     let (mut alive, mut idle, mut walls, mut stuck) = (0u32, 0u32, 0u32, 0u32);
     let mut history: std::collections::HashMap<u64, std::collections::VecDeque<V2>> =
         Default::default();
@@ -102,20 +110,24 @@ fn behaviour_report() {
         ("ffa fortress", Mode::Ffa, "fortress"),
         ("maze", Mode::Maze, "open"),
         ("2 teams competitive", Mode::TwoTeams, "competitive"),
+        ("ffa foundry", Mode::Ffa, "foundry"),
     ] {
-        let r = run(mode, map, 30, 7200);
-        println!(
-            "{name:<22} idle {:>5.1}%  walls {:>5.1}%  stuck {:>5.1}%  kills {:>3}  ai {:>6.0}us/tick",
-            r.idle * 100.,
-            r.walls * 100.,
-            r.stuck * 100.,
-            r.kills,
-            r.micros_per_tick
-        );
-        println!(
-            "    idle by state {:?}\n    stuck by state {:?}",
-            r.idle_states, r.stuck_states
-        );
+        for network in [true, false] {
+            let r = run_with(mode, map, 30, 7200, network);
+            println!(
+                "{name:<22} {} idle {:>5.1}%  walls {:>5.1}%  stuck {:>5.1}%  kills {:>3}  ai {:>6.0}us/tick",
+                if network { "network" } else { "plain  " },
+                r.idle * 100.,
+                r.walls * 100.,
+                r.stuck * 100.,
+                r.kills,
+                r.micros_per_tick
+            );
+            println!(
+                "    idle by state {:?}\n    stuck by state {:?}",
+                r.idle_states, r.stuck_states
+            );
+        }
     }
 }
 

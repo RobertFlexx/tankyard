@@ -8,6 +8,7 @@ pub(super) fn decide(
     difficulty: Skill,
     seen: &[Seen],
     brain: &mut Brain,
+    knowledge: &knowledge::Knowledge,
 ) {
     let health = tank.health / tank.max_health.max(1.);
     let personality = Personality::of(tank.id);
@@ -94,6 +95,13 @@ pub(super) fn decide(
                 if !visible {
                     continue;
                 }
+                // Learned matchups: a tank this class usually beats in fair
+                // fights looks less dangerous, and a counter looks more so.
+                let edge = (1.
+                    - knowledge.matchup(&tank.class, &other.class) * 0.45 * difficulty.insight())
+                .clamp(0.55, 1.45);
+                let strength = strength * edge;
+                pressure *= edge;
                 let peaceful = tank.last_attacker != other.id
                     || world.tick.saturating_sub(tank.damaged_at) > 600;
                 if free_for_all

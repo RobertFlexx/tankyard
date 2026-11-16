@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 mod maps;
+mod motion;
 mod tween;
 pub use maps::*;
+pub use motion::*;
 pub use tween::*;
 
 pub const MAX_LEVEL: u8 = 55;

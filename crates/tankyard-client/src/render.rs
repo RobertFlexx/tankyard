@@ -456,10 +456,20 @@ pub fn world(
             }
         }
     }
+    let placed = |id: EntityId, pos: V2| {
+        previous_positions.get(&id).map_or(pos, |&(previous, _)| {
+            crate::session::interpolate_position(previous, pos, interpolation)
+        })
+    };
     let shown = crate::scenery::Shown {
         hidden: snapshot.match_state.hidden_groups,
         counters: snapshot.match_state.counters,
         poses: tankyard_core::snapshot_poses(snapshot, snapshot.match_state.elapsed),
+        focus: snapshot
+            .tanks
+            .iter()
+            .find(|tank| tank.id == local && tank.alive)
+            .map(|tank| placed(tank.id, tank.pos)),
     };
     if let Some(map) = map {
         crate::scenery::floor(map, &snapshot.config, &shown, view, animation_time);
@@ -1097,6 +1107,22 @@ pub fn world(
             true,
             settings,
         );
+        let lighting =
+            crate::lighting::steady(shown.poses.lighting(&map.ambient), settings.reduced_motion);
+        if lighting[3] > 0.004 {
+            let mut lights = Vec::new();
+            crate::scenery::lights(
+                map,
+                &snapshot.config,
+                &shown,
+                view,
+                animation_time,
+                settings.reduced_motion,
+                &mut lights,
+            );
+            arena_lights(snapshot, local, view, interpolation, &placed, &mut lights);
+            crate::lighting::darken(lighting, &lights, None);
+        }
     }
     for popup in &effects.popups {
         let p = view.screen(popup.pos);
@@ -1109,6 +1135,70 @@ pub fn world(
         );
     }
 }
+/// The light tanks, bosses and shots carry in a dark arena. The player's
+/// own tank lights the most, so the way ahead is always visible.
+fn arena_lights(
+    snapshot: &Snapshot,
+    local: EntityId,
+    view: &View,
+    interpolation: f32,
+    placed: &dyn Fn(EntityId, V2) -> V2,
+    out: &mut Vec<crate::lighting::Light>,
+) {
+    use crate::lighting::{Light, MOST_LIGHTS};
+    let z = view.zoom;
+    for tank in &snapshot.tanks {
+        if !tank.alive || (tank.pocket > 0. && tank.id != local) {
+            continue;
+        }
+        let own = tank.id == local;
+        out.push(Light::Spot {
+            at: view.screen(placed(tank.id, tank.pos)),
+            radius: if own {
+                (tank.radius * 4. + 340.) * z
+            } else {
+                (tank.radius * 3. + 150.) * z
+            },
+            color: alpha(WHITE, if own { 0.95 } else { 0.7 }),
+        });
+    }
+    for boss in &snapshot.bosses {
+        out.push(Light::Spot {
+            at: view.screen(placed(boss.id, boss.pos)),
+            radius: (boss.radius * 2.5 + 120.) * z,
+            color: alpha(
+                mix(
+                    tankyard_client::boss_model::boss_color(boss.kind),
+                    WHITE,
+                    0.4,
+                ),
+                0.8,
+            ),
+        });
+    }
+    for projectile in &snapshot.projectiles {
+        if out.len() >= MOST_LIGHTS {
+            break;
+        }
+        let at = projectile.previous.lerp(projectile.pos, interpolation);
+        if !view.visible(at, 80.) {
+            continue;
+        }
+        out.push(Light::Spot {
+            at: view.screen(at),
+            radius: (projectile.radius * 4. + 36.) * z,
+            color: alpha(
+                mix(
+                    team_color(projectile.team, projectile.owner == local, false),
+                    WHITE,
+                    0.5,
+                ),
+                0.6,
+            ),
+        });
+    }
+}
+
 pub(crate) fn health_bar(p: Vec2, r: f32, ratio: f32, z: f32, color: Color) {
     if ratio >= 0.999 {
         return;

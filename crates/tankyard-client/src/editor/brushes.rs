@@ -24,8 +24,8 @@ impl Brush {
     }
 }
 
-pub const CATEGORIES: [&str; 8] = [
-    "Blocks", "Pads", "Decor", "Logic", "Gates", "Motion", "Effects", "Markers",
+pub const CATEGORIES: [&str; 9] = [
+    "Blocks", "Pads", "Decor", "Logic", "Gates", "Motion", "Effects", "Physics", "Markers",
 ];
 
 fn block(name: &'static str, style: BlockStyle) -> Brush {
@@ -62,6 +62,8 @@ fn pad(kind: ZoneKind) -> Brush {
             ZoneKind::Conveyor => "Carries tanks in its direction",
             ZoneKind::Portal => "Sends tanks to its exit marker",
             ZoneKind::Launch => "Flings tanks in its direction; they coast on",
+            ZoneKind::Pull => "Draws tanks toward its middle",
+            ZoneKind::Ice => "Slippery: slow to start, turn and stop",
         },
     }
 }
@@ -72,7 +74,9 @@ fn decor(name: &'static str, kind: DecorKind, size: [f32; 2]) -> Brush {
             kind,
             rect: [0., 0., 0.05, 0.05],
             color: match kind {
-                DecorKind::Light => [236, 196, 112],
+                DecorKind::Light | DecorKind::Spotlight => [236, 196, 112],
+                DecorKind::Beam => [120, 220, 255],
+                DecorKind::Grid => [140, 170, 190],
                 DecorKind::Label => [222, 228, 232],
                 DecorKind::Arrow => [232, 196, 92],
                 _ => [113, 158, 181],
@@ -90,6 +94,8 @@ fn decor(name: &'static str, kind: DecorKind, size: [f32; 2]) -> Brush {
             effect: (kind == DecorKind::Emitter).then(ParticleEffect::default),
             group: 0,
             flicker: 0.,
+            react: DecorReact::None,
+            reach: 0.,
         }),
         size,
         hint: "",
@@ -352,9 +358,26 @@ pub fn catalog() -> Vec<Vec<Brush>> {
             lamp("Torch", [255, 158, 72], 0.55, 150.).hint("A warm light that wavers like a flame"),
             lamp("Neon", [96, 224, 255], 0., 200.).hint("A cool, steady glow"),
             lamp("Lantern", [255, 214, 150], 0.15, 260.).hint("A wide, soft light"),
+            decor("Spotlight", DecorKind::Spotlight, [320., 320.])
+                .hint("A cone of light along its direction; lights dark maps"),
+            decor("Beam", DecorKind::Beam, [400., 40.]).hint("A shaft of light or a laser line"),
+            decor("Grid", DecorKind::Grid, [320., 320.]).hint("Floor grid lines"),
+            decor("Disc", DecorKind::Disc, [120., 120.]),
+            decor("Triangle", DecorKind::Triangle, [120., 120.]),
+            decor("Hexagon", DecorKind::Hexagon, [120., 120.]),
             decor("Ring", DecorKind::Ring, [120., 120.]),
             decor("Arrow", DecorKind::Arrow, [120., 60.]),
             decor("Label", DecorKind::Label, [280., 60.]),
+            {
+                let mut roof = decor("Roof", DecorKind::Tile, [320., 240.]);
+                if let Object::Decor(d) = &mut roof.object {
+                    d.color = [74, 82, 96];
+                    d.alpha = 245;
+                    d.above = true;
+                    d.react = DecorReact::Fade;
+                }
+                roof.hint("Drawn over tanks; clears for whoever drives under it")
+            },
             effect("Embers", 0),
             effect("Rain", 1),
             effect("Dust", 2),
@@ -1008,6 +1031,147 @@ pub fn catalog() -> Vec<Vec<Brush>> {
             .hint("Sounds an alarm here on signal 1"),
         ],
         vec![
+            logic(
+                "Fling pad",
+                [160., 160.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Fling,
+                    amount: 900,
+                    angle: 270.,
+                    seconds: 0.5,
+                    ..Default::default()
+                },
+            )
+            .hint("Flings tanks upward as they drive in"),
+            logic(
+                "Blast",
+                [240., 240.],
+                MapTrigger {
+                    when: TriggerWhen::Every,
+                    action: TriggerAction::Blast,
+                    amount: 700,
+                    seconds: 4.,
+                    ..Default::default()
+                },
+            )
+            .hint("Throws tanks out of its area every 4 seconds"),
+            logic(
+                "Vortex",
+                [240., 240.],
+                MapTrigger {
+                    when: TriggerWhen::Occupied,
+                    action: TriggerAction::Blast,
+                    amount: -300,
+                    seconds: 0.5,
+                    ..Default::default()
+                },
+            )
+            .hint("Tugs tanks inside toward its middle twice a second"),
+            logic(
+                "Crate plate",
+                [160., 160.],
+                MapTrigger {
+                    when: TriggerWhen::Touch,
+                    action: TriggerAction::Hide,
+                    source: 1,
+                    group: 2,
+                    seconds: 0.,
+                    ..Default::default()
+                },
+            )
+            .hint("Hides group 2 when body 1 is pushed onto it"),
+            logic(
+                "Plate release",
+                [160., 160.],
+                MapTrigger {
+                    when: TriggerWhen::Release,
+                    action: TriggerAction::Show,
+                    source: 1,
+                    group: 2,
+                    seconds: 0.,
+                    ..Default::default()
+                },
+            )
+            .hint("Shows group 2 again when body 1 leaves the plate"),
+            logic(
+                "Shove",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Signal,
+                    action: TriggerAction::Shove,
+                    amount: 600,
+                    ..Default::default()
+                },
+            )
+            .hint("On signal 1, shoves body 1 to the right"),
+            logic(
+                "Path",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Start,
+                    action: TriggerAction::Path,
+                    amount: 1,
+                    seconds: 0.,
+                    ..Default::default()
+                },
+            )
+            .hint("Sends group 1 along path 1 as the round starts"),
+            logic(
+                "Zoom out",
+                [240., 240.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Zoom,
+                    amount: 60,
+                    tween: 6.,
+                    seconds: 1.,
+                    ..Default::default()
+                },
+            )
+            .hint("Widens the view of tanks that drive in for 6 seconds"),
+            logic(
+                "Nightfall",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Start,
+                    action: TriggerAction::Light,
+                    amount: 75,
+                    color: [10, 14, 40],
+                    seconds: 60.,
+                    tween: 8.,
+                    ..Default::default()
+                },
+            )
+            .hint("Darkens the arena over 8 seconds, a minute into the round"),
+            logic(
+                "Lights on",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Signal,
+                    action: TriggerAction::Light,
+                    amount: 0,
+                    tween: 1.5,
+                    ..Default::default()
+                },
+            )
+            .hint("On signal 1, brings full light back"),
+            logic(
+                "Lightning",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Every,
+                    action: TriggerAction::Light,
+                    amount: 0,
+                    seconds: 9.,
+                    tween: 0.05,
+                    duration: 0.15,
+                    ..Default::default()
+                },
+            )
+            .hint("Every 9 seconds, flashes a dark arena to full light for a moment"),
+        ],
+        vec![
             marker(
                 "Spawn",
                 Object::Spawn(SpawnRegion {
@@ -1395,6 +1559,80 @@ pub fn trigger_badge(action: TriggerAction, r: Rect, lit: f32) {
                 ink,
             );
         }
+        TriggerAction::Shove => {
+            // A crate with a push behind it.
+            draw_rectangle(c.x - u * 0.1, c.y - u * 0.55, u * 1.1, u * 1.1, ink);
+            draw_line(c.x - u, c.y, c.x - u * 0.35, c.y, line, ink);
+            draw_triangle(
+                vec2(c.x - u * 0.2, c.y),
+                vec2(c.x - u * 0.5, c.y - u * 0.3),
+                vec2(c.x - u * 0.5, c.y + u * 0.3),
+                ink,
+            );
+        }
+        TriggerAction::Fling => {
+            // A rising arc with an arrowhead.
+            draw_arc(c.x, c.y + u * 0.9, 20, u * 1.2, 200., line, 100., ink);
+            draw_triangle(
+                vec2(c.x + u * 0.95, c.y - u * 0.1),
+                vec2(c.x + u * 0.45, c.y - u * 0.15),
+                vec2(c.x + u * 0.85, c.y + u * 0.4),
+                ink,
+            );
+        }
+        TriggerAction::Blast => {
+            // Rays bursting out of a core.
+            draw_circle(c.x, c.y, u * 0.3, ink);
+            for i in 0..8 {
+                let a = (i as f32 * 45.).to_radians();
+                let (s, k) = a.sin_cos();
+                draw_line(
+                    c.x + k * u * 0.5,
+                    c.y + s * u * 0.5,
+                    c.x + k * u,
+                    c.y + s * u,
+                    line,
+                    ink,
+                );
+            }
+        }
+        TriggerAction::Zoom => {
+            // A magnifying glass.
+            draw_circle_lines(c.x - u * 0.2, c.y - u * 0.2, u * 0.6, line, ink);
+            draw_line(
+                c.x + u * 0.25,
+                c.y + u * 0.25,
+                c.x + u * 0.9,
+                c.y + u * 0.9,
+                line * 1.4,
+                ink,
+            );
+        }
+        TriggerAction::Light => {
+            // A crescent moon.
+            draw_circle(c.x, c.y, u * 0.8, ink);
+            draw_circle(
+                c.x + u * 0.38,
+                c.y - u * 0.28,
+                u * 0.68,
+                Color::new(0.13, 0.12, 0.10, 1.),
+            );
+        }
+        TriggerAction::Path => {
+            // Points joined along a route.
+            let points = [
+                vec2(c.x - u, c.y + u * 0.6),
+                vec2(c.x - u * 0.2, c.y - u * 0.5),
+                vec2(c.x + u * 0.4, c.y + u * 0.3),
+                vec2(c.x + u, c.y - u * 0.7),
+            ];
+            for pair in points.windows(2) {
+                draw_line(pair[0].x, pair[0].y, pair[1].x, pair[1].y, line * 0.8, ink);
+            }
+            for p in points {
+                draw_circle(p.x, p.y, u * 0.2, ink);
+            }
+        }
     }
 }
 
@@ -1510,9 +1748,7 @@ pub fn thumbnail(brush: &Brush, r: Rect, map: &MapDef, settings: &Settings, time
                 0.,
                 0.4,
                 &[0; MAP_COUNTERS as usize],
-                0.,
-                1.,
-                ([1.; 3], 0.),
+                scenery::Look::default(),
             );
         }
         Object::Trigger(t) => {

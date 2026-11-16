@@ -1,6 +1,8 @@
 use std::{
     collections::{HashMap, VecDeque},
-    time::Duration,
+    path::PathBuf,
+    sync::OnceLock,
+    time::{Duration, Instant},
 };
 use tankyard_client::achievements::Tracker;
 use tankyard_content::Content;
@@ -8,7 +10,34 @@ use tankyard_core::{
     BossKind, DT, EntityId, GameEvent, Mode, PlayerInput, Snapshot, Tank, V2, WorldConfig,
     physics::predict_tank,
 };
+use tankyard_server::bot_memory::SharedKnowledge;
 use tankyard_server::{HostedServer, LocalSession, NetworkClient, ServerSettings};
+
+/// What bots learn in offline and hosted games: which tanks earn the most,
+/// which beat which, and their pooled networks. It lives in the game's data
+/// folder, so bots keep improving from one session to the next.
+fn bot_memory() -> &'static (PathBuf, SharedKnowledge) {
+    static MEMORY: OnceLock<(PathBuf, SharedKnowledge)> = OnceLock::new();
+    MEMORY.get_or_init(|| {
+        // Tests never touch the player's real memory.
+        let path = if cfg!(test) {
+            PathBuf::new()
+        } else {
+            directories::ProjectDirs::from("org", "Tank Yard", "Tank Yard")
+                .map(|p| p.data_dir().join("bot-memory.json"))
+                .unwrap_or_default()
+        };
+        let memory = tankyard_server::bot_memory::load(&path, &Content::builtin());
+        (path, memory)
+    })
+}
+
+fn save_bot_memory() {
+    let (path, memory) = bot_memory();
+    if let Err(error) = tankyard_server::bot_memory::save(path, memory) {
+        log::warn!("Couldn't save bot memory to {}: {error}", path.display());
+    }
+}
 
 pub enum Engine {
     Offline(Box<LocalSession>),
@@ -18,6 +47,9 @@ pub enum Engine {
     },
 }
 pub struct Session {
+    /// When this game last saved bot memory, for games whose bots learn into
+    /// it.
+    bot_memory_saved: Option<Instant>,
     pub party_invite: Option<tankyard_server::party::Invite>,
     pub party_network: String,
     party_discovery: Option<tankyard_client::party_network::Discovery>,
@@ -159,9 +191,12 @@ impl Session {
     }
     pub fn offline(config: WorldConfig, bots: usize, name: &str) -> Self {
         let mut local = LocalSession::new(config, bots);
+        local.bots.share_knowledge(bot_memory().1.clone());
         let id = local.world.add_player(name, false);
         let snapshot = local.world.display_snapshot();
-        Self::create(Engine::Offline(Box::new(local)), id, Some(snapshot))
+        let mut session = Self::create(Engine::Offline(Box::new(local)), id, Some(snapshot));
+        session.bot_memory_saved = Some(Instant::now());
+        session
     }
     /// A workshop playtest, starting at `start` when it has room for a tank.
     pub fn editor(
@@ -372,17 +407,20 @@ impl Session {
             mods,
             ..Default::default()
         };
-        let host = HostedServer::start(settings).map_err(|e| e.to_string())?;
+        let host = HostedServer::start_sharing(settings, Some(bot_memory().1.clone()))
+            .map_err(|e| e.to_string())?;
         let address = format!("127.0.0.1:{}", host.address.port());
         let client = NetworkClient::connect(&address, name, password).map_err(|e| e.to_string())?;
-        Ok(Self::create(
+        let mut session = Self::create(
             Engine::Online {
                 client: Box::new(client),
                 host: Some(host),
             },
             0,
             None,
-        ))
+        );
+        session.bot_memory_saved = Some(Instant::now());
+        Ok(session)
     }
     fn create(engine: Engine, player: EntityId, display: Option<Snapshot>) -> Self {
         let bundle = match &engine {
@@ -396,6 +434,7 @@ impl Session {
         }
         Self {
             practice: None,
+            bot_memory_saved: None,
             staff_trusted: matches!(engine, Engine::Online { host: Some(_), .. }),
             party_invite: None,
             party_network: String::new(),
@@ -668,15 +707,31 @@ impl Session {
                     .unwrap_or(authoritative.pos);
                 let mut predicted = authoritative.clone();
                 self.predicted_tick = snapshot.tick;
-                for input in &self.pending {
+                // A sliding body keeps sliding while inputs replay, so a
+                // tank pushing one isn't held back by where it was.
+                let sliding = snapshot
+                    .match_state
+                    .bodies
+                    .iter()
+                    .any(|body| body.velocity != [0., 0.]);
+                let mut walls_ahead = Vec::new();
+                for (step, input) in self.pending.iter().enumerate() {
                     predicted.input = *input;
                     self.predicted_tick += 1;
                     predict_pads(&self.bundle.maps, snapshot, &self.poses_now, &mut predicted);
+                    let walls = if sliding {
+                        let ahead = snapshot.match_state.elapsed + (step + 1) as f32 * DT;
+                        let poses = tankyard_core::snapshot_poses(snapshot, ahead);
+                        tankyard_core::place_walls(snapshot, &poses, &mut walls_ahead);
+                        &walls_ahead
+                    } else {
+                        &self.walls_now
+                    };
                     predict_tank(
                         &mut predicted,
                         content,
                         &snapshot.config,
-                        &self.walls_now,
+                        walls,
                         self.predicted_tick,
                         DT,
                     );
@@ -803,6 +858,13 @@ impl Session {
     pub fn tick(&mut self, input: PlayerInput, content: &Content) {
         if self.practice.as_ref().is_some_and(|run| run.done()) {
             return;
+        }
+        if let Some(saved) = self.bot_memory_saved
+            && saved.elapsed().as_secs() >= tankyard_server::bot_memory::SAVE_SECONDS
+        {
+            self.bot_memory_saved = Some(Instant::now());
+            // Writing can take a moment; the game shouldn't stutter for it.
+            std::thread::spawn(save_bot_memory);
         }
         match &mut self.engine {
             Engine::Offline(local) => {
@@ -1129,6 +1191,9 @@ impl Session {
                 server.shutdown();
             }
         }
+        if self.bot_memory_saved.take().is_some() {
+            save_bot_memory();
+        }
     }
 }
 impl Drop for Session {
@@ -1157,12 +1222,14 @@ fn predict_pads(
     else {
         tank.terrain = 1.;
         tank.push = V2::ZERO;
+        tank.grip = 1.;
         return;
     };
     let hidden = snapshot.match_state.hidden_groups;
     let config = &snapshot.config;
     tank.terrain = tankyard_core::terrain_factor(map, config, hidden, poses, tank.pos);
     tank.push = tankyard_core::terrain_push(map, config, hidden, poses, tank.pos);
+    tank.grip = tankyard_core::terrain_grip(map, config, hidden, poses, tank.pos);
     tankyard_core::launch_tank(
         tank,
         tankyard_core::terrain_launch(map, config, hidden, poses, tank.pos),

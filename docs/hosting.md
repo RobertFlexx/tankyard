@@ -9,7 +9,7 @@ Anyone can host a Tank Yard server: from the game in a few clicks, or as a dedic
 | It to start with the machine and restart if it stops | [Run it as a service](#run-it-as-a-service) | 10 minutes |
 | Players to join `play.example.com`, or no port forwarding | [Your own domain](hosting-domain.md) | 20 minutes |
 
-Players never install your mods: the server sends its checked mod data when they join. Clients and the server must use compatible protocol versions. Tank Yard 1.1.0 and 1.2.0 use protocol 28 and play together. Version 1.0.0 used protocol 26, and 0.15 and 0.16 used 25.
+Players never install your mods: the server sends its checked mod data when they join. Clients and the server must use compatible protocol versions. Tank Yard 1.3.0 uses protocol 29, so its clients and servers play only with each other. Versions 1.1.0 and 1.2.0 used protocol 28, 1.0.0 used 26, and 0.15 and 0.16 used 25.
 
 ## From the game
 
@@ -54,6 +54,7 @@ On Windows, run `.\tankyard-server.exe --write-config server.toml --name "My are
 | `bind` | The UDP address and port, `"0.0.0.0:5000"` by default |
 | `max_players`, `arena_capacity` | Players in total, and per lobby; a full lobby opens another |
 | `bot_count`, `adaptive_bots`, `difficulty` | Bots per lobby, whether they leave as players join, and their skill |
+| `bot_memory_file` | Where bots keep what they learn, `"bot-memory.json"` by default. `""` turns it off |
 | `mods` | Mod pack folders or ZIPs to load, such as `["mods/my_arena.zip"]` |
 | `mode`, `map` under `[world]` | The game mode and map |
 
@@ -191,7 +192,7 @@ cargo build --locked --release -p tankyard-server --bin tankyard-server
 
 The port is UDP 5000. Local players join `127.0.0.1:5000`; LAN players use the host's local address. Internet players need a reachable public address and a forwarded UDP port. IPv6 addresses use brackets, such as `[2001:db8::1234]:5000`.
 
-Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default; `snapshot_rate` takes 1 to 60, and higher rates are smoother at the cost of bandwidth. Tank Yard 1.1.0 and 1.2.0 use protocol 28; clients from 1.0.1 and earlier must update before joining. Validated mod data is sent when joining, so clients do not need to install server packs.
+Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default; `snapshot_rate` takes 1 to 60, and higher rates are smoother at the cost of bandwidth. Tank Yard 1.3.0 uses protocol 29; clients from 1.2.0 and earlier must update before joining. Validated mod data is sent when joining, so clients do not need to install server packs.
 
 Inputs are sent as soon as each frame's update finishes, before drawing; menu commands go out before the frame ends. Movement abilities use shared prediction rules. Remote movement can bridge a packet gap for up to 75 ms, constrained by walls and the arena boundary; longer gaps freeze until a new snapshot arrives. The server reuses snapshot storage between viewers and bounds catch-up work during overload.
 
@@ -203,7 +204,7 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 
 Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
 
-Tank Yard 1.1.0 and 1.2.0 use protocol 28, which carries Bacteria's pursuing doubles and the workshop's effects. They play together. Version 1.0.1 used 27, 1.0.0 used 26, and 0.15 and 0.16 used 25. When upgrading from those versions, update clients, servers and any separate relay together; older snapshots are incompatible. Older clients receive an update message. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
+Tank Yard 1.3.0 uses protocol 29, which carries pushable bodies, arena lighting and the maps that describe them. Versions 1.1.0 and 1.2.0 used 28, 1.0.1 used 27, 1.0.0 used 26, and 0.15 and 0.16 used 25. When upgrading from those versions, update clients, servers and any separate relay together; older snapshots are incompatible. Older clients receive an update message. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
 
 The ordinary server includes signed creator tools by default on official public arenas (`--central`); `creator_admin = false` overrides that policy. Default community/personal hosts are disabled; public community operators can explicitly opt in. Password-protected hosts cannot enable the tools. See [creator administration](creator-administration.md) for policy, immediate revocation, auditing, and updating the central Raspberry Pi/Docker deployment.
 
@@ -301,6 +302,8 @@ Local reconnect runs reserve one spare connection, so they support up to 127 cli
 The central profile uses `arena_capacity = 20` with `max_players = 80`, so up to four groups of twenty. Servers default to `arena_capacity = 20`. Set `arena_capacity = 0` to keep one arena of any size; a capacity above `max_players` is one arena of `max_players`. Party servers always use one arena.
 
 `adaptive_bots = true` is the default for official and community servers. `bot_count` is a ceiling: the arena fills to six participants, with zero bots at six human players. Co-op wave enemies are separate. With no humans connected, the simulation and round timers pause while networking continues to accept joins. Use `adaptive_bots = false` or `--fixed-bots` for a fixed bot population.
+
+Bots learn from every match. They track which tanks score the most points per minute alive, which tanks beat which, and which upgrades lead to the strongest tanks, and they share what each bot learns when it dies. Every lobby on the server learns into one memory, saved to `bot_memory_file` every five minutes and when the server stops, so bots carry what they learned across restarts. Only public information goes in: the scoreboard, the kill feed and tank classes. Sandbox and modded matches teach nothing, because their tanks don't follow the usual rules. Delete the file to start over; a damaged file is reported in the log and replaced by the next save.
 
 Realtime input bursts from delayed connections are coalesced. The server retains bounded processing and drops excess input instead of kicking a player for packet bunching. Malformed input and control-message limits still apply. UDP buffers absorb short bursts where the operating system allows it; WebSocket queues are bounded and pause UDP reads when TCP is blocked.
 

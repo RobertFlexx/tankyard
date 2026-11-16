@@ -3,7 +3,7 @@
 //! simulation authority always remains with the server.
 use renet::{ChannelConfig, ConnectionConfig, SendType};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::{fmt, time::Duration};
+use std::{borrow::Cow, fmt, time::Duration};
 use tankyard_content::Content;
 use tankyard_core::{BossKind, EntityId, GameEvent, PlayerInput, Snapshot};
 mod creator;
@@ -19,12 +19,13 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 28 carries the private pocket's pursuing doubles and forced-return
-/// event. The previous snapshot shape cannot describe that hazard, so source
-/// clients and servers must update together. Released 1.0.1 uses version 27.
-pub const PROTOCOL_VERSION: u32 = 28;
+/// Version 29 carries pushable bodies, arena lighting and the maps that
+/// describe them, which version 28 snapshots and game data can't hold, so
+/// clients and servers update together. Tank Yard 1.3.0 uses it; 1.1.0 and
+/// 1.2.0 used version 28.
+pub const PROTOCOL_VERSION: u32 = 29;
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 28;
+pub const MIN_PROTOCOL_VERSION: u32 = 29;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
 pub const SERVER_OUTDATED: &str =
     "This server runs an older Tank Yard. Its host needs to update it.";
@@ -333,11 +334,33 @@ impl InputBundle {
         (1..=3).contains(&self.count) && self.iter().all(PlayerInput::valid)
     }
 }
+/// What players receive of `bundle`. Map triggers and the paths they play
+/// run only on the server, so they stay behind: players see their effects
+/// in snapshots, newer trigger kinds never reach clients that predate them,
+/// and the fields triggers leave out of their files when unused can't
+/// travel in the binary format at all.
+pub fn players_bundle(bundle: &tankyard_mods::GameBundle) -> Cow<'_, tankyard_mods::GameBundle> {
+    if bundle
+        .maps
+        .iter()
+        .all(|map| map.triggers.is_empty() && map.paths.is_empty())
+    {
+        return Cow::Borrowed(bundle);
+    }
+    let mut stripped = bundle.clone();
+    for map in &mut stripped.maps {
+        map.triggers.clear();
+        map.paths.clear();
+    }
+    Cow::Owned(stripped)
+}
+/// The game data message for `bundle`, as players receive it.
 pub fn game_data(bundle: &tankyard_mods::GameBundle) -> Result<ServerControl, DecodeError> {
+    let bundle = players_bundle(bundle);
     bundle
         .validate()
         .map_err(|_| DecodeError("invalid game data"))?;
-    let bytes = encode(bundle, tankyard_mods::MAX_PACK_BYTES)?;
+    let bytes = encode(&*bundle, tankyard_mods::MAX_PACK_BYTES)?;
     Ok(ServerControl::GameData {
         compressed: lz4_flex::compress_prepend_size(&bytes),
     })
@@ -653,6 +676,8 @@ fn snapshot_valid(s: &Snapshot) -> bool {
             .all(|&group| group <= tankyard_content::MAP_GROUPS)
         && s.match_state.tweens.len() <= tankyard_content::TWEEN_SLOTS
         && s.match_state.tweens.iter().all(|t| t.valid())
+        && s.match_state.bodies.len() <= usize::from(tankyard_content::MAP_GROUPS)
+        && s.match_state.bodies.iter().all(|b| b.valid())
         && s.objectives.iter().all(|o| {
             vector(o.pos)
                 && vector(o.home)
@@ -1026,7 +1051,11 @@ mod tests {
             unreachable!()
         };
         let decoded = decode_game_data(&compressed).unwrap();
-        assert_eq!(bundle.fingerprint(), decoded.fingerprint());
+        assert_eq!(players_bundle(&bundle).fingerprint(), decoded.fingerprint());
+        // Built-in arenas with logic arrive without it: the server runs it.
+        assert!(bundle.maps.iter().any(|map| !map.triggers.is_empty()));
+        assert!(decoded.maps.iter().all(|map| map.triggers.is_empty()));
+        assert_eq!(decoded.maps.len(), bundle.maps.len());
         let bomb = (u32::MAX).to_le_bytes();
         assert!(decode_game_data(&bomb).is_err());
         let mut invalid = compressed;

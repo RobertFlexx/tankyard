@@ -794,6 +794,55 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
                 },
             )
         }
+        "play_map_path" => (
+            0,
+            Effect::MapPath {
+                group: whole(arg(0), "group", 1, tankyard_content::MAP_GROUPS.into())? as u8,
+                path: whole(arg(1), "path", 1, tankyard_content::MAP_PATHS as i32)? as u8,
+            },
+        ),
+        "set_map_lighting" => {
+            let packed = whole(arg(1), "color", 0, 0xff_ffff)? as u32;
+            (
+                0,
+                Effect::MapLight {
+                    darkness: ranged(
+                        arg(0),
+                        "darkness",
+                        0.,
+                        tankyard_content::DARKNESS_LIMIT * 100.,
+                    )?,
+                    color: [(packed >> 16) as u8, (packed >> 8) as u8, packed as u8],
+                    seconds: ranged(arg(2), "seconds", 0., tankyard_content::TWEEN_SECONDS)?,
+                    easing: easing(arg(3), arg(4))?,
+                },
+            )
+        }
+        "shove_map_body" => {
+            let limit = tankyard_content::SHOVE_LIMIT as f32;
+            (
+                0,
+                Effect::MapShove {
+                    group: whole(arg(0), "group", 1, tankyard_content::MAP_GROUPS.into())? as u8,
+                    velocity: [
+                        ranged(arg(1), "x speed", -limit, limit)?,
+                        ranged(arg(2), "y speed", -limit, limit)?,
+                    ],
+                },
+            )
+        }
+        "fling_tank" => {
+            let limit = tankyard_content::FLING_LIMIT as f32;
+            (
+                entity(arg(0))?,
+                Effect::Fling {
+                    velocity: [
+                        ranged(arg(1), "x speed", -limit, limit)?,
+                        ranged(arg(2), "y speed", -limit, limit)?,
+                    ],
+                },
+            )
+        }
         "stop_map_group" => (
             0,
             Effect::MapStop {
@@ -1075,6 +1124,20 @@ fn read(
             t.raw_set("tint", tint)?;
             t.raw_set("tint_strength", strength * 100.)?;
             Value::Table(t)
+        }
+        "map_body" => {
+            let group = whole(Some(a), "group", 1, tankyard_content::MAP_GROUPS.into())? as u8;
+            match world.body_state(group) {
+                Some(state) => {
+                    let t = lua.create_table_with_capacity(0, 4)?;
+                    t.raw_set("x", state.offset.x)?;
+                    t.raw_set("y", state.offset.y)?;
+                    t.raw_set("vx", state.velocity.x)?;
+                    t.raw_set("vy", state.velocity.y)?;
+                    Value::Table(t)
+                }
+                None => Value::Nil,
+            }
         }
         "arena" => {
             let t = lua.create_table()?;

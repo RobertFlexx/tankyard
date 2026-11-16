@@ -20,6 +20,7 @@ mod graphics;
 mod hardware;
 mod hosting;
 mod hud;
+mod lighting;
 mod links;
 mod map_sounds;
 mod menu;
@@ -2778,8 +2779,10 @@ async fn run(cli: Cli) {
                     .find(|t| t.id == session.spectating.unwrap_or(session.player))
             })
             .map_or(1, |tank| tank.level);
+        // A map's Zoom view: below 1 the view widens, above it closes in.
         let target_zoom = (screen_height() / 900.0).clamp(0.7, 2.75)
-            / (1.0 + (f32::from(level.saturating_sub(1)) * 0.006));
+            / (1.0 + (f32::from(level.saturating_sub(1)) * 0.006))
+            * app.effects.map_zoom();
         let ease = 1.0 - (-dt * 9.0).exp();
         app.view.zoom = if app.settings.reduced_motion {
             target_zoom

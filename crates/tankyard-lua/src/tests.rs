@@ -240,6 +240,12 @@ fn hostile_effect_arguments_discard_the_entire_event_batch() {
         "tankyard.scale_map_group(1, -10)",
         "tankyard.tint_map_group(1, '#ffffff', 1000)",
         "tankyard.stop_map_group(33)",
+        "tankyard.set_map_lighting(200)",
+        "tankyard.set_map_lighting(50, '#000000', -1)",
+        "tankyard.play_map_path(1, 0)",
+        "tankyard.shove_map_body(40, 10, 0)",
+        "tankyard.shove_map_body(2, 1e9, 0)",
+        "tankyard.fling_tank(tankyard.tanks()[1].id, 0/0, 0)",
     ] {
         let source = format!(
             "tankyard.on('tick', function() tankyard.set_level(tankyard.tanks()[1].id, 40); {call} end)"
@@ -784,6 +790,37 @@ fn scripts_glide_turn_and_fade_map_groups() {
     assert_eq!(poses.turn(4), 90.);
     assert!((poses.opacity(4) - 0.4).abs() < 1e-4);
     assert_eq!(world.match_state.tweens.len(), 3);
+}
+
+#[test]
+fn scripts_light_the_arena_and_fling_tanks() {
+    let source = r##"
+        local ticks, start = 0, nil
+        tankyard.on("tick", function()
+          ticks = ticks + 1
+          local pilot = tankyard.tanks()[1]
+          if ticks == 20 then
+            assert(pilot.y < start - 60, "flung upward")
+          end
+          if ticks == 1 then
+            start = pilot.y
+            tankyard.set_map_lighting(70, "#102040", 0.5, "sine", "in_out")
+            tankyard.fling_tank(pilot.id, 0, -800)
+            -- The open arena has no bodies and no paths: these do nothing.
+            assert(tankyard.map_body(2) == nil)
+            tankyard.shove_map_body(2, 100, 0)
+            tankyard.play_map_path(2, 1)
+          end
+        end)
+    "##;
+    let (world, runtime) = run(source, 60);
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    let light = world
+        .group_poses()
+        .lighting(&tankyard_content::MapAmbient::default());
+    assert!((light[3] - 0.7).abs() < 1e-3, "{light:?}");
+    assert!((light[2] - 64. / 255.).abs() < 1e-3);
+    assert_eq!(world.group_poses().offset(2), [0., 0.]);
 }
 
 #[test]

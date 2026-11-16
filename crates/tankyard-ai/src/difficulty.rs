@@ -114,6 +114,24 @@ impl Difficulty {
         }
     }
 
+    /// How much bots trust what they've learned together about which tanks
+    /// earn the most and which beat which. Easier bots still pick
+    /// sensible upgrades but don't chase the strongest ones.
+    pub fn insight(self) -> f32 {
+        match self {
+            Self::Beginner => 0.25,
+            Self::Normal => 0.6,
+            Self::Advanced => 0.85,
+            Self::Expert => 1.,
+        }
+    }
+
+    /// Whether bots steer with the trained driving network. Beginners keep
+    /// the plainer hand-written steering, which is easier to outplay.
+    pub fn network_driving(self) -> f32 {
+        if self == Self::Beginner { 0. } else { 1. }
+    }
+
     /// Where this difficulty sits on the continuous skill scale.
     pub fn level(self) -> f32 {
         match self {
@@ -143,6 +161,10 @@ impl Skill {
         } else {
             a + (b - a) * t
         }
+    }
+
+    pub(super) fn network_driving(self) -> bool {
+        self.blend(Difficulty::network_driving) >= 0.5
     }
 
     pub(super) fn reaction_ticks(self) -> u64 {
@@ -179,6 +201,10 @@ impl Skill {
 
     pub(super) fn awareness(self) -> f32 {
         self.blend(Difficulty::awareness)
+    }
+
+    pub(super) fn insight(self) -> f32 {
+        self.blend(Difficulty::insight)
     }
 
     pub(super) fn pressure_limit(self) -> f32 {

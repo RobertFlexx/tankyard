@@ -279,6 +279,9 @@ pub struct Tank {
     /// Velocity added by conveyor pads, in world units per second.
     #[serde(skip)]
     pub push: V2,
+    /// How firmly the tank grips the floor, 1 off pads; ice lowers it.
+    #[serde(skip, default = "unit_scale")]
+    pub grip: f32,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerBadge {
@@ -395,6 +398,7 @@ impl Clone for Tank {
             server_badge: self.server_badge,
             terrain: self.terrain,
             push: self.push,
+            grip: self.grip,
         }
     }
     fn clone_from(&mut self, source: &Self) {
@@ -449,6 +453,7 @@ impl Clone for Tank {
         self.server_badge = source.server_badge;
         self.terrain = source.terrain;
         self.push = source.push;
+        self.grip = source.grip;
     }
 }
 
@@ -773,6 +778,9 @@ pub struct MatchState {
     /// Map counters 1 to 8, which labels and announcements can show.
     #[serde(default)]
     pub counters: [i32; tankyard_content::MAP_COUNTERS as usize],
+    /// Pushed bodies away from where the map places them, or sliding.
+    #[serde(default)]
+    pub bodies: Vec<tankyard_content::BodyPose>,
     /// How map logic is moving, turning and fading groups. Clients replay
     /// these against the round clock instead of receiving moved geometry.
     #[serde(default)]
@@ -802,6 +810,9 @@ pub enum EventKind {
     MapSound,
     /// A launch pad flung tank `subject`.
     Launch,
+    /// A Zoom view trigger reached tank `subject`; see [`crate::zoom_of`]
+    /// for `value`.
+    MapZoom,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Elimination {

@@ -100,16 +100,23 @@ pub enum ZoneKind {
     // Newer kinds go last: the wire format numbers variants in order.
     /// Flings tanks along `angle`; they coast on after leaving it.
     Launch,
+    // Added in 1.3.0.
+    /// Pulls tanks toward its center, harder the closer they get.
+    Pull,
+    /// Slippery: tanks speed up, turn and stop slowly.
+    Ice,
 }
 impl ZoneKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Speed,
         Self::Mud,
+        Self::Ice,
         Self::Repair,
         Self::Hazard,
         Self::Shelter,
         Self::Conveyor,
         Self::Launch,
+        Self::Pull,
         Self::Portal,
     ];
     pub fn name(self) -> &'static str {
@@ -122,6 +129,8 @@ impl ZoneKind {
             Self::Conveyor => "Conveyor",
             Self::Portal => "Portal",
             Self::Launch => "Launch pad",
+            Self::Pull => "Gravity well",
+            Self::Ice => "Ice",
         }
     }
     /// Whether `angle` sets which way it acts.
@@ -154,6 +163,11 @@ fn unit() -> f32 {
 pub const CONVEYOR_SPEED: f32 = 150.;
 /// World units per second a launch pad of strength 1 flings a tank at.
 pub const LAUNCH_SPEED: f32 = 900.;
+/// World units per second a gravity well of strength 1 pulls a tank at its
+/// edge; the pull doubles toward the center.
+pub const PULL_SPEED: f32 = 130.;
+/// How much grip a tank keeps on ice of strength 1, as a fraction.
+pub const ICE_GRIP: f32 = 0.22;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -173,15 +187,34 @@ pub enum DecorKind {
     Label,
     /// A particle emitter; its look is `effect`.
     Emitter,
+    // Added in 1.3.0.
+    /// A filled circle or oval.
+    Disc,
+    /// A triangle pointing along `rotation`.
+    Triangle,
+    /// A six-sided plate.
+    Hexagon,
+    /// A cone of light shining along `rotation`; it lights up dark maps.
+    Spotlight,
+    /// A shaft of light or a laser line along the rectangle's length.
+    Beam,
+    /// Floor grid lines, like a tiled floor or a blueprint.
+    Grid,
 }
 impl DecorKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 13] = [
         Self::Tile,
         Self::Stripes,
-        Self::Light,
+        Self::Grid,
+        Self::Disc,
+        Self::Triangle,
+        Self::Hexagon,
         Self::Ring,
         Self::Arrow,
         Self::Label,
+        Self::Light,
+        Self::Spotlight,
+        Self::Beam,
         Self::Emitter,
     ];
     pub fn name(self) -> &'static str {
@@ -193,9 +226,58 @@ impl DecorKind {
             Self::Arrow => "Arrow",
             Self::Label => "Text",
             Self::Emitter => "Particles",
+            Self::Disc => "Disc",
+            Self::Triangle => "Triangle",
+            Self::Hexagon => "Hexagon",
+            Self::Spotlight => "Spotlight",
+            Self::Beam => "Beam",
+            Self::Grid => "Grid",
         }
     }
+    /// Whether it gives off light that shows through a map's darkness.
+    pub fn lights(self) -> bool {
+        matches!(self, Self::Light | Self::Spotlight | Self::Beam)
+    }
 }
+
+/// How a decoration responds to tanks nearby. Each player sees it respond to
+/// their own tank, so a roof can clear for whoever drives under it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecorReact {
+    #[default]
+    None,
+    /// Fades away as a tank comes near, like a roof or tree canopy.
+    Fade,
+    /// Fades in as a tank comes near, like a hidden sign.
+    Appear,
+    /// Swells as a tank comes near.
+    Grow,
+    /// Brightens as a tank comes near.
+    Glow,
+}
+impl DecorReact {
+    pub const ALL: [Self; 5] = [Self::None, Self::Fade, Self::Appear, Self::Grow, Self::Glow];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "Nothing",
+            Self::Fade => "Fade away",
+            Self::Appear => "Appear",
+            Self::Grow => "Grow",
+            Self::Glow => "Glow",
+        }
+    }
+    /// How strongly it responds to a tank `distance` world units from its
+    /// edge, 0 to 1, when it responds within `reach`.
+    pub fn closeness(distance: f32, reach: f32) -> f32 {
+        let reach = reach.max(1.);
+        let t = (1. - distance.max(0.) / reach).clamp(0., 1.);
+        t * t * (3. - 2. * t)
+    }
+}
+/// How near a tank must come, in world units, before decor responds,
+/// unless the decoration sets its own.
+pub const REACT_REACH: f32 = 220.;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -375,6 +457,22 @@ pub struct MapDecor {
     pub effect: Option<ParticleEffect>,
     #[serde(default)]
     pub group: u8,
+    /// How it responds to tanks nearby.
+    #[serde(default)]
+    pub react: DecorReact,
+    /// How near, in world units, a tank must come for it to respond, 0 to
+    /// 2000; 0 uses [`REACT_REACH`].
+    #[serde(default)]
+    pub reach: f32,
+}
+impl MapDecor {
+    pub fn react_reach(&self) -> f32 {
+        if self.reach > 0. {
+            self.reach
+        } else {
+            REACT_REACH
+        }
+    }
 }
 fn decor_color() -> [u8; 3] {
     [120, 160, 190]
@@ -419,9 +517,16 @@ pub enum TriggerWhen {
     /// When a motion of group `source` ends: a Move, Move to, Turn or Fade,
     /// the trip back included.
     Arrived,
+    // Added in 1.3.0.
+    /// When the blocks of group `source` start to overlap `rect`, such as a
+    /// crate pushed onto a plate; `seconds` is the cooldown.
+    Touch,
+    /// When the blocks of group `source` stop overlapping `rect`; `seconds`
+    /// is the cooldown.
+    Release,
 }
 impl TriggerWhen {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 16] = [
         Self::Every,
         Self::Enter,
         Self::Exit,
@@ -436,6 +541,8 @@ impl TriggerWhen {
         Self::Hidden,
         Self::Defeated,
         Self::Arrived,
+        Self::Touch,
+        Self::Release,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -453,7 +560,13 @@ impl TriggerWhen {
             Self::Hidden => "On hidden",
             Self::Defeated => "On boss down",
             Self::Arrived => "On arrive",
+            Self::Touch => "On touch",
+            Self::Release => "On release",
         }
+    }
+    /// Whether it watches a group's blocks over its rectangle.
+    pub fn watches_blocks(self) -> bool {
+        matches!(self, Self::Touch | Self::Release)
     }
     /// Whether the trigger watches its rectangle for tanks.
     pub fn watches_area(self) -> bool {
@@ -477,7 +590,10 @@ impl TriggerWhen {
     }
     /// Whether `source` names a group it watches.
     pub fn watches_group(self) -> bool {
-        matches!(self, Self::Shown | Self::Hidden | Self::Arrived)
+        matches!(
+            self,
+            Self::Shown | Self::Hidden | Self::Arrived | Self::Touch | Self::Release
+        )
     }
 }
 
@@ -545,21 +661,44 @@ pub enum TriggerAction {
     Shake,
     /// Plays `sound` at `rect`, at `amount` percent volume.
     Sound,
+    // Added in 1.3.0.
+    /// Shoves body `group` toward `angle` at `amount` world units a second.
+    Shove,
+    /// Flings the noticed tanks in `rect` toward `angle` at `amount` world
+    /// units a second.
+    Fling,
+    /// Throws the noticed tanks in `rect` away from its center at `amount`
+    /// world units a second, or pulls them in when `amount` is negative.
+    Blast,
+    /// Zooms the views of the noticed tanks in `rect` to `amount` percent
+    /// for `tween` seconds: below 100 shows more of the arena.
+    Zoom,
+    /// Changes the arena's lighting over `tween` seconds: `amount` percent
+    /// darkness, tinted `color`.
+    Light,
+    /// Sends group `group` along path `amount`, counting from 1.
+    Path,
 }
 impl TriggerAction {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 33] = [
         Self::Toggle,
         Self::Show,
         Self::Hide,
         Self::Move,
         Self::Place,
+        Self::Path,
         Self::Turn,
         Self::Fade,
         Self::Tint,
         Self::Scale,
         Self::Animate,
         Self::Stop,
+        Self::Shove,
+        Self::Fling,
+        Self::Blast,
         Self::Shake,
+        Self::Zoom,
+        Self::Light,
         Self::Sound,
         Self::Announce,
         Self::Boss,
@@ -605,6 +744,12 @@ impl TriggerAction {
             Self::Stop => "Stop group",
             Self::Shake => "Shake screen",
             Self::Sound => "Play sound",
+            Self::Shove => "Shove body",
+            Self::Fling => "Fling tanks",
+            Self::Blast => "Blast",
+            Self::Zoom => "Zoom view",
+            Self::Light => "Lighting",
+            Self::Path => "Play path",
         }
     }
     /// Whether `group` names a map group, as opposed to a channel or counter.
@@ -622,6 +767,8 @@ impl TriggerAction {
                 | Self::Scale
                 | Self::Animate
                 | Self::Stop
+                | Self::Shove
+                | Self::Path
         )
     }
     /// Whether it shows or hides group `group`.
@@ -639,7 +786,12 @@ impl TriggerAction {
                 | Self::Tint
                 | Self::Scale
                 | Self::Animate
+                | Self::Light
         )
+    }
+    /// Whether `angle` sets which way it pushes.
+    pub fn aims(self) -> bool {
+        matches!(self, Self::Shove | Self::Fling)
     }
     /// Whether it only changes how decorations look.
     pub fn decor_only(self) -> bool {
@@ -658,7 +810,16 @@ impl TriggerAction {
     }
     /// Whether it acts on the tanks standing in the trigger's area.
     pub fn affects_tanks(self) -> bool {
-        matches!(self, Self::Heal | Self::Hurt | Self::Award | Self::Shake)
+        matches!(
+            self,
+            Self::Heal
+                | Self::Hurt
+                | Self::Award
+                | Self::Shake
+                | Self::Fling
+                | Self::Blast
+                | Self::Zoom
+        )
     }
     /// Whether it sends on a run of `amount` channels from `group`.
     pub fn sends_range(self) -> bool {
@@ -1161,6 +1322,11 @@ pub struct MapTrigger {
     /// The sound Play sound makes.
     #[serde(default, skip_serializing_if = "is_default")]
     pub sound: MapSound,
+    // Added in 1.3.0, and likewise left out when unused.
+    /// Which way Shove body and Fling tanks push, in degrees: 0 right, 90
+    /// down.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub angle: f32,
 }
 impl MapTrigger {
     /// Animate's pace in cycles a second, after the style's default.
@@ -1220,6 +1386,7 @@ impl Default for MapTrigger {
             style: crate::AnimateStyle::Bob,
             speed: 0.,
             sound: MapSound::Chime,
+            angle: 0.,
         }
     }
 }
@@ -1315,6 +1482,20 @@ pub fn fill_counters<'a>(
 
 /// Most groups a map can name; they fit one 32-bit mask in snapshots.
 pub const MAP_GROUPS: u8 = 32;
+/// Most walls and blocks together, pads, decorations and triggers in one
+/// map.
+pub const MAP_BLOCKS: usize = 2048;
+pub const MAP_ZONES: usize = 512;
+pub const MAP_DECOR: usize = 2048;
+pub const MAP_TRIGGERS: usize = 512;
+/// Fastest Shove body, in world units a second.
+pub const SHOVE_LIMIT: i32 = 2000;
+/// Fastest Fling tanks or Blast, in world units a second.
+pub const FLING_LIMIT: i32 = 3000;
+/// Zoom view's range, in percent of the usual view.
+pub const ZOOM_RANGE: (i32, i32) = (40, 250);
+/// Longest Zoom view, in seconds.
+pub const ZOOM_SECONDS: f32 = 60.;
 /// Stable IDs accepted by map boss triggers. Core verifies this catalog stays
 /// in sync with its boss enum.
 pub const BOSS_IDS: [&str; 14] = [
@@ -1368,6 +1549,53 @@ pub struct MapDef {
     /// Groups hidden when a round starts, such as gates a trigger opens.
     #[serde(default)]
     pub hidden_groups: Vec<u8>,
+    // Added in 1.3.0.
+    /// Groups tanks can push, such as crates and push doors.
+    #[serde(default)]
+    pub bodies: Vec<crate::MapBody>,
+    /// Keyframed routes Play path triggers send groups along.
+    #[serde(default)]
+    pub paths: Vec<crate::MapPath>,
+    /// How dark the arena is when a round starts, and the color of its
+    /// light. Lights, spotlights and beams shine through the dark.
+    #[serde(default)]
+    pub ambient: MapAmbient,
+    /// Names for groups, shown in the editor.
+    #[serde(default)]
+    pub group_names: Vec<GroupName>,
+}
+
+/// An arena's lighting.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapAmbient {
+    /// 0 is fully lit; 0.95 is nearly black.
+    #[serde(default)]
+    pub darkness: f32,
+    /// The color the dark takes on.
+    #[serde(default = "night_color")]
+    pub color: [u8; 3],
+}
+fn night_color() -> [u8; 3] {
+    [8, 10, 26]
+}
+impl Default for MapAmbient {
+    fn default() -> Self {
+        Self {
+            darkness: 0.,
+            color: night_color(),
+        }
+    }
+}
+/// Darkest a map may be.
+pub const DARKNESS_LIMIT: f32 = 0.95;
+
+/// A name for a group, so the editor can say "Vault door" instead of "7".
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupName {
+    pub group: u8,
+    pub name: String,
 }
 impl MapDef {
     /// The bit of `group` in a hidden-group mask; group 0 has none.
@@ -1377,6 +1605,17 @@ impl MapDef {
         } else {
             0
         }
+    }
+    /// The editor's name for `group`, if it has one.
+    pub fn group_name(&self, group: u8) -> Option<&str> {
+        self.group_names
+            .iter()
+            .find(|named| named.group == group)
+            .map(|named| named.name.as_str())
+    }
+    /// The body made of `group`'s blocks, if it is one.
+    pub fn body(&self, group: u8) -> Option<&crate::MapBody> {
+        self.bodies.iter().find(|body| body.group == group)
     }
     /// Groups hidden at the start of a round, as a mask.
     pub fn starting_mask(&self) -> u32 {
@@ -1587,12 +1826,48 @@ pub fn validate_maps(maps: &[MapDef]) -> Result<(), String> {
 /// Blocks, pads, decor, triggers and groups: counts, ranges and text.
 pub fn validate_map_features(map: &MapDef) -> Result<(), String> {
     let id = &map.id;
-    if map.zones.len() > 256
-        || map.decor.len() > 1024
-        || map.triggers.len() > 128
+    if map.walls.len() + map.blocks.len() > MAP_BLOCKS
+        || map.zones.len() > MAP_ZONES
+        || map.decor.len() > MAP_DECOR
+        || map.triggers.len() > MAP_TRIGGERS
         || map.hidden_groups.len() > usize::from(MAP_GROUPS)
     {
-        return Err(format!("{id}: too many pads, decorations or triggers"));
+        return Err(format!(
+            "{id}: at most {MAP_BLOCKS} blocks, {MAP_ZONES} pads, {MAP_DECOR} decorations and {MAP_TRIGGERS} triggers"
+        ));
+    }
+    if map.bodies.len() > usize::from(MAP_GROUPS)
+        || map.paths.len() > crate::MAP_PATHS
+        || map.group_names.len() > usize::from(MAP_GROUPS)
+    {
+        return Err(format!("{id}: too many bodies, paths or group names"));
+    }
+    for (index, body) in map.bodies.iter().enumerate() {
+        body.validate()
+            .map_err(|error| format!("{id}: body {}: {error}", index + 1))?;
+        if map.bodies[..index].iter().any(|b| b.group == body.group) {
+            return Err(format!("{id}: group {} is two bodies", body.group));
+        }
+    }
+    for (index, path) in map.paths.iter().enumerate() {
+        path.validate()
+            .map_err(|error| format!("{id}: path {}: {error}", index + 1))?;
+    }
+    if !range(map.ambient.darkness, 0., DARKNESS_LIMIT) {
+        return Err(format!("{id}: darkness must be 0 to {}", DARKNESS_LIMIT));
+    }
+    for (index, named) in map.group_names.iter().enumerate() {
+        if !(1..=MAP_GROUPS).contains(&named.group)
+            || named.name.trim().is_empty()
+            || !display_text(&named.name, 24)
+            || map.group_names[..index]
+                .iter()
+                .any(|n| n.group == named.group)
+        {
+            return Err(format!(
+                "{id}: each group 1 to {MAP_GROUPS} has at most one name of up to 24 characters"
+            ));
+        }
     }
     let group = |group: u8| group <= MAP_GROUPS;
     for block in &map.blocks {
@@ -1631,6 +1906,7 @@ pub fn validate_map_features(map: &MapDef) -> Result<(), String> {
             || !range(decor.flicker, 0., 1.)
             || !group(decor.group)
             || !display_text(&decor.text, 64)
+            || !range(decor.reach, 0., 2000.)
         {
             return Err(format!("{id}: decoration settings are out of range"));
         }
@@ -1650,6 +1926,8 @@ pub fn validate_map_features(map: &MapDef) -> Result<(), String> {
         return Err(format!("{id}: at most 48 particle emitters"));
     }
     for (index, trigger) in map.triggers.iter().enumerate() {
+        // A Path with no path to play or a Shove on a group that isn't a
+        // body does nothing; the workshop points them out while building.
         validate_trigger(trigger)
             .map_err(|error| format!("{id}: trigger {}: {error}", index + 1))?;
     }
@@ -1827,6 +2105,35 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         TriggerAction::Sound if !(1..=100).contains(&trigger.amount) => {
             return Err("play at 1 to 100 percent volume".into());
         }
+        TriggerAction::Shove if !(1..=SHOVE_LIMIT).contains(&trigger.amount) => {
+            return Err(format!("shove at 1 to {SHOVE_LIMIT} units a second"));
+        }
+        TriggerAction::Fling if !(1..=FLING_LIMIT).contains(&trigger.amount) => {
+            return Err(format!("fling at 1 to {FLING_LIMIT} units a second"));
+        }
+        TriggerAction::Blast if trigger.amount == 0 || trigger.amount.abs() > FLING_LIMIT => {
+            return Err(format!(
+                "blast at 1 to {FLING_LIMIT} units a second, or pull in with a negative amount"
+            ));
+        }
+        TriggerAction::Zoom
+            if !(ZOOM_RANGE.0..=ZOOM_RANGE.1).contains(&trigger.amount)
+                || !range(trigger.tween, 0.1, ZOOM_SECONDS) =>
+        {
+            return Err(format!(
+                "zoom to {} to {} percent for 0.1 to {ZOOM_SECONDS} seconds",
+                ZOOM_RANGE.0, ZOOM_RANGE.1
+            ));
+        }
+        TriggerAction::Light if !(0..=(DARKNESS_LIMIT * 100.) as i32).contains(&trigger.amount) => {
+            return Err(format!(
+                "darken by 0 to {} percent",
+                (DARKNESS_LIMIT * 100.) as i32
+            ));
+        }
+        TriggerAction::Path if !(1..=crate::MAP_PATHS as i32).contains(&trigger.amount) => {
+            return Err(format!("play a path from 1 to {}", crate::MAP_PATHS));
+        }
         TriggerAction::Reset if trigger.group > MAP_GROUPS => {
             return Err(format!(
                 "reset a group from 1 to {MAP_GROUPS}, or 0 for every trigger"
@@ -1879,6 +2186,9 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
             crate::TWEEN_SECONDS
         ));
     }
+    if !trigger.angle.is_finite() {
+        return Err("direction must be a number".into());
+    }
     if trigger.member > MAP_GROUPS || trigger.team > 4 {
         return Err(format!(
             "its own group must be 0 to {MAP_GROUPS} and its team 0 to 4"
@@ -1925,11 +2235,41 @@ pub fn portal_exit_clear(map: &MapDef, exit: [f32; 2]) -> bool {
     validate_point(exit).is_ok() && point_clear(exit[0] * map.width, exit[1] * map.height, map, 40.)
 }
 
+/// Groups whose blocks don't stay put: bodies tanks push, and groups a
+/// trigger hides, toggles or moves. A door like that may close a room at
+/// the start without cutting the arena in two.
+fn movable_groups(map: &MapDef) -> u32 {
+    let bodies = map
+        .bodies
+        .iter()
+        .fold(0, |mask, body| mask | MapDef::group_bit(body.group));
+    map.triggers
+        .iter()
+        .filter(|t| {
+            matches!(
+                t.action,
+                TriggerAction::Hide
+                    | TriggerAction::Toggle
+                    | TriggerAction::Move
+                    | TriggerAction::Place
+                    | TriggerAction::Path
+                    | TriggerAction::Shove
+            )
+        })
+        .fold(bodies, |mask, t| mask | MapDef::group_bit(t.group))
+}
+
 fn point_clear(x: f32, y: f32, map: &MapDef, radius: f32) -> bool {
+    clear_of(x, y, map, radius, map.starting_mask())
+}
+
+/// Whether a circle at `x`, `y` misses the walls and the blocks of groups
+/// not in `hidden`.
+fn clear_of(x: f32, y: f32, map: &MapDef, radius: f32, hidden: u32) -> bool {
     if x < radius || y < radius || x > map.width - radius || y > map.height - radius {
         return false;
     }
-    map.solid_rects(map.starting_mask()).all(|[wx, wy, w, h]| {
+    map.solid_rects(hidden).all(|[wx, wy, w, h]| {
         let (wx, wy, w, h) = (
             wx * map.width,
             wy * map.height,
@@ -1942,8 +2282,8 @@ fn point_clear(x: f32, y: f32, map: &MapDef, radius: f32) -> bool {
     })
 }
 
-fn segment_clear(a: [f32; 2], b: [f32; 2], map: &MapDef) -> bool {
-    map.solid_rects(map.starting_mask()).all(|[x, y, w, h]| {
+fn segment_clear(a: [f32; 2], b: [f32; 2], map: &MapDef, hidden: u32) -> bool {
+    map.solid_rects(hidden).all(|[x, y, w, h]| {
         let mins = [x * map.width - 30., y * map.height - 30.];
         let maxs = [(x + w) * map.width + 30., (y + h) * map.height + 30.];
         let mut entry: f32 = 0.;
@@ -1969,6 +2309,8 @@ fn segment_clear(a: [f32; 2], b: [f32; 2], map: &MapDef) -> bool {
 }
 
 fn validate_connectivity(map: &MapDef) -> Result<(), String> {
+    // Only cover that stays put all round can cut the arena in two.
+    let hidden = map.starting_mask() | movable_groups(map);
     let cols = (map.width / 80.).ceil() as usize;
     let rows = (map.height / 80.).ceil() as usize;
     let center = |index: usize| {
@@ -1982,7 +2324,7 @@ fn validate_connectivity(map: &MapDef) -> Result<(), String> {
             let [x, y] = center(index);
             // Keep samples strictly outside the link test's expanded walls.
             // Exact tangency must not create an isolated line of "free" cells.
-            point_clear(x, y, map, 37.)
+            clear_of(x, y, map, 37., hidden)
         })
         .collect::<Vec<_>>();
     let Some(start) = free.iter().position(|&valid| valid) else {
@@ -2003,7 +2345,10 @@ fn validate_connectivity(map: &MapDef) -> Result<(), String> {
                 continue;
             }
             let next = ny * cols + nx;
-            if !visited[next] && free[next] && segment_clear(center(index), center(next), map) {
+            if !visited[next]
+                && free[next]
+                && segment_clear(center(index), center(next), map, hidden)
+            {
                 visited[next] = true;
                 queue.push_back(next);
             }
@@ -2100,9 +2445,9 @@ mod tests {
     }
 
     #[test]
-    fn all_eight_arenas_have_valid_clear_connected_geometry() {
+    fn every_builtin_arena_has_valid_clear_connected_geometry() {
         let maps = builtin_maps();
-        assert_eq!(maps.len(), 8);
+        assert_eq!(maps.len(), 9);
         validate_maps(&maps).unwrap();
         assert!(maps.iter().any(|map| map.procedural == MapProcedure::Maze));
         assert!(maps.iter().any(|map| map.procedural == MapProcedure::Dense));
@@ -2128,6 +2473,38 @@ mod tests {
         maps[0].walls = vec![[0.49, 0., 0.02, 1.]];
         maps[0].spawn_regions[0].rect = [0.02, 0.02, 0.2, 0.2];
         assert!(validate_maps(&maps).unwrap_err().contains("disconnected"));
+        // A door that can open doesn't seal the arena: a body tanks push,
+        // or a group a trigger hides.
+        let sealed = || {
+            let mut maps = builtin_maps();
+            maps[0].blocks.push(MapBlock {
+                rect: [0.49, 0., 0.02, 1.],
+                style: Default::default(),
+                color: None,
+                group: 2,
+            });
+            maps[0].spawn_regions[0].rect = [0.02, 0.02, 0.2, 0.2];
+            maps
+        };
+        assert!(
+            validate_maps(&sealed())
+                .unwrap_err()
+                .contains("disconnected")
+        );
+        let mut maps = sealed();
+        maps[0].bodies.push(crate::MapBody {
+            group: 2,
+            ..Default::default()
+        });
+        assert!(validate_maps(&maps).is_ok());
+        let mut maps = sealed();
+        maps[0].triggers.push(MapTrigger {
+            when: TriggerWhen::Signal,
+            action: TriggerAction::Hide,
+            group: 2,
+            ..Default::default()
+        });
+        assert!(validate_maps(&maps).is_ok());
         let mut maps = builtin_maps();
         maps.push(maps[0].clone());
         assert!(validate_maps(&maps).unwrap_err().contains("duplicate"));
@@ -2140,7 +2517,7 @@ mod tests {
         };
         let json = serde_json::to_string(&catalog).unwrap();
         let maps = maps_from_json(&json).unwrap();
-        assert_eq!(maps.len(), 8);
+        assert_eq!(maps.len(), 9);
     }
 
     #[test]

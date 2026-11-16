@@ -14,7 +14,7 @@ use crate::ui::{
 };
 use std::hash::{Hash, Hasher};
 use tankyard_client::editor_document::{
-    Document, Key, Object, defeated_boss, describe_trigger, map_id, trigger_tag,
+    Document, Key, Object, defeated_boss, describe_trigger_named, map_id, trigger_tag,
 };
 use tankyard_content::*;
 use tankyard_core::BossKind;
@@ -497,6 +497,8 @@ enum Request {
     Distribute(usize),
     MatchSize(usize),
     Notice(String),
+    /// Select every object in a group.
+    SelectGroup(u8),
 }
 
 impl Editor {
@@ -655,6 +657,14 @@ impl Editor {
                 self.set_selection(vec![key]);
                 self.center_on(key);
             }
+            Request::SelectGroup(group) => {
+                let keys = self.doc.in_group(group);
+                if let Some(&first) = keys.first() {
+                    self.center_on(first);
+                }
+                self.set_selection(keys);
+                self.tab = Tab::Object;
+            }
             Request::Delete => self.delete(),
             Request::Duplicate => self.duplicate(),
             Request::Open(doc, path, notice) => self.open(*doc, path, notice),
@@ -692,14 +702,41 @@ impl Editor {
         let mut style = map.style;
         let mut background = map.background.clone();
         let mut hidden = map.hidden_groups.clone();
+        let mut ambient = map.ambient;
+        let mut paths = map.paths.clone();
+        let mut pick = self.path_pick;
+        let mut locked = self.doc.locked;
+        let mut request = Request::None;
         let used = self.doc.used_groups();
-        let members = {
-            let mut mask = 0u32;
-            for (_, _, group) in self.doc.items() {
-                mask |= MapDef::group_bit(group);
+        // What each group holds: blocks, pads, decor and triggers.
+        let mut counts = [[0u32; 4]; MAP_GROUPS as usize + 1];
+        for (key, _, group) in self.doc.items() {
+            let kind = match key {
+                Key::Block(_) => 0,
+                Key::Zone(_) => 1,
+                Key::Decor(_) => 2,
+                Key::Trigger(_) => 3,
+                _ => continue,
+            };
+            if let Some(row) = counts.get_mut(usize::from(group)) {
+                row[kind] += 1;
             }
-            mask
-        };
+        }
+        // Each group worth listing, with its name and whether tanks push it.
+        let groups: Vec<(u8, Option<String>, bool)> = (1..=MAP_GROUPS)
+            .filter(|&g| {
+                counts[usize::from(g)].iter().any(|&n| n > 0)
+                    || hidden.contains(&g)
+                    || map.group_name(g).is_some()
+            })
+            .map(|g| {
+                (
+                    g,
+                    map.group_name(g).map(str::to_owned),
+                    map.body(g).is_some(),
+                )
+            })
+            .collect();
         let mut f = self.form(x, y, w, s, 1);
         f.text("Name", &mut name, 64);
         f.text("Map id", &mut id, 48);
@@ -728,31 +765,92 @@ impl Editor {
         ) {
             background = palettes[floor].into();
         }
-        f.heading("Hidden when a round starts");
-        let cell = (w - 7. * 4. * s) / 8.;
-        for i in 0..32u8 {
-            let group = i + 1;
-            let r = Rect::new(
-                x + f32::from(i % 8) * (cell + 4. * s),
-                f.y + f32::from(i / 8) * (27. * s),
-                cell,
-                23. * s,
+        f.heading("Lighting");
+        let mut darkness = ambient.darkness * 100.;
+        if f.number(
+            "Darkness (%)",
+            &mut darkness,
+            [0., DARKNESS_LIMIT * 100.],
+            5.,
+        ) {
+            ambient.darkness = darkness / 100.;
+        }
+        if ambient.darkness > 0. {
+            f.color(&mut ambient.color);
+            f.note("Lights, spotlights and beams shine through the dark, and every tank carries a small light. A Lighting trigger changes it during a round.");
+        }
+        paths_form(&mut f, &mut paths, &mut pick);
+        f.heading("Groups");
+        if groups.is_empty() {
+            f.note("No groups yet. Set an object's Group to gather things a trigger moves, hides or animates together, or make the group a pushable body.");
+        }
+        for (group, group_name, pushable) in groups {
+            let [blocks, pads, decor, triggers] = counts[usize::from(group)];
+            let mut parts = Vec::new();
+            for (n, one, many) in [
+                (blocks, "block", "blocks"),
+                (pads, "pad", "pads"),
+                (decor, "decor", "decor"),
+                (triggers, "trigger", "triggers"),
+            ] {
+                match n {
+                    0 => {}
+                    1 => parts.push(format!("1 {one}")),
+                    n => parts.push(format!("{n} {many}")),
+                }
+            }
+            if pushable {
+                parts.push("pushable".into());
+            }
+            let summary = if parts.is_empty() {
+                "empty".to_owned()
+            } else {
+                parts.join(" \u{b7} ")
+            };
+            let title = match group_name {
+                Some(name) => format!("{group}  {name}"),
+                None => format!("Group {group}"),
+            };
+            let h = 40. * s;
+            let r = Rect::new(x, f.y, w, h);
+            draw_rectangle(r.x, r.y, r.w, r.h, mix(surface_color(), bg_color(), 0.3));
+            draw_rectangle(r.x, r.y, 3. * s, r.h, VIOLET);
+            let bw = 50. * s;
+            let gap = 4. * s;
+            let buttons = |i: f32| Rect::new(r.right() - (bw + gap) * i, r.y + 9. * s, bw, 22. * s);
+            let text_w = (buttons(3.).x - x - 14. * s).max(20. * s);
+            label(
+                &fitted_label(&title, 13. * s, text_w),
+                x + 9. * s,
+                r.y + 16. * s,
+                13. * s,
+                text_color(),
             );
-            let on = hidden.contains(&group);
-            if button(r, &group.to_string(), on, true, s * 0.6) {
-                if on {
-                    hidden.retain(|&g| g != group);
-                } else {
+            label(
+                &fitted_label(&summary, 11. * s, text_w),
+                x + 9. * s,
+                r.y + 32. * s,
+                11. * s,
+                muted_color(),
+            );
+            let bit = MapDef::group_bit(group);
+            let starts_hidden = hidden.contains(&group);
+            if button(buttons(3.), "Hidden", starts_hidden, true, s * 0.55) {
+                hidden.retain(|&g| g != group);
+                if !starts_hidden {
                     hidden.push(group);
                     hidden.sort_unstable();
                 }
             }
-            if MapDef::group_bit(group) & members != 0 {
-                draw_circle(r.right() - 4. * s, r.y + 4. * s, 2.5 * s, VIOLET);
+            if button(buttons(2.), "Lock", locked & bit != 0, true, s * 0.55) {
+                locked ^= bit;
             }
+            if small_button(buttons(1.), "Select", s * 0.55) {
+                request = Request::SelectGroup(group);
+            }
+            f.y += h + 4. * s;
         }
-        f.y += 4. * 27. * s + 6. * s;
-        f.note("Lit groups start hidden; a trigger can show them. A dot marks groups with objects. Group 0 is always shown.");
+        f.note("Hidden groups start the round out of sight until a trigger shows them. Locked groups can't be selected on the canvas, so they stay put while you work around them. Name a group from any of its objects.");
         let unused = (1..=MAP_GROUPS)
             .filter(|&g| MapDef::group_bit(g) & used == 0)
             .count();
@@ -771,7 +869,10 @@ impl Editor {
             || players != i32::from(map.capacity)
             || style != map.style
             || background != map.background
-            || hidden != map.hidden_groups;
+            || hidden != map.hidden_groups
+            || ambient != map.ambient
+            || paths != map.paths;
+        self.path_pick = pick;
         if changed {
             self.edit_property(|doc| {
                 let map = &mut doc.map;
@@ -784,9 +885,14 @@ impl Editor {
                 map.style = style;
                 map.background = background;
                 map.hidden_groups = hidden;
+                map.ambient = ambient;
+                map.paths = paths;
             });
         }
-        (end, Request::None)
+        if locked != self.doc.locked {
+            self.edit_property(|doc| doc.locked = locked);
+        }
+        (end, request)
     }
 
     fn object_tab(&mut self, x: f32, y: f32, w: f32, s: f32) -> (f32, Request) {
@@ -814,6 +920,9 @@ impl Editor {
         let (map_w, map_h) = (self.doc.map.width, self.doc.map.height);
         let mut hidden = self.doc.map.hidden_groups.clone();
         let mut locked = self.doc.locked;
+        let mut bodies = self.doc.map.bodies.clone();
+        let mut names = self.doc.map.group_names.clone();
+        let map_paths = self.doc.map.paths.len();
         let salt = 100 + key_salt(key);
         let mut request = Request::None;
         // The gate as the preview sees it, once the preview has run.
@@ -860,6 +969,10 @@ impl Editor {
                 let mut lock = locked & bit != 0;
                 if f.toggle(&format!("Lock group {group} in the editor"), &mut lock) {
                     locked = if lock { locked | bit } else { locked & !bit };
+                }
+                group_name_form(&mut f, &mut names, group);
+                if matches!(object, Object::Block(_)) {
+                    body_form(&mut f, &mut bodies, group);
                 }
             }
             if matches!(object, Object::Trigger(_)) && group > 0 {
@@ -957,11 +1070,34 @@ impl Editor {
                 let mut opacity = i32::from(d.alpha);
                 f.integer("Opacity", &mut opacity, [0, 255]);
                 d.alpha = opacity as u8;
-                if d.kind == DecorKind::Light {
+                if d.kind.lights() {
                     f.number("Flicker", &mut d.flicker, [0., 1.], 0.05);
-                    f.note("Lights brighten what lies under them. Opacity sets how strongly; flicker makes them waver like a flame.");
+                    f.note(match d.kind {
+                        DecorKind::Spotlight => "Shines a cone along its rotation from its back edge; its width sets the reach and its height the spread. In a dark arena it lights what it falls on.",
+                        DecorKind::Beam => "A shaft of light along its rotation. Thin and bright, it reads as a laser; wide and faint, as a sunbeam.",
+                        _ => "Lights brighten what lies under them. Opacity sets how strongly; flicker makes them waver like a flame.",
+                    });
                 }
                 f.toggle("Above tanks", &mut d.above);
+                f.pick(
+                    "Near a tank",
+                    &mut d.react,
+                    &DecorReact::ALL,
+                    DecorReact::name,
+                    3,
+                );
+                if d.react != DecorReact::None {
+                    let mut reach = d.react_reach();
+                    if f.number("Within (units)", &mut reach, [10., 2000.], 10.) {
+                        d.reach = reach;
+                    }
+                    f.note(match d.react {
+                        DecorReact::Fade => "Clears as the player's tank comes close: a roof or a canopy over a hidden path. Turn on Above tanks for it to cover them.",
+                        DecorReact::Appear => "Shows only as the player's tank comes close: a hidden sign or a secret marker.",
+                        DecorReact::Grow => "Swells as the player's tank comes close.",
+                        _ => "Brightens as the player's tank comes close.",
+                    });
+                }
                 if d.kind == DecorKind::Emitter {
                     let effect = d.effect.get_or_insert_default();
                     effect_form(&mut f, effect);
@@ -970,7 +1106,9 @@ impl Editor {
                     f.color(&mut d.color);
                 }
             }
-            Object::Trigger(t) => trigger_form(&mut f, t, live.as_ref(), free_channel),
+            Object::Trigger(t) => {
+                trigger_form(&mut f, t, live.as_ref(), free_channel, map_paths, &names)
+            }
             Object::Spawn(region) => {
                 f.heading("Spawn region");
                 f.stepper("Team (0 for any)", &mut region.team, [0, 4], None);
@@ -982,6 +1120,12 @@ impl Editor {
             Object::Objective(_) => f.note("Objective modes place their goal here."),
         }
         let end = f.y;
+        if bodies != self.doc.map.bodies {
+            self.edit_property(|doc| doc.map.bodies = bodies);
+        }
+        if names != self.doc.map.group_names {
+            self.edit_property(|doc| doc.map.group_names = names);
+        }
         if hidden != self.doc.map.hidden_groups {
             self.edit_property(|doc| doc.map.hidden_groups = hidden);
         }
@@ -1211,7 +1355,7 @@ impl Editor {
                 }
                 LogicRow {
                     tag: trigger_tag(t),
-                    summary: describe_trigger(t),
+                    summary: describe_trigger_named(t, &self.doc.map.group_names),
                     state,
                     chosen: self.selected(Key::Trigger(i)),
                 }
@@ -1499,11 +1643,17 @@ impl Editor {
             .filter(|d| d.kind == DecorKind::Emitter)
             .count();
         let budgets = [
-            ("Walls and blocks", m.walls.len() + m.blocks.len(), 2048),
-            ("Pads", m.zones.len(), 256),
-            ("Decor", m.decor.len(), 1024),
+            (
+                "Walls and blocks",
+                m.walls.len() + m.blocks.len(),
+                MAP_BLOCKS,
+            ),
+            ("Pads", m.zones.len(), MAP_ZONES),
+            ("Decor", m.decor.len(), MAP_DECOR),
             ("Particle emitters", emitters, 48),
-            ("Triggers", m.triggers.len(), 128),
+            ("Triggers", m.triggers.len(), MAP_TRIGGERS),
+            ("Paths", m.paths.len(), MAP_PATHS),
+            ("Bodies", m.bodies.len(), usize::from(MAP_GROUPS)),
             ("Spawn regions", m.spawn_regions.len(), 32),
         ];
         let mut f = self.form(x, y, w, s, 6);
@@ -1932,9 +2082,11 @@ fn trigger_form(
     t: &mut MapTrigger,
     live: Option<&GateView>,
     free_channel: Option<u8>,
+    map_paths: usize,
+    names: &[GroupName],
 ) {
     let s = f.s;
-    let summary = describe_trigger(t);
+    let summary = describe_trigger_named(t, names);
     let lines = wrapped_lines(&summary, f.w - 18. * s, 13. * s);
     let h = 14. * s + lines.len() as f32 * 18. * s;
     draw_rectangle(f.x, f.y, f.w, h, alpha(brushes::LOGIC, 0.14));
@@ -2001,6 +2153,16 @@ fn trigger_form(
                 "Acts when a trigger, a restore timer or a script shows the group. The starting layout does not count."
             } else {
                 "Acts when a trigger, a restore timer or a script hides the group. The starting layout does not count."
+            });
+        }
+        TriggerWhen::Touch | TriggerWhen::Release => {
+            t.source = t.source.clamp(1, MAP_GROUPS);
+            f.stepper("Watch group's blocks", &mut t.source, [1, MAP_GROUPS], None);
+            f.number("Rest after acting (s)", &mut t.seconds, [0., 3600.], 0.5);
+            f.note(if t.when == TriggerWhen::Touch {
+                "Acts when any block of the group starts to overlap the dashed area: a crate pushed onto a plate, a door sliding shut or a lift arriving."
+            } else {
+                "Acts when the last block of the group stops overlapping the dashed area. Pair it with On touch to make a pressure plate."
             });
         }
         TriggerWhen::Arrived => {
@@ -2243,6 +2405,63 @@ fn trigger_form(
             f.integer("Volume (%)", &mut t.amount, [1, 100]);
             f.note("Plays at the middle of this trigger's area, quieter for players further away. It uses the Effects volume.");
         }
+        TriggerAction::Shove => {
+            t.group = t.group.clamp(1, MAP_GROUPS);
+            f.stepper("Body (group)", &mut t.group, [1, MAP_GROUPS], None);
+            angle_form(f, &mut t.angle);
+            t.amount = t.amount.clamp(1, SHOVE_LIMIT);
+            f.integer("Speed (units/s)", &mut t.amount, [1, SHOVE_LIMIT]);
+            f.note("Gives the body a push, as if a tank had rammed it; heavier bodies move less. The group must be a body: select one of its blocks and turn on Pushable.");
+        }
+        TriggerAction::Fling => {
+            angle_form(f, &mut t.angle);
+            t.amount = t.amount.clamp(1, FLING_LIMIT);
+            f.integer("Speed (units/s)", &mut t.amount, [1, FLING_LIMIT]);
+            f.note("Throws the noticed tanks inside the area that way; they coast for a moment, like off a launch pad.");
+        }
+        TriggerAction::Blast => {
+            if t.amount == 0 {
+                t.amount = 600;
+            }
+            t.amount = t.amount.clamp(-FLING_LIMIT, FLING_LIMIT);
+            f.integer(
+                "Speed (negative pulls in)",
+                &mut t.amount,
+                [-FLING_LIMIT, FLING_LIMIT],
+            );
+            f.note("Throws the noticed tanks inside the area away from its middle, or pulls them toward it with a negative speed.");
+        }
+        TriggerAction::Zoom => {
+            t.amount = t.amount.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+            f.integer(
+                "View (% of usual)",
+                &mut t.amount,
+                [ZOOM_RANGE.0, ZOOM_RANGE.1],
+            );
+            t.tween = t.tween.clamp(0.1, ZOOM_SECONDS);
+            f.number("For (s)", &mut t.tween, [0.1, ZOOM_SECONDS], 0.1);
+            f.note("Below 100 shows more of the arena; above 100 closes in. Only the noticed tanks inside see it, and the view eases back afterwards.");
+        }
+        TriggerAction::Light => {
+            let most = (DARKNESS_LIMIT * 100.) as i32;
+            t.amount = t.amount.clamp(0, most);
+            f.integer("Darkness (%)", &mut t.amount, [0, most]);
+            f.color(&mut t.color);
+            motion_form(f, t);
+            f.note("Darkens the whole arena toward the color. Lights, spotlights and beams shine through, and every tank carries a small light of its own. 0% brings full light back. With Go back after, the lighting returns to what it was, so a quick 0% makes a lightning flash.");
+        }
+        TriggerAction::Path => {
+            t.group = t.group.clamp(1, MAP_GROUPS);
+            f.stepper("Target group", &mut t.group, [1, MAP_GROUPS], None);
+            let paths = i32::try_from(map_paths).unwrap_or(0).max(1);
+            t.amount = t.amount.clamp(1, paths);
+            f.integer("Path", &mut t.amount, [1, paths]);
+            f.note(if map_paths == 0 {
+                "This map has no paths yet. Add one in the Map tab, under Paths."
+            } else {
+                "Sends the group's blocks, pads, decor and trigger areas through each point of the path. A Move, Move to or Stop on the group takes it off the path."
+            });
+        }
         TriggerAction::Reset => {
             t.group = t.group.min(MAP_GROUPS);
             f.stepper("Group (0 for all)", &mut t.group, [0, MAP_GROUPS], None);
@@ -2268,6 +2487,212 @@ fn trigger_form(
     f.integer("Chance %", &mut chance, [1, 100]);
     t.chance = chance as u8;
     f.toggle("Once per round", &mut t.once);
+}
+
+/// The map's keyframed paths: add, remove and edit them a point at a time.
+/// `pick` is the path and point being edited.
+fn paths_form(f: &mut Form, paths: &mut Vec<MapPath>, pick: &mut (usize, usize)) {
+    f.heading("Paths");
+    let mut add = false;
+    let mut remove = false;
+    match f.buttons(&["Add path", "Remove path"], true) {
+        Some(0) => add = paths.len() < MAP_PATHS,
+        Some(1) => remove = !paths.is_empty(),
+        _ => {}
+    }
+    if add {
+        paths.push(MapPath {
+            name: String::new(),
+            points: vec![
+                PathPoint {
+                    at: [0.1, 0.],
+                    ..PathPoint::default()
+                },
+                PathPoint::default(),
+            ],
+            repeat: PathRepeat::Loop,
+        });
+        *pick = (paths.len() - 1, 0);
+    }
+    if remove {
+        paths.remove(pick.0.min(paths.len() - 1));
+        *pick = (pick.0.saturating_sub(1), 0);
+    }
+    if paths.is_empty() {
+        f.note("A path is a custom animation: a list of points a group travels through, each with its own timing and curve. A Play path trigger starts it.");
+        return;
+    }
+    let count = paths.len() as i32;
+    let mut number = (pick.0.min(paths.len() - 1) + 1) as i32;
+    if f.integer(&format!("Path (of {count})"), &mut number, [1, count]) {
+        *pick = ((number - 1) as usize, 0);
+    }
+    pick.0 = pick.0.min(paths.len() - 1);
+    let path = &mut paths[pick.0];
+    f.text("Name", &mut path.name, 32);
+    f.pick(
+        "Repeat",
+        &mut path.repeat,
+        &PathRepeat::ALL,
+        PathRepeat::name,
+        3,
+    );
+    match f.buttons(&["Add point", "Remove point"], true) {
+        Some(0) if path.points.len() < PATH_POINTS => {
+            let at = (pick.1 + 1).min(path.points.len());
+            let copy = path.points[pick.1.min(path.points.len() - 1)];
+            path.points.insert(at, copy);
+            pick.1 = at;
+        }
+        Some(1) if path.points.len() > 1 => {
+            path.points.remove(pick.1.min(path.points.len() - 1));
+            pick.1 = pick.1.saturating_sub(1);
+        }
+        _ => {}
+    }
+    let points = path.points.len() as i32;
+    pick.1 = pick.1.min(path.points.len() - 1);
+    let mut point = (pick.1 + 1) as i32;
+    if f.integer(&format!("Point (of {points})"), &mut point, [1, points]) {
+        pick.1 = (point - 1) as usize;
+    }
+    let previous = if pick.1 == 0 {
+        [0., 0.]
+    } else {
+        path.points[pick.1 - 1].at
+    };
+    let p = &mut path.points[pick.1];
+    let limit = TRAVEL_LIMIT * 100.;
+    for (axis, title) in [
+        "Right of its place (% of width)",
+        "Below its place (% of height)",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut percent = p.at[axis] * 100.;
+        if f.number(title, &mut percent, [-limit, limit], 0.5) {
+            p.at[axis] = percent / 100.;
+        }
+    }
+    f.number(
+        "Seconds to get here",
+        &mut p.seconds,
+        [0., TWEEN_SECONDS],
+        0.1,
+    );
+    // Long hops take longer rather than breaking the speed limit.
+    let far = (p.at[0] - previous[0])
+        .abs()
+        .max((p.at[1] - previous[1]).abs());
+    p.seconds = p.seconds.max((far / MOVE_SPEED_LIMIT * 10.).ceil() / 10.);
+    f.number("Wait here (s)", &mut p.pause, [0., TWEEN_SECONDS], 0.1);
+    f.number("Decor turned (degrees)", &mut p.turn, [-3600., 3600.], 5.);
+    if p.seconds > 0. {
+        f.pick("Curve", &mut p.easing.curve, &Curve::ALL, Curve::name, 4);
+        f.pick("", &mut p.easing.mode, &EaseMode::ALL, EaseMode::name, 2);
+        curve_graph(f, p.easing);
+    }
+    f.note("Points are offsets from where the map places the group, so one path can move any group. The first point is reached from wherever the group is when the path starts.");
+}
+
+/// A direction in degrees, with buttons for the eight compass points.
+fn angle_form(f: &mut Form, angle: &mut f32) {
+    const POINTS: [(&str, f32); 8] = [
+        ("→", 0.),
+        ("↘", 45.),
+        ("↓", 90.),
+        ("↙", 135.),
+        ("←", 180.),
+        ("↖", 225.),
+        ("↑", 270.),
+        ("↗", 315.),
+    ];
+    let labels = POINTS.map(|(arrow, _)| arrow);
+    if let Some(i) = f.buttons(&labels, true) {
+        *angle = POINTS[i].1;
+    }
+    let mut degrees = angle.rem_euclid(360.);
+    if f.number("Direction (degrees)", &mut degrees, [0., 359.], 5.) {
+        *angle = degrees;
+    }
+}
+
+/// A name for `group`, kept in `names`; an empty name removes it.
+fn group_name_form(f: &mut Form, names: &mut Vec<GroupName>, group: u8) {
+    let mut name = names
+        .iter()
+        .find(|n| n.group == group)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+    if f.text(&format!("Group {group} name"), &mut name, 24) {
+        names.retain(|n| n.group != group);
+        if !name.trim().is_empty() {
+            names.push(GroupName {
+                group,
+                name: name.trim().to_owned(),
+            });
+            names.sort_by_key(|n| n.group);
+        }
+    }
+}
+
+/// Whether `group`'s blocks make a body tanks can push, and how it moves.
+fn body_form(f: &mut Form, bodies: &mut Vec<MapBody>, group: u8) {
+    let mut pushable = bodies.iter().any(|b| b.group == group);
+    if f.toggle(
+        &format!("Pushable: group {group} is one body"),
+        &mut pushable,
+    ) {
+        bodies.retain(|b| b.group != group);
+        if pushable {
+            bodies.push(MapBody {
+                group,
+                ..MapBody::default()
+            });
+            bodies.sort_by_key(|b| b.group);
+        }
+    }
+    let Some(body) = bodies.iter_mut().find(|b| b.group == group) else {
+        return;
+    };
+    f.heading("Body");
+    f.pick("Slides", &mut body.axis, &BodyAxis::ALL, BodyAxis::name, 3);
+    let titles = [
+        "Reach left (% of width)",
+        "Reach up (% of height)",
+        "Reach right (% of width)",
+        "Reach down (% of height)",
+    ];
+    for (i, title) in titles.into_iter().enumerate() {
+        let sideways = i % 2 == 0;
+        if (body.axis == BodyAxis::Across && !sideways)
+            || (body.axis == BodyAxis::Along && sideways)
+        {
+            continue;
+        }
+        let mut percent = body.reach[i] * 100.;
+        if f.number(title, &mut percent, [0., 100.], 1.) {
+            body.reach[i] = percent / 100.;
+        }
+    }
+    f.number("Weight", &mut body.weight, [0.25, 8.], 0.25);
+    let mut spring = body.spring * 100.;
+    if f.number(
+        "Spring back (% of width a second)",
+        &mut spring,
+        [0., 100.],
+        1.,
+    ) {
+        body.spring = spring / 100.;
+    }
+    f.number("Friction", &mut body.friction, [0.5, 20.], 0.5);
+    let mut bounce = body.bounce * 100.;
+    if f.number("Bounce (%)", &mut bounce, [0., 90.], 5.) {
+        body.bounce = bounce / 100.;
+    }
+    f.toggle("Shots push it", &mut body.shots);
+    f.note("Tanks push the whole group by driving into its blocks: decor, pads and trigger areas in the group ride along. One tank pushes weight 1 at its own speed. With a spring it slides home when let go, like a push door. It stops at other cover and never crushes a tank.");
 }
 
 /// How a Move, Place, Turn, Fade, Tint, Scale or Animate plays: how long,

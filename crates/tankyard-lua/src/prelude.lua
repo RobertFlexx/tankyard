@@ -78,6 +78,9 @@ function tankyard.map_counter(counter) return read("map_counter", check("number"
 function tankyard.map_group(group) return read("map_group", check("number", group, "map_group", "group")) end
 -- Where motions have put group 1-32: offset, turn, opacity, size and tint.
 function tankyard.map_pose(group) return read("map_pose", check("number", group, "map_pose", "group")) end
+-- Where body group 1-32 has been pushed from its place and how fast it
+-- slides, in world units; nil when the group isn't a body.
+function tankyard.map_body(group) return read("map_body", check("number", group, "map_body", "group")) end
 function tankyard.projectiles(x, y, radius)
   return read("projectiles", check("number", x, "projectiles", "x"),
     check("number", y, "projectiles", "y"), check("number", radius, "projectiles", "radius"))
@@ -240,6 +243,25 @@ function tankyard.animate_map_group(group, style, size, speed, seconds, curve, m
 end
 function tankyard.stop_map_group(group)
   emit("stop_map_group", number("stop_map_group", group, "group"))
+end
+-- Sends group 1-32 along the map's path (from 1), as a Play path trigger does.
+function tankyard.play_map_path(group, path)
+  emit("play_map_path", number("play_map_path", group, "group"), number("play_map_path", path, "path"))
+end
+-- Darkens the arena to percent (0-95) tinted color; 0 brings full light back.
+function tankyard.set_map_lighting(percent, color, seconds, curve, mode)
+  emit("set_map_lighting", number("set_map_lighting", percent, "percent"),
+    packed_color("set_map_lighting", color, "color") or 0x080a1a,
+    number("set_map_lighting", seconds or 0, "seconds"), curve, mode)
+end
+-- Pushes body group 1-32 at x, y world units a second.
+function tankyard.shove_map_body(group, x, y)
+  emit("shove_map_body", number("shove_map_body", group, "group"), number("shove_map_body", x or 0, "x"),
+    number("shove_map_body", y or 0, "y"))
+end
+-- Throws a tank at x, y world units a second, as a launch pad does.
+function tankyard.fling_tank(tank, x, y)
+  emit("fling_tank", id("fling_tank", tank), number("fling_tank", x or 0, "x"), number("fling_tank", y or 0, "y"))
 end
 -- Shakes one player's view, or every player's without a tank.
 function tankyard.shake_view(tank, percent, seconds)

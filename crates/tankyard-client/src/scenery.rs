@@ -9,8 +9,8 @@ use crate::{
 use macroquad::prelude::*;
 use tankyard_client::map_model::WallStyle;
 use tankyard_content::{
-    BlockStyle, DecorKind, EmitArea, GroupPoses, MAP_COUNTERS, MapDecor, MapDef, MapZone,
-    ParticleEffect, ParticleShape, ZoneKind,
+    BlockStyle, DecorKind, DecorReact, EmitArea, GroupPoses, MAP_COUNTERS, MapDecor, MapDef,
+    MapZone, ParticleEffect, ParticleShape, ZoneKind,
 };
 use tankyard_core::{V2, WorldConfig};
 
@@ -21,6 +21,8 @@ pub struct Shown {
     pub counters: [i32; MAP_COUNTERS as usize],
     /// Where map logic has moved, turned and faded each group.
     pub poses: GroupPoses,
+    /// The tank decor reacts to, in world units: the player's own.
+    pub focus: Option<V2>,
 }
 
 pub fn wall_style(style: BlockStyle, map: &str) -> WallStyle {
@@ -48,6 +50,8 @@ pub fn zone_color(kind: ZoneKind) -> Color {
         ZoneKind::Conveyor => Color::from_rgba(196, 158, 58, 255),
         ZoneKind::Portal => Color::from_rgba(196, 92, 172, 255),
         ZoneKind::Launch => Color::from_rgba(166, 204, 60, 255),
+        ZoneKind::Pull => Color::from_rgba(122, 108, 236, 255),
+        ZoneKind::Ice => Color::from_rgba(176, 226, 248, 255),
     }
 }
 /// `rgb` with `tint` mixed in at `strength`, as Tint triggers colour decor.
@@ -89,14 +93,19 @@ pub fn floor(map: &MapDef, config: &WorldConfig, shown: &Shown, view: &View, tim
             continue;
         }
         let c = crate::accessibility::palette(zone_color(zone.kind));
-        // Launch arrows light up one after another towards where they fling.
-        let wave = |p: Vec2| {
-            if zone.kind != ZoneKind::Launch {
-                return 0.5;
+        // Launch arrows light up one after another towards where they fling,
+        // and a gravity well's arrows in rings closing on its middle.
+        let wave = |p: Vec2| match zone.kind {
+            ZoneKind::Launch => {
+                let (sin, cos) = zone.angle.to_radians().sin_cos();
+                let along = ((p - r.center()).dot(vec2(cos, sin)) / spacing_of(view)).max(-64.);
+                0.35 + 0.55 * (1. - (time * 1.6 - along * 0.25).rem_euclid(1.))
             }
-            let (sin, cos) = zone.angle.to_radians().sin_cos();
-            let along = ((p - r.center()).dot(vec2(cos, sin)) / spacing_of(view)).max(-64.);
-            0.35 + 0.55 * (1. - (time * 1.6 - along * 0.25).rem_euclid(1.))
+            ZoneKind::Pull => {
+                let out = ((p - r.center()).length() / spacing_of(view)).min(64.);
+                0.3 + 0.6 * (1. - (time * 1.2 + out * 0.3).rem_euclid(1.))
+            }
+            _ => 0.5,
         };
         draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.13));
         draw_rectangle_lines(r.x, r.y, r.w, r.h, (2. * view.zoom).max(1.), alpha(c, 0.65));
@@ -135,7 +144,14 @@ pub fn floor(map: &MapDef, config: &WorldConfig, shown: &Shown, view: &View, tim
                 // Arrows stay readable when zoomed out.
                 let least = if zone.kind.aims() { spacing * 0.3 } else { 1. };
                 let radius = (10. * view.zoom).min(r.w.min(r.h) * 0.18).max(least);
-                zone_mark(zone.kind, zone.angle, p, radius, alpha(c, wave(p)));
+                // A gravity well's arrows point at its middle.
+                let angle = if zone.kind == ZoneKind::Pull {
+                    let to = r.center() - p;
+                    to.y.atan2(to.x).to_degrees()
+                } else {
+                    zone.angle
+                };
+                zone_mark(zone.kind, angle, p, radius, alpha(c, wave(p)));
                 marks_left -= 1;
             }
         }
@@ -242,6 +258,34 @@ pub fn zone_mark(kind: ZoneKind, angle: f32, p: Vec2, r: f32, c: Color) {
             draw_circle_lines(p.x, p.y, r, 2., c);
             draw_circle_lines(p.x, p.y, r * 0.5, 2., c);
         }
+        ZoneKind::Pull => {
+            // One chevron, pointing at the well's middle.
+            let (sin, cos) = angle.to_radians().sin_cos();
+            let turn = |v: Vec2| p + vec2(v.x * cos - v.y * sin, v.x * sin + v.y * cos);
+            let (tip, a, b) = (
+                turn(vec2(r * 0.5, 0.)),
+                turn(vec2(-r * 0.3, -r * 0.7)),
+                turn(vec2(-r * 0.3, r * 0.7)),
+            );
+            let thickness = (r * 0.3).clamp(1.5, 2.5);
+            draw_line(a.x, a.y, tip.x, tip.y, thickness, c);
+            draw_line(tip.x, tip.y, b.x, b.y, thickness, c);
+        }
+        ZoneKind::Ice => {
+            // A six-armed crystal.
+            for i in 0..3 {
+                let (sin, cos) = (i as f32 * 60f32).to_radians().sin_cos();
+                let arm = vec2(cos, sin) * r;
+                draw_line(p.x - arm.x, p.y - arm.y, p.x + arm.x, p.y + arm.y, 1.5, c);
+                for end in [arm, -arm] {
+                    let tip = p + end * 0.6;
+                    let side = vec2(-end.y, end.x) * 0.25;
+                    let back = p + end * 0.85;
+                    draw_line(tip.x + side.x, tip.y + side.y, back.x, back.y, 1.2, c);
+                    draw_line(tip.x - side.x, tip.y - side.y, back.x, back.y, 1.2, c);
+                }
+            }
+        }
         ZoneKind::Mud => {
             for offset in [-0.5, 0., 0.5] {
                 draw_line(
@@ -255,6 +299,96 @@ pub fn zone_mark(kind: ZoneKind, angle: f32, p: Vec2, r: f32, c: Color) {
             }
         }
     }
+}
+
+/// How map logic and the nearby tank change a piece of decor this frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Look {
+    /// Degrees turned on top of its rotation and spin.
+    pub turn: f32,
+    /// Opacity, 0 to 1, on top of its own.
+    pub fade: f32,
+    /// A color mixed in and how strongly.
+    pub tint: ([f32; 3], f32),
+    /// How much brighter it shines, 0 to 1.
+    pub glow: f32,
+}
+impl Default for Look {
+    fn default() -> Self {
+        Self {
+            turn: 0.,
+            fade: 1.,
+            tint: ([1.; 3], 0.),
+            glow: 0.,
+        }
+    }
+}
+
+/// Where a piece of decor stands this frame, in window coordinates, and how
+/// it looks; None when it is hidden, faded out or shrunk to nothing.
+fn placed(
+    item: &MapDecor,
+    config: &WorldConfig,
+    shown: &Shown,
+    view: &View,
+    reduced_motion: bool,
+) -> Option<(Rect, f32, Look)> {
+    if MapDef::group_bit(item.group) & shown.hidden != 0 {
+        return None;
+    }
+    let poses = &shown.poses;
+    let mut fade = poses.opacity(item.group);
+    // Reduced motion keeps Scale but holds animations at rest.
+    let (wobble, sway, mut scale) = if reduced_motion {
+        let scale = poses
+            .scale
+            .get(usize::from(item.group))
+            .copied()
+            .unwrap_or(1.);
+        ([0., 0.], 0., scale)
+    } else {
+        (
+            poses.wobble(item.group),
+            poses.sway(item.group),
+            poses.scale(item.group),
+        )
+    };
+    let shifted = poses.shift(item.rect, item.group);
+    let mut glow = 0.;
+    if item.react != DecorReact::None
+        && let Some(focus) = shown.focus
+    {
+        let area = tankyard_core::map_rect(config, shifted);
+        let dx = (area.x - focus.x).max(focus.x - (area.x + area.w)).max(0.);
+        let dy = (area.y - focus.y).max(focus.y - (area.y + area.h)).max(0.);
+        let near = DecorReact::closeness((dx * dx + dy * dy).sqrt(), item.react_reach());
+        match item.react {
+            DecorReact::Fade => fade *= 1. - 0.88 * near,
+            DecorReact::Appear => fade *= near,
+            DecorReact::Grow => scale *= 1. + 0.35 * near,
+            DecorReact::Glow => glow = near,
+            DecorReact::None => {}
+        }
+    }
+    if fade <= 0.004 || scale <= 0.004 {
+        return None;
+    }
+    let mut r = screen_rect(view, config, shifted);
+    let center = r.center() + vec2(wobble[0], wobble[1]) * view.zoom;
+    r.w *= scale;
+    r.h *= scale;
+    r.x = center.x - r.w * 0.5;
+    r.y = center.y - r.h * 0.5;
+    Some((
+        r,
+        scale,
+        Look {
+            turn: poses.turn(item.group) + sway,
+            fade,
+            tint: poses.tint(item.group),
+            glow,
+        },
+    ))
 }
 
 pub fn decorations(
@@ -274,50 +408,23 @@ pub fn decorations(
     let mut remaining = (1024. * settings.effects.clamp(0., 1.)) as usize;
     SHADED_LIGHTS.with(|left| left.set(128));
     for (index, item) in map.decor.iter().enumerate() {
-        if item.above != above || MapDef::group_bit(item.group) & shown.hidden != 0 {
+        if item.above != above {
             continue;
         }
-        let poses = &shown.poses;
-        let fade = poses.opacity(item.group);
-        if fade <= 0.004 {
+        let Some((r, scale, look)) = placed(item, config, shown, view, settings.reduced_motion)
+        else {
             continue;
-        }
-        // Reduced motion keeps Scale but holds animations at rest.
-        let (wobble, sway, scale) = if settings.reduced_motion {
-            let scale = poses
-                .scale
-                .get(usize::from(item.group))
-                .copied()
-                .unwrap_or(1.);
-            ([0., 0.], 0., scale)
-        } else {
-            (
-                poses.wobble(item.group),
-                poses.sway(item.group),
-                poses.scale(item.group),
-            )
         };
-        if scale <= 0.004 {
-            continue;
-        }
-        let turn = poses.turn(item.group) + sway;
-        let tint = poses.tint(item.group);
-        let mut r = screen_rect(view, config, poses.shift(item.rect, item.group));
-        let center = r.center() + vec2(wobble[0], wobble[1]) * view.zoom;
-        r.w *= scale;
-        r.h *= scale;
-        r.x = center.x - r.w * 0.5;
-        r.y = center.y - r.h * 0.5;
         if item.kind == DecorKind::Emitter {
             if remaining == 0 || settings.reduced_motion {
                 continue;
             }
             let mut effect = item.effect.unwrap_or_default();
-            effect.color = tinted(effect.color, tint);
-            effect.end_color = tinted(effect.end_color, tint);
+            effect.color = tinted(effect.color, look.tint);
+            effect.end_color = tinted(effect.end_color, look.tint);
             effect.size *= scale;
             effect.end_size *= scale;
-            effect.direction += item.rotation + turn + time * item.spin;
+            effect.direction += item.rotation + look.turn + time * item.spin;
             let reach = (effect.speed * effect.lifetime
                 + effect.gravity.abs() * effect.lifetime.powi(2) * 0.5
                 + effect.wobble
@@ -338,55 +445,134 @@ pub fn decorations(
                 time,
                 index as u32,
                 &mut remaining,
-                f32::from(item.alpha) / 255. * pulse * fade,
+                f32::from(item.alpha) / 255. * pulse * look.fade * (1. + look.glow).min(2.),
             );
         } else if visible(r, r.w.max(r.h) * 0.5) {
-            decoration(item, r, time, view.zoom, &shown.counters, turn, fade, tint);
+            decoration(item, r, time, view.zoom, &shown.counters, look);
         }
     }
     // Single pieces drawn elsewhere, such as palette previews, always shade.
     SHADED_LIGHTS.with(|left| left.set(u32::MAX));
 }
 
-/// One piece of decor in `r`, turned a further `turn` degrees, faded to
-/// `fade` and tinted by map logic.
-#[allow(clippy::too_many_arguments)]
+/// The light map's share of the map: lamps, spotlights and beams, and a
+/// faint glow over pads that warn or carry, for when the arena is dark.
+pub fn lights(
+    map: &MapDef,
+    config: &WorldConfig,
+    shown: &Shown,
+    view: &View,
+    time: f32,
+    reduced_motion: bool,
+    out: &mut Vec<crate::lighting::Light>,
+) {
+    use crate::lighting::Light;
+    let time = if reduced_motion { 0. } else { time.max(0.) };
+    for item in &map.decor {
+        if out.len() >= crate::lighting::MOST_LIGHTS {
+            return;
+        }
+        if !item.kind.lights() {
+            continue;
+        }
+        let Some((r, _, look)) = placed(item, config, shown, view, reduced_motion) else {
+            continue;
+        };
+        let pulse = if item.pulse > 0. {
+            0.8 + 0.2 * (time * item.pulse * std::f32::consts::TAU).cos()
+        } else {
+            1.
+        };
+        let strength = (f32::from(item.alpha) / 255. * pulse * look.fade * flicker(item, time)
+            + look.glow * 0.5)
+            .min(1.);
+        // Light reveals true colors more than it tints them.
+        let color = alpha(
+            mix(color(tinted(item.color, look.tint)), WHITE, 0.4),
+            strength,
+        );
+        let angle = (item.rotation + look.turn + time * item.spin).to_radians();
+        let direction = vec2(angle.cos(), angle.sin());
+        out.push(match item.kind {
+            DecorKind::Spotlight => Light::Cone {
+                at: r.center() - direction * r.w * 0.5,
+                angle,
+                spread: (r.h * 0.5).atan2(r.w.max(1.)),
+                reach: r.w * 1.1,
+                color,
+            },
+            DecorKind::Beam => Light::Shaft {
+                from: r.center() - direction * r.w * 0.5,
+                to: r.center() + direction * r.w * 0.5,
+                width: r.h * 2.5,
+                color,
+            },
+            _ => Light::Spot {
+                at: r.center(),
+                radius: r.w.min(r.h) * 0.6,
+                color,
+            },
+        });
+    }
+    for zone in &map.zones {
+        if out.len() >= crate::lighting::MOST_LIGHTS {
+            return;
+        }
+        let glows = matches!(
+            zone.kind,
+            ZoneKind::Hazard | ZoneKind::Portal | ZoneKind::Launch | ZoneKind::Repair
+        );
+        if !glows || MapDef::group_bit(zone.group) & shown.hidden != 0 {
+            continue;
+        }
+        let r = screen_rect(view, config, shown.poses.shift(zone.rect, zone.group));
+        out.push(Light::Spot {
+            at: r.center(),
+            radius: r.w.max(r.h) * 0.75,
+            color: alpha(crate::accessibility::palette(zone_color(zone.kind)), 0.35),
+        });
+    }
+}
+
+/// One piece of decor in `r`, as map logic and the nearby tank leave it.
 pub fn decoration(
     item: &MapDecor,
     r: Rect,
     time: f32,
     zoom: f32,
     counters: &[i32; MAP_COUNTERS as usize],
-    turn: f32,
-    fade: f32,
-    tint: ([f32; 3], f32),
+    look: Look,
 ) {
     let pulse = if item.pulse > 0. {
         0.8 + 0.2 * (time * item.pulse * std::f32::consts::TAU).cos()
     } else {
         1.
     };
+    let base = crate::accessibility::palette(color(tinted(item.color, look.tint)));
     let c = alpha(
-        crate::accessibility::palette(color(tinted(item.color, tint))),
-        f32::from(item.alpha) / 255. * pulse * fade,
+        mix(base, WHITE, look.glow * 0.45),
+        (f32::from(item.alpha) / 255. * pulse * look.fade * (1. + look.glow)).min(1.),
     );
     let p = r.center();
-    let angle = (item.rotation + turn + time * item.spin).to_radians();
+    let angle = (item.rotation + look.turn + time * item.spin).to_radians();
     let rotate = |point: Vec2| {
         p + vec2(
             point.x * angle.cos() - point.y * angle.sin(),
             point.x * angle.sin() + point.y * angle.cos(),
         )
     };
+    let corners = || {
+        [
+            vec2(-r.w, -r.h),
+            vec2(r.w, -r.h),
+            vec2(r.w, r.h),
+            vec2(-r.w, r.h),
+        ]
+        .map(|v| rotate(v * 0.5))
+    };
     match item.kind {
         DecorKind::Tile | DecorKind::Stripes => {
-            let vertices = [
-                vec2(-r.w, -r.h),
-                vec2(r.w, -r.h),
-                vec2(r.w, r.h),
-                vec2(-r.w, r.h),
-            ]
-            .map(|v| rotate(v * 0.5));
+            let vertices = corners();
             draw_triangle(vertices[0], vertices[1], vertices[2], c);
             draw_triangle(vertices[0], vertices[2], vertices[3], c);
             if item.kind == DecorKind::Stripes {
@@ -407,6 +593,100 @@ pub fn decoration(
             }
         }
         DecorKind::Light => light(item, p, r.w.min(r.h) * 0.5, c, time),
+        DecorKind::Spotlight => {
+            let strength = c.a * flicker(item, time);
+            let direction = vec2(angle.cos(), angle.sin());
+            let at = p - direction * r.w * 0.5;
+            if glow::begin(Blend::Add) {
+                crate::lighting::cone(
+                    at,
+                    angle,
+                    (r.h * 0.5).atan2(r.w.max(1.)),
+                    r.w * 1.1,
+                    alpha(c, strength * 0.45),
+                );
+                glow::end();
+            } else {
+                let spread = (r.h * 0.5).atan2(r.w.max(1.));
+                let side = |s: f32| at + vec2((angle + s).cos(), (angle + s).sin()) * r.w;
+                draw_triangle(at, side(-spread), side(spread), alpha(c, strength * 0.18));
+            }
+            // The lamp itself, with a hood behind it.
+            let hood = (r.h.min(r.w) * 0.08).clamp(2., 16.);
+            draw_circle(at.x, at.y, hood, alpha(mix(c, BLACK, 0.5), c.a.max(0.6)));
+            draw_circle(at.x, at.y, hood * 0.55, alpha(mix(c, WHITE, 0.8), strength));
+        }
+        DecorKind::Beam => {
+            let strength = c.a * flicker(item, time);
+            let direction = vec2(angle.cos(), angle.sin()) * r.w * 0.5;
+            let (from, to) = (p - direction, p + direction);
+            if glow::begin(Blend::Add) {
+                crate::lighting::shaft(from, to, r.h * 2.5, alpha(c, strength * 0.35));
+                glow::end();
+            }
+            draw_line(
+                from.x,
+                from.y,
+                to.x,
+                to.y,
+                (r.h * 0.35).max(1.),
+                alpha(mix(c, WHITE, 0.6), strength),
+            );
+        }
+        DecorKind::Grid => {
+            let step = (40. * zoom).max(6.);
+            let thickness = (1.5 * zoom).max(1.);
+            let columns = ((r.w / step).floor() as i32).clamp(1, 96);
+            let rows = ((r.h / step).floor() as i32).clamp(1, 96);
+            for i in 0..=columns {
+                let x = -r.w * 0.5 + i as f32 / columns as f32 * r.w;
+                let (a, b) = (rotate(vec2(x, -r.h * 0.5)), rotate(vec2(x, r.h * 0.5)));
+                draw_line(a.x, a.y, b.x, b.y, thickness, c);
+            }
+            for i in 0..=rows {
+                let y = -r.h * 0.5 + i as f32 / rows as f32 * r.h;
+                let (a, b) = (rotate(vec2(-r.w * 0.5, y)), rotate(vec2(r.w * 0.5, y)));
+                draw_line(a.x, a.y, b.x, b.y, thickness, c);
+            }
+        }
+        DecorKind::Disc => {
+            let sides = (r.w.max(r.h) * 0.5).clamp(12., 48.) as u8;
+            if (r.w - r.h).abs() < 0.5 {
+                draw_poly(p.x, p.y, sides, r.w * 0.5, 0., c);
+            } else {
+                // An ellipse, as a fan, so it can turn.
+                let n = u16::from(sides);
+                let mut vertices = vec![Vertex::new(p.x, p.y, 0., 0., 0., c)];
+                for i in 0..=n {
+                    let a = f32::from(i) / f32::from(n) * std::f32::consts::TAU;
+                    let q = rotate(vec2(a.cos() * r.w * 0.5, a.sin() * r.h * 0.5));
+                    vertices.push(Vertex::new(q.x, q.y, 0., 0., 0., c));
+                }
+                let indices = (1..=n).flat_map(|i| [0, i, i + 1]).collect();
+                draw_mesh(&Mesh {
+                    vertices,
+                    indices,
+                    texture: None,
+                });
+            }
+        }
+        DecorKind::Triangle => {
+            draw_triangle(
+                rotate(vec2(0., -r.h * 0.5)),
+                rotate(vec2(r.w * 0.5, r.h * 0.5)),
+                rotate(vec2(-r.w * 0.5, r.h * 0.5)),
+                c,
+            );
+        }
+        DecorKind::Hexagon => {
+            let points: [Vec2; 6] = std::array::from_fn(|i| {
+                let a = (i as f32 * 60.).to_radians();
+                rotate(vec2(a.cos() * r.w * 0.5, a.sin() * r.h * 0.5))
+            });
+            for i in 1..5 {
+                draw_triangle(points[0], points[i], points[i + 1], c);
+            }
+        }
         DecorKind::Ring => draw_circle_lines(p.x, p.y, r.w.min(r.h) * 0.5, (3. * zoom).max(1.), c),
         DecorKind::Arrow => {
             let a = rotate(vec2(-r.w * 0.4, 0.));

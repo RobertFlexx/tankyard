@@ -840,6 +840,22 @@ fn apply(world: &mut World, actor: EntityId, effect: Effect) {
                 world.event(EventKind::MapShake, pos, id, value, team);
             }
         }
+        Effect::MapPath { group, path } => world.map_input(LogicInput::Path { group, path }),
+        Effect::MapLight {
+            color,
+            darkness,
+            seconds,
+            easing,
+        } => world.map_input(LogicInput::Light {
+            color,
+            darkness: darkness / 100.,
+            seconds,
+            easing,
+        }),
+        Effect::MapShove { group, velocity } => {
+            world.shove_body(group, V2::new(velocity[0], velocity[1]));
+        }
+        Effect::Fling { velocity } => world.fling_tank(actor, V2::new(velocity[0], velocity[1])),
         Effect::PlaySound { sound, at, percent } => {
             let value = crate::sound_event(sound, percent / 100.);
             let at = V2::new(at[0] * world.config.width, at[1] * world.config.height);

@@ -1,6 +1,6 @@
 # Arena Workshop
 
-[Watch the tutorial](arena-workshop-tutorial.mp4) (2 min 37 s) for building, editing, map logic, plugin tools and playtesting in the workshop. The [logic gates video](logic-gates-tutorial.mp4) (1 min 42 s) shows the gate editor and live preview, and the [motions video](motions-tutorial.mp4) (2 min 15 s) covers sliding doors, curves, chained motions, lights and particles. Follow the [written logic tutorial](logic-gates-tutorial.md) to build a lever puzzle or the [motions tutorial](motions-tutorial.md) to build a gatehouse. Plugin authors can start with the [editor plugin guide](editor-plugins.md).
+[Watch the tutorial](arena-workshop-tutorial.mp4) (2 min 37 s) for building, editing, map logic, plugin tools and playtesting in the workshop. The [logic gates video](logic-gates-tutorial.mp4) (1 min 42 s) shows the gate editor and live preview, and the [motions video](motions-tutorial.mp4) (2 min 15 s) covers sliding doors, curves, chained motions, lights and particles. Follow the [written logic tutorial](logic-gates-tutorial.md) to build a lever puzzle, the [motions tutorial](motions-tutorial.md) to build a gatehouse or the [physics and lighting tutorial](physics-tutorial.md) to build a dark yard with a push door, a crate puzzle and a ferry. Plugin authors can start with the [editor plugin guide](editor-plugins.md).
 
 Open **Map editor** on the main menu. The workshop builds maps for local games and community servers using the same validated map-pack format as scripted mods. The canvas fills the middle of the screen. The **dock** along the bottom changes with the mode, and the **inspector** on the right has seven tabs: Map, Object, Logic, Check, Rules, Files and Tools.
 
@@ -103,7 +103,7 @@ Group and team numbers have the same entry boxes. Color controls accept `#RGB` o
 
 With several objects selected, a change applies to every object that has that setting. **Space X evenly / Space Y evenly** spreads their centers between the two outermost objects. **Match widest / Match tallest** copies the largest selected dimension to the other rectangles. Each arrangement is one undo step; fixed-size point markers keep their size. Each committed numeric edit also undoes separately; a continuous slider drag remains one step.
 
-- **Map:** name, id, description, size, recommended players, wall style, floor, and the groups hidden when a round starts. Objects keep their relative place when the size changes.
+- **Map:** name, id, description, size, recommended players, wall style, floor, [lighting](#darkness-and-light), [paths](#paths) and the group list. Objects keep their relative place when the size changes. The group list shows every group in use with its name and what it holds (blocks, pads, decor, triggers, and whether tanks can push it). **Hidden** makes a group start the round out of sight, **Lock** stops it being selected on the canvas while you work around it, and **Select** selects the whole group and centers the view on it.
 - **Object:** position, size, group and the settings for the selected kind. A group's *starts hidden* switch is available here, so a gate needs no trip to Map.
 - **Logic:** preview controls, the test tank's team, the eight counters, the groups the logic uses, a panel to send signals and defeat bosses by hand, a log of what happened, and every trigger with its summary and live state. Click a trigger to find it, or press its **Fire** button to make it act once right now, as if its moment had come. See [Logic preview](#logic-preview).
 - **Check:** runs the map checks. Red items stop playtests and exports; amber items are advice, such as a signal nobody listens to, a group with no objects, or a note from a plugin. Click an item to select it. **Room left** shows how much of each object budget the map uses.
@@ -125,12 +125,22 @@ With several objects selected, a change applies to every object that has that se
 - **Conveyor:** carries tanks along its direction at `150 × strength` units a second, added to their own movement. Turning or flipping the pad turns its direction.
 - **Portal:** sends a tank to the exit marker. Drag the diamond to move the exit. The exit must sit in open floor, and a tank must leave and wait 1.2 seconds before using a portal again.
 - **Launch pad:** flings tanks along its direction at `900 × strength` units a second, then lets them coast for about half a second before steering takes over again. A tank already flying that way at most of that speed is left alone, so a pad launches once rather than on every frame a tank sits on it. Sideways motion is kept, so a tank crossing at an angle curves.
+- **Ice:** tanks keep `22%` of their grip (less at higher strength), so they get going slowly, turn wide and slide on after letting go.
+- **Gravity well:** draws tanks toward its middle at `130 × strength` units a second, up to twice that near the center. Driving straight out still works; drifting past costs time.
 
 Overlapping speed and mud pads multiply, and the final factor is clamped to 0.3–2.5. Overlapping conveyors add up to 600 units a second, and overlapping launch pads up to 1,800. Repair and hazard rates add; shelter pads multiply. Speed, conveyor and launch effects run in shared code, so movement predicts smoothly online.
 
-**Decor** includes tiles, stripes, lights, rings, arrows, labels and particle emitters. It has color, opacity, rotation, spin, pulse and an *above players* switch. It never changes collision. A label can show a counter: `{1}` to `{8}` are replaced with that counter's value.
+**Decor** includes tiles, stripes, lights, spotlights, beams, grids, rings, discs, triangles, hexagons, arrows, labels and particle emitters. It has color, opacity, rotation, spin, pulse and an *Above tanks* switch. It never changes collision. A label can show a counter: `{1}` to `{8}` are replaced with that counter's value.
 
-**Lights** brighten whatever lies under them, so they glow strongly on a dark floor and softly on a light one. Their size sets how far the light reaches, and *Flicker* makes them waver like a flame or a failing lamp (Reduced motion holds them steady). The Decor tab has Torch, Neon and Lantern presets.
+**Near a tank** makes decor respond to the player's own tank within a distance (220 units unless you set **Within**): **Fade away** clears it, for roofs and canopies that hide what is under them until you drive in; **Appear** shows it, for hidden signs; **Grow** swells it; and **Glow** brightens it. Each player sees their own tank's effect, so a roof one player has driven under stays shut for everyone else. The Decor tab's **Roof** piece is a tile that is already above tanks and fades.
+
+**Lights** brighten whatever lies under them, so they glow strongly on a dark floor and softly on a light one. Their size sets how far the light reaches, and *Flicker* makes them waver like a flame or a failing lamp (Reduced motion holds them steady). The Decor tab has Torch, Neon and Lantern presets. A **Spotlight** throws a cone of light from one end of its rectangle to the other; turn it to aim it. A **Beam** is a straight shaft of light along its length.
+
+### Darkness and light
+
+**Lighting** in the Map tab darkens the whole arena toward a color, up to 95%. Darkness hides the floor, cover and shapes alike; light cuts through it. Lights, spotlights and beams light the floor beneath them, and so do hazard, portal, launch and repair pads, every tank (a small light around the hull) and every shot. A **Lighting** trigger changes the darkness during a round, over a time and along a curve, and **Go back after** returns it to what it was, so a quick change to 0% with a short Go back is a lightning flash. With **Reduced motion** on, players see sudden changes ease in over about half a second.
+
+In the editor the canvas shows the darkness at half strength so you can still build, and at full strength while the logic preview runs. On computers without shader support the darkness is a flat veil with soft light spots.
 
 **Markers** place spawn regions (neutral, team 1 or team 2), team bases and objectives. A team base needs a matching team spawn region around it.
 
@@ -153,7 +163,8 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **On change:** its counter changes value at all, by any trigger or script. Setting a counter to the value it already has is not a change.
 - **On shown / On hidden:** its group is shown or hidden, however that happened: a trigger, an *Undo after* timer or a script. The groups a round starts with don't count, so a group hidden from the start doesn't fire On hidden.
 - **On boss down:** a boss is defeated anywhere in the arena. Pick one boss, or *Any boss*.
-- **On arrive:** a motion of its group ends: a move, turn, fade, tint, size change or an animation easing in or out, the trip back included. Several motions ending for the same group in one simulation tick produce one event. A motion cut short by another doesn't count, and neither does one with nowhere to go, such as a door told to open while it's open, or one that a Stop action halts. See [Motions](#motions).
+- **On touch / On release:** a block of the watched group starts to overlap the trigger's area, or the last one stops overlapping it. A crate pushed onto a plate, a door sliding shut or a ferry reaching its dock all count. Together they make a pressure plate that only cover can press.
+- **On arrive:** a motion of its group ends: a move, turn, fade, tint, size change or an animation easing in or out, the trip back included. A group on a path arrives at the path's end, not at each point. Several motions ending for the same group in one simulation tick produce one event. A motion cut short by another doesn't count, and neither does one with nowhere to go, such as a door told to open while it's open, or one that a Stop action halts. See [Motions](#motions).
 
 ### Actions
 
@@ -176,6 +187,7 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **Tint decor, Scale decor, Animate decor, Stop group:** color, resize, animate or halt a group's decor. See [Effects](#effects).
 - **Shake screen:** shakes the views of the noticed tanks inside the area. See [Effects](#effects).
 - **Play sound:** plays one of eight sounds at the trigger. See [Effects](#effects).
+- **Shove body, Fling tanks, Blast, Zoom view, Lighting, Play path:** push a body, throw tanks, change the view or the darkness, or send a group along a path. See [Physics](#physics).
 
 The tank actions and Shake screen act on tanks inside the trigger's own area. On a timer, signal, counter, group or boss trigger, *Who* and *Team* appear under the action to choose those tanks.
 
@@ -263,6 +275,57 @@ The logic preview plays effects too. With the test tank inside a Shake screen tr
 
 Scripts have the same effects: `tint_map_group`, `scale_map_group`, `animate_map_group`, `stop_map_group`, `shake_view` and `play_sound` (see [Modding](modding.md#changing-the-match)).
 
+### Physics
+
+**Pushable bodies.** Select any block of a group and turn on **Pushable** in the Object tab, and the group's blocks become one solid body that tanks push by driving into it. Its decor, pads and trigger areas ride along. The body settings:
+
+- **Slides:** any way, like a crate; left and right only; or up and down only, like a sliding door.
+- **Reach:** how far it can go from where the map places it, separately left, up, right and down, as a percentage of the arena.
+- **Weight:** 0.25 to 8. One tank pushes a body of weight 1 at its own speed; two tanks together push weight 2 as fast.
+- **Spring back:** how fast it returns to its place once no one pushes. With a spring and one-way reach, a body is a push door that swings shut behind you.
+- **Friction** stops it after a shove, **Bounce** keeps some of its speed when it hits the end of its reach or other cover, and **Shots push it** lets bullets knock it about, harder for heavier hits.
+
+A body stops at other cover and never crushes a tank against a wall: it halts instead. Its motion is shared with players in each snapshot and predicted between them, so pushing it feels immediate online.
+
+**Triggers that move things:**
+
+- **Shove body** gives a body a push at a direction and speed, as if a tank had rammed it. Heavier bodies move less. The Check tab notes a Shove whose group isn't pushable.
+- **Fling tanks** throws the noticed tanks inside the area at a direction and speed, up to 3,000 units a second. They coast for a moment, like off a launch pad.
+- **Blast** throws tanks inside the area away from its middle, or with a negative speed pulls them in.
+- **Zoom view** widens (below 100%) or narrows (above 100%) the view of the noticed tanks inside for up to 60 seconds, then eases back.
+- **Lighting** changes the arena's darkness and its color. See [Darkness and light](#darkness-and-light).
+- **Play path** sends a group along one of the map's paths.
+
+### Paths
+
+A path is a custom animation: a list of points a group travels through, each with its own timing and curve. Add paths in the Map tab under **Paths**. Each has a name and a **Repeat**: **Once** stops at the last point, **Loop** carries on from the last point back to the first, and **There and back** turns around at each end.
+
+Each point sets where the group is, as an offset from where the map places it, **Seconds to get here**, **Wait here**, how far to turn the group's decor on the way, and the curve. Because points are offsets, one path can move any group. Long hops take longer rather than break the speed limit of one arena width a second. A map holds up to 32 paths of up to 64 points.
+
+A **Play path** trigger starts a path on a group, and the group's blocks push tanks out of the way as it goes, the same as a Move. A Move, Move to or Stop on the group takes it off the path. When a Play path trigger is selected, or while you edit a path in the Map tab, the canvas draws the path from where the group rests through each numbered point, with a dot that rides it at its own pace and a ghost of the group at the point you're editing.
+
+### The Physics palette
+
+The **Physics** tab in Build holds ready-made pieces. Pieces that act on a group use group 1 unless you pick a group in the dock first.
+
+| Piece | What it does |
+| --- | --- |
+| Fling pad | Throws tanks that enter it 900 units a second, straight up |
+| Blast | Throws tanks outward from its middle every 4 seconds |
+| Vortex | Tugs tanks inside toward its middle twice a second |
+| Crate plate | Hides group 2 while any block of group 1 sits on it |
+| Plate release | Shows group 2 again when group 1's last block leaves it |
+| Shove | On signal 1, shoves body group 1 600 units a second |
+| Path | Sends group 1 along path 1 as the round starts |
+| Zoom out | Widens the view of tanks that drive in to 60% for 6 seconds |
+| Nightfall | Darkens the arena to 75% over 8 seconds, a minute into the round |
+| Lights on | On signal 1, brings full light back over 1.5 seconds |
+| Lightning | Every 9 seconds, flashes a dark arena to full light for a moment |
+
+The logic preview plays paths and lighting changes on the canvas. Shoves, flings, blasts and zooms appear in its log, with the tanks they reach; press **F5** to feel them in a playtest.
+
+Scripts can do the same with `shove_map_body`, `fling_tank`, `play_map_path`, `set_map_lighting` and `map_body` (see [Modding](modding.md#map-logic)).
+
 ### Conditions and gates
 
 **Only if** gives a trigger a gate. When the trigger fires, it checks its conditions and acts only if the gate is open. Press **Add a condition** to start one, and **Add another condition** for up to four. Each condition is a card with its own kind:
@@ -300,7 +363,7 @@ For every trigger:
 
 Signals, counters and group changes can chain: a Show action can set off an On shown watcher, which counts, which sets off a Goal. Each tick allows 256 chained actions, so a loop stops instead of freezing the server. Map changes and new rounds reset the logic.
 
-Triggers keep their listeners in lookup tables built when a round starts, so a signal or counter change only visits the triggers listening for it. A map with all 128 triggers costs no more per tick than the triggers that actually fire.
+Triggers keep their listeners in lookup tables built when a round starts, so a signal or counter change only visits the triggers listening for it. A map with all 512 triggers costs no more per tick than the triggers that actually fire.
 
 ### Links
 
@@ -405,7 +468,8 @@ The Check tab notes logic that can never work as built:
 - a trigger waits for a signal nothing sends, or sends signals nothing receives (including otherwise signals and every channel of a Random signal or Sequence);
 - a watcher or condition reads a counter nothing changes, or a group nothing shows or hides;
 - a Reset triggers action targets a group with no triggers;
-- triggers signal each other in a loop with no delay, gate or chance, which the arena cuts short every tick.
+- triggers signal each other in a loop with no delay, gate or chance, which the arena cuts short every tick;
+- a Shove body acts on a group that isn't pushable, or a Play path plays a path with no points.
 
 Notes never block a playtest; scripts can send signals and change counters and groups the checks can't see.
 
@@ -441,7 +505,7 @@ The workshop folder is `workshop/` inside Tank Yard's data directory. **Files �
 - `exports/<map-id>-<timestamp>.zip`: portable exports.
 - `prefs.json`: panel sizes, canvas switches, navigation settings, the palette tab and item, the inspector tab, the logic preview's speed, and where you were looking in the map you had open.
 
-Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings, and maps that use them need 1.0. Tank Yard 1.1.0 adds launch pads, Tint, Scale, Animate, Stop, Shake screen and Play sound; it uses protocol 28, so 1.1.0 servers and players play only with each other, and maps that use the new pieces need 1.1.0 to open. Maps from earlier versions open unchanged.
+Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings, and maps that use them need 1.0. Tank Yard 1.1.0 adds launch pads, Tint, Scale, Animate, Stop, Shake screen and Play sound; it uses protocol 28, so 1.1.0 servers and players play only with each other, and maps that use the new pieces need 1.1.0 to open. Tank Yard 1.3.0 adds pushable bodies, paths, ice, gravity wells, darkness and lighting, decor that responds to tanks, the new decor shapes, group names and the Physics triggers; it uses protocol 29, so 1.3.0 servers and players play only with each other, and maps that use the new pieces need 1.3.0 to open. Maps from earlier versions open unchanged.
 
 For a dedicated server, put the ZIP in persistent storage, add its path to the top-level `mods` list, and run `reload-mods`. Then `maps` lists it and `map my_arena` selects it. Joining clients receive the checked map data automatically. See [Hosting](hosting.md) and [domain setup](hosting-domain.md).
 

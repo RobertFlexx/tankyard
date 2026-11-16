@@ -2,6 +2,8 @@
 /artifacts/
 *.log
 configs/*bans.json
+configs/bot-memory.json
+/bot-memory.json
 configs/access.json
 configs/*.jsonl*
 /creator-audit.jsonl*

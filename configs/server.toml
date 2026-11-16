@@ -20,6 +20,8 @@ arena_capacity = 20 # Players per lobby; more players open more lobbies. 0 keeps
 bot_count = 12
 adaptive_bots = true # Fill to six tanks; no bots with six or more players.
 difficulty = "Normal"
+# What bots learn between restarts. "" forgets it when the server stops.
+bot_memory_file = "configs/bot-memory.json"
 password = ""
 allow_sandbox = false
 snapshot_rate = 20 # 1-60 per second; higher is smoother and costs bandwidth.

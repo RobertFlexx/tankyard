@@ -108,7 +108,7 @@ Shoot shapes to earn points before fighting other tanks. Tank upgrades unlock at
 
 ## Bots and multiplayer
 
-Bots farm, evolve, use abilities, and play objectives. Their neural models learn visible movement and human class results, as well as their own fights and skill choices. They remember opponents who hurt or killed them: cautious bots keep more distance, while bolder bots may try to settle a grudge when healthy. Winning eases that tension, and grudges cool down over time. Memory survives respawns and resets each match. Reaction delays, aim error, and normal combat stats still apply. When one player's tank far outclasses the bots, they gradually play sharper, up to Expert, and ease back as the gap closes. Practice challenges keep their bots fixed.
+Bots farm, evolve, use abilities, and play objectives. Their neural models learn visible movement and human class results, as well as their own fights and skill choices. They remember opponents who hurt or killed them: cautious bots keep more distance, while bolder bots may try to settle a grudge when healthy. Winning eases that tension, and grudges cool down over time. Grudges survive respawns and reset each match. What bots learn about tanks and upgrades is shared by every bot and kept between matches and restarts, so bots pick stronger tanks and builds the more they play. They steer with a small trained network that watches walls, incoming shots and nearby tanks in every direction. Reaction delays, aim error, and normal combat stats still apply. When one player's tank far outclasses the bots, they gradually play sharper, up to Expert, and ease back as the gap closes. Practice challenges keep their bots fixed.
 
 Sight ranges are 420 / 500 / 560 / 620 units from Beginner through Expert, including automatic mounts. Walls block targeting and threat detection. Bots sidestep incoming shots and pull back from nearby drones or approaching homing rounds. Shots already fired keep their normal flight range. Smasher bots close in, approach heavy cannons from the side, and retreat when hurt. Parry bots wait until a visible shot is about to hit.
 
@@ -187,7 +187,7 @@ The party roster includes **I'm ready** and a ready count. Readiness is shared w
 
 Siege Engine, Skirmisher and Trapper add three boss encounters, each with a practice trial. Special attacks lock their aim during the warning. Heavy siege shots, a straight skirmisher charge and side-pocket mines each leave a different escape route. Boss models use distinct mechanical silhouettes rather than a shared stack of rotating armor.
 
-Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Server and client must both use protocol 28; Tank Yard 1.1.0 and 1.2.0 play together.
+Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Server and client must both use protocol 29, so Tank Yard 1.3.0 plays only with 1.3.0.
 
 ## Bacteria’s pocket dimension
 

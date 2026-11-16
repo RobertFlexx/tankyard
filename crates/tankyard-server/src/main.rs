@@ -210,6 +210,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !args.public_addresses.is_empty() {
         settings.public_addresses = args.public_addresses;
     }
+    // Dedicated servers remember what their bots learn unless told not to.
+    settings
+        .bot_memory_file
+        .get_or_insert_with(|| "bot-memory.json".into());
     settings.validate()?;
     if let Some(path) = args.write_config {
         if args.secure {

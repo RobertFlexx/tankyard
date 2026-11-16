@@ -25,7 +25,18 @@ pub struct HostedServer {
 }
 impl HostedServer {
     pub fn start(settings: ServerSettings) -> Result<Self, NetError> {
+        Self::start_sharing(settings, None)
+    }
+
+    /// Like [`Self::start`], with bots learning into `memory` when given.
+    pub fn start_sharing(
+        settings: ServerSettings,
+        memory: Option<tankyard_ai::SharedKnowledge>,
+    ) -> Result<Self, NetError> {
         let mut server = UdpServer::bind(settings)?;
+        if let Some(memory) = memory {
+            server.share_bot_memory(memory);
+        }
         let address = server.address;
         let (sender, receiver) = mpsc::sync_channel(32);
         let error = Arc::new(Mutex::new(None));

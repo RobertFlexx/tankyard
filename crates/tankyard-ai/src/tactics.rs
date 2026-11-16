@@ -21,6 +21,8 @@ pub struct TacticsLearning {
     trial: Option<Trial>,
     replay: VecDeque<(Features, f32)>,
     outcomes: u32,
+    /// Training samples the model held when it last took pooled weights.
+    adopted: u32,
 }
 fn features(context: [f32; 8], action: usize) -> Features {
     std::array::from_fn(|i| {
@@ -32,6 +34,18 @@ fn features(context: [f32; 8], action: usize) -> Features {
     })
 }
 impl TacticsLearning {
+    /// Adds what this bot learned about plans to the pool.
+    pub(crate) fn share(&self, models: &mut crate::knowledge::SharedModels) {
+        crate::knowledge::pool(&mut models.tactics, &self.model, self.adopted);
+        models.tactic_outcomes = models.tactic_outcomes.max(self.outcomes);
+    }
+
+    pub(crate) fn adopt(&mut self, models: &crate::knowledge::SharedModels) {
+        self.model = models.tactics.clone();
+        self.adopted = self.model.samples;
+        self.outcomes = self.outcomes.max(models.tactic_outcomes);
+    }
+
     pub fn inherit(&mut self, previous: &Self) {
         self.model = previous.model.clone();
         self.outcomes = previous.outcomes;

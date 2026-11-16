@@ -10,7 +10,7 @@ use crate::{
 use macroquad::prelude::*;
 use std::collections::HashSet;
 use tankyard_client::editor_document::{
-    Key, Link, Object, describe_trigger, link, trigger_badge_tag,
+    Key, Link, Object, describe_trigger_named, link, trigger_badge_tag,
 };
 use tankyard_content::*;
 use tankyard_core::{V2, WorldConfig};
@@ -156,6 +156,15 @@ pub fn dashed_rect(r: Rect, thickness: f32, dash: f32, color: Color) {
             let (p, q) = (a.lerp(b, t0), a.lerp(b, t1));
             draw_line(p.x, p.y, q.x, q.y, thickness, color);
         }
+    }
+}
+fn dashed_line(a: Vec2, b: Vec2, thickness: f32, dash: f32, color: Color) {
+    let count = ((b - a).length() / (dash * 2.)).ceil().clamp(1., 200.) as usize;
+    for i in 0..count {
+        let t0 = i as f32 / count as f32;
+        let t1 = (t0 + 0.5 / count as f32).min(1.);
+        let (p, q) = (a.lerp(b, t0), a.lerp(b, t1));
+        draw_line(p.x, p.y, q.x, q.y, thickness, color);
     }
 }
 fn arrow(from: Vec2, to: Vec2, thickness: f32, color: Color) {
@@ -852,6 +861,7 @@ impl Editor {
             hidden: if self.show_hidden { 0 } else { ghost },
             counters: self.preview.counters,
             poses: self.preview.poses(),
+            focus: self.preview.probe(),
         };
         scenery::floor(map, config, &shown, &self.view, self.time);
         scenery::decorations(map, config, &shown, &self.view, self.time, false, settings);
@@ -933,6 +943,36 @@ impl Editor {
             }
         }
         scenery::decorations(map, config, &shown, &self.view, self.time, true, settings);
+        let lighting = shown.poses.lighting(&map.ambient);
+        if lighting[3] > 0.004 {
+            let mut lights = Vec::new();
+            scenery::lights(
+                map,
+                config,
+                &shown,
+                &self.view,
+                self.time,
+                settings.reduced_motion,
+                &mut lights,
+            );
+            if let Some(probe) = shown.focus {
+                let at = self.view.screen(probe);
+                lights.push(crate::lighting::Light::Spot {
+                    at: vec2(at.x, at.y),
+                    radius: 380. * self.view.zoom,
+                    color: alpha(WHITE, 0.95),
+                });
+            }
+            // While editing, the dark is lifted halfway so everything stays
+            // easy to place; the running preview shows it in full.
+            let [r, g, b, dark] = lighting;
+            let dark = if self.preview.running {
+                dark
+            } else {
+                dark * 0.5
+            };
+            crate::lighting::darken([r, g, b, dark], &lights, arena.intersect(canvas));
+        }
         if let Some(focus) = self.focus {
             for (key, r, group) in self.doc.items() {
                 if group != focus {
@@ -949,6 +989,7 @@ impl Editor {
         if self.show_groups {
             self.draw_group_badges(view, s);
         }
+        self.draw_paths(s);
         self.draw_selection(s);
         self.draw_preview_marks(s);
         self.draw_gesture(canvas);
@@ -1310,6 +1351,118 @@ impl Editor {
         draw_poly(to.x, to.y, 4, 9., 0., color);
         draw_poly_lines(to.x, to.y, 4, 9., 0., 1.5, WHITE);
     }
+    /// The path a selected Play path trigger sends its group along, or the
+    /// one the Map tab is editing: a line through its points from where the
+    /// group rests, a ghost of the group at the chosen point and a dot that
+    /// rides the path at its own pace.
+    fn draw_paths(&self, s: f32) {
+        let map = &self.doc.map;
+        let selected = match *self.selection.as_slice() {
+            [Key::Trigger(index)] => map
+                .triggers
+                .get(index)
+                .filter(|t| t.action == TriggerAction::Path)
+                .map(|t| ((t.amount - 1).max(0) as usize, t.group, None)),
+            _ => None,
+        };
+        let editing = (self.tab == Tab::Map).then(|| {
+            let path = self.path_pick.0;
+            // The group a trigger sends along this path, if any does.
+            let group = map
+                .triggers
+                .iter()
+                .find(|t| t.action == TriggerAction::Path && t.amount == path as i32 + 1)
+                .map_or(0, |t| t.group);
+            (path, group, Some(self.path_pick.1))
+        });
+        let Some((index, group, picked)) = selected.or(editing) else {
+            return;
+        };
+        let Some(path) = map.paths.get(index) else {
+            return;
+        };
+        let members: Vec<(Key, [f32; 4])> = self
+            .doc
+            .items()
+            .filter(|&(key, _, g)| group > 0 && g == group && !matches!(key, Key::Trigger(_)))
+            .map(|(key, r, _)| (key, r))
+            .take(256)
+            .collect();
+        let keys: Vec<Key> = members.iter().map(|&(key, _)| key).collect();
+        let bounds = self.doc.bounds(&keys).unwrap_or([0.5, 0.5, 0., 0.]);
+        let home = [bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5];
+        let at =
+            |offset: [f32; 2]| self.point_on_screen([home[0] + offset[0], home[1] + offset[1]]);
+        let color = mix(brushes::LOGIC, CYAN, 0.35);
+        let mut stops = vec![at([0., 0.])];
+        stops.extend(path.points.iter().map(|p| at(p.at)));
+        for pair in stops.windows(2) {
+            arrow(pair[0], pair[1], 2., alpha(color, 0.8));
+        }
+        if path.repeat == PathRepeat::Loop && path.points.len() > 1 {
+            dashed_line(stops[stops.len() - 1], stops[1], 1.5, 6., alpha(color, 0.6));
+        }
+        for (n, p) in stops.iter().enumerate().skip(1) {
+            let chosen = picked == Some(n - 1);
+            let radius = if chosen { 11. } else { 8. };
+            draw_circle(
+                p.x,
+                p.y,
+                radius,
+                if chosen {
+                    color
+                } else {
+                    alpha(bg_color(), 0.9)
+                },
+            );
+            draw_circle_lines(p.x, p.y, radius, 1.5, color);
+            center_label(
+                &n.to_string(),
+                p.x,
+                p.y + 4.5 * s.max(0.8),
+                11. * s.max(0.8),
+                if chosen { WHITE } else { color },
+            );
+        }
+        // The group as it stands at the chosen point.
+        if let Some(point) = picked.and_then(|i| path.points.get(i)) {
+            for &(_, r) in &members {
+                let ghost = self.on_screen([r[0] + point.at[0], r[1] + point.at[1], r[2], r[3]]);
+                draw_rectangle(ghost.x, ghost.y, ghost.w, ghost.h, alpha(color, 0.10));
+                dashed_rect(ghost, 1.5, 5., alpha(color, 0.75));
+            }
+        }
+        // A dot riding the path at its own timing, pauses included.
+        let legs: Vec<(usize, f32, f32)> = path
+            .points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, p.seconds.max(0.), p.pause.max(0.)))
+            .collect();
+        let total: f32 = legs.iter().map(|&(_, go, rest)| go + rest).sum();
+        if total > 0.05 && !reduced_motion() {
+            let mut t = self.time % (total + 0.8);
+            for (i, go, rest) in legs {
+                let (from, to) = (stops[i], stops[i + 1]);
+                if t <= go {
+                    let f = if go > 0. {
+                        path.points[i].easing.apply(t / go)
+                    } else {
+                        1.
+                    };
+                    let p = from.lerp(to, f);
+                    draw_circle(p.x, p.y, 5. * s.max(0.8), color);
+                    break;
+                }
+                t -= go;
+                if t <= rest {
+                    draw_circle(to.x, to.y, 5. * s.max(0.8), color);
+                    break;
+                }
+                t -= rest;
+            }
+        }
+    }
     fn draw_preview_marks(&self, s: f32) {
         let preview = &self.preview;
         if preview.at_start() && !preview.running {
@@ -1520,7 +1673,7 @@ impl Editor {
             title += &format!("  ·  group {}", object.group());
         }
         let detail = match &object {
-            Object::Trigger(t) => Some(describe_trigger(t)),
+            Object::Trigger(t) => Some(describe_trigger_named(t, &self.doc.map.group_names)),
             Object::Zone(z) if z.kind == ZoneKind::Portal => {
                 Some("Sends tanks to its exit marker.".into())
             }

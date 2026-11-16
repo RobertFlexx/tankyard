@@ -8,9 +8,13 @@
 //! Each bot also has a stable personality and its own verdicts on the classes
 //! it has played, so bots differ in temperament and choices like people do.
 mod aiming;
+pub mod arena;
 mod builds;
 mod combat;
 mod difficulty;
+pub mod driver;
+mod driver_weights;
+mod knowledge;
 mod learning;
 mod navigation;
 mod neural;
@@ -27,11 +31,16 @@ use builds::progression_commands;
 use combat::decide;
 pub use difficulty::Difficulty;
 use difficulty::Skill;
+pub use knowledge::{
+    ClassRecord, Knowledge, MAX_FILE_BYTES as KNOWLEDGE_FILE_LIMIT, SharedKnowledge,
+    lock as lock_knowledge,
+};
 use navigation::{Navigation, clear_line};
 use objectives::objective_goal;
 use perception::{Perception, Seen};
 use personality::Personality;
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use steering::*;
 use tankyard_content::{Ability, ClassDef, ProjectileKind};
 use tankyard_core::{EntityId, Mode, PlayerInput, Tank, V2, World, physics};
@@ -115,11 +124,17 @@ pub struct BotController {
     seen: Vec<Seen>,
     commands: Vec<Command>,
     inputs: Vec<(EntityId, PlayerInput)>,
+    /// What these bots learn together, possibly shared with other arenas.
+    knowledge: SharedKnowledge,
+    /// The neural driver, when bots steer with it. Beginner bots never do.
+    driver: Option<driver::DriverNet>,
 }
 
 impl BotController {
     pub fn new(difficulty: Difficulty) -> Self {
         Self {
+            knowledge: Knowledge::default().shared(),
+            driver: Some(driver::trained()),
             difficulty,
             adaptive: true,
             boost: 0.,
@@ -136,6 +151,7 @@ impl BotController {
     /// Keep learned weights when a server starts its next round. New bots get
     /// fresh tactical state and no information about past players or positions.
     pub fn inherit_models(&mut self, previous: &Self, pairs: &[(EntityId, EntityId)]) {
+        self.knowledge = Arc::clone(&previous.knowledge);
         for &(old_id, new_id) in pairs {
             if let Some(old) = previous.brains.get(&old_id) {
                 self.brains
@@ -188,6 +204,36 @@ impl BotController {
         self.boost += (target - self.boost).clamp(-step, step);
     }
 
+    /// Steers with the neural driver using `weights`, or without it for
+    /// None. Returns false, leaving the driver as it was, for weights of the
+    /// wrong size or with values that aren't finite.
+    pub fn set_driver(&mut self, weights: Option<&[f32]>) -> bool {
+        let Some(weights) = weights else {
+            self.driver = None;
+            return true;
+        };
+        let mut net = driver::DriverNet::default();
+        if !net.set_weights(weights) {
+            return false;
+        }
+        self.driver = Some(net);
+        true
+    }
+
+    /// The memory these bots learn into, to save or to share.
+    pub fn knowledge(&self) -> SharedKnowledge {
+        Arc::clone(&self.knowledge)
+    }
+
+    /// Learn into `shared` from now on, together with every other controller
+    /// using it. Each bot takes its pooled networks when it next respawns.
+    pub fn share_knowledge(&mut self, shared: SharedKnowledge) {
+        self.knowledge = shared;
+        for brain in self.brains.values_mut() {
+            brain.learning.adopted = false;
+        }
+    }
+
     pub fn state(&self, id: EntityId) -> Option<BotState> {
         self.brains.get(&id).map(|brain| brain.state)
     }
@@ -200,15 +246,31 @@ impl BotController {
 
     /// Call once immediately before each fixed authoritative simulation tick.
     pub fn update(&mut self, world: &mut World) {
+        self.update_some(world, |_| true);
+    }
+
+    /// Like [`Self::update`], driving only the bots `mine` picks. Two
+    /// controllers can share an arena this way, as in head-to-head tests.
+    pub fn update_some(&mut self, world: &mut World, mine: impl Fn(&Tank) -> bool) {
         if world.match_state.finished {
             return;
         }
-        self.brains
-            .retain(|id, _| world.tanks.iter().any(|tank| tank.id == *id && tank.bot));
+        let shared = Arc::clone(&self.knowledge);
+        let mut knowledge = knowledge::lock(&shared);
+        knowledge.observe(world);
+        self.brains.retain(|id, _| {
+            world
+                .tanks
+                .iter()
+                .any(|tank| tank.id == *id && tank.bot && mine(tank))
+        });
         // Feedback also runs for freshly destroyed bots, while kill notices
         // still identify the opponent. That memory survives the tactical reset.
-        for tank in world.tanks.iter().filter(|tank| tank.bot) {
+        for tank in world.tanks.iter().filter(|tank| tank.bot && mine(tank)) {
             let brain = self.brains.entry(tank.id).or_default();
+            if !brain.learning.adopted {
+                brain.learning.adopt(&knowledge.models);
+            }
             brain.learning.feedback(tank, world.tick, &world.events);
             if let Some(class) = world.content.class(&tank.class)
                 && (tank.alive || brain.deaths != tank.deaths)
@@ -221,6 +283,7 @@ impl BotController {
                 );
             }
             if brain.deaths != tank.deaths {
+                brain.learning.share(&mut knowledge.models);
                 let learning = std::mem::take(&mut brain.learning);
                 *brain = Brain {
                     learning,
@@ -229,7 +292,11 @@ impl BotController {
                 };
             }
         }
-        if !world.tanks.iter().any(|tank| tank.bot && tank.alive) {
+        if !world
+            .tanks
+            .iter()
+            .any(|tank| tank.bot && tank.alive && mine(tank))
+        {
             return;
         }
         // Gliding cover would rebuild the route grid every tick. Routes only
@@ -245,7 +312,11 @@ impl BotController {
         self.inputs.clear();
         self.adapt(world);
         let difficulty = Skill(self.skill());
-        for tank in world.tanks.iter().filter(|tank| tank.bot && tank.alive) {
+        for tank in world
+            .tanks
+            .iter()
+            .filter(|tank| tank.bot && tank.alive && mine(tank))
+        {
             let Some(class) = world.content.class(&tank.class) else {
                 continue;
             };
@@ -269,13 +340,17 @@ impl BotController {
             {
                 self.perception
                     .query(tank.pos, difficulty.perception_radius(), &mut self.seen);
-                decide(world, tank, class, difficulty, &self.seen, brain);
+                decide(
+                    world, tank, class, difficulty, &self.seen, brain, &knowledge,
+                );
                 brain.last_decision_tick = world.tick;
                 progression_commands(
                     world,
                     tank,
                     class,
                     &brain.learning.build,
+                    &knowledge,
+                    difficulty.insight(),
                     &mut self.commands,
                 );
                 brain.initialized = true;
@@ -326,6 +401,27 @@ impl BotController {
             movement += guarded_base_repulsion(world, tank);
             movement = human_motion(world, tank, class, brain, movement);
             movement = movement.clamp_length(1.);
+            // The network forecasts shots in straight lines. Drones and
+            // homing rounds turn after that forecast, so while one closes in
+            // the retreat planned above stands.
+            if let Some(net) = &self.driver
+                && difficulty.network_driving()
+                && brain.escape.length() < 0.5
+            {
+                self.perception.query(tank.pos, 420., &mut self.seen);
+                movement = driver::drive(
+                    net,
+                    &driver::Situation {
+                        world,
+                        tank,
+                        class,
+                        plan: movement,
+                        target: brain.target,
+                        seen: &self.seen,
+                        alertness: difficulty.dodge_strength(),
+                    },
+                );
+            }
             let steering_rate: f32 = if brain.danger > 0.75 { 21.0 } else { 7.5 };
             let smoothing = 1.0 - (-steering_rate / 60.0).exp();
             brain.steering = brain.steering.lerp(movement, smoothing).clamp_length(1.);
@@ -726,6 +822,7 @@ mod tests {
             Difficulty::Expert.into(),
             &seen,
             &mut brain,
+            &Knowledge::default(),
         );
         assert_eq!(brain.state, BotState::Repositioning);
         assert!(brain.goal.x < world.tanks[0].pos.x);
@@ -746,6 +843,7 @@ mod tests {
             Difficulty::Expert.into(),
             &seen,
             &mut brain,
+            &Knowledge::default(),
         );
         assert_eq!(brain.state, BotState::Attacking);
     }
@@ -788,6 +886,7 @@ mod tests {
             Difficulty::Expert.into(),
             &[Seen::Tank(1), Seen::Target(0)],
             &mut brain,
+            &Knowledge::default(),
         );
         assert_eq!(brain.state, BotState::Retreating);
         assert_eq!(brain.target.unwrap().id, enemy);
@@ -1329,6 +1428,7 @@ mod tests {
             Difficulty::Expert.into(),
             &[Seen::Tank(1), Seen::Tank(2)],
             &mut brain,
+            &Knowledge::default(),
         );
         assert_eq!(brain.target.unwrap().id, remembered);
         // Recognition follows identity through a rename, not the display name.
@@ -1347,6 +1447,7 @@ mod tests {
             Difficulty::Expert.into(),
             &[Seen::Tank(1), Seen::Tank(2)],
             &mut brain,
+            &Knowledge::default(),
         );
         assert_ne!(brain.target.map(|sample| sample.id), Some(remembered));
         world.walls.clear();
@@ -1358,6 +1459,7 @@ mod tests {
             Difficulty::Expert.into(),
             &[Seen::Tank(1), Seen::Tank(2)],
             &mut brain,
+            &Knowledge::default(),
         );
         assert_ne!(brain.target.map(|sample| sample.id), Some(remembered));
 
@@ -1372,6 +1474,7 @@ mod tests {
             Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut neutral,
+            &Knowledge::default(),
         );
         assert_ne!(neutral.state, BotState::Retreating);
         neutral.learning.relationships.hurt_by(feared, 0.8, true, 0);
@@ -1382,6 +1485,7 @@ mod tests {
             Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut neutral,
+            &Knowledge::default(),
         );
         assert_eq!(neutral.state, BotState::Retreating);
     }
@@ -1441,6 +1545,7 @@ mod tests {
             Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut brain,
+            &Knowledge::default(),
         );
         assert_eq!(brain.state, BotState::Attacking);
         assert_eq!(brain.goal, world.tanks[1].pos);
@@ -1467,6 +1572,7 @@ mod tests {
             Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut brain,
+            &Knowledge::default(),
         );
         assert_eq!(brain.state, BotState::Attacking);
         assert!(brain.goal.x > world.tanks[0].pos.x);
@@ -1479,6 +1585,7 @@ mod tests {
             Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut brain,
+            &Knowledge::default(),
         );
         assert_eq!(brain.goal, world.tanks[1].pos);
         world.tanks[0].health = world.tanks[0].max_health * 0.2;
@@ -1489,6 +1596,7 @@ mod tests {
             Difficulty::Expert.into(),
             &[Seen::Tank(1)],
             &mut brain,
+            &Knowledge::default(),
         );
         assert_eq!(brain.state, BotState::Retreating);
         assert!(brain.goal.x < world.tanks[0].pos.x);
