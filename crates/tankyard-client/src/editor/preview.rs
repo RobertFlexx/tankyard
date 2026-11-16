@@ -1,6 +1,9 @@
 //! Logic preview: the arena's triggers run in the editor with the same rule
 //! engine servers use, with a test tank at the pointer for area triggers.
-use tankyard_content::{GroupPoses, MAP_COUNTERS, MapDef, MapSound, MapTrigger};
+use tankyard_content::{
+    GroupPoses, HUD_TEXT, HUD_TITLE, HudWidget, MAP_COUNTERS, MapDef, MapSound, MapTrigger, UiFill,
+    fill_ui_text,
+};
 use tankyard_core::{DT, LogicEffect, LogicInput, MapLogic, Occupant, V2, WorldConfig};
 
 /// A trigger's gate as the preview sees it now.
@@ -18,8 +21,18 @@ pub struct Event {
     pub place: Option<V2>,
 }
 
+/// A Show UI trigger's widget on the test tank's screen.
+pub struct PreviewUi {
+    pub slot: u8,
+    pub trigger: usize,
+    pub since: f32,
+    pub until: f32,
+}
+
 pub struct Preview {
     pub running: bool,
+    /// Widgets on the test tank's screen, by slot.
+    pub ui: Vec<PreviewUi>,
     pub time: f32,
     pub speed: f32,
     pub hidden: u32,
@@ -50,6 +63,7 @@ impl Preview {
     pub fn new(map: &MapDef) -> Self {
         let mut preview = Self {
             running: false,
+            ui: Vec::new(),
             time: 0.,
             speed: 1.,
             hidden: 0,
@@ -81,6 +95,7 @@ impl Preview {
         self.flashes = vec![f32::NEG_INFINITY; map.triggers.len()];
         self.acted = vec![0; map.triggers.len()];
         self.events.clear();
+        self.ui.clear();
         self.banner = None;
         self.shake = None;
         self.sounds.clear();
@@ -154,6 +169,8 @@ impl Preview {
     }
     fn tick(&mut self, map: &MapDef, config: &WorldConfig, tanks: &[Occupant]) {
         self.time += DT;
+        let now = self.time;
+        self.ui.retain(|ui| ui.until > now);
         let seed = &mut self.seed;
         self.logic.step(
             map,
@@ -231,6 +248,48 @@ impl Preview {
         }
         for effect in self.effects.drain(..) {
             let (text, place) = match effect {
+                LogicEffect::Ui {
+                    trigger,
+                    slot,
+                    viewers,
+                } => {
+                    let reached = viewers.as_ref().is_none_or(|list| list.contains(&1));
+                    if reached {
+                        let duration = self.triggers.get(trigger).map_or(0., |t| t.duration);
+                        self.ui.retain(|ui| ui.slot != slot);
+                        self.ui.push(PreviewUi {
+                            slot,
+                            trigger,
+                            since: self.time,
+                            until: if duration > 0. {
+                                self.time + duration
+                            } else {
+                                f32::INFINITY
+                            },
+                        });
+                    }
+                    (
+                        if reached {
+                            format!("Shows UI slot {slot}")
+                        } else {
+                            format!("Shows UI slot {slot}, but not to the test tank")
+                        },
+                        None,
+                    )
+                }
+                LogicEffect::HideUi { slot, viewers } => {
+                    if viewers.as_ref().is_none_or(|list| list.contains(&1)) {
+                        self.ui.retain(|ui| slot != 0 && ui.slot != slot);
+                    }
+                    (
+                        if slot == 0 {
+                            "Hides every UI slot".to_owned()
+                        } else {
+                            format!("Hides UI slot {slot}")
+                        },
+                        None,
+                    )
+                }
                 LogicEffect::Announce(text) => {
                     self.banner = Some((self.time, text.clone()));
                     (format!("Announced \u{201c}{text}\u{201d}"), None)
@@ -341,6 +400,72 @@ impl Preview {
         }
         if self.events.len() > 40 {
             self.events.drain(..self.events.len() - 40);
+        }
+    }
+    /// The widgets on the test tank's screen, filled in, with how long each
+    /// has shown.
+    pub fn widgets(&self) -> Vec<(HudWidget, f32)> {
+        self.ui
+            .iter()
+            .filter_map(|shown| {
+                let trigger = self.triggers.get(shown.trigger)?;
+                let ui = trigger.ui.as_deref()?;
+                let fill = UiFill {
+                    counters: &self.counters,
+                    left: shown.until - self.time,
+                    time: self.time,
+                    name: "Test tank",
+                    score: 0,
+                };
+                let mut widget = ui.widget.clone();
+                widget.text = fill_ui_text(&widget.text, &fill, HUD_TEXT);
+                widget.title = fill_ui_text(&widget.title, &fill, HUD_TITLE);
+                if ui.bar > 0 {
+                    let value = self.counters.get(usize::from(ui.bar) - 1).copied();
+                    widget.progress =
+                        Some((value.unwrap_or(0) as f32 / ui.bar_max.max(1) as f32).clamp(0., 1.));
+                } else if ui.timer && trigger.duration > 0. {
+                    widget.progress = Some((fill.left / trigger.duration).clamp(0., 1.));
+                }
+                widget
+                    .valid()
+                    .then_some((widget, (self.time - shown.since).max(0.)))
+            })
+            .collect()
+    }
+    /// The test tank picks choice `option` of the widget at `index` of
+    /// [`Preview::widgets`], as a player would.
+    pub fn pick(&mut self, map: &MapDef, config: &WorldConfig, index: usize, option: u8) {
+        let Some(shown) = self.ui.get(index) else {
+            return;
+        };
+        let Some(ui) = self
+            .triggers
+            .get(shown.trigger)
+            .and_then(|t| t.ui.as_deref())
+        else {
+            return;
+        };
+        let channel = ui.channels.get(usize::from(option)).copied().unwrap_or(0);
+        let choice = ui.widget.choices.get(usize::from(option)).cloned();
+        if !ui.keep {
+            self.ui.remove(index);
+        }
+        self.events.push(Event {
+            at: self.time,
+            text: format!(
+                "Picked \u{201c}{}\u{201d}{}",
+                choice.unwrap_or_default(),
+                if channel > 0 {
+                    format!(", sending signal {channel}")
+                } else {
+                    String::new()
+                }
+            ),
+            place: None,
+        });
+        if channel > 0 {
+            self.send(map, config, LogicInput::Pick { channel, tank: 1 });
         }
     }
     /// Where the test tank was last, in world units.

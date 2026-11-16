@@ -2465,6 +2465,24 @@ fn trigger_form(
                 "Sends the group's blocks, pads, decor and trigger areas through each point of the path. A Move, Move to or Stop on the group takes it off the path."
             });
         }
+        TriggerAction::Ui => {
+            t.group = t.group.clamp(1, MAP_UI_SLOTS);
+            f.stepper("UI slot", &mut t.group, [1, MAP_UI_SLOTS], None);
+            f.note("Each slot holds one widget per player; showing another in the same slot replaces it.");
+            let ui = t.ui.get_or_insert_with(|| Box::new(MapUi::starter()));
+            ui_form(f, ui, &mut t.duration, free_channel);
+        }
+        TriggerAction::HideUi => {
+            t.group = t.group.min(MAP_UI_SLOTS);
+            f.stepper("UI slot (0 for all)", &mut t.group, [0, MAP_UI_SLOTS], None);
+            let mut to = t.ui.as_ref().map_or(UiAudience::Everyone, |ui| ui.to);
+            f.pick("Hide from", &mut to, &UiAudience::ALL, UiAudience::name, 1);
+            if to == UiAudience::Everyone && t.ui.is_none() {
+                // Nothing to remember.
+            } else {
+                t.ui.get_or_insert_with(Default::default).to = to;
+            }
+        }
         TriggerAction::Reset => {
             t.group = t.group.min(MAP_GROUPS);
             f.stepper("Group (0 for all)", &mut t.group, [0, MAP_GROUPS], None);
@@ -2490,6 +2508,319 @@ fn trigger_form(
     f.integer("Chance %", &mut chance, [1, 100]);
     t.chance = chance as u8;
     f.toggle("Once per round", &mut t.once);
+}
+
+thread_local! {
+    /// The design last previewed and when it changed, so an edit replays
+    /// the entrance.
+    static UI_PREVIEW: std::cell::RefCell<(Option<HudWidget>, f64)> =
+        const { std::cell::RefCell::new((None, 0.)) };
+}
+
+/// A Show UI trigger's widget: words, look, place, bar, choices and who
+/// sees it, with a picture of the screen.
+fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Option<u8>) {
+    let s = f.s;
+    // The picture first, so every change below shows straight away.
+    let frame = Rect::new(f.x, f.y + 4. * s, f.w, f.w * 9. / 16.);
+    draw_rectangle(
+        frame.x,
+        frame.y,
+        frame.w,
+        frame.h,
+        Color::new(0.07, 0.09, 0.12, 1.),
+    );
+    let step = frame.w / 16.;
+    for i in 1..16 {
+        let x = frame.x + i as f32 * step;
+        draw_line(
+            x,
+            frame.y,
+            x,
+            frame.bottom(),
+            1.,
+            Color::new(1., 1., 1., 0.04),
+        );
+    }
+    for i in 1..9 {
+        let y = frame.y + i as f32 * step;
+        draw_line(
+            frame.x,
+            y,
+            frame.right(),
+            y,
+            1.,
+            Color::new(1., 1., 1., 0.04),
+        );
+    }
+    // A tank in the middle, for scale.
+    draw_circle(
+        frame.center().x,
+        frame.center().y,
+        step * 0.4,
+        Color::new(0.0, 0.70, 0.88, 0.9),
+    );
+    let mut shown = ui.widget.clone();
+    if ui.bar > 0 || ui.timer {
+        shown.progress = Some(0.6);
+    }
+    shown.text = fill_preview(&shown.text);
+    shown.title = fill_preview(&shown.title);
+    let age = UI_PREVIEW.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let mut design = ui.widget.clone();
+        design.progress = None;
+        if cell.0.as_ref() != Some(&design) {
+            *cell = (Some(design), get_time());
+        }
+        (get_time() - cell.1) as f32
+    });
+    // Somewhat larger than its share of a real screen, so the words in the
+    // picture stay readable.
+    let scale = frame.w / 1000.;
+    if shown.valid() {
+        let pointer = ui_layout::pointer();
+        crate::hud_widgets::preview(
+            &shown,
+            frame,
+            scale,
+            age,
+            0.6,
+            frame.contains(pointer).then_some(pointer),
+        );
+    } else {
+        center_label(
+            "Give the widget a title, text, a bar or choices",
+            frame.center().x,
+            frame.center().y + 20. * s,
+            12. * s,
+            muted_color(),
+        );
+    }
+    draw_rectangle_lines(frame.x, frame.y, frame.w, frame.h, 1.5, line_color());
+    f.y = frame.bottom() + 10. * s;
+    if f.buttons(&["Replay entrance"], true).is_some() {
+        UI_PREVIEW.with(|cell| cell.borrow_mut().1 = get_time());
+    }
+
+    let w = &mut ui.widget;
+    f.heading("Words");
+    f.text("Title", &mut w.title, HUD_TITLE);
+    f.text("Text", &mut w.text, HUD_TEXT);
+    f.note("{1} to {8} show counters, {left} the seconds before it goes, {time} the round's clock, and {name} and {score} the player's own.");
+    f.heading("Look");
+    f.pick("Style", &mut w.style, &HudStyle::ALL, HudStyle::name, 3);
+    f.cycle("Icon", &mut w.icon, &HudIcon::ALL, |icon| {
+        icon.name().to_owned()
+    });
+    f.number("Text size", &mut w.size, [10., 48.], 1.);
+    if w.style != HudStyle::Plain {
+        let mut opacity = w.opacity * 100.;
+        if f.number("Panel opacity (%)", &mut opacity, [0., 100.], 5.) {
+            w.opacity = (opacity / 100.).clamp(0., 1.);
+        }
+    }
+    let mut colors = [w.color, w.panel, w.accent];
+    let defaults = [[240, 244, 248], [24, 30, 40], [0, 178, 225]];
+    for ((title, color), fallback) in ["Own text color", "Own panel color", "Own accent color"]
+        .into_iter()
+        .zip(&mut colors)
+        .zip(defaults)
+    {
+        if title == "Own panel color" && w.style == HudStyle::Plain {
+            continue;
+        }
+        let mut own = color.is_some();
+        if f.toggle(title, &mut own) {
+            *color = own.then_some(color.unwrap_or(fallback));
+        }
+        if let Some(rgb) = color {
+            f.color(rgb);
+        }
+    }
+    [w.color, w.panel, w.accent] = colors;
+    f.note("Without its own colors, a widget follows the player's theme. The accent colors the border, stripe, icon, bar and choices.");
+    f.heading("Place");
+    match f.buttons(&["Top", "Middle", "Bottom"], true) {
+        Some(0) => w.y = 0.14,
+        Some(1) => w.y = 0.5,
+        Some(2) => w.y = 0.84,
+        _ => {}
+    }
+    match f.buttons(&["Left", "Center", "Right"], true) {
+        Some(0) => (w.x, w.align) = (0.02, HudAlign::Left),
+        Some(1) => (w.x, w.align) = (0.5, HudAlign::Center),
+        Some(2) => (w.x, w.align) = (0.98, HudAlign::Right),
+        _ => {}
+    }
+    let mut x = w.x * 100.;
+    if f.number("Across (%)", &mut x, [0., 100.], 1.) {
+        w.x = (x / 100.).clamp(0., 1.);
+    }
+    let mut y = w.y * 100.;
+    if f.number("Down (%)", &mut y, [0., 100.], 1.) {
+        w.y = (y / 100.).clamp(0., 1.);
+    }
+    f.pick(
+        "Line up by",
+        &mut w.align,
+        &HudAlign::ALL,
+        HudAlign::name,
+        3,
+    );
+    f.heading("Motion");
+    f.pick("Entrance", &mut w.enter, &HudEnter::ALL, HudEnter::name, 5);
+    f.toggle("Pulse to draw the eye", &mut w.pulse);
+
+    f.heading("Bar");
+    #[derive(Clone, Copy, PartialEq)]
+    enum Bar {
+        None,
+        Fixed,
+        Counter,
+        Timer,
+    }
+    let mut bar = if ui.bar > 0 {
+        Bar::Counter
+    } else if ui.timer {
+        Bar::Timer
+    } else if ui.widget.progress.is_some() {
+        Bar::Fixed
+    } else {
+        Bar::None
+    };
+    let before = bar;
+    f.cycle(
+        "Bar shows",
+        &mut bar,
+        &[Bar::None, Bar::Fixed, Bar::Counter, Bar::Timer],
+        |bar| {
+            match bar {
+                Bar::None => "No bar",
+                Bar::Fixed => "A set amount",
+                Bar::Counter => "A counter",
+                Bar::Timer => "Time left",
+            }
+            .to_owned()
+        },
+    );
+    if bar != before {
+        ui.bar = u8::from(bar == Bar::Counter);
+        ui.bar_max = if bar == Bar::Counter {
+            ui.bar_max.max(10)
+        } else {
+            0
+        };
+        ui.timer = bar == Bar::Timer;
+        ui.widget.progress = (bar == Bar::Fixed).then_some(0.5);
+    }
+    match bar {
+        Bar::None => {}
+        Bar::Fixed => {
+            let mut percent = ui.widget.progress.unwrap_or(0.5) * 100.;
+            if f.number("Filled (%)", &mut percent, [0., 100.], 5.) {
+                ui.widget.progress = Some((percent / 100.).clamp(0., 1.));
+            }
+        }
+        Bar::Counter => {
+            ui.bar = ui.bar.clamp(1, MAP_COUNTERS);
+            f.stepper("Counter", &mut ui.bar, [1, MAP_COUNTERS], None);
+            ui.bar_max = ui.bar_max.clamp(1, COUNTER_LIMIT);
+            f.integer("Full at", &mut ui.bar_max, [1, COUNTER_LIMIT]);
+        }
+        Bar::Timer => {
+            if *duration <= 0. {
+                f.note("Set Hide after below: the bar empties as that time runs out.");
+            }
+        }
+    }
+    if bar != Bar::None {
+        let w = &mut ui.widget;
+        let mut segments = w.segments;
+        f.stepper(
+            "Pieces (0 for whole)",
+            &mut segments,
+            [0, HUD_SEGMENTS],
+            None,
+        );
+        w.segments = segments;
+        let mut width = w.width * 100.;
+        if f.number("Bar width (% of screen)", &mut width, [2., 100.], 1.) {
+            w.width = (width / 100.).clamp(0.02, 1.);
+        }
+        let mut own = w.bar_color.is_some();
+        if f.toggle("Own bar color", &mut own) {
+            w.bar_color = own.then_some(w.bar_color.unwrap_or([255, 176, 0]));
+        }
+        if let Some(rgb) = &mut w.bar_color {
+            f.color(rgb);
+        }
+    }
+
+    f.heading("Choices");
+    match f.buttons(&["Add choice", "Remove choice"], true) {
+        Some(0) if ui.widget.choices.len() < HUD_CHOICES => {
+            let number = ui.widget.choices.len() + 1;
+            ui.widget.choices.push(format!("Option {number}"));
+            ui.channels.resize(ui.widget.choices.len() - 1, 0);
+            ui.channels.push(free_channel.unwrap_or(0));
+        }
+        Some(1) => {
+            ui.widget.choices.pop();
+            ui.channels.truncate(ui.widget.choices.len());
+        }
+        _ => {}
+    }
+    ui.channels.resize(ui.widget.choices.len(), 0);
+    let salt = f.set_salt(0x0c40_1ce5);
+    for (index, (choice, channel)) in ui
+        .widget
+        .choices
+        .iter_mut()
+        .zip(ui.channels.iter_mut())
+        .enumerate()
+    {
+        f.set_salt(0x0c40_1ce5 + index as u64);
+        f.text(&format!("Choice {}", index + 1), choice, HUD_CHOICE);
+        f.stepper(
+            "Signals channel",
+            channel,
+            [0, MAP_GROUPS],
+            Some(free_channel),
+        );
+    }
+    f.set_salt(salt);
+    if ui.widget.choices.is_empty() {
+        f.note("Add choices to make a menu. Picking one sends its signal, and the player who picked is the tank that set off what listens: set Who to Tank that set it off to reward or move just them.");
+    } else {
+        f.toggle("Stay open after a pick", &mut ui.keep);
+        // Keep choices pickable: never leave one blank.
+        for (index, choice) in ui.widget.choices.iter_mut().enumerate() {
+            if choice.trim().is_empty() {
+                *choice = format!("Option {}", index + 1);
+            }
+        }
+    }
+
+    f.heading("Who and how long");
+    f.pick("Show to", &mut ui.to, &UiAudience::ALL, UiAudience::name, 1);
+    f.number("Hide after (s, 0 keeps)", duration, [0., 3600.], 0.5);
+}
+
+/// Sample values for a widget's fields in the editor's picture.
+fn fill_preview(text: &str) -> String {
+    let counters = [3, 7, 12, 1, 0, 25, 50, 99];
+    tankyard_content::fill_ui_text(
+        text,
+        &tankyard_content::UiFill {
+            counters: &counters,
+            left: 12.,
+            time: 95.,
+            name: "Player",
+            score: 1250,
+        },
+        HUD_TEXT,
+    )
 }
 
 /// The map's keyframed paths: add, remove and edit them a point at a time.

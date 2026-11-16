@@ -188,8 +188,11 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **Shake screen:** shakes the views of the noticed tanks inside the area. See [Effects](#effects).
 - **Play sound:** plays one of eight sounds at the trigger. See [Effects](#effects).
 - **Shove body, Fling tanks, Blast, Zoom view, Lighting, Play path:** push a body, throw tanks, change the view or the darkness, or send a group along a path. See [Physics](#physics).
+- **Show UI, Hide UI:** put a designed widget on players' screens, such as a message, a counter, a timer or a menu of choices, and take it away again. See [UI](#ui).
 
 The tank actions and Shake screen act on tanks inside the trigger's own area. On a timer, signal, counter, group or boss trigger, *Who* and *Team* appear under the action to choose those tanks.
+
+*Who* can also be **Tank that set it off**: only the tank behind what happened, wherever it is. That's the tank that crossed an On enter, On exit, On empty or On destroy area, the first tank inside a While inside area, or the player who picked a choice. It carries through signals, delays, counters and group watchers, so a plate can send a signal to a trigger far away that rewards just the tank that stepped on it. A timer, an At start trigger or a script's signal has no tank behind it, so such a trigger reaches nobody. Area triggers with this setting watch for any tank.
 
 ### Motions
 
@@ -326,6 +329,32 @@ The logic preview plays paths and lighting changes on the canvas. Shoves, flings
 
 Scripts can do the same with `shove_map_body`, `fling_tank`, `play_map_path`, `set_map_lighting` and `map_body` (see [Modding](modding.md#map-logic)).
 
+### UI
+
+A **Show UI** trigger puts a widget on players' screens. A widget can have a title, a line of text with an icon, a bar and up to four choices, and each part is optional. The inspector draws a picture of the screen above the settings, with a tank in the middle for scale, and replays the entrance whenever you change something. **Replay entrance** plays it again.
+
+- **Slot:** 1 to 16. Each slot holds one widget per player, and showing another widget in the same slot replaces it. Give a running score its own slot so a message in another slot never covers it.
+- **Words:** a title of up to 48 bytes and text of up to 120. `{1}`â€“`{8}` show counters, `{left}` the seconds before the widget goes, `{time}` the round's clock, and `{name}` and `{score}` the player's own. They update by themselves while the widget shows.
+- **Look:** **Plain** text with a soft shadow, a **Panel**, a **Card** with a colored stripe, a **Banner** across the whole screen, or a **Pill**. Pick one of 13 icons, the text size and the panel's opacity. Without colors of its own, a widget follows each player's light or dark theme. The accent colors the border, stripe, icon, bar and choices.
+- **Place:** **Top**, **Middle**, **Bottom**, **Left**, **Center** and **Right** jump to the usual spots; *Across* and *Down* fine-tune it. Widgets stay inside the screen at any size.
+- **Motion:** appear at once, or **Fade**, **Pop**, **Slide** in from the nearer side or **Drop** from above. **Pulse** gently brightens the border to draw the eye. Widgets fade out when they go. Players with **Reduced motion** on see them appear and go at once.
+- **Bar:** none, a set amount, a counter (full at a value you choose) or the time left before the widget goes. **Pieces** splits it into up to 20 segments, for lives or charges. Bars glide to new values.
+- **Choices:** each choice sends a signal when a player clicks it, and that player is the tank that set off whatever listens. The menu closes for that player unless **Stay open after a pick** is on. Clicking a choice never fires the tank's gun.
+- **Who and how long:** show it to **Everyone** (players who join later see it too), the **Players in the area**, or the **Player that set it off**. *Hide after* takes it away after that many seconds; 0 keeps it until a Hide UI trigger or the round ends.
+
+**Hide UI** takes a slot's widget away, or every map widget with slot 0, from everyone, from the players in its area or from the player that set it off. Bots never see widgets.
+
+For a shop, put an On enter trigger at the counter that shows a menu to the player that set it off, and On signal triggers for each choice whose *Who* is *Tank that set it off*: Repair tanks, Award points, Fling tanks, or a counter for a door. The logic preview shows widgets over the canvas, and you can click their choices there as the test tank.
+
+### The UI palette
+
+| Piece | What it does |
+| --- | --- |
+| Message | Shows a card to everyone for 8 seconds as the round starts |
+| Counter display | Keeps counter 1 at the top left as a five-piece bar |
+| Choice menu | Asks the player who drives in to pick: Repair sends signal 1, Points sends signal 2, Leave closes it |
+| Hide UI | On signal 1, takes every map widget away |
+
 ### Conditions and gates
 
 **Only if** gives a trigger a gate. When the trigger fires, it checks its conditions and acts only if the gate is open. Press **Add a condition** to start one, and **Add another condition** for up to four. Each condition is a card with its own kind:
@@ -383,7 +412,8 @@ Press **P** to run the map's triggers in the editor with the same engine servers
 - **Counters:** click one to add 1, Shift-click to take 1 away and right-click to clear it. Watchers and goals hear the change as if a trigger made it.
 - **Groups:** every group the logic uses. Lit groups are shown; click one to show or hide it, as a script would. Watchers and gates see the change.
 - **Send:** pick a *Signal channel* and press **Send signal**. If any trigger waits for a boss, **Defeat** pretends the chosen boss was just defeated.
-- **What happened:** counters, announcements, bosses, shapes, repairs, damage, points and script events.
+- **What happened:** counters, announcements, widgets, picks, bosses, shapes, repairs, damage, points and script events.
+- **Widgets:** Show UI widgets that reach the test tank appear over the canvas. Click a choice to pick it.
 - **Triggers:** each trigger's summary with live chips: *spent* for a once-per-round trigger that acted, *next 4.2 s* for a timer, *next sends 7* for a sequence, *open* or *shut* for a gate. **Fire** makes a trigger act once right now, starting the preview if needed.
 
 **Hold T** to drive a test tank at the pointer through plates and exits; the Logic tab sets its team and whether it counts as a bot. **Shift+P** restarts. Editing a trigger restarts the preview by itself.
@@ -469,7 +499,9 @@ The Check tab notes logic that can never work as built:
 - a watcher or condition reads a counter nothing changes, or a group nothing shows or hides;
 - a Reset triggers action targets a group with no triggers;
 - triggers signal each other in a loop with no delay, gate or chance, which the arena cuts short every tick;
-- a Shove body acts on a group that isn't pushable, or a Play path plays a path with no points.
+- a Shove body acts on a group that isn't pushable, or a Play path plays a path with no points;
+- a timer or At start trigger reaches the tank that set it off, which a timer never has;
+- a widget that stays until hidden shows `{left}` or a time-left bar, which only work with *Hide after*.
 
 Notes never block a playtest; scripts can send signals and change counters and groups the checks can't see.
 
@@ -505,7 +537,7 @@ The workshop folder is `workshop/` inside Tank Yard's data directory. **Files â†
 - `exports/<map-id>-<timestamp>.zip`: portable exports.
 - `prefs.json`: panel sizes, canvas switches, navigation settings, the palette tab and item, the inspector tab, the logic preview's speed, and where you were looking in the map you had open.
 
-Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings, and maps that use them need 1.0. Tank Yard 1.1.0 adds launch pads, Tint, Scale, Animate, Stop, Shake screen and Play sound; it uses protocol 28, so 1.1.0 and 1.2.0 servers and players play together, and maps that use the new pieces need 1.1.0 to open. Tank Yard 1.3.0 adds pushable bodies, paths, ice, gravity wells, darkness and lighting, decor that responds to tanks, the new decor shapes, group names and the Physics triggers; it uses protocol 29, so 1.3.0 servers and players play only with each other, and maps that use the new pieces need 1.3.0 to open. Maps from earlier versions open unchanged.
+Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings, and maps that use them need 1.0. Tank Yard 1.1.0 adds launch pads, Tint, Scale, Animate, Stop, Shake screen and Play sound; it uses protocol 28, so 1.1.0 and 1.2.0 servers and players play together, and maps that use the new pieces need 1.1.0 to open. Tank Yard 1.3.0 adds pushable bodies, paths, ice, gravity wells, darkness and lighting, decor that responds to tanks, the new decor shapes, group names and the Physics triggers; it uses protocol 29, so 1.3.0 servers and players play only with each other, and maps that use the new pieces need 1.3.0 to open. Tank Yard 1.4.0 adds Show UI, Hide UI and the *Tank that set it off* filter; it uses protocol 30, so 1.4.0 servers and players play only with each other, and maps that use the new pieces need 1.4.0 to open. Maps from earlier versions open unchanged.
 
 For a dedicated server, put the ZIP in persistent storage, add its path to the top-level `mods` list, and run `reload-mods`. Then `maps` lists it and `map my_arena` selects it. Joining clients receive the checked map data automatically. See [Hosting](hosting.md) and [domain setup](hosting-domain.md).
 

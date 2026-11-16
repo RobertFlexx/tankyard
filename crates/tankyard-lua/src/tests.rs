@@ -633,7 +633,19 @@ fn scripts_show_hud_widgets_to_everyone_or_one_player() {
             r#"tankyard.hud("a", { text = "x", color = "orange" })"#,
             "#rrggbb",
         ),
-        (r#"tankyard.hud("a", {})"#, "needs text, progress"),
+        (r#"tankyard.hud("a", {})"#, "needs text, a title"),
+        (
+            r#"tankyard.hud("a", { text = "x", style = "fancy" })"#,
+            "style must be one of",
+        ),
+        (
+            r#"tankyard.hud("a", { choices = { "a", "b", "c", "d", "e" } })"#,
+            "up to 4 choices",
+        ),
+        (
+            r#"tankyard.hud("a", { text = "x", segments = 2.5 })"#,
+            "whole number",
+        ),
         (
             r#"for i = 1, 17 do tankyard.hud("w" .. i, { text = "x" }) end"#,
             "16 per player",
@@ -644,6 +656,79 @@ fn scripts_show_hud_widgets_to_everyone_or_one_player() {
         assert!(errors.contains(error), "{source}: {errors}");
         assert!(world.hud.is_empty(), "{source}");
     }
+}
+
+#[test]
+fn designed_widgets_and_their_choices_reach_the_pack_that_showed_them() {
+    let mut world = world();
+    let player = world.add_player("Pilot", false);
+    let mut runtime = ModRuntime::default();
+    for (id, source) in [
+        (
+            "shop",
+            r##"
+            local shown = false
+            tankyard.on("tick", function()
+              if shown then return end
+              shown = true
+              local players = tankyard.players()
+              tankyard.hud("menu", {
+                title = "Shop", text = "Buy one", style = "card", icon = "coin",
+                panel = "#102030", opacity = 0.7, accent = { 255, 200, 0 }, enter = "pop",
+                pulse = true, choices = { "Speed", "Armor" },
+              }, players[1].id)
+            end)
+            tankyard.on("choice", function(event)
+              tankyard.set_score(event.actor, event.value * 100)
+              tankyard.announce(event.name)
+            end)
+            "##,
+        ),
+        // Another pack hears nothing of the shop's menu.
+        (
+            "other",
+            r##"
+            tankyard.on("choice", function(event) tankyard.announce("wrong pack") end)
+            "##,
+        ),
+    ] {
+        runtime
+            .install(Box::new(
+                LuaPlugin::new(&info(id), &pack(source), &Content::builtin(), 7).unwrap(),
+            ))
+            .unwrap();
+    }
+    let mut step = |world: &mut World| {
+        world.step_with(|w| runtime.before_step(w));
+        runtime.after_step(world);
+    };
+    for _ in 0..3 {
+        step(&mut world);
+    }
+    let menu = world.hud_for(player);
+    assert_eq!(menu.len(), 1, "{menu:?}");
+    let widget = &menu[0];
+    assert_eq!(widget.style, tankyard_mods::HudStyle::Card);
+    assert_eq!(widget.icon, tankyard_mods::HudIcon::Coin);
+    assert_eq!(widget.enter, tankyard_mods::HudEnter::Pop);
+    assert_eq!(
+        (widget.panel, widget.accent),
+        (Some([16, 32, 48]), Some([255, 200, 0]))
+    );
+    assert!(widget.pulse && (widget.opacity - 0.7).abs() < 1e-6);
+    assert_eq!(widget.choices, ["Speed", "Armor"]);
+    assert_ne!(widget.menu, 0);
+    assert!(world.choose(player, widget.menu, 1));
+    assert!(
+        world.hud_for(player).is_empty(),
+        "a player's own menu closes on a pick"
+    );
+    step(&mut world);
+    step(&mut world);
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    let score = world.tanks.iter().find(|t| t.id == player).unwrap().score;
+    assert_eq!(score, 200, "the second choice is value 2");
+    assert_eq!(world.match_state.announcement, "menu");
 }
 
 #[test]

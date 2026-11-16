@@ -19,13 +19,13 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 29 carries pushable bodies, arena lighting and the maps that
-/// describe them, which version 28 snapshots and game data can't hold, so
-/// clients and servers update together. Tank Yard 1.3.0 uses it; 1.1.0 and
-/// 1.2.0 used version 28.
-pub const PROTOCOL_VERSION: u32 = 29;
+/// Version 30 carries designed HUD widgets with choices, and players' picks
+/// from them, which version 29 can't hold, so clients and servers update
+/// together. Tank Yard 1.4.0 uses it; 1.3.0 used version 29, and 1.1.0 and
+/// 1.2.0 version 28.
+pub const PROTOCOL_VERSION: u32 = 30;
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 29;
+pub const MIN_PROTOCOL_VERSION: u32 = 30;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
 pub const SERVER_OUTDATED: &str =
     "This server runs an older Tank Yard. Its host needs to update it.";
@@ -164,6 +164,11 @@ pub enum ClientControl {
     PartyReady {
         ready: bool,
     },
+    /// Pick choice `option` of the HUD widget numbered `menu`.
+    Choose {
+        menu: u32,
+        option: u8,
+    },
 }
 
 impl ClientControl {
@@ -194,6 +199,9 @@ impl ClientControl {
                     && party_proof.as_ref().is_none_or(|s| s.len() == 64)
             }
             Self::UpgradeStat { stat, count } => *stat < 8 && (1..=7).contains(count),
+            Self::Choose { menu, option } => {
+                *menu != 0 && usize::from(*option) < tankyard_mods::HUD_CHOICES
+            }
             Self::Evolve { class } | Self::SandboxClass { class } => valid_class_id(class),
             Self::SandboxLevel { level } => (1..=tankyard_core::MAX_LEVEL).contains(level),
             Self::SandboxInvulnerability { .. } | Self::SandboxBoss { .. } | Self::Leave => true,

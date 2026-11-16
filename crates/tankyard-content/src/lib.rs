@@ -5,9 +5,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+mod hud;
 mod maps;
 mod motion;
 mod tween;
+pub use hud::*;
 pub use maps::*;
 pub use motion::*;
 pub use tween::*;

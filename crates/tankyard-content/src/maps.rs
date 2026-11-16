@@ -678,9 +678,15 @@ pub enum TriggerAction {
     Light,
     /// Sends group `group` along path `amount`, counting from 1.
     Path,
+    /// Shows the trigger's `ui` widget in slot `group` on the screens its
+    /// `ui` names, replacing what that slot showed.
+    Ui,
+    /// Takes slot `group`'s widget (every map widget for 0) off the screens
+    /// its `ui` names, or everyone's without one.
+    HideUi,
 }
 impl TriggerAction {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 35] = [
         Self::Toggle,
         Self::Show,
         Self::Hide,
@@ -701,6 +707,8 @@ impl TriggerAction {
         Self::Light,
         Self::Sound,
         Self::Announce,
+        Self::Ui,
+        Self::HideUi,
         Self::Boss,
         Self::Signal,
         Self::Random,
@@ -750,7 +758,13 @@ impl TriggerAction {
             Self::Zoom => "Zoom view",
             Self::Light => "Lighting",
             Self::Path => "Play path",
+            Self::Ui => "Show UI",
+            Self::HideUi => "Hide UI",
         }
+    }
+    /// Whether it shows or hides a widget, `group` naming its slot.
+    pub fn uses_ui(self) -> bool {
+        matches!(self, Self::Ui | Self::HideUi)
     }
     /// Whether `group` names a map group, as opposed to a channel or counter.
     pub fn targets_group(self) -> bool {
@@ -1205,16 +1219,157 @@ pub enum TriggerWho {
     Anyone,
     Players,
     Bots,
+    /// Only the tank that set the trigger off: the one that crossed its
+    /// area, or that crossed the area or picked the choice that sent the
+    /// signal it heard. Area triggers watch for any tank.
+    Cause,
 }
 impl TriggerWho {
-    pub const ALL: [Self; 3] = [Self::Anyone, Self::Players, Self::Bots];
+    pub const ALL: [Self; 4] = [Self::Anyone, Self::Players, Self::Bots, Self::Cause];
     pub fn name(self) -> &'static str {
         match self {
             Self::Anyone => "Any tank",
             Self::Players => "Players only",
             Self::Bots => "Bots only",
+            Self::Cause => "Tank that set it off",
         }
     }
+}
+
+/// The map widget slots, numbered from 1.
+pub const MAP_UI_SLOTS: u8 = 16;
+
+/// Who sees a Show UI trigger's widget.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiAudience {
+    /// Every player the trigger notices, wherever they are, and players
+    /// who join while it shows.
+    #[default]
+    Everyone,
+    /// The players the trigger notices inside its area.
+    Inside,
+    /// The player that set the trigger off.
+    Cause,
+}
+impl UiAudience {
+    pub const ALL: [Self; 3] = [Self::Everyone, Self::Inside, Self::Cause];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Everyone => "Everyone",
+            Self::Inside => "Players in the area",
+            Self::Cause => "Player that set it off",
+        }
+    }
+}
+
+/// A widget a Show UI trigger puts on players' screens. Its text and title
+/// fill in `{1}` to `{8}` (counters, as in announcements), `{left}` (seconds
+/// before it goes), `{time}` (the round's clock), `{name}` and `{score}`
+/// (the viewer's) as they change.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapUi {
+    pub widget: crate::HudWidget,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub to: UiAudience,
+    /// Fills the bar from counter `bar` (1 to 8) out of `bar_max`; 0 keeps
+    /// the widget's own progress.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub bar: u8,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub bar_max: i32,
+    /// Empties the bar as the trigger's duration runs out.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub timer: bool,
+    /// The channel each choice signals, in order; the player that picks is
+    /// the tank that set it off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<u8>,
+    /// Whether a menu stays open after a pick.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub keep: bool,
+}
+impl MapUi {
+    /// A widget for a new Show UI trigger: a card near the top.
+    pub fn starter() -> Self {
+        Self {
+            widget: crate::HudWidget {
+                title: "Notice".into(),
+                text: "Write your message here".into(),
+                y: 0.18,
+                style: crate::HudStyle::Card,
+                icon: crate::HudIcon::Info,
+                enter: crate::HudEnter::Pop,
+                ..crate::HudWidget::default()
+            },
+            ..Self::default()
+        }
+    }
+    /// Whether the text or title names the viewer, so each player needs a
+    /// copy of their own.
+    pub fn personal(&self) -> bool {
+        let names = |text: &str| text.contains("{name}") || text.contains("{score}");
+        !self.widget.choices.is_empty() || names(&self.widget.text) || names(&self.widget.title)
+    }
+    /// Whether the text, title or bar change while it shows.
+    pub fn live(&self) -> bool {
+        let fills = |text: &str| text.contains('{');
+        self.bar > 0 || self.timer || fills(&self.widget.text) || fills(&self.widget.title)
+    }
+}
+
+/// What fills a map widget's `{…}` fields.
+pub struct UiFill<'a> {
+    pub counters: &'a [i32],
+    pub left: f32,
+    pub time: f32,
+    pub name: &'a str,
+    pub score: u64,
+}
+/// `template` with its fields filled, cut to `max` bytes. Unknown fields
+/// stay as written.
+pub fn fill_ui_text(template: &str, fill: &UiFill, max: usize) -> String {
+    if !template.contains('{') {
+        return template.to_owned();
+    }
+    let mut out = String::with_capacity(template.len() + 8);
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let tail = &rest[open..];
+        let Some(close) = tail.find('}') else {
+            out.push_str(tail);
+            rest = "";
+            break;
+        };
+        let field = &tail[1..close];
+        let clock = |seconds: f32| {
+            let s = seconds.max(0.).ceil() as u64;
+            format!("{}:{:02}", s / 60, s % 60)
+        };
+        let filled = match field {
+            // A widget that stays has no time left to show.
+            "left" if !fill.left.is_finite() => Some(String::new()),
+            "left" => Some(format!("{}", fill.left.max(0.).ceil() as u64)),
+            "time" => Some(clock(fill.time)),
+            "name" => Some(fill.name.to_owned()),
+            "score" => Some(fill.score.to_string()),
+            _ => Some(field)
+                .filter(|n| n.len() == 1)
+                .and_then(|n| n.parse::<usize>().ok())
+                .and_then(|n| n.checked_sub(1))
+                .and_then(|n| fill.counters.get(n))
+                .map(i32::to_string),
+        };
+        match filled {
+            Some(text) => out.push_str(&text),
+            None => out.push_str(&tail[..=close]),
+        }
+        rest = &tail[close + 1..];
+    }
+    out.push_str(rest);
+    crate::clip_text(&out, max)
 }
 
 /// A rule that runs during a round: toggles, timed gates, hazards that come
@@ -1327,8 +1482,24 @@ pub struct MapTrigger {
     /// down.
     #[serde(default, skip_serializing_if = "is_default")]
     pub angle: f32,
+    // Added in 1.4.0, and likewise left out when unused.
+    /// The widget a Show UI trigger shows, and who a Hide UI trigger hides
+    /// it from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<Box<MapUi>>,
 }
 impl MapTrigger {
+    /// Every signal channel acting can send on: its action's, each choice's
+    /// and the otherwise channel's.
+    pub fn sends(&self) -> impl Iterator<Item = u8> + '_ {
+        let choices = match (&self.ui, self.action) {
+            (Some(ui), TriggerAction::Ui) => ui.channels.as_slice(),
+            _ => &[],
+        };
+        self.action
+            .channels(self.group, self.amount)
+            .chain(choices.iter().copied().filter(|&c| c > 0))
+    }
     /// Animate's pace in cycles a second, after the style's default.
     pub fn animate_speed(&self) -> f32 {
         if self.speed > 0. {
@@ -1387,6 +1558,7 @@ impl Default for MapTrigger {
             speed: 0.,
             sound: MapSound::Chime,
             angle: 0.,
+            ui: None,
         }
     }
 }
@@ -1942,6 +2114,32 @@ pub fn validate_map_features(map: &MapDef) -> Result<(), String> {
 }
 
 /// One trigger's settings, with a reason a map author can act on.
+fn validate_ui(ui: &MapUi) -> Result<(), String> {
+    if !ui.widget.valid() {
+        return Err(format!(
+            "give the widget text, a title, a bar or choices; text up to {} bytes, a title up to {}, up to {} choices of {} bytes, sizes 10 to 48",
+            crate::HUD_TEXT,
+            crate::HUD_TITLE,
+            crate::HUD_CHOICES,
+            crate::HUD_CHOICE
+        ));
+    }
+    if ui.widget.menu != 0 {
+        return Err("leave the widget's menu number to the game".into());
+    }
+    if ui.bar > MAP_COUNTERS || (ui.bar > 0 && !(1..=COUNTER_LIMIT).contains(&ui.bar_max)) {
+        return Err(format!(
+            "fill the bar from a counter from 1 to {MAP_COUNTERS}, out of 1 to {COUNTER_LIMIT}"
+        ));
+    }
+    if ui.channels.len() > ui.widget.choices.len() || ui.channels.iter().any(|&c| c > MAP_GROUPS) {
+        return Err(format!(
+            "each choice signals a channel from 1 to {MAP_GROUPS}, or 0 for none"
+        ));
+    }
+    Ok(())
+}
+
 pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
     validate_rect(trigger.rect)?;
     let seconds = match trigger.when {
@@ -2139,7 +2337,24 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
                 "reset a group from 1 to {MAP_GROUPS}, or 0 for every trigger"
             ));
         }
+        TriggerAction::Ui if !(1..=MAP_UI_SLOTS).contains(&trigger.group) => {
+            return Err(format!("show UI in a slot from 1 to {MAP_UI_SLOTS}"));
+        }
+        TriggerAction::HideUi if trigger.group > MAP_UI_SLOTS => {
+            return Err(format!(
+                "hide UI slot 1 to {MAP_UI_SLOTS}, or 0 for every slot"
+            ));
+        }
+        TriggerAction::Ui if trigger.ui.is_none() => {
+            return Err("design the widget to show".into());
+        }
         _ => {}
+    }
+    // Other actions keep a design they no longer use, for switching back.
+    if trigger.action == TriggerAction::Ui
+        && let Some(ui) = &trigger.ui
+    {
+        validate_ui(ui)?;
     }
     if trigger.only_if.is_none() && !trigger.also_if.is_empty() {
         return Err("more conditions need a first one".into());

@@ -296,6 +296,9 @@ tankyard.every(60 * 30, function(tick) … end)   -- every 30 seconds; up to 64 
 | `capture` | the scorer | 0 | team |
 | `round_start`, `round_end` | 0 | 0 | 0 |
 | `map_event` | the first noticed tank in the trigger's area (0 if none) | 0 | the trigger's number, from 1 |
+| `choice` (1.4) | the player who picked | 0 | the choice picked, from 1 |
+
+A `choice` comes from one of the pack's own [HUD widgets](#hud-widgets) with `choices`; its table also has `name`, the widget's ID. Other packs never hear it.
 
 A `map_event` comes from a map trigger whose action is **Script event**. Its table also has `name` (the event name set on the trigger) and `tanks` (the IDs of the noticed tanks inside the trigger's area). See [Map logic](#map-logic).
 
@@ -438,17 +441,42 @@ end)
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `text` | none | up to 120 bytes; a widget needs `text`, `progress` or both |
-| `x`, `y` | `0.5`, `0.2` | position as a fraction of the screen (`y` is the middle of the text) |
+| `text` | none | up to 120 bytes; a widget needs `text`, a `title`, `progress` or `choices` |
+| `x`, `y` | `0.5`, `0.2` | position as a fraction of the screen (`y` is the middle of a plain widget's text, or of a panel) |
 | `align` | `"center"` | `"left"`, `"center"` or `"right"` of `x` |
 | `size` | `18` | text size, 10 to 48, scaled with the interface |
 | `color`, `bar_color` | theme colors | `"#rrggbb"` or `{ r, g, b }` from 0 to 255 |
 | `progress` | none | a bar below the text, filled from 0 to 1 |
 | `width` | `0.2` | the bar's width as a fraction of the screen, 0.02 to 1 |
+| (1.4) `style` | `"plain"` | `"plain"` (text with a soft shadow), `"panel"`, `"card"` (a panel with a stripe), `"banner"` (across the whole screen) or `"pill"` |
+| (1.4) `title` | none | a smaller line above the text, up to 48 bytes |
+| (1.4) `icon` | `"none"` | `"star"`, `"heart"`, `"coin"`, `"clock"`, `"flag"`, `"bolt"`, `"shield"`, `"key"`, `"gem"`, `"trophy"`, `"target"`, `"info"` or `"alert"` |
+| (1.4) `panel`, `accent` | theme colors | the panel's color, and the border, stripe, icon, bar and choice color |
+| (1.4) `opacity` | `0.85` | how solid the panel is, 0 to 1 |
+| (1.4) `enter` | `"fade"` | how it appears: `"none"`, `"fade"`, `"pop"`, `"slide"` or `"drop"` |
+| (1.4) `pulse` | `false` | gently brightens the border to draw the eye |
+| (1.4) `segments` | `0` | splits the bar into 2 to 20 pieces, such as lives |
+| (1.4) `choices` | none | up to 4 buttons of 1 to 32 bytes; a pick raises the pack's `choice` event |
+
+```lua
+tankyard.on("spawn", function(event)
+  tankyard.hud("shop", {
+    title = "Armory", text = "Pick one upgrade", style = "card", icon = "coin",
+    enter = "pop", y = 0.7, choices = { "Repair", "Armor", "Later" },
+  }, event.actor)
+end)
+tankyard.on("choice", function(event)
+  if event.name ~= "shop" then return end
+  if event.value == 1 then tankyard.heal(event.actor, 200) end
+  if event.value == 2 then tankyard.set_armor(event.actor, 1.25) end
+end)
+```
+
+A menu shown to one player closes when they pick; one shown to everyone stays until the script changes it. A player picks at most ten times a second. Widgets appear with their entrance, fade out when removed, and keep their place while their text changes. With **Reduced motion** on, players see them without movement.
 
 Widget IDs use lowercase letters, digits and `_`. A pack may show 16 widgets to everyone and 16 to each player, and a player receives at most 64 from all packs. Bots have no screen, so widgets for bots are dropped. Widgets end with the round, with their player, or when the pack is disabled.
 
-The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. Clients draw exactly what they receive. HUD widgets were introduced in 0.12. Tank Yard 1.0 uses protocol 26; players and servers must use matching supported protocols.
+The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, and styles, icons and choices in 1.4. Tank Yard 1.4.0 uses protocol 30; players and servers must use matching protocols.
 
 ### Defining content
 
@@ -811,7 +839,7 @@ The [Arena Workshop](map-editor.md) creates these definitions without writing co
 - `decor`: `{ "kind": "tile", "rect": [x,y,w,h], "color": [120,160,190], "alpha": 255, "rotation": 0, "pulse": 0, "spin": 0, "flicker": 0, "above": false, "text": "", "effect": null, "group": 0 }`. Kinds: `tile`, `stripes`, `light`, `ring`, `arrow`, `label`, `emitter`, and (1.3) `spotlight`, `beam`, `grid`, `disc`, `triangle` and `hexagon`. Rotation/spin are degrees; pulse is cycles/second. (1.0) `flicker`, 0–1, makes a `light`, `spotlight` or `beam` waver like a flame or a failing lamp. (1.3) `react` makes decor respond to the player's own tank: `fade` (clears as it comes near, for roofs), `appear`, `grow` or `glow`, within `reach` world units (10–2,000; 220 when left out). Text has at most 64 characters.
 - `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`, (protocol 25) `exit`, `signal`, `counter`, (0.15.1) `occupied` (every `seconds`, at least 0.25, while `threshold` tanks, 1–64, are inside), `cleared` (the last noticed tank leaves or dies) and `destroyed` (a noticed tank dies inside), and (0.16) `changed` (counter `source`, 1–8, changes value), `shown` and `hidden` (group `source`, 1–32, is shown or hidden during the round, by anything) and `defeated` (a boss is defeated; `source` 0 for any boss, or a boss's place in the list under `spawn_boss` counting from 1), and (1.0) `arrived` (a motion of group `source`, 1–32, ends). Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`), (protocol 25) `signal` (channel `group`), `count` (adds `amount` to counter `group`) and `shapes` (`amount` shapes, 1–24, inside `rect`), and (0.15.1) `set` (puts counter `group` at `amount`), `random` (signals one of `amount` channels, at least 2, starting at `group`), `heal` and `hurt` (`amount` percent of health, 1–100) and `award` (`amount` points, 1–100,000) for the noticed tanks inside `rect`, `calculate` (changes counter `group` with `math` and `amount`, or with counter `operand`) and `script` (raises the [`map_event`](#map-logic) script event named `text`: lowercase letters, digits and `_`, starting with a letter, up to 32), and (0.16) `sequence` (signals the next of `amount` channels starting at `group` each time, then starts over) and `reset` (makes group `group`'s triggers start afresh, or every trigger for 0, like `reset_map_triggers`), (1.0) the [motions](#motions) `move`, `place`, `turn` and `fade`, (1.1) the [effects](#effects) `tint`, `scale`, `animate`, `stop`, `shake` and `sound`, and (1.3) the [physics and lighting](#physics-and-lighting) actions `shove`, `fling`, `blast`, `zoom`, `light` and `path`. (1.3) `touch` and `release` act when a block of group `source` starts to overlap `rect`, or the last one stops. Protocol 25 fields, all optional:
   - `member`: the trigger's own group; it is off while that group is hidden.
-  - `who` (`anyone`, `players`, `bots`) and `team` (0–4): which tanks an area trigger notices, or which tanks a `heal`, `hurt` or `award` action reaches.
+  - `who` (`anyone`, `players`, `bots`, and in 1.4 `cause`) and `team` (0–4): which tanks an area trigger notices, or which tanks a `heal`, `hurt` or `award` action reaches. `cause` reaches only the tank that set the trigger off: the one that crossed an area, or picked a choice, behind the signal it heard; area triggers with it watch for any tank.
   - `source`: the signal channel (1–32) or counter (1–8) a trigger waits for. `threshold`: the counter value it waits for.
   - `chance`: 1–100 percent, default 100. `delay`: seconds between firing and acting, 0–3600.
   - (0.15.1) `only_if`: a gate checked when the trigger fires; it acts only if the gate holds. `{ "kind": "counter", "index": 1, "compare": "at_least", "value": 3, "against": 0 }` compares counter `index` with `value`, or with counter `against` when that is 1–8. `compare` is `equal`, `not_equal`, `below`, `above`, `at_most` or `at_least`. `{ "kind": "shown", "index": 4 }` and `{ "kind": "hidden", "index": 4 }` test a group. (0.16) `{ "kind": "inside", "compare": "at_least", "value": 2 }` counts the noticed tanks inside the trigger's `rect` (with its `who` and `team`), and `{ "kind": "time", "compare": "at_least", "value": 300 }` reads whole seconds since the round started; both compare like a counter, with `value` or counter `against`.
@@ -927,6 +955,22 @@ Emitters' `effect` is an optional particle profile. Defaults are:
 Particle shapes are `dot`, `square`, `spark`, `ring`, `triangle`, and (1.0) `soft` (a dot with a soft edge, for smoke, mist and glows) and `star`. (1.0) `glow` adds particles' light to what lies beneath them, like embers; `wobble` drifts them sideways by up to that many world units (0–200), for smoke and fireflies; `twinkle` (0–1) makes each one flicker; and `area` says where they start: anywhere in the rectangle (`fill`), in the ellipse inside it (`round`), along its outline (`edge`) or at its center (`point`). Rate is 0.2–60/s, lifetime 0.1–8 s, speed 0–800, spread 0–360°, gravity ±800, drag 0–8, initial size 1–120, final size 0–120, and spin ±1080°/s. `rate × lifetime` must not exceed 240. Colors are three bytes; direction 0° points right and 90° down.
 
 Maps allow 2,048 walls/blocks combined, 512 zones, 2,048 decor items (48 emitters), 512 triggers, 32 paths, 32 bodies, 32 spawn regions, 4 team bases and 32 objectives. Geometry validation also has a catalog-wide work budget. Dimensions are 900–16,000 by 700–16,000 world units. Every rectangle must fit inside `[0,1]²`. Validation checks starting collision/connectivity, finite values and count limits before accepting a pack.
+
+#### UI
+
+Tank Yard 1.4.0 (protocol 30) adds `ui` and `hide_ui` actions. A `ui` trigger shows its `ui` widget in slot `group` (1–16); a `hide_ui` trigger takes slot `group` away (0 for every slot) from the players its `ui.to` names, or from everyone without a `ui`:
+
+```json
+{ "when": "enter", "action": "ui", "rect": [0.45, 0.4, 0.1, 0.1], "group": 3, "seconds": 2,
+  "duration": 0,
+  "ui": {
+    "widget": { "title": "Workshop", "text": "Pick an upgrade, {name}", "y": 0.7,
+                "style": "panel", "icon": "bolt", "enter": "slide",
+                "choices": ["Repair", "Points", "Leave"] },
+    "to": "cause", "channels": [1, 2, 0] } }
+```
+
+`widget` takes the [HUD widget](#hud-widgets) fields; its `text` and `title` fill in `{1}`–`{8}` (counters), `{left}` (seconds before it goes), `{time}` (the round's clock), `{name}` and `{score}` (the viewer's). `to` is `everyone` (the default; later arrivals see it too), `inside` (players the trigger notices in its `rect`) or `cause` (the player that set it off). `bar` (1–8) fills the bar from that counter out of `bar_max` (1–99,999); `timer: true` empties it as `duration` runs out instead. Each choice signals its channel in `channels` (0 for none) with the picker as the tank that set it off, and the menu closes for them unless `keep` is true. `duration` above 0 takes the widget away after that many seconds. Bots never see widgets.
 
 Boss IDs are `sentinel`, `prism`, `foundry`, `tempest`, `bastion`, `eclipse`, `guardian`, `summoner`, `defender`, `fallen_overlord`, `fallen_booster`, `siege_engine`, `skirmisher`, `trapper`. Boss triggers use these IDs. Scripts' `spawn_boss` also accepts the existing display names.
 

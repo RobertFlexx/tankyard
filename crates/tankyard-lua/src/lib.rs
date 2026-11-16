@@ -356,6 +356,12 @@ impl ServerPlugin for LuaPlugin {
                 event_table.raw_set("tanks", tanks)?;
                 event_table.raw_set("value", raised.trigger + 1)?;
             }
+            if event.trigger == Trigger::Choice
+                && let Some(pick) = world.hud_picks.get(event.value as usize)
+            {
+                event_table.raw_set("name", pick.widget.as_str())?;
+                event_table.raw_set("value", i64::from(pick.option) + 1)?;
+            }
             let outcome = dispatch.call::<()>((event.trigger.name(), event_table));
             native.raw_set("read", Value::Nil)?;
             native.raw_set("emit", Value::Nil)?;
@@ -956,19 +962,12 @@ fn hud(args: &[Value]) -> mlua::Result<Effect> {
     if args.len() <= 2 {
         return Ok(Effect::Hud { id, widget: None });
     }
-    let raw = match arg(2) {
-        Some(Value::String(s)) => s.to_string_lossy(),
+    let words = |index: usize, max: usize| match arg(index) {
+        Some(Value::String(s)) => tankyard_mods::clip_text(s.to_string_lossy().trim(), max),
         _ => String::new(),
     };
-    let text: String = raw.chars().filter(|c| !c.is_control()).collect();
-    let text = text.trim();
-    let mut clipped = String::new();
-    for c in text.chars() {
-        if clipped.len() + c.len_utf8() > 120 {
-            break;
-        }
-        clipped.push(c);
-    }
+    let clipped = words(2, tankyard_mods::HUD_TEXT);
+    let title = words(12, tankyard_mods::HUD_TITLE);
     let field = |index: usize, what: &str, default: f32, low: f32, high: f32| {
         let value = optional_number(arg(index), what)?.map_or(default, |v| v as f32);
         if (low..=high).contains(&value) {
@@ -1005,8 +1004,62 @@ fn hud(args: &[Value]) -> mlua::Result<Effect> {
         Some(_) => return Err(rt("tankyard.hud: progress must be between 0 and 1")),
         None => None,
     };
-    if clipped.is_empty() && progress.is_none() {
-        return Err(rt("tankyard.hud: a widget needs text, progress or both"));
+    /// One of `options` by its id, or the first without a value.
+    fn named<T: Copy>(
+        value: Option<&Value>,
+        what: &str,
+        options: &[T],
+        id: fn(T) -> &'static str,
+    ) -> mlua::Result<T> {
+        let Some(Value::String(name)) = value else {
+            return Ok(options[0]);
+        };
+        let name = name.to_string_lossy();
+        options
+            .iter()
+            .copied()
+            .find(|o| id(*o) == name)
+            .ok_or_else(|| {
+                let ids: Vec<_> = options.iter().map(|o| format!("{:?}", id(*o))).collect();
+                rt(format!(
+                    "tankyard.hud: {what} must be one of {}",
+                    ids.join(", ")
+                ))
+            })
+    }
+    let choices: Vec<String> = match arg(20) {
+        Some(Value::String(list)) => list
+            .to_string_lossy()
+            .split('\n')
+            .map(|choice| choice.trim().to_owned())
+            .collect(),
+        _ => Vec::new(),
+    };
+    if choices.len() > tankyard_mods::HUD_CHOICES
+        || choices
+            .iter()
+            .any(|c| c.is_empty() || c.len() > tankyard_mods::HUD_CHOICE)
+    {
+        return Err(rt(format!(
+            "tankyard.hud: up to {} choices of 1 to {} bytes",
+            tankyard_mods::HUD_CHOICES,
+            tankyard_mods::HUD_CHOICE
+        )));
+    }
+    if clipped.is_empty() && title.is_empty() && progress.is_none() && choices.is_empty() {
+        return Err(rt(
+            "tankyard.hud: a widget needs text, a title, progress or choices",
+        ));
+    }
+    let segments = field(
+        19,
+        "segments",
+        0.,
+        0.,
+        f32::from(tankyard_mods::HUD_SEGMENTS),
+    )?;
+    if segments.fract() != 0. {
+        return Err(rt("tankyard.hud: segments must be a whole number"));
     }
     Ok(Effect::Hud {
         id,
@@ -1020,6 +1073,35 @@ fn hud(args: &[Value]) -> mlua::Result<Effect> {
             progress,
             bar_color: color(9)?,
             width: field(10, "width", 0.2, 0.02, 1.)?,
+            style: named(
+                arg(11),
+                "style",
+                &tankyard_mods::HudStyle::ALL,
+                tankyard_mods::HudStyle::id,
+            )?,
+            title,
+            icon: named(
+                arg(13),
+                "icon",
+                &tankyard_mods::HudIcon::ALL,
+                tankyard_mods::HudIcon::id,
+            )?,
+            panel: color(14)?,
+            opacity: field(15, "opacity", 0.85, 0., 1.)?,
+            accent: color(16)?,
+            enter: match arg(17) {
+                None | Some(Value::Nil) => tankyard_mods::HudEnter::Fade,
+                value => named(
+                    value,
+                    "enter",
+                    &tankyard_mods::HudEnter::ALL,
+                    tankyard_mods::HudEnter::id,
+                )?,
+            },
+            pulse: matches!(arg(18), Some(Value::Boolean(true))),
+            segments: segments as u8,
+            choices,
+            menu: 0,
         }),
     })
 }

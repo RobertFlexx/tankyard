@@ -24,8 +24,8 @@ impl Brush {
     }
 }
 
-pub const CATEGORIES: [&str; 9] = [
-    "Blocks", "Pads", "Decor", "Logic", "Gates", "Motion", "Effects", "Physics", "Markers",
+pub const CATEGORIES: [&str; 10] = [
+    "Blocks", "Pads", "Decor", "Logic", "Gates", "Motion", "Effects", "Physics", "Markers", "UI",
 ];
 
 fn block(name: &'static str, style: BlockStyle) -> Brush {
@@ -1220,6 +1220,89 @@ pub fn catalog() -> Vec<Vec<Brush>> {
             marker("Objective", Object::Objective([0.5, 0.5]), [0., 0.])
                 .hint("A point for objective modes"),
         ],
+        vec![
+            logic(
+                "Message",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Start,
+                    action: TriggerAction::Ui,
+                    seconds: 1.,
+                    duration: 8.,
+                    ui: Some(Box::new(MapUi::starter())),
+                    ..Default::default()
+                },
+            )
+            .hint("Shows a card to everyone for 8 seconds as the round starts"),
+            logic(
+                "Counter display",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Start,
+                    action: TriggerAction::Ui,
+                    group: 2,
+                    seconds: 0.,
+                    ui: Some(Box::new(MapUi {
+                        widget: HudWidget {
+                            title: "Cores".into(),
+                            text: "{1} / 5".into(),
+                            x: 0.02,
+                            y: 0.14,
+                            align: HudAlign::Left,
+                            style: HudStyle::Pill,
+                            icon: HudIcon::Gem,
+                            size: 16.,
+                            segments: 5,
+                            width: 0.14,
+                            ..HudWidget::default()
+                        },
+                        bar: 1,
+                        bar_max: 5,
+                        ..MapUi::default()
+                    })),
+                    ..Default::default()
+                },
+            )
+            .hint("Keeps counter 1 on screen as a five-piece bar"),
+            logic(
+                "Choice menu",
+                [240., 240.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Ui,
+                    group: 3,
+                    seconds: 2.,
+                    ui: Some(Box::new(MapUi {
+                        widget: HudWidget {
+                            title: "Workshop".into(),
+                            text: "Pick an upgrade".into(),
+                            y: 0.7,
+                            style: HudStyle::Panel,
+                            icon: HudIcon::Bolt,
+                            enter: HudEnter::Slide,
+                            choices: vec!["Repair".into(), "Points".into(), "Leave".into()],
+                            ..HudWidget::default()
+                        },
+                        to: UiAudience::Cause,
+                        channels: vec![1, 2, 0],
+                        ..MapUi::default()
+                    })),
+                    ..Default::default()
+                },
+            )
+            .hint("Asks the player who drives in to pick; choices send signals 1 and 2"),
+            logic(
+                "Hide UI",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Signal,
+                    action: TriggerAction::HideUi,
+                    group: 0,
+                    ..Default::default()
+                },
+            )
+            .hint("On signal 1, clears every map widget"),
+        ],
     ]
 }
 
@@ -1617,6 +1700,31 @@ pub fn trigger_badge(action: TriggerAction, r: Rect, lit: f32) {
                 u * 0.68,
                 Color::new(0.13, 0.12, 0.10, 1.),
             );
+        }
+        TriggerAction::Ui | TriggerAction::HideUi => {
+            // A little screen with a panel on it.
+            draw_rectangle_lines(c.x - u, c.y - u * 0.75, u * 2., u * 1.5, line * 0.8, ink);
+            if action == TriggerAction::Ui {
+                draw_rectangle(c.x - u * 0.6, c.y - u * 0.45, u * 1.2, u * 0.5, ink);
+                draw_line(
+                    c.x - u * 0.45,
+                    c.y + u * 0.35,
+                    c.x + u * 0.45,
+                    c.y + u * 0.35,
+                    line,
+                    ink,
+                );
+            } else {
+                draw_rectangle_lines(
+                    c.x - u * 0.6,
+                    c.y - u * 0.45,
+                    u * 1.2,
+                    u * 0.5,
+                    line * 0.7,
+                    ink,
+                );
+                draw_line(c.x - u, c.y + u * 0.75, c.x + u, c.y - u * 0.75, line, ink);
+            }
         }
         TriggerAction::Path => {
             // Points joined along a route.

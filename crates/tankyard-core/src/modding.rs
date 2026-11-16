@@ -289,6 +289,23 @@ impl ModRuntime {
                     }),
             );
         }
+        if wants(Trigger::Choice) {
+            // `value` is the pick's place in `world.hud_picks`.
+            events.extend(world.hud_picks.iter().enumerate().map(|(index, pick)| {
+                HookEvent {
+                    trigger: Trigger::Choice,
+                    actor: pick.tank,
+                    position: world
+                        .tanks
+                        .iter()
+                        .find(|tank| tank.id == pick.tank)
+                        .map_or(V2::ZERO, |tank| tank.pos),
+                    tick: world.tick,
+                    target: 0,
+                    value: index as f32,
+                }
+            }));
+        }
         if wants(Trigger::Damage) {
             events.extend(world.damage_log.iter().take(1024).map(|record| HookEvent {
                 trigger: Trigger::Damage,
@@ -316,6 +333,15 @@ impl ModRuntime {
     pub fn dispatch(&mut self, world: &mut World, event: HookEvent) {
         for module in &mut self.modules {
             if module.disabled || !module.wants(event.trigger) {
+                continue;
+            }
+            // A pick goes only to the pack whose widget it was.
+            if event.trigger == Trigger::Choice
+                && world
+                    .hud_picks
+                    .get(event.value as usize)
+                    .is_none_or(|pick| pick.pack != module.id)
+            {
                 continue;
             }
             if module.command_tick != event.tick {
@@ -353,10 +379,15 @@ impl ModRuntime {
                         let key = (module.id.clone(), actor, id);
                         match widget {
                             // Bots have no screen to show a widget on.
-                            Some(widget)
+                            Some(mut widget)
                                 if actor == 0
                                     || world.tanks.iter().any(|t| t.id == actor && !t.bot) =>
                             {
+                                widget.menu = if widget.choices.is_empty() {
+                                    0
+                                } else {
+                                    crate::map_features::menu_number(&key.0, &key.2)
+                                };
                                 world.hud.insert(key, widget);
                             }
                             Some(_) => {}

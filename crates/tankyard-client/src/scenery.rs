@@ -507,14 +507,17 @@ pub fn lights(
         };
         if let Some(effect) = item.effect.as_ref().filter(|_| glowing) {
             let spread = (effect.speed * effect.lifetime * 0.5 + effect.size * 3.) * view.zoom;
-            out.push(Light::Spot {
-                at: r.center(),
-                radius: (r.w.max(r.h) * 0.5 + spread * scale).max(4.),
-                color: alpha(
-                    mix(color(tinted(effect.color, look.tint)), WHITE, 0.3),
-                    (f32::from(item.alpha) / 255. * 0.55 * look.fade).min(1.),
-                ),
-            });
+            crate::lighting::gather(
+                out,
+                Light::Spot {
+                    at: r.center(),
+                    radius: (r.w.max(r.h) * 0.5 + spread * scale).max(4.),
+                    color: alpha(
+                        mix(color(tinted(effect.color, look.tint)), WHITE, 0.3),
+                        (f32::from(item.alpha) / 255. * 0.55 * look.fade).min(1.),
+                    ),
+                },
+            );
             continue;
         }
         let pulse = if item.pulse > 0. {
@@ -536,32 +539,38 @@ pub fn lights(
             // The pool where the beam lands, as the visible spotlight draws it.
             let spread = (r.h * 0.5).atan2(r.w.max(1.));
             let land = r.w * 0.7;
-            out.push(Light::Spot {
-                at: r.center() - direction * r.w * 0.5 + direction * land,
-                radius: (land * spread.tan() * 0.85).max(2.),
-                color: alpha(color, color.a * 0.35),
-            });
+            crate::lighting::gather(
+                out,
+                Light::Spot {
+                    at: r.center() - direction * r.w * 0.5 + direction * land,
+                    radius: (land * spread.tan() * 0.85).max(2.),
+                    color: alpha(color, color.a * 0.35),
+                },
+            );
         }
-        out.push(match item.kind {
-            DecorKind::Spotlight => Light::Cone {
-                at: r.center() - direction * r.w * 0.5,
-                angle,
-                spread: (r.h * 0.5).atan2(r.w.max(1.)),
-                reach: r.w * 1.1,
-                color,
+        crate::lighting::gather(
+            out,
+            match item.kind {
+                DecorKind::Spotlight => Light::Cone {
+                    at: r.center() - direction * r.w * 0.5,
+                    angle,
+                    spread: (r.h * 0.5).atan2(r.w.max(1.)),
+                    reach: r.w * 1.1,
+                    color,
+                },
+                DecorKind::Beam => Light::Shaft {
+                    from: r.center() - direction * r.w * 0.5,
+                    to: r.center() + direction * r.w * 0.5,
+                    width: r.h * 2.5,
+                    color,
+                },
+                _ => Light::Spot {
+                    at: r.center(),
+                    radius: r.w.min(r.h) * 0.6,
+                    color,
+                },
             },
-            DecorKind::Beam => Light::Shaft {
-                from: r.center() - direction * r.w * 0.5,
-                to: r.center() + direction * r.w * 0.5,
-                width: r.h * 2.5,
-                color,
-            },
-            _ => Light::Spot {
-                at: r.center(),
-                radius: r.w.min(r.h) * 0.6,
-                color,
-            },
-        });
+        );
     }
     for zone in &map.zones {
         if out.len() >= crate::lighting::MOST_LIGHTS {
@@ -575,11 +584,44 @@ pub fn lights(
             continue;
         }
         let r = screen_rect(view, config, shown.poses.shift(zone.rect, zone.group));
-        out.push(Light::Spot {
-            at: r.center(),
-            radius: r.w.max(r.h) * 0.75,
-            color: alpha(crate::accessibility::palette(zone_color(zone.kind)), 0.35),
-        });
+        crate::lighting::gather(
+            out,
+            Light::Spot {
+                at: r.center(),
+                radius: r.w.max(r.h) * 0.75,
+                color: alpha(crate::accessibility::palette(zone_color(zone.kind)), 0.35),
+            },
+        );
+    }
+}
+
+/// An unturned grid, only its lines on screen and only as long as the
+/// screen shows them: a grid as large as the arena costs a screenful.
+fn straight_grid(r: Rect, step: f32, thickness: f32, c: Color) {
+    let (columns, rows) = ((r.w / step).floor().max(1.), (r.h / step).floor().max(1.));
+    let (dx, dy) = (r.w / columns, r.h / rows);
+    let (left, right) = (
+        r.x.max(-thickness),
+        r.right().min(screen_width() + thickness),
+    );
+    let (top, bottom) = (
+        r.y.max(-thickness),
+        r.bottom().min(screen_height() + thickness),
+    );
+    if left > right || top > bottom {
+        return;
+    }
+    let first = ((left - r.x) / dx).ceil().max(0.) as u32;
+    let last = (((right - r.x) / dx).floor().min(columns) as u32).min(first + 512);
+    for i in first..=last {
+        let x = r.x + i as f32 * dx;
+        draw_line(x, top, x, bottom, thickness, c);
+    }
+    let first = ((top - r.y) / dy).ceil().max(0.) as u32;
+    let last = (((bottom - r.y) / dy).floor().min(rows) as u32).min(first + 512);
+    for i in first..=last {
+        let y = r.y + i as f32 * dy;
+        draw_line(left, y, right, y, thickness, c);
     }
 }
 
@@ -709,6 +751,10 @@ pub fn decoration(
         DecorKind::Grid => {
             let step = (40. * zoom).max(6.);
             let thickness = (1.5 * zoom).max(1.);
+            if angle.sin().abs() < 1e-4 && angle.cos() > 0. {
+                straight_grid(r, step, thickness, c);
+                return;
+            }
             let columns = ((r.w / step).floor() as i32).clamp(1, 96);
             let rows = ((r.h / step).floor() as i32).clamp(1, 96);
             for i in 0..=columns {
@@ -847,33 +893,25 @@ fn light(item: &MapDecor, p: Vec2, radius: f32, c: Color, time: f32) {
         glow::spot(p, radius * 0.9, alpha(c, strength * 0.8));
         glow::spot(p, radius * 0.3, alpha(hot, strength));
         glow::end();
-        // A faint halo and a glint on the bulb, the way a lens catches it.
-        draw_circle_lines(
-            p.x,
-            p.y,
-            radius * 0.62,
-            (radius * 0.015).max(1.),
-            alpha(c, strength * 0.12),
-        );
-        if radius > 10. && glow::begin(Blend::Add) {
-            crate::lighting::glint(
-                p,
-                (radius * 0.32).min(90.),
-                std::f32::consts::FRAC_PI_4,
-                alpha(hot, strength * 0.5),
-            );
+        // A glint on the bulb, the way a lens catches it, and a white-hot
+        // core added on top so the bulb never reads darker than its glow.
+        if glow::begin(Blend::Add) {
+            if radius > 10. {
+                crate::lighting::glint(
+                    p,
+                    (radius * 0.32).min(90.),
+                    std::f32::consts::FRAC_PI_4,
+                    alpha(hot, strength * 0.5),
+                );
+            }
+            glow::spot(p, (radius * 0.08).max(2.), alpha(WHITE, strength * 0.9));
             glow::end();
         }
     } else {
         glow::fallback_spot(p, radius, alpha(c, strength * 0.9));
         draw_circle(p.x, p.y, radius * 0.14, alpha(hot, strength * 0.6));
+        draw_circle(p.x, p.y, (radius * 0.05).max(1.2), alpha(WHITE, strength));
     }
-    draw_circle(
-        p.x,
-        p.y,
-        (radius * 0.05).max(1.2),
-        alpha(mix(c, WHITE, 0.8), strength),
-    );
 }
 
 /// A spotlight's lamp at `at`, shining along `direction`: a housing that

@@ -472,16 +472,20 @@ pub fn world(
             .map(|tank| placed(tank.id, tank.pos)),
     };
     if let Some(map) = map {
-        crate::scenery::floor(map, &snapshot.config, &shown, view, animation_time);
-        crate::scenery::decorations(
-            map,
-            &snapshot.config,
-            &shown,
-            view,
-            animation_time,
-            false,
-            settings,
-        );
+        crate::profile::phase("pads", || {
+            crate::scenery::floor(map, &snapshot.config, &shown, view, animation_time)
+        });
+        crate::profile::phase("decor", || {
+            crate::scenery::decorations(
+                map,
+                &snapshot.config,
+                &shown,
+                view,
+                animation_time,
+                false,
+                settings,
+            )
+        });
     }
     let wall_scale = scale / snapshot.config.arena_scale.max(0.5);
     let arena_center = V2::new(snapshot.config.width * 0.5, snapshot.config.height * 0.5);
@@ -530,77 +534,79 @@ pub fn world(
         w: wall.w * wall_scale,
         h: wall.h * wall_scale,
     };
-    // Soft drop shadows first, so cover reads as raised above the floor.
-    if settings.shape_quality > 0 {
-        let shadow = if dark {
-            Color::new(0.0, 0.0, 0.0, 0.24)
-        } else {
-            Color::new(0.10, 0.12, 0.14, 0.11)
+    crate::profile::phase("walls", || {
+        // Soft drop shadows first, so cover reads as raised above the floor.
+        if settings.shape_quality > 0 {
+            let shadow = if dark {
+                Color::new(0.0, 0.0, 0.0, 0.24)
+            } else {
+                Color::new(0.10, 0.12, 0.14, 0.11)
+            };
+            for wall in snapshot.walls.iter().map(scaled) {
+                if !view.visible(wall.center(), wall.w.max(wall.h)) {
+                    continue;
+                }
+                let p = view.screen(V2::new(wall.x + 6., wall.y + 8.));
+                draw_rectangle(p.x, p.y, wall.w * z, wall.h * z, shadow);
+            }
+        }
+        let styles = map.map(crate::scenery::block_styles);
+        // Styles belong to where the map puts each block, before any glide.
+        let arena_size = V2::new(
+            snapshot.config.width * snapshot.config.arena_scale,
+            snapshot.config.height * snapshot.config.arena_scale,
+        );
+        let home = |index: usize, wall: tankyard_core::Rect| match snapshot.wall_groups.get(index) {
+            Some(&group) if shown.poses.moved && group > 0 => {
+                let [dx, dy] = shown.poses.offset(group);
+                tankyard_core::Rect {
+                    x: wall.x - dx * arena_size.x,
+                    y: wall.y - dy * arena_size.y,
+                    ..wall
+                }
+            }
+            _ => wall,
         };
-        for wall in snapshot.walls.iter().map(scaled) {
+        // Groups tanks can push, drawn as crates.
+        let bodies = map.map_or(0, |map| {
+            map.bodies.iter().fold(0, |mask, body| {
+                mask | tankyard_content::MapDef::group_bit(body.group)
+            })
+        });
+        for (index, original) in snapshot.walls.iter().enumerate() {
+            let wall = scaled(original);
             if !view.visible(wall.center(), wall.w.max(wall.h)) {
                 continue;
             }
-            let p = view.screen(V2::new(wall.x + 6., wall.y + 8.));
-            draw_rectangle(p.x, p.y, wall.w * z, wall.h * z, shadow);
-        }
-    }
-    let styles = map.map(crate::scenery::block_styles);
-    // Styles belong to where the map puts each block, before any glide.
-    let arena_size = V2::new(
-        snapshot.config.width * snapshot.config.arena_scale,
-        snapshot.config.height * snapshot.config.arena_scale,
-    );
-    let home = |index: usize, wall: tankyard_core::Rect| match snapshot.wall_groups.get(index) {
-        Some(&group) if shown.poses.moved && group > 0 => {
-            let [dx, dy] = shown.poses.offset(group);
-            tankyard_core::Rect {
-                x: wall.x - dx * arena_size.x,
-                y: wall.y - dy * arena_size.y,
-                ..wall
+            let p = view.screen(V2::new(wall.x, wall.y));
+            let (style, tint) = map.map_or(
+                (
+                    tankyard_client::map_model::WallStyle::for_map(&snapshot.config.map),
+                    None,
+                ),
+                |map| {
+                    styles
+                        .as_ref()
+                        .expect("map has a style index")
+                        .collider_style(
+                            map,
+                            &snapshot.config,
+                            snapshot.match_state.hidden_groups,
+                            home(index, *original),
+                        )
+                },
+            );
+            let r = Rect::new(p.x, p.y, wall.w * z, wall.h * z);
+            crate::scenery::block(r, style, tint, dark, settings.shape_quality);
+            if snapshot
+                .wall_groups
+                .get(index)
+                .is_some_and(|&group| tankyard_content::MapDef::group_bit(group) & bodies != 0)
+            {
+                crate::scenery::body_marks(r, dark);
             }
         }
-        _ => wall,
-    };
-    // Groups tanks can push, drawn as crates.
-    let bodies = map.map_or(0, |map| {
-        map.bodies.iter().fold(0, |mask, body| {
-            mask | tankyard_content::MapDef::group_bit(body.group)
-        })
     });
-    for (index, original) in snapshot.walls.iter().enumerate() {
-        let wall = scaled(original);
-        if !view.visible(wall.center(), wall.w.max(wall.h)) {
-            continue;
-        }
-        let p = view.screen(V2::new(wall.x, wall.y));
-        let (style, tint) = map.map_or(
-            (
-                tankyard_client::map_model::WallStyle::for_map(&snapshot.config.map),
-                None,
-            ),
-            |map| {
-                styles
-                    .as_ref()
-                    .expect("map has a style index")
-                    .collider_style(
-                        map,
-                        &snapshot.config,
-                        snapshot.match_state.hidden_groups,
-                        home(index, *original),
-                    )
-            },
-        );
-        let r = Rect::new(p.x, p.y, wall.w * z, wall.h * z);
-        crate::scenery::block(r, style, tint, dark, settings.shape_quality);
-        if snapshot
-            .wall_groups
-            .get(index)
-            .is_some_and(|&group| tankyard_content::MapDef::group_bit(group) & bodies != 0)
-        {
-            crate::scenery::body_marks(r, dark);
-        }
-    }
     if snapshot.config.mode == Mode::Survival {
         let p = view.screen(V2::new(
             snapshot.config.width * 0.5,
@@ -1106,15 +1112,17 @@ pub fn world(
         }
     }
     if let Some(map) = map {
-        crate::scenery::decorations(
-            map,
-            &snapshot.config,
-            &shown,
-            view,
-            animation_time,
-            true,
-            settings,
-        );
+        crate::profile::phase("decor above", || {
+            crate::scenery::decorations(
+                map,
+                &snapshot.config,
+                &shown,
+                view,
+                animation_time,
+                true,
+                settings,
+            )
+        });
         let lighting =
             crate::lighting::steady(shown.poses.lighting(&map.ambient), settings.reduced_motion);
         if lighting[3] > 0.004 {
@@ -1129,7 +1137,9 @@ pub fn world(
                 &mut lights,
             );
             arena_lights(snapshot, local, view, interpolation, &placed, &mut lights);
-            crate::lighting::darken(lighting, &lights, None);
+            crate::profile::phase("darkness", || {
+                crate::lighting::darken(lighting, &lights, None)
+            });
         }
     }
     for popup in &effects.popups {
@@ -1160,29 +1170,35 @@ fn arena_lights(
             continue;
         }
         let own = tank.id == local;
-        out.push(Light::Spot {
-            at: view.screen(placed(tank.id, tank.pos)),
-            radius: if own {
-                (tank.radius * 4. + 340.) * z
-            } else {
-                (tank.radius * 3. + 150.) * z
+        crate::lighting::gather(
+            out,
+            Light::Spot {
+                at: view.screen(placed(tank.id, tank.pos)),
+                radius: if own {
+                    (tank.radius * 4. + 340.) * z
+                } else {
+                    (tank.radius * 3. + 150.) * z
+                },
+                color: alpha(WHITE, if own { 0.95 } else { 0.7 }),
             },
-            color: alpha(WHITE, if own { 0.95 } else { 0.7 }),
-        });
+        );
     }
     for boss in &snapshot.bosses {
-        out.push(Light::Spot {
-            at: view.screen(placed(boss.id, boss.pos)),
-            radius: (boss.radius * 2.5 + 120.) * z,
-            color: alpha(
-                mix(
-                    tankyard_client::boss_model::boss_color(boss.kind),
-                    WHITE,
-                    0.4,
+        crate::lighting::gather(
+            out,
+            Light::Spot {
+                at: view.screen(placed(boss.id, boss.pos)),
+                radius: (boss.radius * 2.5 + 120.) * z,
+                color: alpha(
+                    mix(
+                        tankyard_client::boss_model::boss_color(boss.kind),
+                        WHITE,
+                        0.4,
+                    ),
+                    0.8,
                 ),
-                0.8,
-            ),
-        });
+            },
+        );
     }
     for projectile in &snapshot.projectiles {
         if out.len() >= MOST_LIGHTS {
@@ -1192,18 +1208,21 @@ fn arena_lights(
         if !view.visible(at, 80.) {
             continue;
         }
-        out.push(Light::Spot {
-            at: view.screen(at),
-            radius: (projectile.radius * 4. + 36.) * z,
-            color: alpha(
-                mix(
-                    team_color(projectile.team, projectile.owner == local, false),
-                    WHITE,
-                    0.5,
+        crate::lighting::gather(
+            out,
+            Light::Spot {
+                at: view.screen(at),
+                radius: (projectile.radius * 4. + 36.) * z,
+                color: alpha(
+                    mix(
+                        team_color(projectile.team, projectile.owner == local, false),
+                        WHITE,
+                        0.5,
+                    ),
+                    0.6,
                 ),
-                0.6,
-            ),
-        });
+            },
+        );
     }
 }
 

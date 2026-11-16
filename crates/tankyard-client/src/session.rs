@@ -80,6 +80,13 @@ pub struct Session {
     /// group poses that put them there, for prediction.
     walls_now: Vec<tankyard_core::Rect>,
     poses_now: tankyard_content::GroupPoses,
+    /// Bodies where the predicted tank has pushed them, one per map body,
+    /// and the walls with them there: what the next input predicts against.
+    bodies_ahead: Vec<tankyard_core::BodyState>,
+    walls_ahead: Vec<tankyard_core::Rect>,
+    /// Bodies the predicted tank pushes, or pushed and the server has yet to
+    /// settle, as a group mask. They're drawn where prediction has them.
+    pushing: u32,
     pub previous_positions: HashMap<EntityId, (V2, f32)>,
     pub ticks: u64,
     pub dropped_ticks: u64,
@@ -460,6 +467,9 @@ impl Session {
             render_time: 0.0,
             walls_now: Vec::new(),
             poses_now: Default::default(),
+            bodies_ahead: Vec::new(),
+            walls_ahead: Vec::new(),
+            pushing: 0,
             previous_positions: HashMap::new(),
             ticks: 0,
             dropped_ticks: 0,
@@ -707,36 +717,38 @@ impl Session {
                     .unwrap_or(authoritative.pos);
                 let mut predicted = authoritative.clone();
                 self.predicted_tick = snapshot.tick;
-                // A sliding body keeps sliding while inputs replay, so a
-                // tank pushing one isn't held back by where it was.
-                let sliding = snapshot
-                    .match_state
-                    .bodies
+                // Bodies start where the server has them and move with the
+                // predicted tank, as the server will move them on its inputs.
+                let map = self
+                    .bundle
+                    .maps
                     .iter()
-                    .any(|body| body.velocity != [0., 0.]);
-                let mut walls_ahead = Vec::new();
-                for (step, input) in self.pending.iter().enumerate() {
+                    .find(|map| map.id == snapshot.config.map);
+                self.walls_ahead.clone_from(&self.walls_now);
+                match map {
+                    Some(map) => {
+                        tankyard_core::snapshot_body_states(snapshot, map, &mut self.bodies_ahead)
+                    }
+                    None => self.bodies_ahead.clear(),
+                }
+                let mut pushed = 0;
+                for input in &self.pending {
                     predicted.input = *input;
                     self.predicted_tick += 1;
                     predict_pads(&self.bundle.maps, snapshot, &self.poses_now, &mut predicted);
-                    let walls = if sliding {
-                        let ahead = snapshot.match_state.elapsed + (step + 1) as f32 * DT;
-                        let poses = tankyard_core::snapshot_poses(snapshot, ahead);
-                        tankyard_core::place_walls(snapshot, &poses, &mut walls_ahead);
-                        &walls_ahead
-                    } else {
-                        &self.walls_now
-                    };
-                    predict_tank(
-                        &mut predicted,
+                    pushed |= predict_step(
+                        snapshot,
                         content,
-                        &snapshot.config,
-                        walls,
+                        map,
+                        &mut self.walls_ahead,
+                        &mut self.bodies_ahead,
+                        &mut predicted,
                         self.predicted_tick,
-                        DT,
                     );
-                    predict_body_contact(snapshot, content, walls, &mut predicted);
                 }
+                self.pushing = map.map_or(0, |map| {
+                    still_predicted(snapshot, map, &self.bodies_ahead, self.pushing | pushed)
+                });
                 let error = old - predicted.pos;
                 self.correction = if error.length() < 150.0 {
                     error
@@ -853,7 +865,29 @@ impl Session {
         let map_time = snapshot.match_state.elapsed
             + (self.render_time - snapshot.tick as f32 * DT).clamp(-0.5, 0.1);
         display.match_state.elapsed = map_time;
-        let poses = tankyard_core::snapshot_poses(snapshot, map_time);
+        if let Some(map) = self
+            .bundle
+            .maps
+            .iter()
+            .find(|map| map.id == snapshot.config.map)
+            .filter(|map| !map.bodies.is_empty())
+        {
+            let previous = client
+                .previous_snapshot
+                .as_ref()
+                .filter(|previous| previous.match_state.round == snapshot.match_state.round);
+            shown_bodies(
+                map,
+                snapshot,
+                previous,
+                alpha,
+                extrapolation,
+                (&self.bodies_ahead, self.pushing),
+                &mut display.match_state.bodies,
+            );
+        }
+        // Display bodies hold where to draw them now, so poses take them as is.
+        let poses = tankyard_core::snapshot_poses(display, map_time);
         tankyard_core::place_walls(snapshot, &poses, &mut display.walls);
     }
     pub fn tick(&mut self, input: PlayerInput, content: &Content) {
@@ -917,15 +951,20 @@ impl Session {
                         predicted.input = input;
                         self.predicted_tick += 1;
                         predict_pads(&self.bundle.maps, snapshot, &self.poses_now, predicted);
-                        predict_tank(
-                            predicted,
+                        let map = self
+                            .bundle
+                            .maps
+                            .iter()
+                            .find(|map| map.id == snapshot.config.map);
+                        self.pushing |= predict_step(
+                            snapshot,
                             content,
-                            &snapshot.config,
-                            &self.walls_now,
+                            map,
+                            &mut self.walls_ahead,
+                            &mut self.bodies_ahead,
+                            predicted,
                             self.predicted_tick,
-                            DT,
                         );
-                        predict_body_contact(snapshot, content, &self.walls_now, predicted);
                     }
                 }
             }
@@ -1042,6 +1081,17 @@ impl Session {
             }
             Engine::Online { client, .. } => {
                 client.upgrade_stat_amount(index, count);
+            }
+        }
+    }
+    /// Pick choice `option` of HUD widget `menu`.
+    pub fn choose(&mut self, menu: u32, option: u8) {
+        match &mut self.engine {
+            Engine::Offline(local) => {
+                local.world.choose(self.player, menu, option);
+            }
+            Engine::Online { client, .. } => {
+                client.choose(menu, option);
             }
         }
     }
@@ -1210,37 +1260,127 @@ pub(super) fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
 }
 /// Pads under a predicted tank, with the server's arithmetic, since pad
 /// effects do not travel in snapshots.
-/// Preserve the same contacted-body velocity that the host does after moving
-/// a tank. Body velocities arrive in arena fractions per second.
-fn predict_body_contact(
+/// One predicted tick: the tank moves, then the bodies it pushes, in the
+/// server's order. Returns the bodies it pushed, as a group mask.
+fn predict_step(
     snapshot: &Snapshot,
     content: &Content,
-    walls: &[tankyard_core::Rect],
+    map: Option<&tankyard_content::MapDef>,
+    walls: &mut [tankyard_core::Rect],
+    bodies: &mut Vec<tankyard_core::BodyState>,
     tank: &mut Tank,
+    tick: u64,
+) -> u32 {
+    predict_tank(tank, content, &snapshot.config, walls, tick, DT);
+    let Some(map) = map.filter(|map| !map.bodies.is_empty()) else {
+        return 0;
+    };
+    if walls.len() != snapshot.wall_groups.len() {
+        return 0;
+    }
+    let bosses: Vec<_> = snapshot.bosses.iter().map(|b| (b.pos, b.radius)).collect();
+    tankyard_core::BodySpace {
+        map,
+        config: &snapshot.config,
+        content,
+        walls,
+        wall_groups: &snapshot.wall_groups,
+        tanks: std::slice::from_mut(tank),
+        bosses: &bosses,
+        hidden: snapshot.match_state.hidden_groups,
+    }
+    .step(bodies, &[])
+    .pushed
+}
+
+/// Of the bodies in `shown`, those to keep drawing where prediction has
+/// them: ones pushed now, and ones the server hasn't caught up with yet.
+/// A body hands back to snapshots only once both agree it has stopped,
+/// so it never jumps on letting go.
+fn still_predicted(
+    snapshot: &Snapshot,
+    map: &tankyard_content::MapDef,
+    ahead: &[tankyard_core::BodyState],
+    shown: u32,
+) -> u32 {
+    let size = V2::new(snapshot.config.width, snapshot.config.height) * snapshot.config.arena_scale;
+    let mut keep = 0;
+    for (body, state) in map.bodies.iter().zip(ahead) {
+        let bit = tankyard_content::MapDef::group_bit(body.group);
+        if shown & bit == 0 {
+            continue;
+        }
+        let server = snapshot
+            .match_state
+            .bodies
+            .iter()
+            .find(|pose| pose.group == body.group)
+            .copied()
+            .unwrap_or_default();
+        let offset = V2::new(server.offset[0] * size.x, server.offset[1] * size.y);
+        let settled = server.velocity == [0., 0.]
+            && state.velocity.length() < 1.
+            && (state.offset - offset).length() < 0.5;
+        if !settled {
+            keep |= bit;
+        }
+    }
+    keep
+}
+
+/// Where to draw each body of `map` this frame, into `out`: one the local
+/// tank pushes where prediction has it, so it moves with the tank, and the
+/// rest between the last two snapshots, like other tanks and shots.
+fn shown_bodies(
+    map: &tankyard_content::MapDef,
+    latest: &Snapshot,
+    previous: Option<&Snapshot>,
+    alpha: f32,
+    extrapolation: f32,
+    (ahead, pushing): (&[tankyard_core::BodyState], u32),
+    out: &mut Vec<tankyard_content::BodyPose>,
 ) {
-    if !tank.tangible() || snapshot.match_state.bodies.is_empty() {
-        return;
-    }
-    let config = &snapshot.config;
-    let size = V2::new(config.width, config.height) * config.arena_scale;
-    let mut velocities = [V2::ZERO; tankyard_content::MAP_GROUPS as usize + 1];
-    for body in &snapshot.match_state.bodies {
-        if let Some(velocity) = velocities.get_mut(usize::from(body.group)) {
-            *velocity = V2::new(body.velocity[0] * size.x, body.velocity[1] * size.y);
-        }
-    }
-    let speed = tankyard_core::physics::movement_speed(tank, content, config);
-    for (&wall, &group) in walls.iter().zip(&snapshot.wall_groups) {
-        let Some(&velocity) = velocities.get(usize::from(group)) else {
-            continue;
+    let size = V2::new(latest.config.width, latest.config.height) * latest.config.arena_scale;
+    let pose = |snapshot: &Snapshot, group: u8| {
+        snapshot
+            .match_state
+            .bodies
+            .iter()
+            .find(|pose| pose.group == group)
+            .copied()
+            .unwrap_or(tankyard_content::BodyPose {
+                group,
+                ..Default::default()
+            })
+    };
+    out.clear();
+    for (index, body) in map.bodies.iter().enumerate() {
+        let now = pose(latest, body.group);
+        let predicted = ahead
+            .get(index)
+            .filter(|_| pushing & tankyard_content::MapDef::group_bit(body.group) != 0);
+        let offset = match predicted {
+            Some(state) => [state.offset.x / size.x, state.offset.y / size.y],
+            None => {
+                let before = previous.map_or(now, |previous| pose(previous, body.group));
+                let at = |axis: usize| {
+                    before.offset[axis]
+                        + (now.offset[axis] - before.offset[axis]) * alpha
+                        + now.velocity[axis] * extrapolation
+                };
+                // Sliding on never takes a body past the end of its reach.
+                [
+                    at(0).clamp(-body.reach[0], body.reach[2]),
+                    at(1).clamp(-body.reach[1], body.reach[3]),
+                ]
+            }
         };
-        if velocity == V2::ZERO {
-            continue;
-        }
-        if let Some((normal, _)) =
-            tankyard_core::physics::circle_rect(tank.pos, tank.radius + 2., wall)
-        {
-            tankyard_core::physics::keep_pushing_velocity(tank, normal, velocity, speed);
+        if offset != [0., 0.] || now.velocity != [0., 0.] {
+            out.push(tankyard_content::BodyPose {
+                group: body.group,
+                offset,
+                velocity: now.velocity,
+            });
         }
     }
 }
@@ -1334,41 +1474,6 @@ pub fn trusted_address(address: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn body_prediction_keeps_contact_speed_but_never_reaches_across_a_gap() {
-        let content = Content::builtin();
-        let mut world = tankyard_core::World::new(WorldConfig::default(), content.clone());
-        world.add_player("prediction", false);
-        let mut tank = world.tanks[0].clone();
-        let mut snapshot = world.snapshot();
-        let wall = tankyard_core::Rect {
-            x: 1000.,
-            y: 500.,
-            w: 80.,
-            h: 400.,
-        };
-        snapshot.walls = vec![wall];
-        snapshot.wall_groups = vec![3];
-        snapshot.match_state.bodies = vec![tankyard_content::BodyPose {
-            group: 3,
-            offset: [0., 0.],
-            velocity: [
-                90. / (snapshot.config.width * snapshot.config.arena_scale),
-                0.,
-            ],
-        }];
-        tank.pos = V2::new(wall.x - tank.radius - 1., 700.);
-        tank.input.movement = V2::new(1., 0.);
-        tank.vel = V2::new(0., 20.);
-        predict_body_contact(&snapshot, &content, &snapshot.walls, &mut tank);
-        assert!((tank.vel.x - 90.).abs() < 0.001);
-        assert_eq!(tank.vel.y, 20.);
-        tank.pos.x -= 10.;
-        tank.vel = V2::new(0., 20.);
-        predict_body_contact(&snapshot, &content, &snapshot.walls, &mut tank);
-        assert_eq!(tank.vel, V2::new(0., 20.));
-    }
-
     #[test]
     fn staff_proofs_go_unasked_only_to_the_official_server_or_this_computer() {
         for address in [

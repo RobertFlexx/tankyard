@@ -3,7 +3,7 @@
 //! one is and how fast it slides, so clients draw them between snapshots.
 use super::*;
 use crate::physics::circle_rect;
-use tankyard_content::{BodyPose, MapBody};
+use tankyard_content::{BodyPose, Content, MapBody};
 
 /// How a body has moved from where the map places it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -118,24 +118,100 @@ impl World {
             .resize(self.map.bodies.len(), BodyState::default());
         let hidden = self.map_hidden();
         let size = self.arena_size();
-        let hits = std::mem::take(&mut self.body_hits);
-        let mut moved_mask = 0;
+        let mut hits = std::mem::take(&mut self.body_hits);
         let mut old = std::mem::take(&mut self.motion_scratch);
         old.clone_from(&self.walls);
-        for index in 0..self.map.bodies.len() {
-            let body = self.map.bodies[index].clone();
-            let mut state = self.bodies[index];
-            if MapDef::group_bit(body.group) & hidden != 0 {
-                // A hidden body neither moves nor keeps sliding.
-                state.velocity = V2::ZERO;
-                self.bodies[index] = state;
+        let bosses: Vec<_> = self.bosses.iter().map(|b| (b.pos, b.radius)).collect();
+        let step = BodySpace {
+            map: &self.map,
+            config: &self.config,
+            content: &self.content,
+            walls: &mut self.walls,
+            wall_groups: &self.wall_groups,
+            tanks: &mut self.tanks,
+            bosses: &bosses,
+            hidden,
+        }
+        .step(&mut self.bodies, &hits);
+        if step.moved != 0 {
+            self.poses = self.composed_poses(self.match_state.elapsed);
+            self.scale_map_walls();
+            self.push_from_moving_walls(&old, step.moved);
+        }
+        self.motion_scratch = old;
+        hits.clear();
+        self.body_hits = hits;
+        self.publish_bodies(size);
+    }
+
+    /// Tell clients where bodies are: only those away from home or moving.
+    fn publish_bodies(&mut self, size: V2) {
+        self.match_state.bodies.clear();
+        for (body, state) in self.map.bodies.iter().zip(&self.bodies) {
+            if state.offset == V2::ZERO && state.velocity == V2::ZERO {
                 continue;
             }
-            let (drive, pushers) = self.pushing(&body, state.velocity);
+            self.match_state.bodies.push(BodyPose {
+                group: body.group,
+                offset: [state.offset.x / size.x, state.offset.y / size.y],
+                velocity: [state.velocity.x / size.x, state.velocity.y / size.y],
+            });
+        }
+    }
+}
+
+/// What one body step reads and moves. The server steps its whole world
+/// with it; a client steps its own predicted tank with it, so a crate it
+/// pushes moves with it on screen instead of when the next snapshot lands.
+pub struct BodySpace<'a> {
+    pub map: &'a MapDef,
+    pub config: &'a WorldConfig,
+    pub content: &'a Content,
+    /// Every wall. A step moves the ones in the bodies' groups.
+    pub walls: &'a mut [Rect],
+    pub wall_groups: &'a [u8],
+    /// Tanks that may push. Pushing keeps their speed into the body.
+    pub tanks: &'a mut [Tank],
+    /// Bosses, as center and radius, which bodies never sweep into.
+    pub bosses: &'a [(V2, f32)],
+    /// Groups map logic hides; their bodies hold still.
+    pub hidden: u32,
+}
+
+/// What a body step did, as group masks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BodyStep {
+    /// Bodies that moved.
+    pub moved: u32,
+    /// Bodies a tank pushed.
+    pub pushed: u32,
+}
+
+impl BodySpace<'_> {
+    fn arena_size(&self) -> V2 {
+        let scale = self.config.arena_scale;
+        V2::new(self.config.width * scale, self.config.height * scale)
+    }
+
+    /// Advance each body, `states` holding one per map body, by one tick
+    /// with `hits` from shots.
+    pub fn step(&mut self, states: &mut Vec<BodyState>, hits: &[(u8, V2)]) -> BodyStep {
+        let map = self.map;
+        states.resize(map.bodies.len(), BodyState::default());
+        let size = self.arena_size();
+        let mut done = BodyStep::default();
+        for (body, state) in map.bodies.iter().zip(states.iter_mut()) {
+            if MapDef::group_bit(body.group) & self.hidden != 0 {
+                // A hidden body neither moves nor keeps sliding.
+                state.velocity = V2::ZERO;
+                continue;
+            }
+            let (drive, pushers) = self.pushing(body, state.velocity);
             let weight = body.weight.max(0.25);
             if pushers > 0 {
+                done.pushed |= MapDef::group_bit(body.group);
                 // A light body never outruns the tanks pushing it.
-                let target = along_axis(&body, drive / weight.max(pushers as f32));
+                let target = along_axis(body, drive / weight.max(pushers as f32));
                 state.velocity = state
                     .velocity
                     .lerp(target, 1. - (-PUSH_RESPONSE * DT).exp());
@@ -160,12 +236,12 @@ impl World {
                     }
                 }
             }
-            for &(group, push) in &hits {
+            for &(group, push) in hits {
                 if group == body.group {
                     state.velocity += push / weight;
                 }
             }
-            state.velocity = along_axis(&body, state.velocity).clamp_length(BODY_SPEED);
+            state.velocity = along_axis(body, state.velocity).clamp_length(BODY_SPEED);
             if state.velocity.length_squared() < 0.25 && pushers == 0 {
                 state.velocity = V2::ZERO;
             }
@@ -197,8 +273,7 @@ impl World {
                 } else {
                     V2::new(delta, shift.y)
                 };
-                let blocked =
-                    delta.abs() < 1e-4 || self.body_blocked(body.group, try_shift, vertical);
+                let blocked = delta.abs() < 1e-4 || self.blocked(body.group, try_shift, vertical);
                 if blocked || limited {
                     let bounce = -body.bounce.clamp(0., 0.9);
                     if vertical {
@@ -213,24 +288,17 @@ impl World {
             }
             if shift != V2::ZERO {
                 state.offset += shift;
-                moved_mask |= MapDef::group_bit(body.group);
+                done.moved |= MapDef::group_bit(body.group);
                 // Move this body's walls now, so the next body sees it.
-                for (wall, &group) in self.walls.iter_mut().zip(&self.wall_groups) {
+                for (wall, &group) in self.walls.iter_mut().zip(self.wall_groups) {
                     if group == body.group {
                         wall.x += shift.x;
                         wall.y += shift.y;
                     }
                 }
             }
-            self.bodies[index] = state;
         }
-        if moved_mask != 0 {
-            self.poses = self.composed_poses(self.match_state.elapsed);
-            self.scale_map_walls();
-            self.push_from_moving_walls(&old, moved_mask);
-        }
-        self.motion_scratch = old;
-        self.publish_bodies(size);
+        done
     }
 
     /// Tanks driving into `body`, which moves at `velocity`: the push they add
@@ -243,11 +311,11 @@ impl World {
             if intent.length_squared() < 0.04 {
                 continue;
             }
-            let speed = crate::physics::movement_speed(tank, &self.content, &self.config);
+            let speed = crate::physics::movement_speed(tank, self.content, self.config);
             let contact = self
                 .walls
                 .iter()
-                .zip(&self.wall_groups)
+                .zip(self.wall_groups)
                 .filter(|&(_, &group)| group == body.group)
                 .filter_map(|(&wall, _)| circle_rect(tank.pos, tank.radius + CONTACT, wall))
                 .max_by(|a, b| a.1.total_cmp(&b.1));
@@ -270,7 +338,7 @@ impl World {
 
     /// Whether `group`'s walls, moved a further `shift`, would leave the
     /// arena, overlap other cover, or crush a tank or boss against cover.
-    fn body_blocked(&self, group: u8, shift: V2, vertical: bool) -> bool {
+    fn blocked(&self, group: u8, shift: V2, vertical: bool) -> bool {
         let bounds = self.config.bounds();
         let moved = |wall: Rect| Rect {
             x: wall.x + shift.x,
@@ -280,7 +348,7 @@ impl World {
         let others = || {
             self.walls
                 .iter()
-                .zip(&self.wall_groups)
+                .zip(self.wall_groups)
                 .filter(move |&(_, &g)| g != group)
                 .map(|(&wall, _)| wall)
         };
@@ -291,7 +359,7 @@ impl World {
         for (&wall, _) in self
             .walls
             .iter()
-            .zip(&self.wall_groups)
+            .zip(self.wall_groups)
             .filter(|&(_, &g)| g == group)
         {
             let to = moved(wall);
@@ -332,28 +400,34 @@ impl World {
             if self
                 .bosses
                 .iter()
-                .any(|boss| swept_by(boss.pos, boss.radius, from, to, vertical).is_some())
+                .any(|&(pos, radius)| swept_by(pos, radius, from, to, vertical).is_some())
             {
                 return true;
             }
         }
         false
     }
+}
 
-    /// Tell clients where bodies are: only those away from home or moving.
-    fn publish_bodies(&mut self, size: V2) {
-        self.match_state.bodies.clear();
-        for (body, state) in self.map.bodies.iter().zip(&self.bodies) {
-            if state.offset == V2::ZERO && state.velocity == V2::ZERO {
-                continue;
-            }
-            self.match_state.bodies.push(BodyPose {
-                group: body.group,
-                offset: [state.offset.x / size.x, state.offset.y / size.y],
-                velocity: [state.velocity.x / size.x, state.velocity.y / size.y],
-            });
-        }
-    }
+/// Bodies as `snapshot` has them, one state per body of `map`, in world
+/// units. Snapshots leave out bodies at rest at home.
+pub fn snapshot_body_states(snapshot: &Snapshot, map: &MapDef, out: &mut Vec<BodyState>) {
+    let size = V2::new(
+        snapshot.config.width * snapshot.config.arena_scale,
+        snapshot.config.height * snapshot.config.arena_scale,
+    );
+    out.clear();
+    out.extend(map.bodies.iter().map(|body| {
+        snapshot
+            .match_state
+            .bodies
+            .iter()
+            .find(|pose| pose.group == body.group)
+            .map_or_else(BodyState::default, |pose| BodyState {
+                offset: V2::new(pose.offset[0] * size.x, pose.offset[1] * size.y),
+                velocity: V2::new(pose.velocity[0] * size.x, pose.velocity[1] * size.y),
+            })
+    }));
 }
 
 /// Where map logic and pushes have put each group, as a client draws it
@@ -434,6 +508,73 @@ mod tests {
         for _ in 0..ticks {
             world.step();
         }
+    }
+
+    #[test]
+    fn a_client_predicting_its_push_keeps_pace_with_the_server() {
+        let body = MapBody {
+            axis: BodyAxis::Free,
+            reach: [0.3; 4],
+            weight: 1.5,
+            friction: 5.,
+            ..MapBody::default()
+        };
+        let mut world = crate_world(body, [0.4, 0.45, 0.04, 0.04], &[]);
+        // A client predicts with its snapshot's arena size; hold it still.
+        for _ in 0..4000 {
+            world.update_arena_size();
+        }
+        world.scale_map_walls();
+        lean_on(&mut world, V2::new(1., 0.));
+        run(&mut world, 20);
+        // The client starts from a snapshot and steps its own tank and the
+        // bodies it pushes, as the server will on receiving its inputs.
+        let snapshot = world.snapshot();
+        let mut tank = world.tanks[0].clone();
+        // Snapshots carry walls at home; the client places them as poses say.
+        let mut walls = Vec::new();
+        let poses = snapshot_poses(&snapshot, snapshot.match_state.elapsed);
+        crate::place_walls(&snapshot, &poses, &mut walls);
+        let mut states = Vec::new();
+        snapshot_body_states(&snapshot, &world.map, &mut states);
+        let mut pushed = 0;
+        for tick in 1..=45 {
+            world.step();
+            crate::physics::predict_tank(
+                &mut tank,
+                &world.content,
+                &snapshot.config,
+                &walls,
+                snapshot.tick + tick,
+                DT,
+            );
+            pushed |= BodySpace {
+                map: &world.map,
+                config: &snapshot.config,
+                content: &world.content,
+                walls: &mut walls,
+                wall_groups: &snapshot.wall_groups,
+                tanks: std::slice::from_mut(&mut tank),
+                bosses: &[],
+                hidden: snapshot.match_state.hidden_groups,
+            }
+            .step(&mut states, &[])
+            .pushed;
+        }
+        assert_eq!(pushed, MapDef::group_bit(3));
+        let server = world.body_state(3).unwrap();
+        assert!(server.offset.x > 100., "the crate moved: {server:?}");
+        assert!(
+            (states[0].offset - server.offset).length() < 0.5,
+            "client {:?} and server {server:?} agree",
+            states[0]
+        );
+        assert!(
+            (tank.pos - world.tanks[0].pos).length() < 0.5,
+            "client tank {:?}, server tank {:?}",
+            tank.pos,
+            world.tanks[0].pos
+        );
     }
 
     #[test]
@@ -566,7 +707,17 @@ mod tests {
         lean_on(&mut world, V2::new(1., 0.));
         world.tanks[0].pos.x -= 10.;
         let body = world.map.bodies[0].clone();
-        let (drive, pushers) = world.pushing(&body, V2::new(150., 0.));
+        let (drive, pushers) = BodySpace {
+            map: &world.map,
+            config: &world.config,
+            content: &world.content,
+            walls: &mut world.walls,
+            wall_groups: &world.wall_groups,
+            tanks: &mut world.tanks,
+            bosses: &[],
+            hidden: 0,
+        }
+        .pushing(&body, V2::new(150., 0.));
         assert_eq!(
             pushers, 0,
             "a moving crate cannot be pushed across empty space"

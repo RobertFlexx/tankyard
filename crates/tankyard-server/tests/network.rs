@@ -1466,6 +1466,7 @@ fn mod_hud_widgets_reach_only_the_players_they_are_for() {
         progress: Some(0.25),
         bar_color: None,
         width: 0.2,
+        ..tankyard_mods::HudWidget::default()
     };
     let hud = &mut server.arenas[0].session.world.hud;
     hud.insert(("pack".into(), 0, "all".into()), widget("Everyone"));
@@ -1481,6 +1482,31 @@ fn mod_hud_widgets_reach_only_the_players_they_are_for() {
     assert_eq!(client.mod_hud[0].color, Some([255, 0, 0]));
     server.arenas[0].session.world.hud.clear();
     pump(&mut server, &mut [&mut client], 30);
+    assert!(client.mod_hud.is_empty());
+    assert!(client.is_ready());
+
+    // A designed menu arrives whole, and a pick travels back.
+    let menu = tankyard_mods::HudWidget {
+        title: "Shop".into(),
+        style: tankyard_mods::HudStyle::Card,
+        icon: tankyard_mods::HudIcon::Coin,
+        choices: vec!["Speed".into(), "Armor".into()],
+        menu: tankyard_core::menu_number("pack", "menu"),
+        ..tankyard_mods::HudWidget::default()
+    };
+    server.arenas[0]
+        .session
+        .world
+        .hud
+        .insert(("pack".into(), player, "menu".into()), menu.clone());
+    pump(&mut server, &mut [&mut client], 30);
+    assert_eq!(client.mod_hud, std::slice::from_ref(&menu));
+    assert!(client.choose(menu.menu, 1));
+    pump(&mut server, &mut [&mut client], 30);
+    assert!(
+        server.arenas[0].session.world.hud.is_empty(),
+        "the pick reached the server and closed the player's menu"
+    );
     assert!(client.mod_hud.is_empty());
     assert!(client.is_ready());
 }

@@ -765,7 +765,7 @@ impl Document {
             if t.when == TriggerWhen::Signal {
                 used |= MapDef::group_bit(t.source);
             }
-            for channel in t.action.channels(t.group, t.amount) {
+            for channel in t.sends() {
                 used |= MapDef::group_bit(channel);
             }
             used |= MapDef::group_bit(t.otherwise);
@@ -847,7 +847,7 @@ impl Document {
             }
             let senders = |channel: u8| {
                 m.triggers.iter().any(|t| {
-                    t.action.channels(t.group, t.amount).contains(&channel)
+                    t.sends().any(|sent| sent == channel)
                         || (t.otherwise == channel && t.only_if.is_some())
                 })
             };
@@ -937,8 +937,7 @@ impl Document {
                     .any(|t| t.when == TriggerWhen::Signal && t.source == channel)
             };
             let mut unheard: Vec<u8> = trigger
-                .action
-                .channels(trigger.group, trigger.amount)
+                .sends()
                 .filter(|&channel| !receives(channel))
                 .collect();
             if trigger.otherwise > 0 && trigger.only_if.is_some() && !receives(trigger.otherwise) {
@@ -964,6 +963,45 @@ impl Document {
                     ),
                     false,
                 ),
+            }
+            // Timers have no tank behind them.
+            let to_cause = trigger.who == TriggerWho::Cause
+                || trigger
+                    .ui
+                    .as_ref()
+                    .is_some_and(|ui| ui.to == UiAudience::Cause);
+            if to_cause && matches!(trigger.when, TriggerWhen::Start | TriggerWhen::Every) {
+                note(
+                    key,
+                    format!(
+                        "{name} reaches the tank that set it off, but a timer has no tank behind it, so it reaches nobody."
+                    ),
+                    false,
+                );
+            }
+            if let Some(ui) = trigger
+                .ui
+                .as_ref()
+                .filter(|_| trigger.action == TriggerAction::Ui && trigger.duration <= 0.)
+            {
+                let words = [&ui.widget.text, &ui.widget.title];
+                if ui.timer {
+                    note(
+                        key,
+                        format!(
+                            "{name}'s bar counts down the time left, but the widget stays until hidden, so the bar never shows. Set Hide after."
+                        ),
+                        false,
+                    );
+                } else if words.iter().any(|text| text.contains("{left}")) {
+                    note(
+                        key,
+                        format!(
+                            "{name} shows {{left}}, but the widget stays until hidden, so it's blank. Set Hide after."
+                        ),
+                        false,
+                    );
+                }
             }
             if trigger.action == TriggerAction::Reset
                 && trigger.group > 0
@@ -1201,7 +1239,7 @@ pub fn link(from: &MapTrigger, to: &MapTrigger) -> Option<Link> {
     };
     let awaits = |group: u8| to.when == TriggerWhen::Arrived && to.source == group;
     let listens = |channel: u8| to.when == TriggerWhen::Signal && to.source == channel;
-    if from.action.channels(from.group, from.amount).any(listens) {
+    if from.sends().any(&listens) {
         Some(Link::Signal)
     } else if from.action.targets_counter() && reads_counter(from.group) {
         Some(Link::Counter)
@@ -1228,7 +1266,7 @@ fn signal_loop(triggers: &[MapTrigger]) -> Option<Vec<usize>> {
             if !free(t) {
                 return Vec::new();
             }
-            let channels = t.action.channels(t.group, t.amount);
+            let channels: Vec<u8> = t.sends().collect();
             triggers
                 .iter()
                 .enumerate()
@@ -1309,6 +1347,7 @@ fn who_here(t: &MapTrigger) -> &'static str {
         TriggerWho::Anyone => "the tanks",
         TriggerWho::Players => "the players",
         TriggerWho::Bots => "the bots",
+        TriggerWho::Cause => "the tank that set it off",
     }
 }
 fn team_here(t: &MapTrigger) -> String {
@@ -1346,10 +1385,47 @@ pub fn map_id(name: &str) -> String {
     }
 }
 
+/// A Show UI trigger's action, for its sentence.
+fn describe_ui(t: &MapTrigger) -> String {
+    let Some(ui) = t.ui.as_ref() else {
+        return format!("show UI slot {} (not designed yet)", t.group);
+    };
+    let w = &ui.widget;
+    let what = [w.title.trim(), w.text.trim()]
+        .into_iter()
+        .find(|text| !text.is_empty())
+        .map_or_else(
+            || "a bar".to_owned(),
+            |text| format!("\u{201c}{text}\u{201d}"),
+        );
+    let to = match ui.to {
+        UiAudience::Everyone => "everyone",
+        UiAudience::Inside => "the players here",
+        UiAudience::Cause => "the player that set it off",
+    };
+    let mut text = format!("show {what} in UI slot {} to {to}", t.group);
+    if !w.choices.is_empty() {
+        let picks: Vec<String> = w
+            .choices
+            .iter()
+            .enumerate()
+            .map(|(index, choice)| match ui.channels.get(index).copied() {
+                Some(channel) if channel > 0 => format!("{choice} \u{2192} {channel}"),
+                _ => choice.clone(),
+            })
+            .collect();
+        text += &format!(", asking {}", picks.join(", "));
+    }
+    if t.duration > 0. {
+        text += &format!(" for {}", seconds(t.duration));
+    }
+    text
+}
+
 /// A trigger in one plain sentence, for the inspector and logic list.
 pub fn describe_trigger(t: &MapTrigger) -> String {
     let who = match t.who {
-        TriggerWho::Anyone => "a tank",
+        TriggerWho::Anyone | TriggerWho::Cause => "a tank",
         TriggerWho::Players => "a player",
         TriggerWho::Bots => "a bot",
     };
@@ -1514,6 +1590,19 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
             color_hex(t.color)
         ),
         TriggerAction::Path => format!("send group {} along path {}", t.group, t.amount),
+        TriggerAction::Ui => describe_ui(t),
+        TriggerAction::HideUi => {
+            let slot = if t.group == 0 {
+                "every UI slot".to_owned()
+            } else {
+                format!("UI slot {}", t.group)
+            };
+            match t.ui.as_ref().map_or(UiAudience::Everyone, |ui| ui.to) {
+                UiAudience::Everyone => format!("hide {slot}"),
+                UiAudience::Inside => format!("hide {slot} from the players here"),
+                UiAudience::Cause => format!("hide {slot} from the player that set it off"),
+            }
+        }
     };
     if t.action.animates() {
         text += &if t.tween > 0. {
@@ -1826,6 +1915,14 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
         TriggerAction::Zoom => format!("Zoom {}%", t.amount),
         TriggerAction::Light => format!("Dark {}%", t.amount),
         TriggerAction::Path => format!("Path {} on {}", t.amount, t.group),
+        TriggerAction::Ui => match t.ui.as_ref() {
+            Some(ui) if !ui.widget.choices.is_empty() => {
+                format!("Ask {} ({})", t.group, ui.widget.choices.len())
+            }
+            _ => format!("UI {}", t.group),
+        },
+        TriggerAction::HideUi if t.group == 0 => "Hide all UI".into(),
+        TriggerAction::HideUi => format!("Hide UI {}", t.group),
     };
     let mut tag = match gate_tag(t, compact) {
         Some(gate) => format!("{when} if {gate} \u{2192} {action}"),
@@ -2238,6 +2335,48 @@ mod tests {
             doc.replace(Key::Trigger(0), Object::Trigger(first));
         }
         assert!(!doc.problems().iter().any(|p| p.text.contains("each other")));
+    }
+
+    #[test]
+    fn checks_find_widgets_that_cannot_show_what_they_ask_for() {
+        let mut doc = Document::default();
+        // A timer reaches the tank that set it off: nobody.
+        doc.insert(Object::Trigger(MapTrigger {
+            when: TriggerWhen::Every,
+            seconds: 5.,
+            action: TriggerAction::Award,
+            amount: 10,
+            who: TriggerWho::Cause,
+            ..Default::default()
+        }));
+        // Time left on a widget that stays.
+        doc.insert(Object::Trigger(MapTrigger {
+            when: TriggerWhen::Enter,
+            action: TriggerAction::Ui,
+            group: 1,
+            ui: Some(Box::new(MapUi {
+                widget: HudWidget {
+                    text: "Gone in {left}".into(),
+                    ..HudWidget::default()
+                },
+                to: UiAudience::Cause,
+                ..MapUi::default()
+            })),
+            ..Default::default()
+        }));
+        let problems = doc.problems();
+        let says = |text: &str| problems.iter().any(|p| p.text.contains(text));
+        assert!(
+            says("Trigger 1 reaches the tank that set it off, but a timer"),
+            "{problems:#?}"
+        );
+        assert!(!says("Trigger 2 reaches"), "an area has a tank behind it");
+        assert!(says("Trigger 2 shows {left}"), "{problems:#?}");
+        if let Some(Object::Trigger(mut shown)) = doc.object(Key::Trigger(1)) {
+            shown.duration = 5.;
+            doc.replace(Key::Trigger(1), Object::Trigger(shown));
+        }
+        assert!(!doc.problems().iter().any(|p| p.text.contains("{left}")));
     }
 
     #[test]

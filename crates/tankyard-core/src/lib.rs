@@ -39,10 +39,11 @@ mod weapons;
 pub mod world;
 pub use arena::PVE_WAVES;
 pub use map_features::{
-    BodyState, LAUNCH_COAST, LogicEffect, LogicInput, MAP_EVENT_LIMIT, MapEvent, MapLogic,
-    Occupant, gate_state, launch_tank, map_point, map_rect, place_walls, shake_event, shake_of,
-    shelter_factor, snapshot_poses, sound_event, sound_of, terrain_factor, terrain_grip,
-    terrain_launch, terrain_push, zones_at, zoom_event, zoom_of,
+    BodySpace, BodyState, BodyStep, HudPick, LAUNCH_COAST, LogicEffect, LogicInput,
+    MAP_EVENT_LIMIT, MAP_HUD, MapEvent, MapLogic, Occupant, ShownUi, gate_state, launch_tank,
+    map_point, map_rect, menu_number, place_walls, shake_event, shake_of, shelter_factor,
+    snapshot_body_states, snapshot_poses, sound_event, sound_of, terrain_factor, terrain_grip,
+    terrain_launch, terrain_push, ui_slot_id, zones_at, zoom_event, zoom_of,
 };
 pub use math::*;
 pub use model::*;

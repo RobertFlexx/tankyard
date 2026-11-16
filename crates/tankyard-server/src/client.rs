@@ -714,6 +714,10 @@ impl NetworkClient {
                 count,
             })
     }
+    /// Pick choice `option` of HUD widget `menu`.
+    pub fn choose(&mut self, menu: u32, option: u8) -> bool {
+        self.queue_control(ClientControl::Choose { menu, option })
+    }
     pub fn evolve(&mut self, class: &str) -> bool {
         self.queue_control(ClientControl::Evolve {
             class: class.into(),

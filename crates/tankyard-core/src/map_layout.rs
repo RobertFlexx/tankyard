@@ -150,6 +150,8 @@ impl World {
             tank.grip = 1.;
         }
         self.logic = Default::default();
+        self.map_ui.clear();
+        self.map_ui_dirty = true;
         self.match_state.counters = Default::default();
         self.match_state.tweens.clear();
         self.bodies.clear();

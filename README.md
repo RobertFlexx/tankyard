@@ -55,7 +55,7 @@ entirely made by one guy. (me! :D)
 
 > dual licensed, pick what you wanna abide by :D
 
-The [Arena Workshop](docs/map-editor.md) builds custom maps in the game, with pads, conveyors, portals, ice, gravity wells, lights, darkness, particle effects, push doors and crates, moving cover on eased motions and keyframed paths, and map logic you can test in place: watchers, pressure plates, sequences and AND, OR and XOR gates. [Hosting](docs/hosting.md) covers a dedicated server in five minutes, running it as a service, and a community on your own hostname with the [domain setup guide](docs/hosting-domain.md).
+The [Arena Workshop](docs/map-editor.md) builds custom maps in the game, with pads, conveyors, portals, ice, gravity wells, lights, darkness, particle effects, push doors and crates, moving cover on eased motions and keyframed paths, map logic you can test in place: watchers, pressure plates, sequences and AND, OR and XOR gates, and on-screen widgets you design yourself, from score counters to shop menus whose choices drive the map. [Hosting](docs/hosting.md) covers a dedicated server in five minutes, running it as a service, and a community on your own hostname with the [domain setup guide](docs/hosting-domain.md).
 
 [Editor tutorial video](docs/arena-workshop-tutorial.mp4) · [Logic gates video](docs/logic-gates-tutorial.mp4) · [Logic gates tutorial](docs/logic-gates-tutorial.md) · [Motions video](docs/motions-tutorial.mp4) · [Motions tutorial](docs/motions-tutorial.md) · [Animate and effects tutorial](docs/effects-tutorial.md) · [Physics and lighting video](docs/physics-tutorial.mp4) · [Physics and lighting tutorial](docs/physics-tutorial.md) · [Editor plugin API and full guide](docs/editor-plugins.md)
 

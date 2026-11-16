@@ -54,6 +54,16 @@ pub struct World {
     pub(crate) logic_tanks: Vec<crate::map_features::Occupant>,
     /// Script events map triggers raised this tick.
     pub map_events: Vec<crate::map_features::MapEvent>,
+    /// Picks from packs' widgets this tick, for their `choice` events.
+    pub hud_picks: Vec<crate::map_features::HudPick>,
+    /// Picks made since the last tick began.
+    pub(crate) picks_in: Vec<crate::map_features::HudPick>,
+    /// The tick each player last picked a choice.
+    pub(crate) pick_ticks: BTreeMap<EntityId, u64>,
+    /// Map widgets on screen.
+    pub(crate) map_ui: Vec<crate::map_features::ShownUi>,
+    pub(crate) map_ui_dirty: bool,
+    pub(crate) next_menu: u32,
     pub(crate) zone_areas: Vec<(usize, Rect)>,
     /// Seconds before each tank may use a portal again; never replicated.
     pub(crate) portal_rest: BTreeMap<EntityId, f32>,
@@ -201,6 +211,12 @@ impl World {
             logic: Default::default(),
             logic_tanks: Vec::new(),
             map_events: Vec::new(),
+            hud_picks: Vec::new(),
+            picks_in: Vec::new(),
+            pick_ticks: BTreeMap::new(),
+            map_ui: Vec::new(),
+            map_ui_dirty: false,
+            next_menu: 0,
             zone_areas: Vec::new(),
             portal_rest: BTreeMap::new(),
             bodies: Vec::new(),
@@ -683,6 +699,8 @@ impl World {
         self.events.clear();
         self.damage_log.clear();
         self.map_events.clear();
+        self.hud_picks.clear();
+        std::mem::swap(&mut self.hud_picks, &mut self.picks_in);
         before(self);
         if self.match_state.finished {
             return;
@@ -692,6 +710,7 @@ impl World {
         self.update_arena_size();
         self.random_boss_event();
         self.run_triggers();
+        self.sync_map_ui();
         self.update_zones();
         self.update_tanks();
         self.update_bodies();

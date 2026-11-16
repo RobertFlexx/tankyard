@@ -32,6 +32,12 @@ fn draw_circle(x: f32, y: f32, radius: f32, color: Color) {
     let p = crate::ui_layout::position(vec2(x, y));
     macroquad::shapes::draw_circle(p.x, p.y, radius, color);
 }
+pub(crate) fn ui_triangle(a: Vec2, b: Vec2, c: Vec2, color: Color) {
+    draw_triangle(a, b, c, color);
+}
+pub(crate) fn ui_circle_lines(x: f32, y: f32, radius: f32, thickness: f32, color: Color) {
+    draw_circle_lines(x, y, radius, thickness, color);
+}
 fn draw_triangle(a: Vec2, b: Vec2, c: Vec2, color: Color) {
     let p = crate::ui_layout::position;
     macroquad::shapes::draw_triangle(p(a), p(b), p(c), color);

@@ -1100,6 +1100,10 @@ impl UdpServer {
             ClientControl::Evolve { class } => {
                 self.arenas[arena].session.world.evolve(player, &class)
             }
+            ClientControl::Choose { menu, option } => self.arenas[arena]
+                .session
+                .world
+                .choose(player, menu, option),
             ClientControl::SandboxLevel { level } => {
                 permitted
                     && self.arenas[arena]

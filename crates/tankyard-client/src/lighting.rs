@@ -35,6 +35,28 @@ pub enum Light {
 /// the frame.
 pub const MOST_LIGHTS: usize = 768;
 
+impl Light {
+    /// Whether any of it falls in the window.
+    pub fn on_screen(&self) -> bool {
+        let (w, h) = (screen_width(), screen_height());
+        match *self {
+            Light::Spot { at, radius, .. } => on_screen(at, radius, w, h),
+            Light::Cone { at, reach, .. } => on_screen(at, reach, w, h),
+            Light::Shaft {
+                from, to, width, ..
+            } => on_screen((from + to) * 0.5, from.distance(to) * 0.5 + width, w, h),
+        }
+    }
+}
+
+/// Adds `light` to a frame's `lights` if it shows and there's room, so
+/// lights off screen never crowd out ones on it.
+pub fn gather(lights: &mut Vec<Light>, light: Light) {
+    if lights.len() < MOST_LIGHTS && light.on_screen() {
+        lights.push(light);
+    }
+}
+
 thread_local! {
     static LIGHT_MAP: RefCell<Option<((u32, u32), RenderTarget)>> = const { RefCell::new(None) };
     /// The lighting last shown and when, for [`steady`].

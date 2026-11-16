@@ -9,13 +9,15 @@ use tankyard_content::{
     AnimateStyle, CONVEYOR_SPEED, COUNTER_LIMIT, Easing, GateState, GroupPoses, ICE_GRIP,
     LAUNCH_SPEED, MAP_COUNTERS, MAP_GROUPS, MapDef, MapSound, MapTrigger, MapZone, MathOp,
     PULL_SPEED, SCALE_LIMIT, SHAKE_SECONDS, TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction,
-    TriggerWhen, TriggerWho, Tween, TweenChannel, TweenValue, ZOOM_SECONDS, ZoneKind,
+    TriggerWhen, TriggerWho, Tween, TweenChannel, TweenValue, UiAudience, ZOOM_SECONDS, ZoneKind,
 };
 
 mod bodies;
 mod paths;
-pub use bodies::{BodyState, snapshot_poses};
+mod ui;
+pub use bodies::{BodySpace, BodyState, BodyStep, snapshot_body_states, snapshot_poses};
 use paths::PathPlay;
+pub use ui::{HudPick, MAP_HUD, ShownUi, menu_number, ui_slot_id};
 
 /// A normalized map rectangle in world units, following animated borders the
 /// same way walls do.
@@ -221,6 +223,19 @@ pub struct Occupant {
 pub enum LogicEffect {
     /// Text with counter placeholders already filled in.
     Announce(String),
+    /// Show trigger `trigger`'s widget in `slot` to `viewers`, or to every
+    /// player.
+    Ui {
+        trigger: usize,
+        slot: u8,
+        viewers: Option<Vec<EntityId>>,
+    },
+    /// Take `slot`'s widget (every slot for 0) off `viewers`' screens, or
+    /// everyone's.
+    HideUi {
+        slot: u8,
+        viewers: Option<Vec<EntityId>>,
+    },
     Boss {
         kind: BossKind,
         at: V2,
@@ -337,6 +352,12 @@ pub fn sound_of(value: u32) -> Option<(MapSound, f32)> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LogicInput {
     Signal(u8),
+    /// Player `tank` picked a choice that signals `channel`; they are the
+    /// tank that set off what listens.
+    Pick {
+        channel: u8,
+        tank: EntityId,
+    },
     SetCounter(u8, i32),
     AddCounter(u8, i32),
     Group(u8, bool),
@@ -485,10 +506,15 @@ pub struct MapLogic {
     arrivals: Vec<(f32, u8, TweenChannel)>,
     /// Where every group stood when this step began.
     poses: GroupPoses,
-    /// Delayed actions: when, and which trigger.
-    pending: Vec<(f32, usize)>,
-    /// Triggers to fire from signals and counters, in order.
-    queue: Vec<usize>,
+    /// Delayed actions: when, which trigger, and the tank that set it off.
+    pending: Vec<(f32, usize, EntityId)>,
+    /// Triggers to fire from signals and counters, in order, each with the
+    /// tank that set it off.
+    queue: Vec<(usize, EntityId)>,
+    /// The tank that set off what is acting now; 0 for none.
+    cause: EntityId,
+    /// The tank whose crossing the last area check saw.
+    crosser: EntityId,
     scratch: Vec<EntityId>,
     /// Requests from scripts, oldest first.
     inbox: Vec<LogicInput>,
@@ -509,7 +535,7 @@ pub struct MapLogic {
 /// The tanks an area trigger or tank action notices.
 fn notices(trigger: &MapTrigger, tank: &Occupant) -> bool {
     (match trigger.who {
-        TriggerWho::Anyone => true,
+        TriggerWho::Anyone | TriggerWho::Cause => true,
         TriggerWho::Players => !tank.bot,
         TriggerWho::Bots => tank.bot,
     }) && (trigger.team == 0 || trigger.team == tank.team)
@@ -539,7 +565,15 @@ impl MapLogic {
         }
         for input in std::mem::take(&mut self.inbox) {
             match input {
-                LogicInput::Signal(channel) => self.signal(channel),
+                LogicInput::Signal(channel) => {
+                    self.cause = 0;
+                    self.signal(channel);
+                }
+                LogicInput::Pick { channel, tank } => {
+                    self.cause = tank;
+                    self.signal(channel);
+                    self.cause = 0;
+                }
                 LogicInput::SetCounter(counter, value) => self.set_counter(map, counter, value),
                 LogicInput::AddCounter(counter, add) => {
                     let slot = usize::from(counter).wrapping_sub(1);
@@ -636,7 +670,7 @@ impl MapLogic {
                     for &index in &self.listeners.defeated {
                         let wanted = usize::from(map.triggers[index].source);
                         if wanted == 0 || wanted == number {
-                            self.queue.push(index);
+                            self.queue.push((index, 0));
                         }
                     }
                 }
@@ -666,7 +700,7 @@ impl MapLogic {
         }
         for &index in &self.listeners.arrived {
             if MapDef::group_bit(map.triggers[index].source) & arrived != 0 {
-                self.queue.push(index);
+                self.queue.push((index, 0));
             }
         }
     }
@@ -683,7 +717,7 @@ impl MapLogic {
             let trigger = &map.triggers[index];
             let bit = MapDef::group_bit(trigger.source);
             if changed & bit != 0 && (hidden & bit != 0) == (trigger.when == TriggerWhen::Hidden) {
-                self.queue.push(index);
+                self.queue.push((index, self.cause));
             }
         }
     }
@@ -718,6 +752,7 @@ impl MapLogic {
         self.poses = GroupPoses::default();
         self.pending.clear();
         self.queue.clear();
+        self.cause = 0;
         self.ready = true;
     }
 
@@ -769,18 +804,19 @@ impl MapLogic {
             false
         });
         self.play_returns(now);
-        if self.pending.iter().any(|&(at, _)| at <= now) {
+        if self.pending.iter().any(|&(at, ..)| at <= now) {
             let mut due = Vec::new();
-            self.pending.retain(|&(at, index)| {
+            self.pending.retain(|&(at, index, cause)| {
                 if at <= now {
-                    due.push((at, index));
+                    due.push((at, index, cause));
                     false
                 } else {
                     true
                 }
             });
             due.sort_by(|a, b| a.0.total_cmp(&b.0));
-            for (_, index) in due {
+            for (_, index, cause) in due {
+                self.cause = cause;
                 self.act(index, map, config, now, hidden, tanks, random, effects);
             }
         }
@@ -794,6 +830,11 @@ impl MapLogic {
             if self.spent[index] || now < self.next[index] {
                 continue;
             }
+            self.cause = match trigger.when {
+                TriggerWhen::Occupied => self.inside[index].first().copied().unwrap_or(0),
+                when if when.watches_area() => self.crosser,
+                _ => 0,
+            };
             let fire = match trigger.when {
                 TriggerWhen::Every => {
                     // Catch up without firing twice in one step.
@@ -891,8 +932,9 @@ impl MapLogic {
         let mut cursor = 0;
         loop {
             while cursor < self.queue.len() {
-                let index = self.queue[cursor];
+                let (index, cause) = self.queue[cursor];
                 cursor += 1;
+                self.cause = cause;
                 if !self.spent[index] {
                     self.fire(index, map, config, now, hidden, tanks, random, effects);
                 }
@@ -905,6 +947,7 @@ impl MapLogic {
             }
         }
         self.queue.clear();
+        self.cause = 0;
     }
 
     /// Carry out trigger `index` right away, as if it had fired and won its
@@ -930,6 +973,7 @@ impl MapLogic {
         self.alive.clear();
         self.alive.extend(tanks.iter().map(|tank| tank.id));
         self.alive.sort_unstable();
+        self.cause = 0;
         self.act(index, map, config, now, hidden, tanks, random, effects);
         self.follow(map, config, now, hidden, tanks, random, effects);
     }
@@ -954,22 +998,24 @@ impl MapLogic {
         self.scratch.sort_unstable();
         let previous = &self.inside[index];
         let alive = |id: &EntityId| self.alive.binary_search(id).is_ok();
-        let crossed = match trigger.when {
+        let crosser = match trigger.when {
             TriggerWhen::Enter => self
                 .scratch
                 .iter()
-                .any(|id| previous.binary_search(id).is_err()),
+                .find(|id| previous.binary_search(id).is_err()),
             // Leaving means still alive and outside; dying inside is not leaving.
             TriggerWhen::Exit => previous
                 .iter()
-                .any(|id| self.scratch.binary_search(id).is_err() && alive(id)),
-            TriggerWhen::Cleared => !previous.is_empty() && self.scratch.is_empty(),
+                .find(|id| self.scratch.binary_search(id).is_err() && alive(id)),
+            TriggerWhen::Cleared => previous.first().filter(|_| self.scratch.is_empty()),
             // Only living tanks are listed, so one that vanished from inside died there.
-            TriggerWhen::Destroyed => previous.iter().any(|id| !alive(id)),
-            _ => false,
-        };
+            TriggerWhen::Destroyed => previous.iter().find(|id| !alive(id)),
+            _ => None,
+        }
+        .copied();
+        self.crosser = crosser.unwrap_or(0);
         std::mem::swap(&mut self.inside[index], &mut self.scratch);
-        crossed
+        crosser.is_some()
     }
 
     /// A trigger fired: check it is switched on and wins its chance, then act
@@ -1007,7 +1053,7 @@ impl MapLogic {
         }
         if trigger.delay > 0. {
             if self.pending.len() < PENDING_LIMIT {
-                self.pending.push((now + trigger.delay, index));
+                self.pending.push((now + trigger.delay, index, self.cause));
             }
         } else {
             self.act(index, map, config, now, hidden, tanks, random, effects);
@@ -1033,6 +1079,28 @@ impl MapLogic {
             &self.poses,
             tanks,
         ))
+    }
+
+    /// The tanks `trigger`'s action reaches: the noticed tanks in `area`,
+    /// or only the tank that set it off.
+    fn affected(&self, trigger: &MapTrigger, area: Rect, tanks: &[Occupant]) -> Vec<EntityId> {
+        tanks
+            .iter()
+            .filter(|tank| match trigger.who {
+                TriggerWho::Cause => {
+                    self.cause != 0
+                        && tank.id == self.cause
+                        && (trigger.team == 0 || trigger.team == tank.team)
+                }
+                _ => notices(trigger, tank) && contains(area, tank.pos),
+            })
+            .map(|tank| tank.id)
+            .collect()
+    }
+
+    /// The tank that set off what is acting now; 0 for none.
+    pub fn cause(&self) -> EntityId {
+        self.cause
     }
 
     /// Where `trigger`'s area is now: it moves with the trigger's own group.
@@ -1259,15 +1327,17 @@ impl MapLogic {
 
     /// Queue every trigger listening on signal channel `channel`.
     fn signal(&mut self, channel: u8) {
+        let cause = self.cause;
         if let Some(listeners) = self.listeners.signal.get(usize::from(channel)) {
-            self.queue.extend_from_slice(listeners);
+            self.queue
+                .extend(listeners.iter().map(|&index| (index, cause)));
         }
     }
 
     /// Start the triggers of `group` afresh (every trigger for 0).
     fn reset(&mut self, map: &MapDef, group: u8, now: f32) {
         let chosen = |index: usize| group == 0 || map.triggers[index].member == group;
-        self.pending.retain(|&(_, index)| !chosen(index));
+        self.pending.retain(|&(_, index, _)| !chosen(index));
         for (index, trigger) in map.triggers.iter().enumerate() {
             if chosen(index) {
                 self.spent[index] = false;
@@ -1293,13 +1363,15 @@ impl MapLogic {
         let counter = usize::from(counter);
         for &other in self.listeners.reach.get(counter).into_iter().flatten() {
             if reached(old, new, map.triggers[other].threshold) {
-                self.queue.push(other);
+                self.queue.push((other, self.cause));
             }
         }
+        let cause = self.cause;
         if old != new
             && let Some(listeners) = self.listeners.change.get(counter)
         {
-            self.queue.extend_from_slice(listeners);
+            self.queue
+                .extend(listeners.iter().map(|&index| (index, cause)));
         }
     }
 
@@ -1371,6 +1443,56 @@ impl MapLogic {
             TriggerAction::Announce => effects.push(LogicEffect::Announce(
                 tankyard_content::fill_counters(trigger.text.trim(), &self.counters).into_owned(),
             )),
+            TriggerAction::Ui | TriggerAction::HideUi => {
+                let viewers = trigger.ui.as_deref().and_then(|ui| {
+                    let players = |tank: &&Occupant| {
+                        !tank.bot && (trigger.team == 0 || trigger.team == tank.team)
+                    };
+                    match ui.to {
+                        UiAudience::Everyone if trigger.team == 0 => None,
+                        UiAudience::Everyone => {
+                            Some(tanks.iter().filter(players).map(|tank| tank.id).collect())
+                        }
+                        UiAudience::Inside => {
+                            let area = self.area(config, trigger);
+                            Some(
+                                tanks
+                                    .iter()
+                                    .filter(players)
+                                    .filter(|tank| contains(area, tank.pos))
+                                    .map(|tank| tank.id)
+                                    .collect(),
+                            )
+                        }
+                        UiAudience::Cause => Some(
+                            tanks
+                                .iter()
+                                .filter(players)
+                                .filter(|tank| self.cause != 0 && tank.id == self.cause)
+                                .map(|tank| tank.id)
+                                .collect(),
+                        ),
+                    }
+                });
+                // Showing to nobody in particular is nothing to do.
+                if viewers
+                    .as_ref()
+                    .is_none_or(|list: &Vec<EntityId>| !list.is_empty())
+                {
+                    effects.push(if trigger.action == TriggerAction::Ui {
+                        LogicEffect::Ui {
+                            trigger: index,
+                            slot: trigger.group,
+                            viewers,
+                        }
+                    } else {
+                        LogicEffect::HideUi {
+                            slot: trigger.group,
+                            viewers,
+                        }
+                    });
+                }
+            }
             TriggerAction::Boss => {
                 if let Some(kind) = BossKind::from_id(&trigger.boss) {
                     let area = self.area(config, trigger);
@@ -1432,11 +1554,7 @@ impl MapLogic {
                 effects.push(LogicEffect::Script {
                     name: trigger.text.trim().to_owned(),
                     trigger: index,
-                    tanks: tanks
-                        .iter()
-                        .filter(|tank| notices(trigger, tank) && contains(area, tank.pos))
-                        .map(|tank| tank.id)
-                        .collect(),
+                    tanks: self.affected(trigger, area, tanks),
                     area,
                 });
             }
@@ -1448,11 +1566,7 @@ impl MapLogic {
             | TriggerAction::Blast
             | TriggerAction::Zoom => {
                 let area = self.area(config, trigger);
-                let ids = tanks
-                    .iter()
-                    .filter(|tank| notices(trigger, tank) && contains(area, tank.pos))
-                    .map(|tank| tank.id)
-                    .collect();
+                let ids = self.affected(trigger, area, tanks);
                 let percent = trigger.amount.clamp(1, 100) as f32;
                 let speed = trigger.amount.clamp(
                     -tankyard_content::FLING_LIMIT,
@@ -1899,6 +2013,12 @@ impl World {
         for effect in effects {
             match effect {
                 LogicEffect::Announce(text) => self.match_state.announcement = text,
+                LogicEffect::Ui {
+                    trigger,
+                    slot,
+                    viewers,
+                } => self.show_ui(trigger, slot, viewers),
+                LogicEffect::HideUi { slot, viewers } => self.hide_ui(slot, viewers),
                 LogicEffect::Boss { kind, at } => {
                     self.spawn_boss_near(kind, at);
                 }
@@ -3173,6 +3293,48 @@ mod tests {
         let picks = &bench.logic.counters[1..4];
         assert_eq!(picks.iter().sum::<i32>(), 60, "one channel each second");
         assert!(picks.iter().all(|&n| n >= 8), "{picks:?} spread out");
+    }
+
+    #[test]
+    fn the_tank_that_set_it_off_carries_through_signals_and_delays() {
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                group: 6,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Enter, TriggerAction::Signal)
+            },
+            MapTrigger {
+                source: 6,
+                amount: 10,
+                delay: 0.5,
+                who: TriggerWho::Cause,
+                ..trigger(TriggerWhen::Signal, TriggerAction::Award)
+            },
+        ]);
+        let center = bench.center();
+        let first = [tank(1, center, false, 0)];
+        bench.run(1., &first);
+        let awarded = |bench: &Bench| -> Vec<Vec<EntityId>> {
+            bench
+                .effects
+                .iter()
+                .filter_map(|effect| match effect {
+                    LogicEffect::Award { tanks, .. } => Some(tanks.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(awarded(&bench), vec![vec![1]]);
+        bench.effects.clear();
+        // A second tank drives in while the first stays: only it is rewarded.
+        let both = [tank(1, center, false, 0), tank(2, center, false, 0)];
+        bench.run(1., &both);
+        assert_eq!(awarded(&bench), vec![vec![2]]);
+        bench.effects.clear();
+        // A script's signal has no tank behind it, so nobody is rewarded.
+        bench.logic.input(LogicInput::Signal(6));
+        bench.run(1., &both);
+        assert_eq!(awarded(&bench), vec![Vec::<EntityId>::new()]);
     }
 
     #[test]

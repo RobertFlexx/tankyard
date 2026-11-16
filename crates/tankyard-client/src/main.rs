@@ -20,6 +20,7 @@ mod graphics;
 mod hardware;
 mod hosting;
 mod hud;
+mod hud_widgets;
 mod lighting;
 mod links;
 mod map_sounds;
@@ -34,6 +35,7 @@ mod pocket_audio;
 mod pocket_view;
 mod practice_ui;
 mod presentation;
+mod profile;
 mod render;
 mod rules_ui;
 mod scenery;
@@ -1222,6 +1224,7 @@ impl App {
                     _ => false,
                 };
                 community
+                    || hud_widgets::captures_pointer(&session.mod_hud(), s)
                     || session.display.as_ref().is_some_and(|snapshot| {
                         self.hud
                             .captures_pointer(snapshot, &self.content, session.player, s)
@@ -2092,6 +2095,7 @@ impl App {
         overlays.notice_y += axiom_height;
         overlays.achievement_y += axiom_height;
         let mut actions = Vec::new();
+        let mut widget_pick = None;
         set_interactive(true);
         let covered = self.overlay_captures_pointer(s, false);
         if let Some(session) = &self.session {
@@ -2181,7 +2185,11 @@ impl App {
                     s,
                     &self.view,
                 );
-                hud::mod_widgets(&session.mod_hud(), s);
+                if !self.paused && !self.menu_over_game {
+                    widget_pick = hud_widgets::draw(&session.mod_hud(), s);
+                } else {
+                    hud_widgets::draw(&session.mod_hud(), s);
+                }
                 if let Some(axiom) = axiom {
                     let r = hud::boss_banner_layout(screen_width(), s);
                     let r = Rect::new(r.x, 106. * s, r.w, 52. * s);
@@ -2443,6 +2451,11 @@ impl App {
         for action in actions {
             self.hud_action(action);
         }
+        if let Some((menu, option)) = widget_pick
+            && let Some(session) = &mut self.session
+        {
+            session.choose(menu, option);
+        }
         if !self.paused
             && !self.menu_over_game
             && !self.creator.open
@@ -2678,6 +2691,17 @@ impl App {
         }
     }
 }
+/// Draws everything queued and waits for the GPU, for phase timings.
+fn finish_gpu_work() {
+    unsafe {
+        let mut gl = get_internal_gl();
+        gl.flush();
+        if gl.quad_context.info().backend == miniquad::Backend::OpenGl {
+            miniquad::gl::glFinish();
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     if cli.diagnostics_path {
@@ -2813,7 +2837,11 @@ async fn run(cli: Cli) {
         );
         accessibility::configure_vision(app.settings.colorblind_palette, app.settings.team_symbols);
         let s = app.scale();
-        app.update(dt, s);
+        // Phase times leave out startup, as the frame times do.
+        if app.smoke.is_some() && app.frames == 61 {
+            profile::enable(Some(finish_gpu_work));
+        }
+        profile::phase("update", || app.update(dt, s));
         // Send this frame's input now; drawing takes a few milliseconds
         // more, and anything queued while drawing goes after it.
         if let Some(session) = &mut app.session {
@@ -2824,8 +2852,8 @@ async fn run(cli: Cli) {
             app.menu.post_error = post_error.map(str::to_owned);
         }
         app.presentation.begin(&app.settings);
-        app.draw(s);
-        app.presentation.finish();
+        profile::phase("draw", || app.draw(s));
+        profile::phase("present", || app.presentation.finish());
         ui::end_frame();
         // Discard characters that no field consumed this frame.
         while get_char_pressed().is_some() {}
@@ -2879,6 +2907,9 @@ async fn run(cli: Cli) {
                     cpu * 1000.,
                     1. / mean.max(1e-6)
                 );
+                if let Some(phases) = profile::report(app.frame_times.len() as u64) {
+                    println!("Tank Yard frame phases: {phases}");
+                }
             }
             break;
         }

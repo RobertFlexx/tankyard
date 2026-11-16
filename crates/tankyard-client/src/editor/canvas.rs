@@ -535,6 +535,26 @@ impl Editor {
         let pointer = ui_layout::pointer();
         let canvas = layout.canvas;
         let inside = canvas.contains(pointer) && !self.help;
+        // The preview's widgets sit over the arena: a click on one of their
+        // choices picks it, and a click elsewhere on them does nothing.
+        if inside && self.gesture.is_none() && !self.preview.ui.is_empty() {
+            let widgets = self.preview.widgets();
+            let over = widgets.iter().position(|(widget, _)| {
+                crate::hud_widgets::covers(widget, canvas, layout.s, pointer)
+                    && !widget.choices.is_empty()
+            });
+            if let Some(index) = over {
+                if is_mouse_button_pressed(MouseButton::Left)
+                    && let Some(option) =
+                        crate::hud_widgets::choice_at(&widgets[index].0, canvas, layout.s, pointer)
+                {
+                    let config = self.config();
+                    self.preview.pick(&self.doc.map, &config, index, option);
+                }
+                self.hover = None;
+                return;
+            }
+        }
         if inside {
             // Where tools run from the Tools tab: the last click, since the
             // pointer always crosses the canvas edge on its way there.
@@ -1620,6 +1640,16 @@ impl Editor {
                     &text,
                     canvas.right() - width - 10. * s,
                     canvas.bottom() - size - 20. * s,
+                );
+            }
+            for (widget, age) in preview.widgets() {
+                crate::hud_widgets::preview(
+                    &widget,
+                    canvas,
+                    s,
+                    age,
+                    0.,
+                    canvas.contains(pointer).then_some(pointer),
                 );
             }
             if let Some((at, text)) = &preview.banner

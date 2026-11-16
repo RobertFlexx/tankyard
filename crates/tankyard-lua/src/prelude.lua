@@ -288,12 +288,25 @@ function tankyard.hud(widget_id, widget, tank)
     return
   end
   check("table", widget, "hud", "widget")
-  local text = widget.text
+  local text, title, choices = widget.text, widget.title, nil
+  if widget.choices ~= nil then
+    check("table", widget.choices, "hud", "choices")
+    local list = {}
+    for index, choice in ipairs(widget.choices) do
+      list[index] = check("string", choice, "hud", "each choice")
+    end
+    choices = table.concat(list, "\n")
+  end
   emit("hud", tank or 0, widget_id, text ~= nil and tostring(text) or "",
     optional("number", widget.x, "hud", "x"), optional("number", widget.y, "hud", "y"),
     optional("string", widget.align, "hud", "align"), optional("number", widget.size, "hud", "size"),
     packed_color("hud", widget.color, "color"), optional("number", widget.progress, "hud", "progress"),
-    packed_color("hud", widget.bar_color, "bar_color"), optional("number", widget.width, "hud", "width"))
+    packed_color("hud", widget.bar_color, "bar_color"), optional("number", widget.width, "hud", "width"),
+    optional("string", widget.style, "hud", "style"), title ~= nil and tostring(title) or "",
+    optional("string", widget.icon, "hud", "icon"), packed_color("hud", widget.panel, "panel"),
+    optional("number", widget.opacity, "hud", "opacity"), packed_color("hud", widget.accent, "accent"),
+    optional("string", widget.enter, "hud", "enter"), optional("boolean", widget.pulse, "hud", "pulse"),
+    optional("number", widget.segments, "hud", "segments"), choices)
 end
 
 -- Definitions (load phase only; ignored while a round is running) ------------
