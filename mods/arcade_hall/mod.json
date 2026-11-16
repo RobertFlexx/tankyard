@@ -1,0 +1,1321 @@
+{
+  "api_version": 2,
+  "id": "arcade_hall",
+  "name": "Arcade Hall",
+  "version": "1.0",
+  "maps": [
+    {
+      "id": "arcade_hall",
+      "name": "Arcade Hall",
+      "description": "A neon hall built from the 1.4 workshop's UI triggers: a coin counter with a jackpot, a shop menu, a vault countdown and a vote for the next event.",
+      "width": 3200,
+      "height": 2200,
+      "capacity": 16,
+      "recommended_modes": [
+        "ffa",
+        "sandbox"
+      ],
+      "walls": [],
+      "procedural": "None",
+      "objective_positions": [],
+      "spawn_regions": [
+        {
+          "team": 0,
+          "rect": [
+            0.42,
+            0.86,
+            0.16,
+            0.08
+          ]
+        },
+        {
+          "team": 0,
+          "rect": [
+            0.42,
+            0.06,
+            0.16,
+            0.08
+          ]
+        }
+      ],
+      "team_bases": [],
+      "background": "violet",
+      "blocks": [
+        {
+          "rect": [
+            0.04,
+            0.32,
+            0.18,
+            0.02
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.04,
+            0.66,
+            0.18,
+            0.02
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.04,
+            0.34,
+            0.02,
+            0.32
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.2,
+            0.34,
+            0.02,
+            0.1
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.2,
+            0.56,
+            0.02,
+            0.1
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.2,
+            0.44,
+            0.02,
+            0.12
+          ],
+          "group": 2
+        },
+        {
+          "rect": [
+            0.78,
+            0.34,
+            0.18,
+            0.02
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.78,
+            0.64,
+            0.18,
+            0.02
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.94,
+            0.36,
+            0.02,
+            0.28
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.78,
+            0.36,
+            0.02,
+            0.06
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.78,
+            0.58,
+            0.02,
+            0.06
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.3,
+            0.2,
+            0.03,
+            0.045
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.67,
+            0.2,
+            0.03,
+            0.045
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.3,
+            0.755,
+            0.03,
+            0.045
+          ],
+          "group": 0
+        },
+        {
+          "rect": [
+            0.67,
+            0.755,
+            0.03,
+            0.045
+          ],
+          "group": 0
+        }
+      ],
+      "zones": [
+        {
+          "kind": "repair",
+          "rect": [
+            0.09,
+            0.45,
+            0.07,
+            0.1
+          ],
+          "strength": 1,
+          "group": 0,
+          "angle": 0,
+          "exit": [
+            0,
+            0
+          ]
+        }
+      ],
+      "decor": [
+        {
+          "kind": "tile",
+          "rect": [
+            0.06,
+            0.34,
+            0.14,
+            0.32
+          ],
+          "color": [
+            70,
+            40,
+            60
+          ],
+          "alpha": 110,
+          "group": 0
+        },
+        {
+          "kind": "label",
+          "rect": [
+            0.085,
+            0.385,
+            0.09,
+            0.02
+          ],
+          "color": [
+            255,
+            96,
+            140
+          ],
+          "alpha": 220,
+          "group": 0,
+          "text": "VAULT"
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.1,
+            0.44,
+            0.06,
+            0.12
+          ],
+          "color": [
+            255,
+            96,
+            140
+          ],
+          "alpha": 200,
+          "group": 3
+        },
+        {
+          "kind": "stripes",
+          "rect": [
+            0.205,
+            0.44,
+            0.01,
+            0.12
+          ],
+          "color": [
+            255,
+            96,
+            140
+          ],
+          "alpha": 160,
+          "group": 2
+        },
+        {
+          "kind": "tile",
+          "rect": [
+            0.8,
+            0.36,
+            0.14,
+            0.28
+          ],
+          "color": [
+            30,
+            60,
+            70
+          ],
+          "alpha": 110,
+          "group": 0
+        },
+        {
+          "kind": "tile",
+          "rect": [
+            0.84,
+            0.42,
+            0.08,
+            0.16
+          ],
+          "color": [
+            64,
+            220,
+            230
+          ],
+          "alpha": 90,
+          "group": 0
+        },
+        {
+          "kind": "label",
+          "rect": [
+            0.835,
+            0.385,
+            0.09,
+            0.02
+          ],
+          "color": [
+            64,
+            220,
+            230
+          ],
+          "alpha": 230,
+          "group": 0,
+          "text": "SHOP"
+        },
+        {
+          "kind": "beam",
+          "rect": [
+            0.81,
+            0.375,
+            0.12,
+            0.006
+          ],
+          "color": [
+            64,
+            220,
+            230
+          ],
+          "alpha": 200,
+          "group": 0
+        },
+        {
+          "kind": "beam",
+          "rect": [
+            0.81,
+            0.617,
+            0.12,
+            0.006
+          ],
+          "color": [
+            64,
+            220,
+            230
+          ],
+          "alpha": 200,
+          "group": 0
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.85,
+            0.44,
+            0.06,
+            0.12
+          ],
+          "color": [
+            64,
+            220,
+            230
+          ],
+          "alpha": 150,
+          "group": 0
+        },
+        {
+          "kind": "grid",
+          "rect": [
+            0.3,
+            0.2,
+            0.4,
+            0.6
+          ],
+          "color": [
+            120,
+            100,
+            200
+          ],
+          "alpha": 60,
+          "group": 0
+        },
+        {
+          "kind": "ring",
+          "rect": [
+            0.44,
+            0.41,
+            0.12,
+            0.18
+          ],
+          "color": [
+            150,
+            110,
+            255
+          ],
+          "alpha": 120,
+          "group": 0
+        },
+        {
+          "kind": "label",
+          "rect": [
+            0.44,
+            0.215,
+            0.12,
+            0.022
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 210,
+          "group": 0,
+          "text": "PRIZE FLOOR"
+        },
+        {
+          "kind": "disc",
+          "rect": [
+            0.475,
+            0.265,
+            0.05,
+            0.07
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 60,
+          "group": 0
+        },
+        {
+          "kind": "ring",
+          "rect": [
+            0.475,
+            0.265,
+            0.05,
+            0.07
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 210,
+          "group": 0
+        },
+        {
+          "kind": "hexagon",
+          "rect": [
+            0.488,
+            0.283,
+            0.024,
+            0.034
+          ],
+          "color": [
+            255,
+            230,
+            150
+          ],
+          "alpha": 230,
+          "group": 0,
+          "spin": 40
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.46,
+            0.24,
+            0.08,
+            0.12
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 120,
+          "group": 0
+        },
+        {
+          "kind": "disc",
+          "rect": [
+            0.355,
+            0.465,
+            0.05,
+            0.07
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 60,
+          "group": 0
+        },
+        {
+          "kind": "ring",
+          "rect": [
+            0.355,
+            0.465,
+            0.05,
+            0.07
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 210,
+          "group": 0
+        },
+        {
+          "kind": "hexagon",
+          "rect": [
+            0.368,
+            0.483,
+            0.024,
+            0.034
+          ],
+          "color": [
+            255,
+            230,
+            150
+          ],
+          "alpha": 230,
+          "group": 0,
+          "spin": 40
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.34,
+            0.44,
+            0.08,
+            0.12
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 120,
+          "group": 0
+        },
+        {
+          "kind": "disc",
+          "rect": [
+            0.595,
+            0.465,
+            0.05,
+            0.07
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 60,
+          "group": 0
+        },
+        {
+          "kind": "ring",
+          "rect": [
+            0.595,
+            0.465,
+            0.05,
+            0.07
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 210,
+          "group": 0
+        },
+        {
+          "kind": "hexagon",
+          "rect": [
+            0.608,
+            0.483,
+            0.024,
+            0.034
+          ],
+          "color": [
+            255,
+            230,
+            150
+          ],
+          "alpha": 230,
+          "group": 0,
+          "spin": 40
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.58,
+            0.44,
+            0.08,
+            0.12
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 120,
+          "group": 0
+        },
+        {
+          "kind": "disc",
+          "rect": [
+            0.475,
+            0.665,
+            0.05,
+            0.07
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 60,
+          "group": 0
+        },
+        {
+          "kind": "ring",
+          "rect": [
+            0.475,
+            0.665,
+            0.05,
+            0.07
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 210,
+          "group": 0
+        },
+        {
+          "kind": "hexagon",
+          "rect": [
+            0.488,
+            0.683,
+            0.024,
+            0.034
+          ],
+          "color": [
+            255,
+            230,
+            150
+          ],
+          "alpha": 230,
+          "group": 0,
+          "spin": 40
+        },
+        {
+          "kind": "light",
+          "rect": [
+            0.46,
+            0.64,
+            0.08,
+            0.12
+          ],
+          "color": [
+            255,
+            196,
+            64
+          ],
+          "alpha": 120,
+          "group": 0
+        },
+        {
+          "kind": "spotlight",
+          "rect": [
+            0.08,
+            0.06,
+            0.22,
+            0.09
+          ],
+          "color": [
+            150,
+            110,
+            255
+          ],
+          "alpha": 150,
+          "group": 0,
+          "rotation": 35
+        },
+        {
+          "kind": "spotlight",
+          "rect": [
+            0.7,
+            0.06,
+            0.22,
+            0.09
+          ],
+          "color": [
+            150,
+            110,
+            255
+          ],
+          "alpha": 150,
+          "group": 0,
+          "rotation": 145
+        }
+      ],
+      "triggers": [
+        {
+          "when": "enter",
+          "action": "count",
+          "rect": [
+            0.475,
+            0.265,
+            0.05,
+            0.07
+          ],
+          "group": 1,
+          "amount": 1,
+          "seconds": 2
+        },
+        {
+          "when": "enter",
+          "action": "count",
+          "rect": [
+            0.355,
+            0.465,
+            0.05,
+            0.07
+          ],
+          "group": 1,
+          "amount": 1,
+          "seconds": 2
+        },
+        {
+          "when": "enter",
+          "action": "count",
+          "rect": [
+            0.595,
+            0.465,
+            0.05,
+            0.07
+          ],
+          "group": 1,
+          "amount": 1,
+          "seconds": 2
+        },
+        {
+          "when": "enter",
+          "action": "count",
+          "rect": [
+            0.475,
+            0.665,
+            0.05,
+            0.07
+          ],
+          "group": 1,
+          "amount": 1,
+          "seconds": 2
+        },
+        {
+          "when": "start",
+          "action": "ui",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "group": 1,
+          "seconds": 0.5,
+          "duration": 9,
+          "ui": {
+            "widget": {
+              "title": "Arcade Hall",
+              "text": "Welcome, {name}. Grab coins, visit the shop, crack the vault.",
+              "y": 0.16,
+              "style": "card",
+              "icon": "star",
+              "enter": "drop",
+              "accent": [
+                255,
+                196,
+                64
+              ]
+            }
+          }
+        },
+        {
+          "when": "start",
+          "action": "ui",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "group": 2,
+          "seconds": 0.2,
+          "ui": {
+            "widget": {
+              "title": "Coins",
+              "text": "{1} / 20",
+              "x": 0.985,
+              "y": 0.36,
+              "align": "right",
+              "style": "pill",
+              "icon": "coin",
+              "size": 16,
+              "width": 0.14,
+              "segments": 10,
+              "accent": [
+                255,
+                196,
+                64
+              ]
+            },
+            "bar": 1,
+            "bar_max": 20
+          }
+        },
+        {
+          "when": "start",
+          "action": "ui",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "group": 3,
+          "seconds": 0.2,
+          "duration": 40,
+          "ui": {
+            "widget": {
+              "text": "Vault opens in {left}s",
+              "y": 0.1,
+              "style": "pill",
+              "icon": "clock",
+              "size": 16,
+              "width": 0.16,
+              "accent": [
+                255,
+                96,
+                140
+              ]
+            },
+            "timer": true
+          }
+        },
+        {
+          "when": "start",
+          "action": "hide",
+          "rect": [
+            0.07,
+            0.37,
+            0.12,
+            0.26
+          ],
+          "group": 2,
+          "seconds": 40
+        },
+        {
+          "when": "start",
+          "action": "tint",
+          "rect": [
+            0.07,
+            0.37,
+            0.12,
+            0.26
+          ],
+          "group": 3,
+          "seconds": 40,
+          "color": [
+            110,
+            230,
+            150
+          ],
+          "tween": 1
+        },
+        {
+          "when": "start",
+          "action": "sound",
+          "rect": [
+            0.07,
+            0.37,
+            0.12,
+            0.26
+          ],
+          "seconds": 40,
+          "sound": "fanfare",
+          "amount": 80
+        },
+        {
+          "when": "start",
+          "action": "ui",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "group": 3,
+          "seconds": 40,
+          "duration": 6,
+          "ui": {
+            "widget": {
+              "title": "Vault open",
+              "text": "First tank inside wins 1,000 points",
+              "y": 0.1,
+              "style": "card",
+              "icon": "key",
+              "enter": "pop",
+              "accent": [
+                110,
+                230,
+                150
+              ]
+            }
+          }
+        },
+        {
+          "when": "enter",
+          "action": "award",
+          "rect": [
+            0.07,
+            0.37,
+            0.12,
+            0.26
+          ],
+          "amount": 1000,
+          "once": true,
+          "who": "cause"
+        },
+        {
+          "when": "enter",
+          "action": "ui",
+          "rect": [
+            0.07,
+            0.37,
+            0.12,
+            0.26
+          ],
+          "group": 4,
+          "once": true,
+          "duration": 5,
+          "ui": {
+            "widget": {
+              "title": "Vault prize",
+              "text": "+1,000 points, {name}",
+              "y": 0.3,
+              "style": "card",
+              "icon": "trophy",
+              "enter": "pop",
+              "pulse": true,
+              "accent": [
+                255,
+                196,
+                64
+              ]
+            },
+            "to": "cause"
+          }
+        },
+        {
+          "when": "changed",
+          "action": "sound",
+          "rect": [
+            0.44,
+            0.41,
+            0.12,
+            0.18
+          ],
+          "source": 1,
+          "sound": "switch",
+          "amount": 45
+        },
+        {
+          "when": "counter",
+          "action": "ui",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "source": 1,
+          "threshold": 20,
+          "group": 5,
+          "duration": 6,
+          "ui": {
+            "widget": {
+              "title": "JACKPOT",
+              "text": "Shapes rain on the prize floor",
+              "y": 0.3,
+              "style": "banner",
+              "icon": "star",
+              "size": 22,
+              "enter": "pop",
+              "pulse": true,
+              "panel": [
+                40,
+                16,
+                60
+              ],
+              "accent": [
+                255,
+                196,
+                64
+              ]
+            },
+            "timer": true
+          }
+        },
+        {
+          "when": "counter",
+          "action": "shapes",
+          "rect": [
+            0.3,
+            0.2,
+            0.4,
+            0.6
+          ],
+          "source": 1,
+          "threshold": 20,
+          "amount": 24
+        },
+        {
+          "when": "counter",
+          "action": "light",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "source": 1,
+          "threshold": 20,
+          "amount": 0,
+          "tween": 0.15,
+          "duration": 1.2,
+          "color": [
+            40,
+            20,
+            60
+          ]
+        },
+        {
+          "when": "counter",
+          "action": "sound",
+          "rect": [
+            0.44,
+            0.41,
+            0.12,
+            0.18
+          ],
+          "source": 1,
+          "threshold": 20,
+          "sound": "fanfare",
+          "amount": 90
+        },
+        {
+          "when": "counter",
+          "action": "set",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "source": 1,
+          "threshold": 20,
+          "group": 1,
+          "amount": 0,
+          "delay": 2
+        },
+        {
+          "when": "enter",
+          "action": "ui",
+          "rect": [
+            0.84,
+            0.42,
+            0.08,
+            0.16
+          ],
+          "group": 6,
+          "seconds": 1,
+          "ui": {
+            "widget": {
+              "title": "Shop",
+              "text": "{name}, pick one",
+              "y": 0.74,
+              "style": "panel",
+              "icon": "coin",
+              "enter": "slide",
+              "accent": [
+                64,
+                220,
+                230
+              ],
+              "choices": [
+                "Repair",
+                "+300 points",
+                "Leave"
+              ]
+            },
+            "to": "cause",
+            "channels": [
+              1,
+              2,
+              0
+            ]
+          }
+        },
+        {
+          "when": "exit",
+          "action": "hide_ui",
+          "rect": [
+            0.84,
+            0.42,
+            0.08,
+            0.16
+          ],
+          "group": 6,
+          "ui": {
+            "widget": {
+              "text": "Shop"
+            },
+            "to": "cause"
+          }
+        },
+        {
+          "when": "signal",
+          "action": "heal",
+          "rect": [
+            0.84,
+            0.42,
+            0.08,
+            0.16
+          ],
+          "source": 1,
+          "amount": 100,
+          "who": "cause"
+        },
+        {
+          "when": "signal",
+          "action": "sound",
+          "rect": [
+            0.84,
+            0.42,
+            0.08,
+            0.16
+          ],
+          "source": 1,
+          "sound": "chime",
+          "amount": 70
+        },
+        {
+          "when": "signal",
+          "action": "award",
+          "rect": [
+            0.84,
+            0.42,
+            0.08,
+            0.16
+          ],
+          "source": 2,
+          "amount": 300,
+          "who": "cause"
+        },
+        {
+          "when": "signal",
+          "action": "sound",
+          "rect": [
+            0.84,
+            0.42,
+            0.08,
+            0.16
+          ],
+          "source": 2,
+          "sound": "bell",
+          "amount": 70
+        },
+        {
+          "when": "every",
+          "action": "ui",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "seconds": 50,
+          "offset": 20,
+          "group": 7,
+          "duration": 12,
+          "ui": {
+            "widget": {
+              "title": "Call the next event",
+              "text": "First pick wins",
+              "x": 0.985,
+              "y": 0.56,
+              "align": "right",
+              "style": "card",
+              "icon": "flag",
+              "enter": "slide",
+              "accent": [
+                150,
+                110,
+                255
+              ],
+              "choices": [
+                "Lights out",
+                "Shape rain"
+              ]
+            },
+            "channels": [
+              5,
+              6
+            ],
+            "timer": true
+          }
+        },
+        {
+          "when": "signal",
+          "action": "light",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "source": 5,
+          "amount": 85,
+          "tween": 1.5,
+          "duration": 10,
+          "color": [
+            10,
+            4,
+            24
+          ]
+        },
+        {
+          "when": "signal",
+          "action": "announce",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "source": 5,
+          "text": "Lights out!"
+        },
+        {
+          "when": "signal",
+          "action": "shapes",
+          "rect": [
+            0.3,
+            0.2,
+            0.4,
+            0.6
+          ],
+          "source": 6,
+          "amount": 16
+        },
+        {
+          "when": "signal",
+          "action": "announce",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "source": 6,
+          "text": "Shape rain!"
+        },
+        {
+          "when": "signal",
+          "action": "hide_ui",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "source": 5,
+          "group": 7
+        },
+        {
+          "when": "signal",
+          "action": "hide_ui",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "source": 6,
+          "group": 7
+        }
+      ],
+      "ambient": {
+        "darkness": 0.45,
+        "color": [
+          30,
+          12,
+          48
+        ]
+      },
+      "group_names": [
+        {
+          "group": 2,
+          "name": "Vault gate"
+        },
+        {
+          "group": 3,
+          "name": "Vault lamp"
+        }
+      ]
+    }
+  ]
+}

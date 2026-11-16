@@ -182,7 +182,7 @@ printf '%b' "${TANKYARD_TEST_LDD:-\\tlibc.so.7 => /lib/libc.so.7 (0x1)\\n}"
     def test_workshop_examples_and_captions_are_in_the_release_archive(self):
         with tarfile.open(self.archive, "r:gz") as archive:
             files = {member.name for member in archive.getmembers()}
-        for name in ("night_works", "switchyard"):
+        for name in ("night_works", "switchyard", "arcade_hall"):
             self.assertTrue(any(path.endswith(f"/mods/{name}/mod.json") for path in files), name)
         self.assertTrue(any(path.endswith("/docs/physics-tutorial.md") for path in files))
         self.assertTrue(any(path.endswith("/docs/physics-tutorial.vtt") for path in files))

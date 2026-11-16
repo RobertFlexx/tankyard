@@ -379,9 +379,12 @@ impl ModRuntime {
                         let key = (module.id.clone(), actor, id);
                         match widget {
                             // Bots have no screen to show a widget on.
+                            // A widget a client would refuse never reaches the list
+                            // it receives, so it can't hide the others.
                             Some(mut widget)
-                                if actor == 0
-                                    || world.tanks.iter().any(|t| t.id == actor && !t.bot) =>
+                                if widget.valid()
+                                    && (actor == 0
+                                        || world.tanks.iter().any(|t| t.id == actor && !t.bot)) =>
                             {
                                 widget.menu = if widget.choices.is_empty() {
                                     0

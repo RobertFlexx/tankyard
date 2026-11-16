@@ -344,6 +344,8 @@ A **Show UI** trigger puts a widget on players' screens. A widget can have a tit
 
 **Hide UI** takes a slot's widget away, or every map widget with slot 0, from everyone, from the players in its area or from the player that set it off. Bots never see widgets.
 
+The bundled [Arcade Hall pack](../mods/arcade_hall) is a finished map built this way: a coin counter with a jackpot, a shop, a vault countdown and a vote. Enable it on Mods to play it, or import its `mod.json` in the workshop to see each trigger.
+
 For a shop, put an On enter trigger at the counter that shows a menu to the player that set it off, and On signal triggers for each choice whose *Who* is *Tank that set it off*: Repair tanks, Award points, Fling tanks, or a counter for a door. The logic preview shows widgets over the canvas, and you can click their choices there as the test tank.
 
 ### The UI palette

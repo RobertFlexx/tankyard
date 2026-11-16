@@ -1027,11 +1027,15 @@ fn hud(args: &[Value]) -> mlua::Result<Effect> {
                 ))
             })
     }
+    // One line per choice; an empty list is no choices.
     let choices: Vec<String> = match arg(20) {
-        Some(Value::String(list)) => list
+        Some(Value::String(list)) if !list.as_bytes().is_empty() => list
             .to_string_lossy()
             .split('\n')
-            .map(|choice| choice.trim().to_owned())
+            .map(|choice| {
+                let plain: String = choice.chars().filter(|c| !c.is_control()).collect();
+                plain.trim().to_owned()
+            })
             .collect(),
         _ => Vec::new(),
     };

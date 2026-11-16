@@ -1,0 +1,14 @@
+[mod]
+name = "Arcade Hall"
+version = "1.0"
+description = "A neon hall built from the 1.4 workshop's UI triggers: a coin counter with a jackpot, a shop menu, a vault countdown and a vote for the next event."
+license = "MIT"
+icon = "icon.svg"
+tags = ["maps", "tutorial", "ui"]
+
+[creator]
+name = "Tank Yard"
+url = "https://github.com/RobertFlexx/tankyard"
+
+[links]
+source = "https://github.com/RobertFlexx/tankyard/tree/main/mods/arcade_hall"

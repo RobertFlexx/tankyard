@@ -293,7 +293,8 @@ function tankyard.hud(widget_id, widget, tank)
     check("table", widget.choices, "hud", "choices")
     local list = {}
     for index, choice in ipairs(widget.choices) do
-      list[index] = check("string", choice, "hud", "each choice")
+      -- Control characters, line breaks among them, become spaces.
+      list[index] = (check("string", choice, "hud", "each choice"):gsub("%c", " "))
     end
     choices = table.concat(list, "\n")
   end

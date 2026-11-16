@@ -659,6 +659,36 @@ fn scripts_show_hud_widgets_to_everyone_or_one_player() {
 }
 
 #[test]
+fn empty_choice_lists_and_control_characters_in_choices_are_harmless() {
+    let mut world = world();
+    let player = world.add_player("Pilot", false);
+    let mut runtime = ModRuntime::default();
+    let source = r##"
+        tankyard.on("tick", function()
+          tankyard.hud("plain", { text = "Wave 2", choices = {} })
+          tankyard.hud("menu", { text = "Go?", choices = { "Go\tnow", "Line\nbreak" } })
+        end)
+        "##;
+    runtime
+        .install(Box::new(
+            LuaPlugin::new(&info("tidy"), &pack(source), &Content::builtin(), 7).unwrap(),
+        ))
+        .unwrap();
+    for _ in 0..3 {
+        world.step_with(|w| runtime.before_step(w));
+        runtime.after_step(&mut world);
+    }
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    let shown = world.hud_for(player);
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    assert!(shown.iter().all(tankyard_mods::HudWidget::valid));
+    let menu = shown.iter().find(|w| w.text == "Go?").expect("the menu");
+    assert_eq!(menu.choices, ["Go now", "Line break"]);
+    let plain = shown.iter().find(|w| w.text == "Wave 2").expect("the line");
+    assert!(plain.choices.is_empty() && plain.menu == 0);
+}
+
+#[test]
 fn designed_widgets_and_their_choices_reach_the_pack_that_showed_them() {
     let mut world = world();
     let player = world.add_player("Pilot", false);
