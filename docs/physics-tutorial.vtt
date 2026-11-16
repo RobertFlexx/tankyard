@@ -1,0 +1,55 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:03.700
+Night Works, the example pack, open in the Arena Workshop.
+
+00:00:03.700 --> 00:00:09.590
+In the Map tab, Darkness sets how dark a round starts and the color tints it.
+
+00:00:09.590 --> 00:00:14.820
+Paths move a group through points, each with its own timing, wait and curve.
+
+00:00:14.820 --> 00:00:19.130
+The canvas draws the ferry's path from where it rests, with a dot riding it.
+
+00:00:19.130 --> 00:00:25.730
+The group list shows what each group holds. Hidden, Lock and Select act on all of it.
+
+00:00:25.730 --> 00:00:29.650
+Pushable turns a group into one solid body that tanks shove by driving into it.
+
+00:00:29.650 --> 00:00:33.440
+Choose which way it slides and how far, its weight, a spring home, friction and bounce.
+
+00:00:33.440 --> 00:00:43.590
+The Physics palette holds ready-made pieces. Hover one to see what it does.
+
+00:00:43.590 --> 00:00:47.440
+Lightning flashes a dark arena every nine seconds, then Go back after returns the dark.
+
+00:00:47.440 --> 00:00:55.980
+P runs the logic in place: the ferry rides its path and the ring pulses.
+
+00:00:55.980 --> 00:00:58.860
+Shift+F5 playtests from the pointer. Drive into the push door and it gives way.
+
+00:00:58.860 --> 00:01:06.210
+Steer past it and it springs shut behind you. The roof clears while you're inside.
+
+00:01:06.210 --> 00:01:18.980
+Shove the crate onto the plate to open the vault gate.
+
+00:01:18.980 --> 00:01:28.610
+The lights plate brightens the yard for ten seconds. Every six, the middle blasts tanks outward.
+
+00:01:28.610 --> 00:01:31.800
+Foundry, a new built-in arena for every mode, built from the same pieces.
+
+00:01:31.800 --> 00:01:36.250
+A furnace, belts, cranes on paths, and press rooms behind push doors.
+
+00:01:36.250 --> 00:01:47.850
+Belts carry tanks along, and cranes ride back and forth on their paths.
+
+00:01:47.850 --> 00:01:53.150
+Every ten seconds the furnace glows red, then blows back every tank near it.

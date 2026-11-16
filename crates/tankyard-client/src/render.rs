@@ -562,6 +562,12 @@ pub fn world(
         }
         _ => wall,
     };
+    // Groups tanks can push, drawn as crates.
+    let bodies = map.map_or(0, |map| {
+        map.bodies.iter().fold(0, |mask, body| {
+            mask | tankyard_content::MapDef::group_bit(body.group)
+        })
+    });
     for (index, original) in snapshot.walls.iter().enumerate() {
         let wall = scaled(original);
         if !view.visible(wall.center(), wall.w.max(wall.h)) {
@@ -585,13 +591,15 @@ pub fn world(
                     )
             },
         );
-        crate::scenery::block(
-            Rect::new(p.x, p.y, wall.w * z, wall.h * z),
-            style,
-            tint,
-            dark,
-            settings.shape_quality,
-        );
+        let r = Rect::new(p.x, p.y, wall.w * z, wall.h * z);
+        crate::scenery::block(r, style, tint, dark, settings.shape_quality);
+        if snapshot
+            .wall_groups
+            .get(index)
+            .is_some_and(|&group| tankyard_content::MapDef::group_bit(group) & bodies != 0)
+        {
+            crate::scenery::body_marks(r, dark);
+        }
     }
     if snapshot.config.mode == Mode::Survival {
         let p = view.screen(V2::new(

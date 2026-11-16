@@ -1,6 +1,5 @@
 //! Keeps what bots learn between restarts: which tanks earn the most, which
 //! beat which, and the networks they pool. One memory serves every arena.
-use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
 pub use tankyard_ai::SharedKnowledge;
@@ -18,17 +17,12 @@ pub fn load(path: &Path, content: &Content) -> SharedKnowledge {
         return Knowledge::default().shared();
     }
     let read = || -> std::io::Result<String> {
-        let file = std::fs::File::open(path)?;
-        let meta = file.metadata()?;
-        if !meta.is_file() || meta.len() > tankyard_ai::KNOWLEDGE_FILE_LIMIT as u64 {
-            return Err(std::io::Error::other(
-                "not a bot memory file of a usable size",
-            ));
-        }
-        let mut text = String::new();
-        file.take(tankyard_ai::KNOWLEDGE_FILE_LIMIT as u64 + 1)
-            .read_to_string(&mut text)?;
-        Ok(text)
+        // Preserve the normal missing-file path, then use the shared bounded
+        // reader, which rejects FIFOs before an open can stall startup.
+        std::fs::metadata(path)?;
+        let bytes = tankyard_mods::read_bounded_limit(path, tankyard_ai::KNOWLEDGE_FILE_LIMIT)
+            .map_err(std::io::Error::other)?;
+        String::from_utf8(bytes).map_err(std::io::Error::other)
     };
     match read() {
         Ok(text) => match Knowledge::from_json(&text, content) {
@@ -85,6 +79,40 @@ pub fn save(path: &Path, memory: &SharedKnowledge) -> std::io::Result<bool> {
 mod tests {
     use super::*;
     use tankyard_core::{Mode, World, WorldConfig};
+
+    #[cfg(unix)]
+    #[test]
+    fn special_memory_files_do_not_stall_startup() {
+        use std::{sync::mpsc, time::Duration};
+        let root = std::env::temp_dir().join(format!(
+            "tankyard-memory-pipe-{}-{}",
+            std::process::id(),
+            renet_netcode::generate_random_bytes::<8>()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("memory.json");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let memory = load(&path, &Content::builtin());
+            tx.send(lock_knowledge(&memory).lives()).unwrap();
+        });
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2))
+                .expect("memory load must not wait for a writer"),
+            0
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn memories_round_trip_and_damaged_files_start_fresh() {

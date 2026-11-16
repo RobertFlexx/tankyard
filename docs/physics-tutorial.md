@@ -2,6 +2,8 @@
 
 Build a dark yard: a room behind a push door, a crate you shove onto a plate to open a gate, a ferry that rides a path, and a lightning storm.
 
+[Watch the physics and lighting video](physics-tutorial.mp4) (1 min 53 s), or follow the steps below. The video has [English captions](physics-tutorial.vtt).
+
 You need **Tank Yard 1.3.0 or later**. The bundled [Night Works pack](../mods/night_works) is a finished map built the same way; enable it on Mods and pick it in an offline Sandbox game, or import it in the workshop to see how it's put together.
 
 Start with **New** in the workshop. The steps use a 2400 × 1600 arena, but everything works at other sizes. Press **G** to show group numbers on the canvas as you go.

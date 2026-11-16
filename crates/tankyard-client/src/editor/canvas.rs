@@ -881,6 +881,10 @@ impl Editor {
             canvas.w + 80.,
             canvas.h + 80.,
         );
+        let body_mask = map
+            .bodies
+            .iter()
+            .fold(0, |mask, body| mask | MapDef::group_bit(body.group));
         for (key, r, group) in self.doc.items() {
             // The logic preview glides groups; their homes stay outlined,
             // since that is where editing moves them.
@@ -918,6 +922,9 @@ impl Editor {
                         settings.dark_arena,
                         settings.shape_quality,
                     );
+                    if body_mask & MapDef::group_bit(b.group) != 0 {
+                        scenery::body_marks(rect, settings.dark_arena);
+                    }
                 }
                 Key::Trigger(i) => self.draw_trigger(i, rect),
                 Key::Spawn(i) => brushes::spawn_mark(map.spawn_regions[i].team, rect, s),

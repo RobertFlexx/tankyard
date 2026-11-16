@@ -94,9 +94,14 @@ pub fn darken(lighting: [f32; 4], lights: &[Light], area: Option<Rect>) {
         return;
     }
     let (w, h) = (screen_width(), screen_height());
-    let area = area
-        .and_then(|a| a.intersect(Rect::new(0., 0., w, h)))
-        .unwrap_or(Rect::new(0., 0., w, h));
+    let window = Rect::new(0., 0., w, h);
+    let area = match area {
+        Some(requested) => match requested.intersect(window) {
+            Some(visible) => visible,
+            None => return,
+        },
+        None => window,
+    };
     if area.w < 1. || area.h < 1. {
         return;
     }
@@ -234,44 +239,79 @@ fn vertex(p: Vec2, color: Color) -> Vertex {
     Vertex::new(p.x, p.y, 0., 0., 0., color)
 }
 
+/// How far along a cone each row of its mesh lies, and how bright it is
+/// there: light falling away from the lamp, faster near it, as it spreads.
+const CONE_ROWS: [(f32, f32); 4] = [(0.12, 0.82), (0.38, 0.5), (0.7, 0.18), (1., 0.)];
+const CONE_STEPS: usize = 18;
+const CONE_VERTICES: usize = 1 + (CONE_STEPS + 1) * CONE_ROWS.len();
+const CONE_INDICES: [u16; CONE_STEPS * (3 + (CONE_ROWS.len() - 1) * 6)] = {
+    let mut indices = [0; CONE_STEPS * (3 + (CONE_ROWS.len() - 1) * 6)];
+    let mut sector = 0;
+    let mut cursor = 0;
+    while sector < CONE_STEPS {
+        let near = (1 + sector * CONE_ROWS.len()) as u16;
+        let next = near + CONE_ROWS.len() as u16;
+        indices[cursor] = 0;
+        indices[cursor + 1] = near;
+        indices[cursor + 2] = next;
+        cursor += 3;
+        let mut row = 0;
+        while row + 1 < CONE_ROWS.len() {
+            let a = near + row as u16;
+            let b = next + row as u16;
+            indices[cursor] = a;
+            indices[cursor + 1] = a + 1;
+            indices[cursor + 2] = b + 1;
+            indices[cursor + 3] = a;
+            indices[cursor + 4] = b + 1;
+            indices[cursor + 5] = b;
+            cursor += 6;
+            row += 1;
+        }
+        sector += 1;
+    }
+    indices
+};
+
+/// Submit small light shapes directly to the ordinary batcher. Stack-backed
+/// vertices and fixed indices avoid allocating a Mesh for each light each frame.
+fn geometry(vertices: &[Vertex], indices: &[u16]) {
+    // SAFETY: rendering runs on the main graphics thread; no context borrow
+    // survives this call, which copies the geometry into macroquad's batch.
+    unsafe {
+        let gl = get_internal_gl().quad_gl;
+        gl.texture(None);
+        gl.draw_mode(DrawMode::Triangles);
+        gl.geometry(vertices, indices);
+    }
+}
+
 /// A cone of light, brightest at its tip and along its middle and fading to
 /// nothing at its far end and sides, in the current blend.
 pub fn cone(at: Vec2, angle: f32, spread: f32, reach: f32, color: Color) {
-    const STEPS: usize = 14;
+    const ROWS: usize = CONE_ROWS.len();
     if reach < 0.5 || color.a <= 0.004 {
         return;
     }
     let spread = spread.clamp(0.02, 1.5);
-    let mut vertices = Vec::with_capacity(1 + STEPS * 2 + 2);
-    vertices.push(vertex(at, color));
-    for i in 0..=STEPS {
-        let t = i as f32 / STEPS as f32 * 2. - 1.;
+    let mut vertices = [vertex(at, color); CONE_VERTICES];
+    for i in 0..=CONE_STEPS {
+        let t = i as f32 / CONE_STEPS as f32 * 2. - 1.;
         let a = angle + t * spread;
         let direction = vec2(a.cos(), a.sin());
-        // Soft sides: full in the middle, none at the edge.
-        let side = (1. - t * t).max(0.);
-        vertices.push(vertex(
-            at + direction * reach * 0.45,
-            Color {
-                a: color.a * 0.65 * side,
-                ..color
-            },
-        ));
-        vertices.push(vertex(at + direction * reach, Color { a: 0., ..color }));
+        // Soft sides: full in the middle, easing to none at the edge.
+        let side = (1. - t * t).max(0.).powf(1.5);
+        for (row, (along, bright)) in CONE_ROWS.into_iter().enumerate() {
+            vertices[1 + i * ROWS + row] = vertex(
+                at + direction * reach * along,
+                Color {
+                    a: color.a * bright * side,
+                    ..color
+                },
+            );
+        }
     }
-    let mut indices = Vec::with_capacity(STEPS * 9);
-    for i in 0..STEPS as u16 {
-        let (near, far) = (1 + i * 2, 2 + i * 2);
-        let (next_near, next_far) = (near + 2, far + 2);
-        indices.extend_from_slice(&[0, near, next_near]);
-        indices.extend_from_slice(&[near, far, next_far]);
-        indices.extend_from_slice(&[near, next_far, next_near]);
-    }
-    draw_mesh(&Mesh {
-        vertices,
-        indices,
-        texture: None,
-    });
+    geometry(&vertices, &CONE_INDICES);
 }
 
 /// A shaft of light with a bright core and soft edges, in the current blend.
@@ -282,7 +322,7 @@ pub fn shaft(from: Vec2, to: Vec2, width: f32, color: Color) {
     }
     let across = vec2(-along.y, along.x).normalize() * width * 0.5;
     let clear = Color { a: 0., ..color };
-    let vertices = vec![
+    let vertices = [
         vertex(from - across, clear),
         vertex(from, color),
         vertex(from + across, clear),
@@ -290,16 +330,54 @@ pub fn shaft(from: Vec2, to: Vec2, width: f32, color: Color) {
         vertex(to, color),
         vertex(to + across, clear),
     ];
-    draw_mesh(&Mesh {
-        vertices,
-        indices: vec![0, 1, 4, 0, 4, 3, 1, 2, 5, 1, 5, 4],
-        texture: None,
-    });
+    geometry(&vertices, &[0, 1, 4, 0, 4, 3, 1, 2, 5, 1, 5, 4]);
+}
+
+/// A four-pointed glint over a bright source: thin spikes `length` long,
+/// turned `turn` radians and fading toward their tips, in the current blend.
+pub fn glint(at: Vec2, length: f32, turn: f32, color: Color) {
+    if length < 1. || color.a <= 0.004 {
+        return;
+    }
+    let clear = Color { a: 0., ..color };
+    let mut vertices = [vertex(at, color); 13];
+    let mut indices = [0; 24];
+    for k in 0..4u16 {
+        let a = turn + f32::from(k) * std::f32::consts::FRAC_PI_2;
+        let direction = vec2(a.cos(), a.sin());
+        let side = vec2(-direction.y, direction.x) * length * 0.08;
+        let first = 1 + k * 3;
+        vertices[usize::from(first)..usize::from(first) + 3].copy_from_slice(&[
+            vertex(at + side, clear),
+            vertex(at + direction * length, clear),
+            vertex(at - side, clear),
+        ]);
+        let cursor = usize::from(k) * 6;
+        indices[cursor..cursor + 6].copy_from_slice(&[
+            0,
+            first,
+            first + 1,
+            0,
+            first + 1,
+            first + 2,
+        ]);
+    }
+    geometry(&vertices, &indices);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cones_fade_steadily_from_the_lamp_to_nothing() {
+        let mut last = (0., 1.);
+        for (along, bright) in CONE_ROWS {
+            assert!(along > last.0 && bright < last.1, "{along} {bright}");
+            last = (along, bright);
+        }
+        assert_eq!(last, (1., 0.), "the far end meets the dark without a rim");
+    }
 
     #[test]
     fn steady_lighting_eases_flashes_at_a_bounded_rate() {

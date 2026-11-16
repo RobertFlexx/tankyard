@@ -924,6 +924,8 @@ impl RenderingBackend for GlContext {
         let t = self.textures.get(texture);
         match &t.raw {
             TextureOrRenderbuffer::Texture(raw) => unsafe {
+                // Tank Yard: the next texture may reuse this name.
+                self.cache.forget_texture(*raw);
                 glDeleteTextures(1, raw as *const _);
             },
             TextureOrRenderbuffer::Renderbuffer(raw) => unsafe {

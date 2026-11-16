@@ -187,13 +187,38 @@ pub fn move_tank(
     slide_tank(tank, config, walls, dt);
 }
 
-/// The velocity half of [`move_tank`]: acceleration, coasting and their limits.
-pub fn steer_tank(tank: &mut Tank, content: &Content, config: &WorldConfig, dt: f32) {
-    let speed = tank_speed(tank, content)
+/// Maximum motor-driven speed, including terrain, boosts and carrying a core.
+pub fn movement_speed(tank: &Tank, content: &Content, config: &WorldConfig) -> f32 {
+    tank_speed(tank, content)
         * config.rules.movement_multiplier
         * tank.terrain.clamp(0.3, 2.5)
         * (if tank.boost > 0. { 1.55 } else { 1. })
-        * (if tank.carrying { 0.75 } else { 1. });
+        * (if tank.carrying { 0.75 } else { 1. })
+}
+
+/// Keep a driving tank's normal speed when the body it touches moves away.
+/// The caller checks contact and supplies the wall-to-tank unit normal.
+/// Tangential motion is unchanged, and a fast shove cannot pull the tank
+/// faster than its own motor. Host simulation and prediction share this rule.
+pub fn keep_pushing_velocity(tank: &mut Tank, normal: V2, body_velocity: V2, speed: f32) {
+    if !normal.finite() || !body_velocity.finite() || !speed.is_finite() {
+        return;
+    }
+    let into = -tank.input.movement.clamp_length(1.).dot(normal);
+    if into <= 0.2 {
+        return;
+    }
+    let toward = (-body_velocity.dot(normal))
+        .max(0.)
+        .min(speed.max(0.) * into);
+    if toward > 0. {
+        tank.vel += normal * (-toward - tank.vel.dot(normal)).min(0.);
+    }
+}
+
+/// The velocity half of [`move_tank`]: acceleration, coasting and their limits.
+pub fn steer_tank(tank: &mut Tank, content: &Content, config: &WorldConfig, dt: f32) {
+    let speed = movement_speed(tank, content, config);
     // Conveyors carry a tank whether or not it steers, like a moving floor.
     let push = if tank.push.finite() {
         tank.push.clamp_length(600.)
@@ -777,6 +802,44 @@ impl WallIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pushing_contact_preserves_slide_and_respects_motor_speed_and_input() {
+        let content = Content::builtin();
+        let config = WorldConfig::default();
+        let mut world = crate::World::new(config, content);
+        world.add_player("contact", false);
+        let tank = &mut world.tanks[0];
+        let normal = V2::new(-1., 0.);
+        tank.input.movement = V2::new(1., 0.);
+        tank.vel = V2::new(0., 35.);
+        keep_pushing_velocity(tank, normal, V2::new(90., 0.), 150.);
+        assert_eq!(tank.vel, V2::new(90., 35.));
+        keep_pushing_velocity(tank, normal, V2::new(900., 0.), 150.);
+        assert_eq!(
+            tank.vel,
+            V2::new(150., 35.),
+            "a shove cannot tow the pusher"
+        );
+        tank.vel = V2::new(0., 35.);
+        tank.input.movement = V2::ZERO;
+        keep_pushing_velocity(tank, normal, V2::new(90., 0.), 150.);
+        assert_eq!(tank.vel, V2::new(0., 35.));
+        tank.input.movement = V2::new(-1., 0.);
+        keep_pushing_velocity(tank, normal, V2::new(90., 0.), 150.);
+        assert_eq!(
+            tank.vel,
+            V2::new(0., 35.),
+            "leaving the body breaks contact"
+        );
+        tank.input.movement = V2::new(1., 0.);
+        keep_pushing_velocity(tank, normal, V2::new(-90., 0.), 150.);
+        assert_eq!(
+            tank.vel,
+            V2::new(0., 35.),
+            "an approaching body is resolved by collision"
+        );
+    }
 
     #[test]
     fn indexed_tank_motion_matches_full_wall_prediction() {

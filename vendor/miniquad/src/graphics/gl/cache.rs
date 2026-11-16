@@ -116,6 +116,25 @@ impl GlCache {
         self.index_buffer = 0;
     }
 
+    /// Tank Yard: forget a texture name GL is about to delete. GL unbinds it
+    /// and hands the name to a later texture, which the cache would otherwise
+    /// take for already bound, so that texture's upload would go to whatever
+    /// is really bound (a font atlas made this way samples black).
+    pub fn forget_texture(&mut self, texture: GLuint) {
+        for cached in &mut self.textures {
+            if cached.texture == texture {
+                *cached = CachedTexture {
+                    target: 0,
+                    texture: 0,
+                };
+            }
+        }
+        if self.stored_texture == texture {
+            self.stored_target = 0;
+            self.stored_texture = 0;
+        }
+    }
+
     pub fn clear_texture_bindings(&mut self) {
         for ix in 0..MAX_SHADERSTAGE_IMAGES {
             if self.textures[ix].texture != 0 {

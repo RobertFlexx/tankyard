@@ -6,7 +6,11 @@
 alongside), the windowing and rendering layer under macroquad, with Tank Yard's
 Metal improvements for Macs. Every change is marked with a `Tank Yard:`
 comment, and the commit after the unmodified import shows them all as a diff.
-Other platforms run upstream's OpenGL code unchanged.
+The OpenGL backend includes external-texture interop for DLSS. Deleting a texture
+also drops it from the texture-binding cache. GL hands a deleted texture's name to
+the next new one, which the cache then took for already bound, so that
+texture's pixels went elsewhere. A font atlas that grew after a render target
+was resized drew every letter as a black box.
 
 The Metal backend changes:
 

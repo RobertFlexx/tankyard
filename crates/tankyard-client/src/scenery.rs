@@ -107,8 +107,15 @@ pub fn floor(map: &MapDef, config: &WorldConfig, shown: &Shown, view: &View, tim
             }
             _ => 0.5,
         };
-        draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.13));
+        // Pads that hurt or heal breathe, so they read as live from afar.
+        let breath = match zone.kind {
+            ZoneKind::Hazard => 0.07 * (time * 3.2).sin(),
+            ZoneKind::Repair => 0.04 * (time * 2.).sin(),
+            _ => 0.,
+        };
+        draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.13 + breath));
         draw_rectangle_lines(r.x, r.y, r.w, r.h, (2. * view.zoom).max(1.), alpha(c, 0.65));
+        pad_corners(r, view.zoom, alpha(c, 0.9));
         // A restrained repeating stencil makes pads distinguishable without
         // relying on colour. The count is capped even for arena-sized pads.
         let spacing = spacing_of(view);
@@ -202,6 +209,23 @@ fn portal(zone: &MapZone, rect: [f32; 4], config: &WorldConfig, view: &View, tim
             2.,
             alpha(c, 0.6),
         );
+    }
+}
+
+/// Bold brackets on a pad's corners, so its edges read at a glance.
+fn pad_corners(r: Rect, zoom: f32, c: Color) {
+    let arm = (r.w.min(r.h) * 0.22).min(30. * zoom.max(0.25)).max(3.);
+    let thickness = (3.5 * zoom).clamp(1.5, 5.);
+    for (corner, out) in [
+        (vec2(r.x, r.y), vec2(1., 1.)),
+        (vec2(r.right(), r.y), vec2(-1., 1.)),
+        (vec2(r.right(), r.bottom()), vec2(-1., -1.)),
+        (vec2(r.x, r.bottom()), vec2(1., -1.)),
+    ] {
+        let along = corner + vec2(out.x * arm, 0.);
+        let down = corner + vec2(0., out.y * arm);
+        draw_line(corner.x, corner.y, along.x, along.y, thickness, c);
+        draw_line(corner.x, corner.y, down.x, down.y, thickness, c);
     }
 }
 
@@ -472,12 +496,27 @@ pub fn lights(
         if out.len() >= crate::lighting::MOST_LIGHTS {
             return;
         }
-        if !item.kind.lights() {
+        // Glowing particles light the floor around where they rise.
+        let glowing =
+            item.kind == DecorKind::Emitter && item.effect.as_ref().is_some_and(|e| e.glow);
+        if !item.kind.lights() && !glowing {
             continue;
         }
-        let Some((r, _, look)) = placed(item, config, shown, view, reduced_motion) else {
+        let Some((r, scale, look)) = placed(item, config, shown, view, reduced_motion) else {
             continue;
         };
+        if let Some(effect) = item.effect.as_ref().filter(|_| glowing) {
+            let spread = (effect.speed * effect.lifetime * 0.5 + effect.size * 3.) * view.zoom;
+            out.push(Light::Spot {
+                at: r.center(),
+                radius: (r.w.max(r.h) * 0.5 + spread * scale).max(4.),
+                color: alpha(
+                    mix(color(tinted(effect.color, look.tint)), WHITE, 0.3),
+                    (f32::from(item.alpha) / 255. * 0.55 * look.fade).min(1.),
+                ),
+            });
+            continue;
+        }
         let pulse = if item.pulse > 0. {
             0.8 + 0.2 * (time * item.pulse * std::f32::consts::TAU).cos()
         } else {
@@ -493,6 +532,16 @@ pub fn lights(
         );
         let angle = (item.rotation + look.turn + time * item.spin).to_radians();
         let direction = vec2(angle.cos(), angle.sin());
+        if item.kind == DecorKind::Spotlight && out.len() + 1 < crate::lighting::MOST_LIGHTS {
+            // The pool where the beam lands, as the visible spotlight draws it.
+            let spread = (r.h * 0.5).atan2(r.w.max(1.));
+            let land = r.w * 0.7;
+            out.push(Light::Spot {
+                at: r.center() - direction * r.w * 0.5 + direction * land,
+                radius: (land * spread.tan() * 0.85).max(2.),
+                color: alpha(color, color.a * 0.35),
+            });
+        }
         out.push(match item.kind {
             DecorKind::Spotlight => Light::Cone {
                 at: r.center() - direction * r.w * 0.5,
@@ -576,17 +625,17 @@ pub fn decoration(
             draw_triangle(vertices[0], vertices[1], vertices[2], c);
             draw_triangle(vertices[0], vertices[2], vertices[3], c);
             if item.kind == DecorKind::Stripes {
-                let n = (r.w / (16. * zoom).max(8.)).ceil().clamp(1., 48.) as usize;
+                let span = r.w + r.h * 0.5;
+                let n = (span / (16. * zoom).max(8.)).ceil().clamp(1., 48.) as usize;
                 for i in 0..n {
-                    let x = -r.w * 0.5 + (i as f32 + 0.5) / n as f32 * r.w;
-                    let a = rotate(vec2((x - r.h * 0.25).max(-r.w * 0.5), -r.h * 0.5));
-                    let b = rotate(vec2((x + r.h * 0.25).min(r.w * 0.5), r.h * 0.5));
+                    let [a, b] =
+                        stripe_segment(vec2(r.w, r.h), (i as f32 + 0.5) / n as f32).map(rotate);
                     draw_line(
                         a.x,
                         a.y,
                         b.x,
                         b.y,
-                        (r.w / n as f32 * 0.36).max(1.),
+                        (span / n as f32 * 0.32).max(1.),
                         alpha(BLACK, c.a * 0.45),
                     );
                 }
@@ -597,24 +646,24 @@ pub fn decoration(
             let strength = c.a * flicker(item, time);
             let direction = vec2(angle.cos(), angle.sin());
             let at = p - direction * r.w * 0.5;
+            let spread = (r.h * 0.5).atan2(r.w.max(1.));
+            let hood = (r.h.min(r.w) * 0.08).clamp(2., 16.);
             if glow::begin(Blend::Add) {
-                crate::lighting::cone(
-                    at,
-                    angle,
-                    (r.h * 0.5).atan2(r.w.max(1.)),
-                    r.w * 1.1,
-                    alpha(c, strength * 0.45),
-                );
+                crate::lighting::cone(at, angle, spread, r.w * 1.1, alpha(c, strength * 0.45));
                 glow::end();
+                // Where the beam lands, a pool; at the lamp, glare.
+                if glow::begin(Blend::Glow) {
+                    let land = r.w * 0.7;
+                    let pool = (land * spread.tan() * 0.85).max(2.);
+                    glow::spot(at + direction * land, pool, alpha(c, strength * 0.14));
+                    glow::spot(at, hood * 3.2, alpha(mix(c, WHITE, 0.6), strength * 0.55));
+                    glow::end();
+                }
             } else {
-                let spread = (r.h * 0.5).atan2(r.w.max(1.));
                 let side = |s: f32| at + vec2((angle + s).cos(), (angle + s).sin()) * r.w;
                 draw_triangle(at, side(-spread), side(spread), alpha(c, strength * 0.18));
             }
-            // The lamp itself, with a hood behind it.
-            let hood = (r.h.min(r.w) * 0.08).clamp(2., 16.);
-            draw_circle(at.x, at.y, hood, alpha(mix(c, BLACK, 0.5), c.a.max(0.6)));
-            draw_circle(at.x, at.y, hood * 0.55, alpha(mix(c, WHITE, 0.8), strength));
+            spotlight_lamp(at, direction, hood, c, strength);
         }
         DecorKind::Beam => {
             let strength = c.a * flicker(item, time);
@@ -622,6 +671,20 @@ pub fn decoration(
             let (from, to) = (p - direction, p + direction);
             if glow::begin(Blend::Add) {
                 crate::lighting::shaft(from, to, r.h * 2.5, alpha(c, strength * 0.35));
+                // A brighter stretch drifts along it, like current in a tube.
+                if !ui::reduced_motion() {
+                    let seed = item.rect[0].to_bits() ^ item.rect[1].to_bits().rotate_left(7);
+                    let head = (time * 0.3 + hash(seed)).fract() * 1.3 - 0.15;
+                    let (a, b) = (head.clamp(0., 1.), (head + 0.15).clamp(0., 1.));
+                    if b > a {
+                        crate::lighting::shaft(
+                            from + (to - from) * a,
+                            from + (to - from) * b,
+                            r.h * 1.6,
+                            alpha(mix(c, WHITE, 0.4), strength * 0.3),
+                        );
+                    }
+                }
                 glow::end();
             }
             draw_line(
@@ -632,6 +695,16 @@ pub fn decoration(
                 (r.h * 0.35).max(1.),
                 alpha(mix(c, WHITE, 0.6), strength),
             );
+            if glow::begin(Blend::Glow) {
+                for end in [from, to] {
+                    glow::spot(
+                        end,
+                        (r.h * 1.8).max(3.),
+                        alpha(mix(c, WHITE, 0.5), strength * 0.6),
+                    );
+                }
+                glow::end();
+            }
         }
         DecorKind::Grid => {
             let step = (40. * zoom).max(6.);
@@ -734,6 +807,19 @@ fn flicker(item: &MapDecor, time: f32) -> f32 {
     1. - item.flicker * 0.85 * (a + (b - a) * f)
 }
 
+/// Clip a line x = intercept + y/2 to the local decor rectangle. Clamping
+/// its x endpoints alone makes tall rectangles collapse every stripe onto
+/// the same diagonal instead of preserving the pattern's angle and spacing.
+fn stripe_segment(size: Vec2, t: f32) -> [Vec2; 2] {
+    let intercept = (t - 0.5) * (size.x + size.y * 0.5);
+    let low = (-size.y * 0.5).max(-size.x - intercept * 2.);
+    let high = (size.y * 0.5).min(size.x - intercept * 2.);
+    [
+        vec2(intercept + low * 0.5, low),
+        vec2(intercept + high * 0.5, high),
+    ]
+}
+
 thread_local! {
     /// Lights a map layer may still shade. Each shaded light costs its own
     /// draw calls, so past the budget lights draw as rings, which batch, and
@@ -761,6 +847,23 @@ fn light(item: &MapDecor, p: Vec2, radius: f32, c: Color, time: f32) {
         glow::spot(p, radius * 0.9, alpha(c, strength * 0.8));
         glow::spot(p, radius * 0.3, alpha(hot, strength));
         glow::end();
+        // A faint halo and a glint on the bulb, the way a lens catches it.
+        draw_circle_lines(
+            p.x,
+            p.y,
+            radius * 0.62,
+            (radius * 0.015).max(1.),
+            alpha(c, strength * 0.12),
+        );
+        if radius > 10. && glow::begin(Blend::Add) {
+            crate::lighting::glint(
+                p,
+                (radius * 0.32).min(90.),
+                std::f32::consts::FRAC_PI_4,
+                alpha(hot, strength * 0.5),
+            );
+            glow::end();
+        }
     } else {
         glow::fallback_spot(p, radius, alpha(c, strength * 0.9));
         draw_circle(p.x, p.y, radius * 0.14, alpha(hot, strength * 0.6));
@@ -771,6 +874,41 @@ fn light(item: &MapDecor, p: Vec2, radius: f32, c: Color, time: f32) {
         (radius * 0.05).max(1.2),
         alpha(mix(c, WHITE, 0.8), strength),
     );
+}
+
+/// A spotlight's lamp at `at`, shining along `direction`: a housing that
+/// flares toward the front, its rim, and a lit lens with a glint.
+fn spotlight_lamp(at: Vec2, direction: Vec2, hood: f32, c: Color, strength: f32) {
+    let across = vec2(-direction.y, direction.x);
+    let (back, front) = (at - direction * hood * 1.9, at + direction * hood * 0.3);
+    let shell = alpha(mix(c, BLACK, 0.62), c.a.max(0.7));
+    let corners = [
+        back - across * hood * 0.7,
+        back + across * hood * 0.7,
+        front + across * hood * 1.15,
+        front - across * hood * 1.15,
+    ];
+    draw_triangle(corners[0], corners[1], corners[2], shell);
+    draw_triangle(corners[0], corners[2], corners[3], shell);
+    let (a, b) = (corners[3], corners[2]);
+    draw_line(
+        a.x,
+        a.y,
+        b.x,
+        b.y,
+        (hood * 0.28).max(1.),
+        alpha(mix(c, BLACK, 0.3), shell.a),
+    );
+    draw_circle(at.x, at.y, hood * 0.7, alpha(mix(c, WHITE, 0.85), strength));
+    if hood > 3. && glow::begin(Blend::Add) {
+        crate::lighting::glint(
+            at,
+            hood * 2.6,
+            0.,
+            alpha(mix(c, WHITE, 0.7), strength * 0.45),
+        );
+        glow::end();
+    }
 }
 
 fn hash(mut value: u32) -> f32 {
@@ -1028,9 +1166,95 @@ pub fn block(r: Rect, style: WallStyle, tint: Option<Color>, dark: bool, quality
     }
 }
 
+/// Marks a block of a pushable body, so players can tell what gives way: a
+/// frame inside its edge with bolts at the corners, braced corner to corner
+/// when it is squarish and slatted across when it is long and thin.
+pub fn body_marks(r: Rect, dark: bool) {
+    let short = r.w.min(r.h);
+    if short < 4. {
+        return;
+    }
+    let ink = if dark { WHITE } else { BLACK };
+    let c = alpha(ink, 0.22);
+    let inset = (short * 0.14).clamp(1.5, 12.);
+    let inner = Rect::new(r.x + inset, r.y + inset, r.w - inset * 2., r.h - inset * 2.);
+    let thickness = (short * 0.05).clamp(1., 4.);
+    draw_rectangle_lines(inner.x, inner.y, inner.w, inner.h, thickness, c);
+    let long = r.w.max(r.h);
+    if long < short * 2.2 {
+        draw_line(
+            inner.x,
+            inner.y,
+            inner.right(),
+            inner.bottom(),
+            thickness,
+            c,
+        );
+        draw_line(
+            inner.right(),
+            inner.y,
+            inner.x,
+            inner.bottom(),
+            thickness,
+            c,
+        );
+    } else {
+        // Slats leaning across the short side, spaced by it.
+        let slats = (long / short).floor().clamp(1., 24.) as usize;
+        for i in 0..slats {
+            let t = (i as f32 + 0.5) / slats as f32;
+            let (a, b) = if r.w >= r.h {
+                let x = inner.x + t * inner.w;
+                let lean = inner.h * 0.35;
+                (vec2(x - lean, inner.bottom()), vec2(x + lean, inner.y))
+            } else {
+                let y = inner.y + t * inner.h;
+                let lean = inner.w * 0.35;
+                (vec2(inner.x, y + lean), vec2(inner.right(), y - lean))
+            };
+            draw_line(a.x, a.y, b.x, b.y, thickness, c);
+        }
+    }
+    let bolt = (short * 0.05).clamp(1., 4.);
+    for corner in [
+        vec2(inner.x, inner.y),
+        vec2(inner.right(), inner.y),
+        vec2(inner.right(), inner.bottom()),
+        vec2(inner.x, inner.bottom()),
+    ] {
+        draw_circle(corner.x, corner.y, bolt, alpha(ink, 0.35));
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::particle_alpha;
+    use super::{particle_alpha, stripe_segment};
+
+    #[test]
+    fn stripes_keep_their_angle_and_stay_inside_tall_and_wide_decor() {
+        for size in [
+            macroquad::prelude::vec2(40., 400.),
+            macroquad::prelude::vec2(400., 40.),
+            macroquad::prelude::vec2(100., 100.),
+        ] {
+            let mut previous = None;
+            for i in 0..48 {
+                let segment = stripe_segment(size, (i as f32 + 0.5) / 48.);
+                for p in segment {
+                    assert!(p.x.abs() <= size.x * 0.5 + 0.001);
+                    assert!(p.y.abs() <= size.y * 0.5 + 0.001);
+                }
+                let line = segment[1] - segment[0];
+                assert!(line.y > 0. && (line.x - line.y * 0.5).abs() < 0.001);
+                assert_ne!(
+                    previous,
+                    Some(segment),
+                    "stripes must not collapse together"
+                );
+                previous = Some(segment);
+            }
+        }
+    }
 
     #[test]
     fn fading_particles_appear_quickly_and_fade_as_they_age() {

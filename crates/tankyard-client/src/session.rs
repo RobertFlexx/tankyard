@@ -735,6 +735,7 @@ impl Session {
                         self.predicted_tick,
                         DT,
                     );
+                    predict_body_contact(snapshot, content, walls, &mut predicted);
                 }
                 let error = old - predicted.pos;
                 self.correction = if error.length() < 150.0 {
@@ -924,6 +925,7 @@ impl Session {
                             self.predicted_tick,
                             DT,
                         );
+                        predict_body_contact(snapshot, content, &self.walls_now, predicted);
                     }
                 }
             }
@@ -1208,6 +1210,41 @@ pub(super) fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
 }
 /// Pads under a predicted tank, with the server's arithmetic, since pad
 /// effects do not travel in snapshots.
+/// Preserve the same contacted-body velocity that the host does after moving
+/// a tank. Body velocities arrive in arena fractions per second.
+fn predict_body_contact(
+    snapshot: &Snapshot,
+    content: &Content,
+    walls: &[tankyard_core::Rect],
+    tank: &mut Tank,
+) {
+    if !tank.tangible() || snapshot.match_state.bodies.is_empty() {
+        return;
+    }
+    let config = &snapshot.config;
+    let size = V2::new(config.width, config.height) * config.arena_scale;
+    let mut velocities = [V2::ZERO; tankyard_content::MAP_GROUPS as usize + 1];
+    for body in &snapshot.match_state.bodies {
+        if let Some(velocity) = velocities.get_mut(usize::from(body.group)) {
+            *velocity = V2::new(body.velocity[0] * size.x, body.velocity[1] * size.y);
+        }
+    }
+    let speed = tankyard_core::physics::movement_speed(tank, content, config);
+    for (&wall, &group) in walls.iter().zip(&snapshot.wall_groups) {
+        let Some(&velocity) = velocities.get(usize::from(group)) else {
+            continue;
+        };
+        if velocity == V2::ZERO {
+            continue;
+        }
+        if let Some((normal, _)) =
+            tankyard_core::physics::circle_rect(tank.pos, tank.radius + 2., wall)
+        {
+            tankyard_core::physics::keep_pushing_velocity(tank, normal, velocity, speed);
+        }
+    }
+}
+
 fn predict_pads(
     maps: &[tankyard_content::MapDef],
     snapshot: &Snapshot,
@@ -1297,6 +1334,41 @@ pub fn trusted_address(address: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn body_prediction_keeps_contact_speed_but_never_reaches_across_a_gap() {
+        let content = Content::builtin();
+        let mut world = tankyard_core::World::new(WorldConfig::default(), content.clone());
+        world.add_player("prediction", false);
+        let mut tank = world.tanks[0].clone();
+        let mut snapshot = world.snapshot();
+        let wall = tankyard_core::Rect {
+            x: 1000.,
+            y: 500.,
+            w: 80.,
+            h: 400.,
+        };
+        snapshot.walls = vec![wall];
+        snapshot.wall_groups = vec![3];
+        snapshot.match_state.bodies = vec![tankyard_content::BodyPose {
+            group: 3,
+            offset: [0., 0.],
+            velocity: [
+                90. / (snapshot.config.width * snapshot.config.arena_scale),
+                0.,
+            ],
+        }];
+        tank.pos = V2::new(wall.x - tank.radius - 1., 700.);
+        tank.input.movement = V2::new(1., 0.);
+        tank.vel = V2::new(0., 20.);
+        predict_body_contact(&snapshot, &content, &snapshot.walls, &mut tank);
+        assert!((tank.vel.x - 90.).abs() < 0.001);
+        assert_eq!(tank.vel.y, 20.);
+        tank.pos.x -= 10.;
+        tank.vel = V2::new(0., 20.);
+        predict_body_contact(&snapshot, &content, &snapshot.walls, &mut tank);
+        assert_eq!(tank.vel, V2::new(0., 20.));
+    }
+
     #[test]
     fn staff_proofs_go_unasked_only_to_the_official_server_or_this_computer() {
         for address in [

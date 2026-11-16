@@ -131,11 +131,11 @@ impl World {
                 self.bodies[index] = state;
                 continue;
             }
-            let (drive, pushers) = self.pushing(&body);
+            let (drive, pushers) = self.pushing(&body, state.velocity);
             let weight = body.weight.max(0.25);
             if pushers > 0 {
                 // A light body never outruns the tanks pushing it.
-                let target = along_axis(&body, drive / weight.max(1.));
+                let target = along_axis(&body, drive / weight.max(pushers as f32));
                 state.velocity = state
                     .velocity
                     .lerp(target, 1. - (-PUSH_RESPONSE * DT).exp());
@@ -233,22 +233,24 @@ impl World {
         self.publish_bodies(size);
     }
 
-    /// Tanks driving into `body`: the push they add up to, in world units a
-    /// second, and how many push.
-    fn pushing(&self, body: &MapBody) -> (V2, u32) {
+    /// Tanks driving into `body`, which moves at `velocity`: the push they add
+    /// up to, in world units a second, and how many push.
+    fn pushing(&mut self, body: &MapBody, velocity: V2) -> (V2, u32) {
         let mut drive = V2::ZERO;
         let mut pushers = 0;
-        for tank in self.tanks.iter().filter(|t| t.tangible()) {
+        for tank in self.tanks.iter_mut().filter(|t| t.tangible()) {
             let intent = tank.input.movement.clamp_length(1.);
             if intent.length_squared() < 0.04 {
                 continue;
             }
+            let speed = crate::physics::movement_speed(tank, &self.content, &self.config);
             let contact = self
                 .walls
                 .iter()
                 .zip(&self.wall_groups)
                 .filter(|&(_, &group)| group == body.group)
-                .find_map(|(&wall, _)| circle_rect(tank.pos, tank.radius + CONTACT, wall));
+                .filter_map(|(&wall, _)| circle_rect(tank.pos, tank.radius + CONTACT, wall))
+                .max_by(|a, b| a.1.total_cmp(&b.1));
             let Some((normal, _)) = contact else {
                 continue;
             };
@@ -256,9 +258,10 @@ impl World {
             if into <= 0.2 {
                 continue;
             }
-            let speed = crate::physics::tank_speed(tank, &self.content)
-                * self.config.rules.movement_multiplier
-                * tank.terrain.clamp(0.3, 2.5);
+            // Collision removes normal speed against static walls. Retain the
+            // contacted body's departing speed so contact survives next tick,
+            // instead of accepting pushes from tanks across an empty gap.
+            crate::physics::keep_pushing_velocity(tank, normal, velocity, speed);
             drive -= normal * (into * speed);
             pushers += 1;
         }
@@ -555,6 +558,90 @@ mod tests {
         world.shot_hit_wall(index, V2::new(-900., 0.), 100.);
         world.step();
         assert!(world.body_state(3).unwrap().velocity.x < -10.);
+    }
+
+    #[test]
+    fn tanks_cannot_push_a_body_before_making_contact() {
+        let mut world = crate_world(MapBody::default(), [0.4, 0.45, 0.04, 0.04], &[]);
+        lean_on(&mut world, V2::new(1., 0.));
+        world.tanks[0].pos.x -= 10.;
+        let body = world.map.bodies[0].clone();
+        let (drive, pushers) = world.pushing(&body, V2::new(150., 0.));
+        assert_eq!(
+            pushers, 0,
+            "a moving crate cannot be pushed across empty space"
+        );
+        assert_eq!(drive, V2::ZERO);
+    }
+
+    #[test]
+    fn pushed_bodies_keep_pace_with_the_tank_by_their_weight() {
+        for weight in [1., 1.5, 3.] {
+            let mut world = crate_world(
+                MapBody {
+                    weight,
+                    friction: 5.,
+                    reach: [0.4; 4],
+                    ..MapBody::default()
+                },
+                [0.2, 0.45, 0.04, 0.04],
+                &[],
+            );
+            lean_on(&mut world, V2::new(1., 0.));
+            // Up to speed first, then measure a second of steady pushing.
+            run(&mut world, 30);
+            let before = world.body_state(3).unwrap().offset.x;
+            run(&mut world, 60);
+            let pace = world.body_state(3).unwrap().offset.x - before;
+            let tank = crate::physics::tank_speed(&world.tanks[0], &world.content)
+                * world.config.rules.movement_multiplier;
+            let expected = tank / weight.max(1.);
+            assert!(
+                pace > expected * 0.85 && pace < expected * 1.05,
+                "weight {weight}: {pace:.0} a second, expected about {expected:.0}"
+            );
+        }
+    }
+
+    #[test]
+    fn cooperating_pushers_do_not_make_a_light_body_outrun_them() {
+        for weight in [1., 3.] {
+            let mut world = crate_world(
+                MapBody {
+                    weight,
+                    friction: 5.,
+                    reach: [0.4; 4],
+                    ..MapBody::default()
+                },
+                [0.2, 0.4, 0.04, 0.15],
+                &[],
+            );
+            world.add_player("Helper", false);
+            for _ in 0..240 {
+                world.update_arena_size();
+            }
+            world.scale_map_walls();
+            let wall = body_wall(&world);
+            for (i, tank) in world.tanks.iter_mut().enumerate() {
+                tank.pos = V2::new(
+                    wall.x - tank.radius - 1.,
+                    wall.y + wall.h * 0.5 + if i == 0 { -45. } else { 45. },
+                );
+                tank.vel = V2::ZERO;
+                tank.input.movement = V2::new(1., 0.);
+            }
+            run(&mut world, 30);
+            let before = world.body_state(3).unwrap().offset.x;
+            run(&mut world, 60);
+            let pace = world.body_state(3).unwrap().offset.x - before;
+            let speed =
+                crate::physics::movement_speed(&world.tanks[0], &world.content, &world.config);
+            let expected = speed * (2. / weight).min(1.);
+            assert!(
+                pace > expected * 0.85 && pace < expected * 1.05,
+                "weight {weight}: pace {pace}, expected {expected}"
+            );
+        }
     }
 
     #[test]

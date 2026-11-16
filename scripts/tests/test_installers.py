@@ -179,6 +179,15 @@ printf '%b' "${TANKYARD_TEST_LDD:-\\tlibc.so.7 => /lib/libc.so.7 (0x1)\\n}"
         result = subprocess.run([str(self.destination / "tankyard"), "--version"], text=True, capture_output=True, check=True)
         self.assertEqual(result.stdout.strip(), "tankyard 1.2.3")
 
+    def test_workshop_examples_and_captions_are_in_the_release_archive(self):
+        with tarfile.open(self.archive, "r:gz") as archive:
+            files = {member.name for member in archive.getmembers()}
+        for name in ("night_works", "switchyard"):
+            self.assertTrue(any(path.endswith(f"/mods/{name}/mod.json") for path in files), name)
+        self.assertTrue(any(path.endswith("/docs/physics-tutorial.md") for path in files))
+        self.assertTrue(any(path.endswith("/docs/physics-tutorial.vtt") for path in files))
+        self.assertFalse(any(path.endswith(".mp4") for path in files), "videos stay outside installer payloads")
+
     def test_busy_server_responses_are_retried(self):
         counter = self.root / "failures"
         counter.write_text("2")

@@ -1,6 +1,6 @@
 //! The inspector beside the canvas: map settings, the selected objects'
 //! properties, trigger logic and its preview, checks, rules and files.
-use super::{Editor, Layout, Tab, brushes, directory, read_document};
+use super::{Editor, Layout, Mode, Tab, brushes, directory, read_document};
 use crate::{
     ui::{AMBER, RED, VIOLET, *},
     ui_layout,
@@ -663,7 +663,10 @@ impl Editor {
                     self.center_on(first);
                 }
                 self.set_selection(keys);
+                // Ready to drag, with the group's settings from the top.
+                self.mode = Mode::Edit;
                 self.tab = Tab::Object;
+                self.scroll = 0.;
             }
             Request::Delete => self.delete(),
             Request::Duplicate => self.duplicate(),
@@ -845,7 +848,7 @@ impl Editor {
             if button(buttons(2.), "Lock", locked & bit != 0, true, s * 0.55) {
                 locked ^= bit;
             }
-            if small_button(buttons(1.), "Select", s * 0.55) {
+            if button(buttons(1.), "Select", false, true, s * 0.55) {
                 request = Request::SelectGroup(group);
             }
             f.y += h + 4. * s;

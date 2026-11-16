@@ -91,7 +91,7 @@ impl Editor {
             line_color(),
         );
         match self.mode {
-            Mode::Build => self.palette(content, settings, s),
+            Mode::Build => self.palette(content, layout.canvas.right(), settings, s),
             Mode::Edit => self.edit_buttons(content, s),
             Mode::Delete => self.delete_tools(content, s),
             Mode::Pan => self.navigation_controls(content, layout.canvas.center(), s),
@@ -254,7 +254,9 @@ impl Editor {
             ));
         }
     }
-    fn palette(&mut self, r: Rect, settings: &Settings, s: f32) {
+    /// The Build palette; tile hints stay left of `hint_right`, so the
+    /// inspector, drawn after the dock, never covers them.
+    fn palette(&mut self, r: Rect, hint_right: f32, settings: &Settings, s: f32) {
         let tab_h = 26. * s;
         let chooser = 210. * s;
         let tabs = brushes::CATEGORIES.len() as f32;
@@ -349,7 +351,7 @@ impl Editor {
         {
             let size = 12. * s;
             let width = label_width(hint, size) + 16. * s;
-            let x = (pointer.x - width * 0.5).clamp(4., screen_width() - width - 4.);
+            let x = (pointer.x - width * 0.5).clamp(4., (hint_right - width - 4.).max(4.));
             let y = r.y - size - 22. * s;
             draw_rectangle(x, y, width, size + 12. * s, alpha(text_color(), 0.9));
             label(hint, x + 8. * s, y + size + 3. * s, size, surface_color());
