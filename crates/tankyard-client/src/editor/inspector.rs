@@ -2635,7 +2635,7 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
     f.text("Text", &mut w.text, HUD_TEXT);
     f.note("{1} to {8} show counters, {left} the seconds before it goes, {time} the round's clock, {name} and {score} the player's own, and {cause} the tank that set it off.");
     f.heading("Look");
-    f.note("A look restyles the widget in one click: colors, outline, border, fill, lettering, bar and buttons. Change any of them after.");
+    f.note("A look sets the colors, shape, border, fill, lettering, bar and buttons in one click. You can change any of them afterwards.");
     for row in HudLook::ALL.chunks(4) {
         let names: Vec<&str> = row.iter().map(|look| look.name()).collect();
         if let Some(index) = f.buttons(&names, true) {

@@ -11173,7 +11173,7 @@
       "ability_cooldown": 18,
       "passive_regen": 0,
       "strengths": "Instant flanking routes and escapes for you and your team. Shots fired into the entry, yours or an opponent's, leave the exit from an unexpected side.",
-      "weaknesses": "A pair takes two well-aimed shots and open floor. Rifts are visible to everyone, carry no drones or traps, and close to anyone holding a flag.",
+      "weaknesses": "A pair takes two well-aimed shots and open floor. Rifts are visible to everyone and don't carry drones, traps or flag carriers.",
       "ai_range": 420
     }
   ]

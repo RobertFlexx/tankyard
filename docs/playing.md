@@ -132,7 +132,7 @@ Choose Host server to play with friends or Join server to enter an address. A lo
 
 Gatewright is a level-55 evolution from Switchback, Wisp, Undertow or Meteor, built around a rift gun. Its **Rift pair** ability has an 18-second cooldown. Activating it arms the gun for 8 seconds: your next shot opens the violet entry rift where it lands and the shot after opens the teal exit. A pair lasts 15 seconds, then each rift collapses with a short pop. The HUD shows which end you fire next and how long the pair stays open.
 
-You, your teammates and every round that goes into the entry come out of the exit, keeping their heading and speed, so a shot into the entry can hit from an unexpected side. Opponents, drones, traps, mines and anyone carrying a flag stay on their side. A pair opens at least 216 units apart and at most 1300 away; when a shot finds no room (inside a wall, too close to the other end or to another rift) it fizzles and the charge comes back. Activating the ability again, dying or changing tank closes your pair, and moving walls crush rifts they cover. Bots don't use rifts.
+You, your teammates and every round that goes into the entry come out of the exit, keeping their heading and speed, so a shot into the entry can hit from an unexpected side. Opponents, drones, traps, mines and anyone carrying a flag stay on their side. Rifts open where your shots land, up to 1300 units away and at least 216 units from each other. If a shot lands where a rift can't open (inside a wall, or too close to the other end or another rift), you get the shot back. Activating the ability again, dying or changing tank closes your pair, and moving walls crush rifts they cover. Bots don't use rifts.
 
 ## New combat trials and Chronarch
 
