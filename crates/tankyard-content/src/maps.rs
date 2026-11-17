@@ -1950,6 +1950,24 @@ pub fn maps_from_json(source: &str) -> Result<Vec<MapDef>, String> {
 }
 
 pub fn validate_maps(maps: &[MapDef]) -> Result<(), String> {
+    validate_map_catalog(maps, true)
+}
+
+/// Validate maps received from a server. These contain presentation and
+/// collision data, without the server's triggers or paths. Their closed doors
+/// can divide the authored geometry, so connectivity is checked on the full
+/// server catalog instead. All bounds, clearance and resource checks remain.
+pub fn validate_player_maps(maps: &[MapDef]) -> Result<(), String> {
+    if maps
+        .iter()
+        .any(|map| !map.triggers.is_empty() || !map.paths.is_empty())
+    {
+        return Err("player maps must not contain server triggers or paths".into());
+    }
+    validate_map_catalog(maps, false)
+}
+
+fn validate_map_catalog(maps: &[MapDef], check_connectivity: bool) -> Result<(), String> {
     if maps.is_empty() || maps.len() > 256 {
         return Err("a map catalog needs between 1 and 256 arenas".into());
     }
@@ -2114,7 +2132,9 @@ pub fn validate_maps(maps: &[MapDef]) -> Result<(), String> {
         }
         // Procedural generators validate their generated geometry in core. This
         // pass verifies the complete static geometry declared by every preset.
-        validate_connectivity(map)?;
+        if check_connectivity {
+            validate_connectivity(map)?;
+        }
     }
     Ok(())
 }

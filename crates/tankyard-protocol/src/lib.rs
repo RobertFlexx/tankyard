@@ -364,10 +364,12 @@ pub fn players_bundle(bundle: &tankyard_mods::GameBundle) -> Cow<'_, tankyard_mo
 }
 /// The game data message for `bundle`, as players receive it.
 pub fn game_data(bundle: &tankyard_mods::GameBundle) -> Result<ServerControl, DecodeError> {
-    let bundle = players_bundle(bundle);
+    // Validate gameplay on the authored catalog, where moving doors still
+    // have their triggers. The client validates the stripped presentation.
     bundle
         .validate()
         .map_err(|_| DecodeError("invalid game data"))?;
+    let bundle = players_bundle(bundle);
     let bytes = encode(&*bundle, tankyard_mods::MAX_PACK_BYTES)?;
     Ok(ServerControl::GameData {
         compressed: lz4_flex::compress_prepend_size(&bytes),
@@ -385,7 +387,7 @@ pub fn decode_game_data(bytes: &[u8]) -> Result<tankyard_mods::GameBundle, Decod
         .map_err(|_| DecodeError("invalid compressed game data"))?;
     let bundle: tankyard_mods::GameBundle = decode(&bytes, tankyard_mods::MAX_PACK_BYTES)?;
     bundle
-        .validate()
+        .validate_for_players()
         .map_err(|_| DecodeError("invalid server game data"))?;
     Ok(bundle)
 }
@@ -1070,6 +1072,72 @@ mod tests {
         invalid[4..].fill(255);
         assert!(decode_game_data(&invalid).is_err());
     }
+    #[test]
+    fn closed_moving_gates_reach_players_without_server_logic() {
+        use tankyard_content::{
+            MapBlock, MapProcedure, MapTrigger, SpawnRegion, TriggerAction, TriggerWhen,
+        };
+        let mut bundle = tankyard_mods::GameBundle::builtin();
+        bundle.maps.truncate(1);
+        let map = &mut bundle.maps[0];
+        map.procedural = MapProcedure::None;
+        map.walls.clear();
+        map.blocks = vec![MapBlock {
+            rect: [0.49, 0., 0.02, 1.],
+            group: 1,
+            style: Default::default(),
+            color: None,
+        }];
+        map.spawn_regions = vec![SpawnRegion {
+            team: 0,
+            rect: [0.1, 0.4, 0.1, 0.2],
+        }];
+        map.team_bases.clear();
+        map.objective_positions.clear();
+        map.paths.clear();
+        map.bodies.clear();
+        map.triggers = vec![MapTrigger {
+            when: TriggerWhen::Start,
+            action: TriggerAction::Hide,
+            group: 1,
+            ..Default::default()
+        }];
+        bundle.validate().unwrap();
+        assert!(
+            players_bundle(&bundle)
+                .validate()
+                .unwrap_err()
+                .contains("disconnected")
+        );
+        let ServerControl::GameData { compressed } = game_data(&bundle).unwrap() else {
+            unreachable!()
+        };
+        let received = decode_game_data(&compressed).unwrap();
+        assert_eq!(received.maps[0].blocks, bundle.maps[0].blocks);
+        assert!(received.maps[0].triggers.is_empty());
+        assert_eq!(
+            received.fingerprint(),
+            players_bundle(&bundle).fingerprint()
+        );
+
+        // A genuinely disconnected authored map must still be rejected by
+        // the server. Removing logic cannot become a way around that check.
+        bundle.maps[0].triggers.clear();
+        assert!(game_data(&bundle).is_err());
+
+        // Player data still rejects malformed geometry and resource bombs.
+        let mut bad = received;
+        bad.maps[0].blocks[0].rect[0] = f32::NAN;
+        let bytes = encode(&bad, tankyard_mods::MAX_PACK_BYTES).unwrap();
+        assert!(decode_game_data(&lz4_flex::compress_prepend_size(&bytes)).is_err());
+        bad.maps[0].blocks[0].rect[0] = 0.49;
+        bad.maps[0].width = 16000.;
+        bad.maps[0].height = 16000.;
+        let block = bad.maps[0].blocks[0].clone();
+        bad.maps[0].blocks = vec![block; 2048];
+        assert!(bad.validate_for_players().unwrap_err().contains("budget"));
+    }
+
     #[test]
     fn bounded_control_and_trailing_data() {
         let request = ClientControl::UpgradeStat { stat: 3, count: 1 };

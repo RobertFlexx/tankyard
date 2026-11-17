@@ -128,11 +128,19 @@ impl GameBundle {
         }
     }
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_with_maps(validate_maps)
+    }
+    /// Validate the catalog sent to players, after server logic is removed.
+    /// Authored packs and simulation worlds must use `validate` instead.
+    pub fn validate_for_players(&self) -> Result<(), String> {
+        self.validate_with_maps(tankyard_content::validate_player_maps)
+    }
+    fn validate_with_maps(&self, maps: fn(&[MapDef]) -> Result<(), String>) -> Result<(), String> {
         if self.api_version != API_VERSION {
             return Err("unsupported mod API version".into());
         }
         self.content.validate_modded()?;
-        validate_maps(&self.maps)?;
+        maps(&self.maps)?;
         self.rules.validate()?;
         if self.textures.len() > 16 {
             return Err("at most 16 textures may be loaded".into());

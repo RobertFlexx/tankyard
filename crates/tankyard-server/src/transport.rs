@@ -2129,8 +2129,8 @@ fn bounded_snapshot(
 /// The game data players receive and the hash their welcome carries, both
 /// without map logic (see [`players_bundle`]).
 fn player_game_data(bundle: &tankyard_mods::GameBundle) -> Result<(u64, Bytes), NetError> {
+    let message = game_data(bundle).map_err(|e| NetError(e.to_string()))?;
     let bundle = players_bundle(bundle);
-    let message = game_data(&bundle).map_err(|e| NetError(e.to_string()))?;
     let bytes = encode(&message, MAX_SERVER_CONTROL_BYTES)
         .map(Bytes::from)
         .map_err(|e| NetError(e.to_string()))?;
@@ -2159,6 +2159,23 @@ mod tests {
             points: vec![tankyard_content::PathPoint::default()],
             ..Default::default()
         });
+        // This wall only opens through server logic. Its stripped player
+        // representation is temporarily divided, which is valid presentation.
+        bundle.maps[0].walls.clear();
+        bundle.maps[0].team_bases.clear();
+        bundle.maps[0].objective_positions.clear();
+        bundle.maps[0].spawn_regions = vec![tankyard_content::SpawnRegion {
+            team: 0,
+            rect: [0.1, 0.4, 0.1, 0.2],
+        }];
+        bundle.maps[0].blocks.push(tankyard_content::MapBlock {
+            rect: [0.49, 0., 0.02, 1.],
+            group: 1,
+            style: Default::default(),
+            color: None,
+        });
+        bundle.maps[0].triggers[0].action = TriggerAction::Hide;
+        bundle.maps[0].triggers[0].group = 1;
         let (hash, bytes) = player_game_data(&bundle).unwrap();
         let ServerControl::GameData { compressed } =
             decode(&bytes, MAX_SERVER_CONTROL_BYTES).unwrap()
