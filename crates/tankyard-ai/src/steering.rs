@@ -21,7 +21,7 @@ pub(super) fn navigate(
     if goal_distance < 20. {
         return V2::ZERO;
     }
-    if clear_line(tank.pos, brain.goal, tank.radius + 4., &world.walls) {
+    if navigation.clear_path(tank.pos, brain.goal, tank.radius + 4.) {
         brain.path.clear();
         return (brain.goal - tank.pos).normalized() * (goal_distance / 90.).min(1.);
     }
@@ -44,8 +44,7 @@ pub(super) fn navigate(
     {
         brain.path.pop_front();
     }
-    while brain.path.len() >= 2
-        && clear_line(tank.pos, brain.path[1], tank.radius + 4., &world.walls)
+    while brain.path.len() >= 2 && navigation.clear_path(tank.pos, brain.path[1], tank.radius + 4.)
     {
         brain.path.pop_front();
     }
@@ -55,14 +54,20 @@ pub(super) fn navigate(
         .map_or(V2::ZERO, |&next| (next - tank.pos).normalized())
 }
 
-pub(super) fn local_steering(world: &World, tank: &Tank, class: &ClassDef, seen: &[Seen]) -> V2 {
+pub(super) fn local_steering(
+    world: &World,
+    cover: &Navigation,
+    tank: &Tank,
+    class: &ClassDef,
+    seen: &[Seen],
+) -> V2 {
     let mut steer = V2::ZERO;
     let forward = tank.pos + tank.vel * 0.2;
-    for &wall in &world.walls {
+    cover.walls_around(forward, tank.radius + 20., |wall| {
         if let Some((normal, depth)) = physics::circle_rect(forward, tank.radius + 20., wall) {
             steer += normal * (depth / 45.).clamp(0., 0.65);
         }
-    }
+    });
     for &item in seen {
         if let Seen::Tank(index) = item {
             let ally = &world.tanks[index];
@@ -130,7 +135,12 @@ pub(super) fn dodge_threat(relative_position: V2, relative_velocity: V2, safety:
     (tangent * side, strength)
 }
 
-pub(super) fn projectile_avoidance(world: &World, tank: &Tank, seen: &[Seen]) -> (V2, f32, V2) {
+pub(super) fn projectile_avoidance(
+    world: &World,
+    cover: &Navigation,
+    tank: &Tank,
+    seen: &[Seen],
+) -> (V2, f32, V2) {
     let mut dodge = V2::ZERO;
     let mut danger: f32 = 0.;
     let mut escape = V2::ZERO;
@@ -152,7 +162,7 @@ pub(super) fn projectile_avoidance(world: &World, tank: &Tank, seen: &[Seen]) ->
         }
         let delta = projectile.pos - tank.pos;
         if delta.length_squared() > 340.0 * 340.0
-            || !clear_line(tank.pos, projectile.pos, projectile.radius, &world.walls)
+            || !cover.clear_path(tank.pos, projectile.pos, projectile.radius)
         {
             continue;
         }

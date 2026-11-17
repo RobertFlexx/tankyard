@@ -175,11 +175,10 @@ fn portal(zone: &MapZone, rect: [f32; 4], config: &WorldConfig, view: &View, tim
         let p = r.center();
         draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.10));
         draw_rectangle_lines(r.x, r.y, r.w, r.h, (2. * view.zoom).max(1.), alpha(c, 0.55));
-        for ring in 0..3 {
-            let phase = (time * 0.6 + ring as f32 / 3.).fract();
-            draw_circle_lines(
-                p.x,
-                p.y,
+        for wave in 0..3 {
+            let phase = (time * 0.6 + wave as f32 / 3.).fract();
+            ring(
+                p,
                 radius * (0.25 + 0.7 * phase),
                 (2.5 * view.zoom).max(1.),
                 alpha(c, 0.75 * (1. - phase)),
@@ -193,13 +192,7 @@ fn portal(zone: &MapZone, rect: [f32; 4], config: &WorldConfig, view: &View, tim
         && exit.x < screen_width() + size
         && exit.y < screen_height() + size
     {
-        draw_circle_lines(
-            exit.x,
-            exit.y,
-            size,
-            (2.5 * view.zoom).max(1.),
-            alpha(c, 0.7),
-        );
+        ring(exit, size, (2.5 * view.zoom).max(1.), alpha(c, 0.7));
         draw_poly_lines(
             exit.x,
             exit.y,
@@ -216,16 +209,20 @@ fn portal(zone: &MapZone, rect: [f32; 4], config: &WorldConfig, view: &View, tim
 fn pad_corners(r: Rect, zoom: f32, c: Color) {
     let arm = (r.w.min(r.h) * 0.22).min(30. * zoom.max(0.25)).max(3.);
     let thickness = (3.5 * zoom).clamp(1.5, 5.);
+    let half = thickness * 0.5;
     for (corner, out) in [
         (vec2(r.x, r.y), vec2(1., 1.)),
         (vec2(r.right(), r.y), vec2(-1., 1.)),
         (vec2(r.right(), r.bottom()), vec2(-1., -1.)),
         (vec2(r.x, r.bottom()), vec2(1., -1.)),
     ] {
-        let along = corner + vec2(out.x * arm, 0.);
-        let down = corner + vec2(0., out.y * arm);
-        draw_line(corner.x, corner.y, along.x, along.y, thickness, c);
-        draw_line(corner.x, corner.y, down.x, down.y, thickness, c);
+        // Two bars that meet at the corner without overlapping: the one
+        // along the top or bottom edge covers the corner itself.
+        let span = |from: f32, length: f32| (from.min(from + length), length.abs());
+        let (x, w) = span(corner.x - out.x * half, out.x * (arm + half));
+        draw_rectangle(x, corner.y - half, w, thickness, c);
+        let (y, h) = span(corner.y + out.y * half, out.y * (arm - half).max(0.));
+        draw_rectangle(corner.x - half, y, thickness, h, c);
     }
 }
 
@@ -251,13 +248,21 @@ pub fn zone_mark(kind: ZoneKind, angle: f32, p: Vec2, r: f32, c: Color) {
         ZoneKind::Speed => {
             for offset in [-0.5, 0.35] {
                 let x = p.x + offset * r;
-                draw_line(x - r * 0.4, p.y - r * 0.65, x + r * 0.25, p.y, 2., c);
-                draw_line(x + r * 0.25, p.y, x - r * 0.4, p.y + r * 0.65, 2., c);
+                chevron(
+                    vec2(x + r * 0.25, p.y),
+                    vec2(x - r * 0.4, p.y - r * 0.65),
+                    vec2(x - r * 0.4, p.y + r * 0.65),
+                    2.,
+                    c,
+                );
             }
         }
         ZoneKind::Repair => {
-            draw_rectangle(p.x - r, p.y - r * 0.28, r * 2., r * 0.56, c);
-            draw_rectangle(p.x - r * 0.28, p.y - r, r * 0.56, r * 2., c);
+            // A cross in three pieces that meet without overlapping.
+            let arm = r * 0.28;
+            draw_rectangle(p.x - r, p.y - arm, r * 2., arm * 2., c);
+            draw_rectangle(p.x - arm, p.y - r, arm * 2., r - arm, c);
+            draw_rectangle(p.x - arm, p.y + arm, arm * 2., r - arm, c);
         }
         ZoneKind::Hazard => {
             draw_triangle(p + vec2(0., -r), p + vec2(r, r), p + vec2(-r, r), c);
@@ -273,14 +278,12 @@ pub fn zone_mark(kind: ZoneKind, angle: f32, p: Vec2, r: f32, c: Color) {
                 let tip = turn(vec2((offset + 0.35) * r, 0.));
                 let a = turn(vec2((offset - 0.3) * r, -0.7 * r));
                 let b = turn(vec2((offset - 0.3) * r, 0.7 * r));
-                let thickness = (r * 0.3).clamp(1.5, 2.5);
-                draw_line(a.x, a.y, tip.x, tip.y, thickness, c);
-                draw_line(tip.x, tip.y, b.x, b.y, thickness, c);
+                chevron(tip, a, b, (r * 0.3).clamp(1.5, 2.5), c);
             }
         }
         ZoneKind::Portal => {
-            draw_circle_lines(p.x, p.y, r, 2., c);
-            draw_circle_lines(p.x, p.y, r * 0.5, 2., c);
+            ring(p, r, 2., c);
+            ring(p, r * 0.5, 2., c);
         }
         ZoneKind::Pull => {
             // One chevron, pointing at the well's middle.
@@ -291,9 +294,7 @@ pub fn zone_mark(kind: ZoneKind, angle: f32, p: Vec2, r: f32, c: Color) {
                 turn(vec2(-r * 0.3, -r * 0.7)),
                 turn(vec2(-r * 0.3, r * 0.7)),
             );
-            let thickness = (r * 0.3).clamp(1.5, 2.5);
-            draw_line(a.x, a.y, tip.x, tip.y, thickness, c);
-            draw_line(tip.x, tip.y, b.x, b.y, thickness, c);
+            chevron(tip, a, b, (r * 0.3).clamp(1.5, 2.5), c);
         }
         ZoneKind::Ice => {
             // A six-armed crystal.
@@ -558,11 +559,12 @@ pub fn lights(
                     reach: r.w * 1.1,
                     color,
                 },
+                // A tube lights a broad band of floor either side of it.
                 DecorKind::Beam => Light::Shaft {
                     from: r.center() - direction * r.w * 0.5,
                     to: r.center() + direction * r.w * 0.5,
-                    width: r.h * 2.5,
-                    color,
+                    width: (r.h * 6.).max(110. * view.zoom),
+                    color: alpha(color, color.a * 0.85),
                 },
                 _ => Light::Spot {
                     at: r.center(),
@@ -709,41 +711,47 @@ pub fn decoration(
         }
         DecorKind::Beam => {
             let strength = c.a * flicker(item, time);
-            let direction = vec2(angle.cos(), angle.sin()) * r.w * 0.5;
-            let (from, to) = (p - direction, p + direction);
+            let direction = vec2(angle.cos(), angle.sin());
+            let (from, to) = (p - direction * r.w * 0.5, p + direction * r.w * 0.5);
+            let tube = (r.h * 0.35).max(1.);
+            let hot = mix(c, WHITE, 0.55);
+            // Haze all around the tube, soft at its ends as at its sides,
+            // and a tighter glow hugging it.
             if glow::begin(Blend::Add) {
-                crate::lighting::shaft(from, to, r.h * 2.5, alpha(c, strength * 0.35));
-                // A brighter stretch drifts along it, like current in a tube.
-                if !ui::reduced_motion() {
-                    let seed = item.rect[0].to_bits() ^ item.rect[1].to_bits().rotate_left(7);
-                    let head = (time * 0.3 + hash(seed)).fract() * 1.3 - 0.15;
-                    let (a, b) = (head.clamp(0., 1.), (head + 0.15).clamp(0., 1.));
-                    if b > a {
-                        crate::lighting::shaft(
-                            from + (to - from) * a,
-                            from + (to - from) * b,
-                            r.h * 1.6,
-                            alpha(mix(c, WHITE, 0.4), strength * 0.3),
-                        );
-                    }
-                }
+                crate::lighting::shaft(from, to, r.h * 3., alpha(c, strength * 0.2));
+                crate::lighting::shaft(from, to, r.h * 1.2, alpha(c, strength * 0.3));
+                glow::end();
+            } else {
+                capsule(from, to, r.h * 0.6, alpha(c, strength * 0.15));
+            }
+            // The tube: one rounded shape, so nothing in it overlaps.
+            capsule(from, to, tube * 0.5, alpha(hot, strength));
+            if glow::begin(Blend::Add) {
+                // A white-hot line down its middle.
+                crate::lighting::shaft(from, to, tube * 0.8, alpha(WHITE, strength * 0.5));
                 glow::end();
             }
-            draw_line(
-                from.x,
-                from.y,
-                to.x,
-                to.y,
-                (r.h * 0.35).max(1.),
-                alpha(mix(c, WHITE, 0.6), strength),
-            );
+            // Pulses of brighter light run along it at a steady pace,
+            // swelling in from one end and fading out at the other.
+            if !ui::reduced_motion() && glow::begin(Blend::Glow) {
+                let seed = item.rect[0].to_bits() ^ item.rect[1].to_bits().rotate_left(7);
+                let length = r.w / zoom.max(0.01);
+                let period = (length / 520.).max(1.2);
+                let phase = (time / period + hash(seed)).fract();
+                glow::stretched_spot(
+                    from.lerp(to, phase),
+                    direction * (r.w * 0.09).max(tube * 2.),
+                    (r.h * 0.9).max(tube),
+                    alpha(
+                        mix(c, WHITE, 0.7),
+                        strength * 0.6 * (phase * std::f32::consts::PI).sin(),
+                    ),
+                );
+                glow::end();
+            }
             if glow::begin(Blend::Glow) {
                 for end in [from, to] {
-                    glow::spot(
-                        end,
-                        (r.h * 1.8).max(3.),
-                        alpha(mix(c, WHITE, 0.5), strength * 0.6),
-                    );
+                    glow::spot(end, (r.h * 1.4).max(3.), alpha(hot, strength * 0.45));
                 }
                 glow::end();
             }
@@ -806,17 +814,34 @@ pub fn decoration(
                 draw_triangle(points[0], points[i], points[i + 1], c);
             }
         }
-        DecorKind::Ring => draw_circle_lines(p.x, p.y, r.w.min(r.h) * 0.5, (3. * zoom).max(1.), c),
+        DecorKind::Ring => ring(p, r.w.min(r.h) * 0.5, (3. * zoom).max(1.), c),
         DecorKind::Arrow => {
-            let a = rotate(vec2(-r.w * 0.4, 0.));
-            let b = rotate(vec2(r.w * 0.1, 0.));
-            draw_line(a.x, a.y, b.x, b.y, (r.h * 0.22).max(1.), c);
-            draw_triangle(
-                rotate(vec2(r.w * 0.5, 0.)),
-                rotate(vec2(0., -r.h * 0.5)),
-                rotate(vec2(0., r.h * 0.5)),
-                c,
-            );
+            // One outline in five triangles that share their edges, so a
+            // see-through arrow is even all over.
+            let stem = (r.h * 0.11).max(0.5);
+            let [
+                tail_top,
+                base_top,
+                head_top,
+                tip,
+                head_bottom,
+                base_bottom,
+                tail_bottom,
+            ] = [
+                vec2(-r.w * 0.4, -stem),
+                vec2(0., -stem),
+                vec2(0., -r.h * 0.5),
+                vec2(r.w * 0.5, 0.),
+                vec2(0., r.h * 0.5),
+                vec2(0., stem),
+                vec2(-r.w * 0.4, stem),
+            ]
+            .map(rotate);
+            draw_triangle(tail_top, base_top, base_bottom, c);
+            draw_triangle(tail_top, base_bottom, tail_bottom, c);
+            draw_triangle(head_top, tip, base_top, c);
+            draw_triangle(base_top, tip, base_bottom, c);
+            draw_triangle(base_bottom, tip, head_bottom, c);
         }
         DecorKind::Label => {
             let size = (r.h * 0.7).clamp(6., 72.);
@@ -835,6 +860,95 @@ pub fn decoration(
         }
         DecorKind::Emitter => {}
     }
+}
+
+/// A ring `thickness` wide around `center`, as one band with no seams, so
+/// a see-through ring has no beads where segments would overlap.
+pub(crate) fn ring(center: Vec2, radius: f32, thickness: f32, c: Color) {
+    const MOST: usize = 96;
+    let outer = radius + thickness * 0.5;
+    let inner = (radius - thickness * 0.5).max(0.);
+    if outer < 0.5 || c.a <= 0.004 {
+        return;
+    }
+    let steps = ((outer * 0.5) as usize).clamp(12, MOST);
+    let mut vertices = [crate::lighting::vertex(center, c); 2 * (MOST + 1)];
+    for i in 0..=steps {
+        let a = i as f32 / steps as f32 * std::f32::consts::TAU;
+        let d = vec2(a.cos(), a.sin());
+        vertices[i * 2] = crate::lighting::vertex(center + d * outer, c);
+        vertices[i * 2 + 1] = crate::lighting::vertex(center + d * inner, c);
+    }
+    let mut indices = [0_u16; MOST * 6];
+    for i in 0..steps {
+        let o = (i * 2) as u16;
+        indices[i * 6..i * 6 + 6].copy_from_slice(&[o, o + 2, o + 3, o, o + 3, o + 1]);
+    }
+    crate::lighting::geometry(&vertices[..2 * (steps + 1)], &indices[..steps * 6]);
+}
+
+/// A V `thickness` wide with its point at `tip` and its arms reaching to
+/// `a` and `b`, in two pieces that meet at a mitred point without
+/// overlapping.
+pub(crate) fn chevron(tip: Vec2, a: Vec2, b: Vec2, thickness: f32, c: Color) {
+    let (to_a, to_b) = ((a - tip).normalize_or_zero(), (b - tip).normalize_or_zero());
+    let forward = -(to_a + to_b).normalize_or_zero();
+    if forward == Vec2::ZERO || to_a == Vec2::ZERO || to_b == Vec2::ZERO {
+        return;
+    }
+    let half = thickness * 0.5;
+    // Each arm's sides lie half the thickness out; they meet past the tip
+    // by as much more as the V is sharp, within reason.
+    let sine = (1. - to_a.dot(-forward).powi(2)).max(0.).sqrt().max(0.3);
+    let (outer, inner) = (tip + forward * (half / sine), tip - forward * (half / sine));
+    let side = |to: Vec2| {
+        let normal = vec2(-to.y, to.x);
+        let outward = if normal.dot(forward) >= 0. {
+            normal
+        } else {
+            -normal
+        };
+        outward * half
+    };
+    let (out_a, out_b) = (side(to_a), side(to_b));
+    draw_triangle(a + out_a, outer, inner, c);
+    draw_triangle(a + out_a, inner, a - out_a, c);
+    draw_triangle(outer, b + out_b, b - out_b, c);
+    draw_triangle(outer, b - out_b, inner, c);
+}
+
+/// A filled capsule of `radius` from `a` to `b`: one convex shape, so a
+/// see-through tube has no overlapping ends.
+fn capsule(a: Vec2, b: Vec2, radius: f32, c: Color) {
+    const STEPS: usize = 10;
+    if radius < 0.1 || c.a <= 0.004 {
+        return;
+    }
+    let along = b - a;
+    let direction = along.try_normalize().unwrap_or(vec2(1., 0.));
+    let turn = direction.y.atan2(direction.x);
+    let middle = (a + b) * 0.5;
+    let mut vertices = [crate::lighting::vertex(middle, c); 1 + 2 * (STEPS + 1)];
+    for (end, (center, start)) in [
+        (b, turn - std::f32::consts::FRAC_PI_2),
+        (a, turn + std::f32::consts::FRAC_PI_2),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for j in 0..=STEPS {
+            let angle = start + j as f32 / STEPS as f32 * std::f32::consts::PI;
+            vertices[1 + end * (STEPS + 1) + j] =
+                crate::lighting::vertex(center + vec2(angle.cos(), angle.sin()) * radius, c);
+        }
+    }
+    let outline = 2 * (STEPS + 1);
+    let mut indices = [0_u16; 3 * 2 * (STEPS + 1)];
+    for i in 0..outline {
+        let next = (i + 1) % outline;
+        indices[i * 3..i * 3 + 3].copy_from_slice(&[0, 1 + i as u16, 1 + next as u16]);
+    }
+    crate::lighting::geometry(&vertices, &indices);
 }
 
 /// How much a flickering light dims at `time`: smooth noise, so it wavers

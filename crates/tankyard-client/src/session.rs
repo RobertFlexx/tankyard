@@ -87,6 +87,9 @@ pub struct Session {
     /// Bodies the predicted tank pushes, or pushed and the server has yet to
     /// settle, as a group mask. They're drawn where prediction has them.
     pushing: u32,
+    /// Offline, where bodies were a tick ago and in which round, so they're
+    /// drawn between ticks like tanks.
+    bodies_before: (u32, Vec<tankyard_content::BodyPose>),
     pub previous_positions: HashMap<EntityId, (V2, f32)>,
     pub ticks: u64,
     pub dropped_ticks: u64,
@@ -470,6 +473,7 @@ impl Session {
             bodies_ahead: Vec::new(),
             walls_ahead: Vec::new(),
             pushing: 0,
+            bodies_before: (0, Vec::new()),
             previous_positions: HashMap::new(),
             ticks: 0,
             dropped_ticks: 0,
@@ -918,6 +922,10 @@ impl Session {
                     self.previous_positions
                         .insert(boss.id, (boss.pos, boss.aim));
                 }
+                self.bodies_before.0 = local.world.match_state.round;
+                self.bodies_before
+                    .1
+                    .clone_from(&local.world.match_state.bodies);
                 local.world.set_input(self.player, input);
                 local.step();
                 self.achievement_tracker
@@ -972,8 +980,10 @@ impl Session {
         self.ticks += 1;
     }
     /// Show the latest local prediction in the same frame as its input.
+    /// Offline, place moving cover where the frame draws tanks instead.
     pub fn present_prediction(&mut self, fraction: f32) {
         if self.offline_mode() {
+            self.present_offline_cover(fraction);
             return;
         }
         if let (Some(predicted), Some(display)) = (&self.predicted, &mut self.display)
@@ -1011,6 +1021,79 @@ impl Session {
             tank.cooldowns.clone_from(&predicted.cooldowns);
             tank.charge = predicted.charge;
             tank.input = predicted.input;
+        }
+    }
+    /// Offline, tanks are drawn `fraction` of the way from the tick before
+    /// to the latest one. Gliding and pushed cover is placed at that same
+    /// moment, so a crate a tank pushes stays against it however fast the
+    /// screen refreshes.
+    fn present_offline_cover(&mut self, fraction: f32) {
+        let (Engine::Offline(local), Some(display)) = (&self.engine, &mut self.display) else {
+            return;
+        };
+        let world = &local.world;
+        if world.rest_walls.len() != world.wall_groups.len()
+            || display.walls.len() != world.walls.len()
+        {
+            return;
+        }
+        let fraction = fraction.clamp(0., 1.);
+        let now = world.match_state.elapsed;
+        display.match_state.elapsed = (now - DT * (1. - fraction)).max(0.);
+        let (round, before) = &self.bodies_before;
+        let before = |group: u8| {
+            before
+                .iter()
+                .find(|pose| pose.group == group && *round == world.match_state.round)
+                .map_or([0., 0.], |pose| pose.offset)
+        };
+        let shown = &mut display.match_state.bodies;
+        shown.clear();
+        for pose in &world.match_state.bodies {
+            let from = before(pose.group);
+            shown.push(tankyard_content::BodyPose {
+                offset: [
+                    from[0] + (pose.offset[0] - from[0]) * fraction,
+                    from[1] + (pose.offset[1] - from[1]) * fraction,
+                ],
+                ..*pose
+            });
+        }
+        // A body that came to rest at home this tick still slides there.
+        for pose in &self.bodies_before.1 {
+            if *round == world.match_state.round
+                && !world
+                    .match_state
+                    .bodies
+                    .iter()
+                    .any(|now| now.group == pose.group)
+            {
+                shown.push(tankyard_content::BodyPose {
+                    offset: pose.offset.map(|offset| offset * (1. - fraction)),
+                    velocity: [0., 0.],
+                    ..*pose
+                });
+            }
+        }
+        let poses = tankyard_core::snapshot_poses(display, display.match_state.elapsed);
+        if !poses.moved {
+            display.walls.clone_from(&world.rest_walls);
+            return;
+        }
+        let scale = world.config.arena_scale;
+        let size = V2::new(world.config.width * scale, world.config.height * scale);
+        for ((wall, rest), &group) in display
+            .walls
+            .iter_mut()
+            .zip(&world.rest_walls)
+            .zip(&world.wall_groups)
+        {
+            let [dx, dy] = poses.offset(group);
+            *wall = tankyard_core::Rect {
+                x: rest.x + dx * size.x,
+                y: rest.y + dy * size.y,
+                ..*rest
+            };
         }
     }
     pub fn render_fraction(&self, fraction: f32) -> f32 {
@@ -1570,6 +1653,78 @@ mod tests {
             "the authoritative snapshot is still before the shot"
         );
     }
+    #[test]
+    fn offline_crates_are_drawn_between_ticks_like_tanks() {
+        let mut map = tankyard_content::builtin_maps().remove(0);
+        map.blocks.push(tankyard_content::MapBlock {
+            rect: [0.45, 0.45, 0.04, 0.05],
+            style: Default::default(),
+            color: None,
+            group: 3,
+        });
+        map.bodies.push(tankyard_content::MapBody {
+            group: 3,
+            ..Default::default()
+        });
+        let mut session = Session::offline(
+            WorldConfig {
+                mode: Mode::Sandbox,
+                target_count: 0,
+                ..Default::default()
+            },
+            0,
+            "Pilot",
+        );
+        let Engine::Offline(local) = &mut session.engine else {
+            unreachable!("an offline session");
+        };
+        local.world.change_map(map).unwrap();
+        let crate_wall = local
+            .world
+            .wall_groups
+            .iter()
+            .position(|&g| g == 3)
+            .unwrap();
+        let content = Content::builtin();
+        let mut before = Vec::new();
+        for _ in 0..6 {
+            let Engine::Offline(local) = &mut session.engine else {
+                unreachable!();
+            };
+            local.world.shove_body(3, V2::new(240., 0.));
+            before = local.world.walls.clone();
+            session.tick(session.neutral_input(0), &content);
+        }
+        let Engine::Offline(local) = &session.engine else {
+            unreachable!();
+        };
+        let after = local.world.walls.clone();
+        assert!(
+            after[crate_wall].x > before[crate_wall].x + 1.,
+            "the crate slides"
+        );
+        for (fraction, expected) in [
+            (0., before[crate_wall].x),
+            (0.5, (before[crate_wall].x + after[crate_wall].x) * 0.5),
+            (1., after[crate_wall].x),
+        ] {
+            session.present_prediction(fraction);
+            let shown = session.display.as_ref().unwrap().walls[crate_wall];
+            assert!(
+                (shown.x - expected).abs() < 0.01,
+                "{fraction}: {} {expected}",
+                shown.x
+            );
+        }
+        // Everything else stands where the world has it.
+        let shown = &session.display.as_ref().unwrap().walls;
+        for (index, (shown, wall)) in shown.iter().zip(&after).enumerate() {
+            if index != crate_wall {
+                assert_eq!(shown, wall);
+            }
+        }
+    }
+
     #[test]
     fn sandbox_level_shortcuts_respect_bounds_and_game_state() {
         let mut session = Session::offline(

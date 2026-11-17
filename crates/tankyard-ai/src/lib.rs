@@ -35,7 +35,7 @@ pub use knowledge::{
     ClassRecord, Knowledge, MAX_FILE_BYTES as KNOWLEDGE_FILE_LIMIT, SharedKnowledge,
     lock as lock_knowledge,
 };
-use navigation::{Navigation, clear_line};
+use navigation::Navigation;
 use objectives::objective_goal;
 use perception::{Perception, Seen};
 use personality::Personality;
@@ -119,8 +119,6 @@ pub struct BotController {
     brains: HashMap<EntityId, Brain>,
     perception: Perception,
     navigation: Navigation,
-    /// Ticks since the route grid last followed gliding cover.
-    navigation_age: u32,
     seen: Vec<Seen>,
     commands: Vec<Command>,
     inputs: Vec<(EntityId, PlayerInput)>,
@@ -141,7 +139,6 @@ impl BotController {
             brains: HashMap::new(),
             perception: Perception::default(),
             navigation: Navigation::default(),
-            navigation_age: 0,
             seen: Vec::with_capacity(256),
             commands: Vec::with_capacity(128),
             inputs: Vec::with_capacity(128),
@@ -299,14 +296,10 @@ impl BotController {
         {
             return;
         }
-        // Gliding cover would rebuild the route grid every tick. Routes only
-        // need it a few times a second; steering still meets the real walls.
-        self.navigation_age = self.navigation_age.saturating_add(1);
-        if !world.cover_gliding() || self.navigation_age >= 30 {
-            self.navigation_age = 0;
-            self.navigation
-                .refresh(world.config.width, world.config.height, &world.walls);
-        }
+        // Moving cover refreshes only the cells near it, so routes always
+        // follow sliding crates and gliding doors.
+        self.navigation
+            .refresh(world.config.width, world.config.height, &world.walls);
         self.perception.rebuild(world);
         self.commands.clear();
         self.inputs.clear();
@@ -341,7 +334,14 @@ impl BotController {
                 self.perception
                     .query(tank.pos, difficulty.perception_radius(), &mut self.seen);
                 decide(
-                    world, tank, class, difficulty, &self.seen, brain, &knowledge,
+                    world,
+                    &self.navigation,
+                    tank,
+                    class,
+                    difficulty,
+                    &self.seen,
+                    brain,
+                    &knowledge,
                 );
                 brain.last_decision_tick = world.tick;
                 progression_commands(
@@ -362,7 +362,8 @@ impl BotController {
                 .is_multiple_of(dodge_period)
             {
                 self.perception.query(tank.pos, 340., &mut self.seen);
-                let (dodge, danger, escape) = projectile_avoidance(world, tank, &self.seen);
+                let (dodge, danger, escape) =
+                    projectile_avoidance(world, &self.navigation, tank, &self.seen);
                 let next_dodge = dodge * difficulty.dodge_strength();
                 // High-priority evasion ramps up quickly but does not jerk the
                 // bot across its whole steering envelope in one tick.
@@ -370,7 +371,7 @@ impl BotController {
                 brain.danger = danger;
                 brain.escape = escape;
                 let opportunity = if class.ability.is_parry() {
-                    parry_threat(world, tank, &self.seen)
+                    parry_threat(world, &self.navigation, tank, &self.seen)
                 } else {
                     None
                 };
@@ -396,7 +397,7 @@ impl BotController {
             movement =
                 movement * (1. - retreat_weight) + brain.escape.normalized() * retreat_weight;
             self.perception.query(tank.pos, 110., &mut self.seen);
-            movement += local_steering(world, tank, class, &self.seen);
+            movement += local_steering(world, &self.navigation, tank, class, &self.seen);
             movement += brain.dodge;
             movement += guarded_base_repulsion(world, tank);
             movement = human_motion(world, tank, class, brain, movement);
@@ -413,6 +414,7 @@ impl BotController {
                     net,
                     &driver::Situation {
                         world,
+                        cover: &self.navigation,
                         tank,
                         class,
                         plan: movement,
@@ -457,7 +459,7 @@ impl BotController {
                 let distance = tank.pos.distance(estimated);
                 let range = class.ai_range.max(100.) * 1.6 + target.radius;
                 let fire = distance < range.min(difficulty.perception_radius())
-                    && clear_line(tank.pos, estimated, 5., &world.walls);
+                    && self.navigation.clear_path(tank.pos, estimated, 5.);
                 ((lead - tank.pos).angle() + error, fire, distance)
             } else {
                 ((brain.goal - tank.pos).angle(), false, f32::MAX)
@@ -817,6 +819,7 @@ mod tests {
         let seen = (0..world.tanks.len()).map(Seen::Tank).collect::<Vec<_>>();
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -838,6 +841,7 @@ mod tests {
         let class = world.content.class(&world.tanks[0].class).unwrap();
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -881,6 +885,7 @@ mod tests {
         let class = world.content.class(&world.tanks[0].class).unwrap();
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -1216,11 +1221,24 @@ mod tests {
         world.tanks[1].pos = V2::new(1080., 1000.);
         world.tanks[1].vel = V2::new(-300., 0.);
         assert!(
-            parry_opportunity(&world, &world.tanks[0], &[Seen::Tank(1)])
-                .is_some_and(|eta| eta < 0.18)
+            parry_opportunity(
+                &world,
+                &Navigation::of(&world),
+                &world.tanks[0],
+                &[Seen::Tank(1)]
+            )
+            .is_some_and(|eta| eta < 0.18)
         );
         world.tanks[1].vel.x = 300.;
-        assert!(parry_opportunity(&world, &world.tanks[0], &[Seen::Tank(1)]).is_none());
+        assert!(
+            parry_opportunity(
+                &world,
+                &Navigation::of(&world),
+                &world.tanks[0],
+                &[Seen::Tank(1)]
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -1256,8 +1274,12 @@ mod tests {
             frozen: None,
             stasis_used: false,
         });
-        let (dodge, danger, escape) =
-            projectile_avoidance(&world, &world.tanks[0], &[Seen::Projectile(0)]);
+        let (dodge, danger, escape) = projectile_avoidance(
+            &world,
+            &Navigation::of(&world),
+            &world.tanks[0],
+            &[Seen::Projectile(0)],
+        );
         assert!(danger > 0.5);
         assert!(
             dodge.y.abs() > 0.5,
@@ -1358,8 +1380,12 @@ mod tests {
                 "must retreat from {kind:?}"
             );
             assert!(world.tanks[0].input.valid());
-            let (_, danger, escape) =
-                projectile_avoidance(&world, &world.tanks[0], &[Seen::Projectile(0)]);
+            let (_, danger, escape) = projectile_avoidance(
+                &world,
+                &Navigation::of(&world),
+                &world.tanks[0],
+                &[Seen::Projectile(0)],
+            );
             assert!(danger > 0.5 && escape.x < -0.5);
         }
     }
@@ -1370,7 +1396,7 @@ mod tests {
         let seen = [Seen::Projectile(0)];
         world.projectiles[0].team = 1;
         assert_eq!(
-            projectile_avoidance(&world, &world.tanks[0], &seen),
+            projectile_avoidance(&world, &Navigation::of(&world), &world.tanks[0], &seen),
             (V2::ZERO, 0., V2::ZERO)
         );
         world.projectiles[0].team = 2;
@@ -1381,25 +1407,25 @@ mod tests {
             h: 100.,
         });
         assert_eq!(
-            projectile_avoidance(&world, &world.tanks[0], &seen),
+            projectile_avoidance(&world, &Navigation::of(&world), &world.tanks[0], &seen),
             (V2::ZERO, 0., V2::ZERO)
         );
         world.walls.clear();
         world.projectiles[0].vel.x = 180.;
         assert_eq!(
-            projectile_avoidance(&world, &world.tanks[0], &seen),
+            projectile_avoidance(&world, &Navigation::of(&world), &world.tanks[0], &seen),
             (V2::ZERO, 0., V2::ZERO)
         );
         world.projectiles[0].vel.x = -180.;
         world.projectiles[0].lifetime = 0.1;
         assert_eq!(
-            projectile_avoidance(&world, &world.tanks[0], &seen).2,
+            projectile_avoidance(&world, &Navigation::of(&world), &world.tanks[0], &seen).2,
             V2::ZERO
         );
         world.projectiles[0].lifetime = 2.;
         world.projectiles[0].pos.x = 1500.;
         assert_eq!(
-            projectile_avoidance(&world, &world.tanks[0], &seen),
+            projectile_avoidance(&world, &Navigation::of(&world), &world.tanks[0], &seen),
             (V2::ZERO, 0., V2::ZERO)
         );
     }
@@ -1423,6 +1449,7 @@ mod tests {
         let class = world.content.class(&world.tanks[0].class).unwrap();
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -1442,6 +1469,7 @@ mod tests {
         });
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -1454,6 +1482,7 @@ mod tests {
         world.tanks[2].pos = V2::new(1000., 1800.);
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -1469,6 +1498,7 @@ mod tests {
         let mut neutral = Brain::default();
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -1480,6 +1510,7 @@ mod tests {
         neutral.learning.relationships.hurt_by(feared, 0.8, true, 0);
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -1540,6 +1571,7 @@ mod tests {
         let class = world.content.class("auto_smasher").unwrap();
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -1567,6 +1599,7 @@ mod tests {
         let mut brain = Brain::default();
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -1580,6 +1613,7 @@ mod tests {
         world.tanks[1].pos.x = 1100.;
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -1591,6 +1625,7 @@ mod tests {
         world.tanks[0].health = world.tanks[0].max_health * 0.2;
         decide(
             &world,
+            &Navigation::of(&world),
             &world.tanks[0],
             class,
             Difficulty::Expert.into(),
@@ -1615,16 +1650,19 @@ mod tests {
         let seen = [Seen::Projectile(0)];
         let class = world.content.class("reprisal").unwrap();
         let mut brain = Brain {
-            parry_eta: parry_opportunity(&world, &world.tanks[0], &seen),
+            parry_eta: parry_opportunity(&world, &Navigation::of(&world), &world.tanks[0], &seen),
             ..Default::default()
         };
         assert!(brain.parry_eta.unwrap() > 0.14);
         assert!(!use_ability(class, &world.tanks[0], &brain, 100.));
         world.projectiles[0].pos.x = 1060.;
-        brain.parry_eta = parry_opportunity(&world, &world.tanks[0], &seen);
+        brain.parry_eta =
+            parry_opportunity(&world, &Navigation::of(&world), &world.tanks[0], &seen);
         assert!(use_ability(class, &world.tanks[0], &brain, 60.));
         world.projectiles[0].lifetime = 0.001;
-        assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_none());
+        assert!(
+            parry_opportunity(&world, &Navigation::of(&world), &world.tanks[0], &seen).is_none()
+        );
         world.projectiles[0].lifetime = 2.;
         world.walls.push(tankyard_core::Rect {
             x: 1035.,
@@ -1632,14 +1670,22 @@ mod tests {
             w: 10.,
             h: 100.,
         });
-        assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_none());
+        assert!(
+            parry_opportunity(&world, &Navigation::of(&world), &world.tanks[0], &seen).is_none()
+        );
         world.walls.clear();
         world.projectiles[0].kind = ProjectileKind::Drone;
-        assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_some());
+        assert!(
+            parry_opportunity(&world, &Navigation::of(&world), &world.tanks[0], &seen).is_some()
+        );
         world.projectiles[0].kind = ProjectileKind::Minion;
-        assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_some());
+        assert!(
+            parry_opportunity(&world, &Navigation::of(&world), &world.tanks[0], &seen).is_some()
+        );
         world.projectiles[0].kind = ProjectileKind::Trap;
-        assert!(parry_opportunity(&world, &world.tanks[0], &seen).is_none());
+        assert!(
+            parry_opportunity(&world, &Navigation::of(&world), &world.tanks[0], &seen).is_none()
+        );
     }
 
     #[test]

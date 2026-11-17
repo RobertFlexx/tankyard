@@ -136,6 +136,17 @@ pub fn team_marker(team: u8, local: bool, p: Vec2, radius: f32) {
         );
     }
 }
+/// How many sides a shape of `kind` has.
+fn shape_sides(kind: TargetKind) -> u8 {
+    match kind {
+        TargetKind::Triangle | TargetKind::Mobile => 3,
+        TargetKind::Square | TargetKind::Reinforced => 4,
+        TargetKind::Pentagon => 5,
+        TargetKind::Fortress => 6,
+        TargetKind::Rare => 7,
+        TargetKind::Custom(sides) => sides,
+    }
+}
 pub(crate) fn polygon(center: Vec2, sides: u8, radius: f32, angle: f32, color: Color) {
     let center = crate::ui_layout::position(center);
     if sides < 3 {
@@ -667,15 +678,16 @@ pub fn world(
             continue;
         }
         let p = view.screen(position);
-        let (sides, color) = match target.kind {
-            TargetKind::Square => (4, AMBER),
-            TargetKind::Triangle => (3, RED),
-            TargetKind::Pentagon => (5, Color::new(0.463, 0.553, 0.988, 1.0)),
-            TargetKind::Fortress => (6, Color::new(0.35, 0.53, 0.9, 1.0)),
-            TargetKind::Rare => (7, Color::new(0.54, 0.92, 0.35, 1.0)),
-            TargetKind::Mobile => (3, Color::new(1.0, 0.6, 0.35, 1.0)),
-            TargetKind::Reinforced => (4, Color::new(0.64, 0.7, 0.75, 1.0)),
-            TargetKind::Custom(sides) => (sides, VIOLET),
+        let sides = shape_sides(target.kind);
+        let color = match target.kind {
+            TargetKind::Square => AMBER,
+            TargetKind::Triangle => RED,
+            TargetKind::Pentagon => Color::new(0.463, 0.553, 0.988, 1.0),
+            TargetKind::Fortress => Color::new(0.35, 0.53, 0.9, 1.0),
+            TargetKind::Rare => Color::new(0.54, 0.92, 0.35, 1.0),
+            TargetKind::Mobile => Color::new(1.0, 0.6, 0.35, 1.0),
+            TargetKind::Reinforced => Color::new(0.64, 0.7, 0.75, 1.0),
+            TargetKind::Custom(_) => VIOLET,
         };
         let radius = target.radius * z;
         let angle = previous_positions
@@ -1136,10 +1148,70 @@ pub fn world(
                 settings.reduced_motion,
                 &mut lights,
             );
+            let map_lights = lights.len();
             arena_lights(snapshot, local, view, interpolation, &placed, &mut lights);
             crate::profile::phase("darkness", || {
                 crate::lighting::darken(lighting, &lights, None)
             });
+            if settings.shape_quality > 0 {
+                crate::profile::phase("rims", || {
+                    // Lamps, beams and glowing pads catch the cover and tanks
+                    // facing them; tanks' own light doesn't.
+                    let walls: Vec<Rect> = snapshot
+                        .walls
+                        .iter()
+                        .map(scaled)
+                        .filter(|wall| view.visible(wall.center(), wall.w.max(wall.h)))
+                        .map(|wall| {
+                            let p = view.screen(V2::new(wall.x, wall.y));
+                            Rect::new(p.x, p.y, wall.w * z, wall.h * z)
+                        })
+                        .collect();
+                    let tanks = snapshot
+                        .tanks
+                        .iter()
+                        .filter(|tank| tank.alive && (tank.pocket <= 0. || tank.id == local))
+                        .map(|tank| (placed(tank.id, tank.pos), tank.radius));
+                    let bosses = snapshot
+                        .bosses
+                        .iter()
+                        .map(|boss| (placed(boss.id, boss.pos), boss.radius));
+                    let round: Vec<(Vec2, f32)> = tanks
+                        .chain(bosses)
+                        .filter(|&(pos, radius)| view.visible(pos, radius))
+                        .map(|(pos, radius)| (view.screen(pos), radius * z))
+                        .collect();
+                    let shapes: Vec<(Vec2, u8, f32, f32)> = snapshot
+                        .targets
+                        .iter()
+                        .filter_map(|target| {
+                            let pos = placed(target.id, target.pos);
+                            view.visible(pos, target.radius).then(|| {
+                                let turn = previous_positions.get(&target.id).map_or(
+                                    target.angle,
+                                    |&(_, previous)| {
+                                        previous + (target.angle - previous) * interpolation
+                                    },
+                                );
+                                (
+                                    view.screen(pos),
+                                    shape_sides(target.kind),
+                                    target.radius * z,
+                                    turn,
+                                )
+                            })
+                        })
+                        .collect();
+                    crate::lighting::rims(
+                        &lights[..map_lights],
+                        lighting[3],
+                        &walls,
+                        &round,
+                        &shapes,
+                        z,
+                    );
+                });
+            }
         }
     }
     for popup in &effects.popups {

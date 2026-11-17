@@ -220,6 +220,33 @@ pub fn spot(center: Vec2, radius: f32, color: Color) {
     );
 }
 
+/// A soft spot stretched into an oval: `along` is half its length, as a
+/// vector it lies along, and `across` half its width, in the current blend.
+pub fn stretched_spot(center: Vec2, along: Vec2, across: f32, color: Color) {
+    if along.length_squared() < 0.01 || across < 0.1 || color.a <= 0.004 {
+        return;
+    }
+    let side = vec2(-along.y, along.x).normalize() * across;
+    let corner = |u: f32, v: f32| {
+        let p = center + along * (u * 2. - 1.) + side * (v * 2. - 1.);
+        Vertex::new(p.x, p.y, 0., u, v, color)
+    };
+    let vertices = [
+        corner(0., 0.),
+        corner(1., 0.),
+        corner(1., 1.),
+        corner(0., 1.),
+    ];
+    // SAFETY: rendering runs on the main graphics thread; no context borrow
+    // survives this call, which copies the geometry into macroquad's batch.
+    unsafe {
+        let gl = get_internal_gl().quad_gl;
+        gl.texture(None);
+        gl.draw_mode(DrawMode::Triangles);
+        gl.geometry(&vertices, &[0, 1, 2, 0, 2, 3]);
+    }
+}
+
 /// Rings stacking to roughly the shader's falloff.
 pub fn fallback_spot(center: Vec2, radius: f32, color: Color) {
     for (scale, share) in [(1., 0.10), (0.7, 0.14), (0.42, 0.22), (0.2, 0.38)] {

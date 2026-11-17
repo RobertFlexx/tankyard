@@ -2,10 +2,20 @@
 use super::*;
 
 #[cfg(test)]
-pub(super) fn parry_opportunity(world: &World, tank: &Tank, seen: &[Seen]) -> Option<f32> {
-    parry_threat(world, tank, seen).map(|(_, eta)| eta)
+pub(super) fn parry_opportunity(
+    world: &World,
+    cover: &Navigation,
+    tank: &Tank,
+    seen: &[Seen],
+) -> Option<f32> {
+    parry_threat(world, cover, tank, seen).map(|(_, eta)| eta)
 }
-pub(super) fn parry_threat(world: &World, tank: &Tank, seen: &[Seen]) -> Option<(EntityId, f32)> {
+pub(super) fn parry_threat(
+    world: &World,
+    cover: &Navigation,
+    tank: &Tank,
+    seen: &[Seen],
+) -> Option<(EntityId, f32)> {
     seen.iter()
         .filter_map(|item| {
             let (id, pos, vel, radius, lifetime) = match *item {
@@ -52,9 +62,7 @@ pub(super) fn parry_threat(world: &World, tank: &Tank, seen: &[Seen]) -> Option<
                 _ => return None,
             };
             let delta = pos - tank.pos;
-            if delta.length_squared() > 340. * 340.
-                || !clear_line(tank.pos, pos, radius, &world.walls)
-            {
+            if delta.length_squared() > 340. * 340. || !cover.clear_path(tank.pos, pos, radius) {
                 return None;
             }
             let velocity = vel - tank.vel;

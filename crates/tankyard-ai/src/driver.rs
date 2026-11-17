@@ -51,6 +51,8 @@ pub fn initial_weights() -> Vec<f32> {
 
 pub(super) struct Situation<'a> {
     pub world: &'a World,
+    /// The world's cover, indexed for quick sight lines.
+    pub cover: &'a Navigation,
     pub tank: &'a Tank,
     pub class: &'a ClassDef,
     /// Where the hand-written steering wants to go, up to length 1.
@@ -67,14 +69,8 @@ fn direction(index: usize) -> V2 {
 
 /// How far a tank can drive along `dir` before touching a wall or the arena
 /// edge, as a fraction of [`SIGHT`].
-fn clearance(world: &World, pos: V2, radius: f32, dir: V2) -> f32 {
-    let end = pos + dir * SIGHT;
-    let mut nearest: f32 = 1.;
-    for &wall in &world.walls {
-        if let Some((time, _)) = physics::sweep_rect(pos, end, radius, wall) {
-            nearest = nearest.min(time);
-        }
-    }
+fn clearance(world: &World, cover: &Navigation, pos: V2, radius: f32, dir: V2) -> f32 {
+    let nearest = cover.first_contact(pos, pos + dir * SIGHT, radius);
     let bounds = world.config.bounds();
     let edge = |from: f32, low: f32, high: f32, step: f32| {
         if step > 1e-4 {
@@ -97,7 +93,7 @@ pub(super) fn sense(s: &Situation) -> [[f32; FEATURES]; DIRECTIONS] {
     let speed = physics::tank_speed(tank, &world.content).max(60.);
     let radius = tank.radius * 0.8;
     let clear: [f32; DIRECTIONS] =
-        std::array::from_fn(|i| clearance(world, tank.pos, radius, direction(i)));
+        std::array::from_fn(|i| clearance(world, s.cover, tank.pos, radius, direction(i)));
     let mut threat = V2::ZERO;
     let mut allies = V2::ZERO;
     let mut shots: Vec<(V2, V2, f32, f32)> = Vec::new();
@@ -242,6 +238,7 @@ mod tests {
                 &net,
                 &Situation {
                     world: &world,
+                    cover: &Navigation::of(&world),
                     tank,
                     class,
                     plan,
@@ -265,14 +262,15 @@ mod tests {
             h: 200.,
         });
         let tank = &world.tanks[0];
-        let east = clearance(&world, tank.pos, tank.radius, V2::new(1., 0.));
-        let west = clearance(&world, tank.pos, tank.radius, V2::new(-1., 0.));
+        let cover = Navigation::of(&world);
+        let east = clearance(&world, &cover, tank.pos, tank.radius, V2::new(1., 0.));
+        let west = clearance(&world, &cover, tank.pos, tank.radius, V2::new(-1., 0.));
         assert!(east < 0.3, "east {east}");
         assert_eq!(west, 1.);
         let bounds = world.config.bounds();
         let edge = V2::new(bounds.x + tank.radius + 1., bounds.y + 400.);
-        assert!(clearance(&world, edge, tank.radius, V2::new(-1., 0.)) < 0.01);
-        assert!(clearance(&world, edge, tank.radius, V2::new(0., 1.)) > 0.9);
+        assert!(clearance(&world, &cover, edge, tank.radius, V2::new(-1., 0.)) < 0.01);
+        assert!(clearance(&world, &cover, edge, tank.radius, V2::new(0., 1.)) > 0.9);
         // With walls straight ahead, the start weights turn aside.
         let class = world.content.class(&tank.class).unwrap();
         let mut net = DriverNet::default();
@@ -281,6 +279,7 @@ mod tests {
             &net,
             &Situation {
                 world: &world,
+                cover: &cover,
                 tank,
                 class,
                 plan: V2::new(1., 0.),

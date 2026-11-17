@@ -81,6 +81,14 @@ enum Command {
         seed: u64,
         #[arg(long, default_value = "ffa")]
         mode: String,
+        /// The map to play, by ID, such as one a pack adds. It plays at its
+        /// own suggested size, as in a workshop playtest.
+        #[arg(long, default_value = "open")]
+        map: String,
+        /// Keep every body on the map sliding back and forth, as players
+        /// pushing crates do.
+        #[arg(long)]
+        shove: bool,
     },
     /// Nominal weapon throughput; combat outcomes still require playtesting.
     Balance,
@@ -487,6 +495,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             ticks,
             seed,
             mode,
+            map,
+            shove,
         } => {
             if !(1..=128).contains(&bots) || ticks == 0 || ticks > 1_000_000 {
                 return Err("mod-bench requires 1..128 bots and 1..1000000 ticks".into());
@@ -504,21 +514,52 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let start = Instant::now();
             let loaded = tankyard_lua::load(&mods)?;
             let load_ms = start.elapsed().as_secs_f64() * 1000.;
+            let Some((width, height)) = loaded
+                .bundle
+                .maps
+                .iter()
+                .find(|m| m.id == map)
+                .map(|m| (m.width, m.height))
+            else {
+                let known: Vec<_> = loaded.bundle.maps.iter().map(|m| m.id.as_str()).collect();
+                return Err(format!("no map {map}; maps: {}", known.join(", ")).into());
+            };
             let mut session = tankyard_server::LocalSession::with_mods(
                 WorldConfig {
                     mode,
                     seed,
+                    map,
+                    width,
+                    height,
                     ..Default::default()
                 },
                 bots,
                 loaded,
             )?;
+            let groups: Vec<u8> = session.world.map.bodies.iter().map(|b| b.group).collect();
+            if shove && groups.is_empty() {
+                return Err("--shove needs a map with bodies".into());
+            }
             let mut mod_times = Vec::with_capacity(ticks);
             let mut tick_times = Vec::with_capacity(ticks);
+            let mut bot_times = Vec::with_capacity(ticks);
             let mut mod_allocations = 0u64;
-            for _ in 0..ticks {
+            let mut sliding = 0;
+            let mut offsets = Vec::new();
+            for tick in 0..ticks {
                 let tick_start = Instant::now();
+                if shove {
+                    // A second each way, at a pushing tank's pace.
+                    let way = if tick / 60 % 2 == 0 { 1. } else { -1. };
+                    for &group in &groups {
+                        session
+                            .world
+                            .shove_body(group, V2::new(way * 60., way * 60.));
+                    }
+                }
+                let bots_start = Instant::now();
                 session.bots.update(&mut session.world);
+                bot_times.push(bots_start.elapsed().as_secs_f64() * 1000.);
                 let mut spent = 0.;
                 let mut allocations_spent = 0;
                 let mods = &mut session.mods;
@@ -537,14 +578,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 mod_allocations += allocations_spent;
                 mod_times.push(spent);
                 tick_times.push(tick_start.elapsed().as_secs_f64() * 1000.);
+                let now: Vec<V2> = groups
+                    .iter()
+                    .filter_map(|&group| session.world.body_state(group))
+                    .map(|state| state.offset)
+                    .collect();
+                if now != offsets {
+                    sliding += 1;
+                    offsets = now;
+                }
             }
             let mods_distribution = distribution(&mut mod_times);
             let tick_distribution = distribution(&mut tick_times);
+            let bots_distribution = distribution(&mut bot_times);
             println!(
-                "{} packs, {bots} bots, {ticks} ticks, load {load_ms:.1} ms",
-                session.bundle.mods.len()
+                "{} packs, {bots} bots, {ticks} ticks, {width}x{height} {}, load {load_ms:.1} ms",
+                session.bundle.mods.len(),
+                session.world.config.map
             );
-            for (name, d) in [("mods", &mods_distribution), ("tick", &tick_distribution)] {
+            for (name, d) in [
+                ("mods", &mods_distribution),
+                ("bots", &bots_distribution),
+                ("tick", &tick_distribution),
+            ] {
                 println!(
                     "  {name:<5} avg {:.4} ms  p95 {:.4} ms  p99 {:.4} ms  max {:.4} ms",
                     d.average_ms, d.p95_ms, d.p99_ms, d.max_ms
@@ -555,6 +611,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 100. * mods_distribution.average_ms / tick_distribution.average_ms.max(1e-9),
                 mod_allocations as f64 / ticks as f64
             );
+            if !groups.is_empty() {
+                println!("  bodies moved during {sliding} of {ticks} ticks");
+            }
             if !session.mods.errors.is_empty() {
                 return Err(session.mods.errors.join("; ").into());
             }

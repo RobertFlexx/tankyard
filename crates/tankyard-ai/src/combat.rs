@@ -1,8 +1,10 @@
 //! Visible-threat decisions and tactical goals.
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn decide(
     world: &World,
+    cover: &Navigation,
     tank: &Tank,
     class: &ClassDef,
     difficulty: Skill,
@@ -52,7 +54,7 @@ pub(super) fn decide(
                 let strength = (f32::from(other.level) + 12.) / (f32::from(tank.level) + 12.)
                     * (other.max_health / tank.max_health.max(1.)).sqrt();
                 let weak = 1. - (other.health / other.max_health.max(1.)).clamp(0., 1.);
-                let visible = clear_line(tank.pos, other.pos, tank.radius * 0.35, &world.walls);
+                let visible = cover.clear_path(tank.pos, other.pos, tank.radius * 0.35);
                 let mut pressure = strength.clamp(0.3, 2.)
                     * (1. - weak * 0.65)
                     * (1. - distance / 850.).clamp(0., 1.);
@@ -174,7 +176,7 @@ pub(super) fn decide(
                     continue;
                 }
                 let efficiency = (target.xp as f32 / target.health.max(20.)).clamp(0.3, 3.);
-                let visible = clear_line(tank.pos, target.pos, 4.0, &world.walls);
+                let visible = cover.clear_path(tank.pos, target.pos, 4.0);
                 if !visible {
                     continue;
                 }
@@ -215,7 +217,7 @@ pub(super) fn decide(
                 }
                 let distance = tank.pos.distance(boss.pos);
                 if distance > difficulty.perception_radius()
-                    || !clear_line(tank.pos, boss.pos, tank.radius * 0.35, &world.walls)
+                    || !cover.clear_path(tank.pos, boss.pos, tank.radius * 0.35)
                 {
                     continue;
                 }
@@ -408,7 +410,7 @@ pub(super) fn decide(
         let legal = std::array::from_fn(|index| {
             (index != 5 || companion.is_some())
                 && world.position_clear(candidates[index], tank.radius + 15.)
-                && clear_line(tank.pos, candidates[index], tank.radius + 4., &world.walls)
+                && cover.clear_path(tank.pos, candidates[index], tank.radius + 4.)
         });
         let bounds = world.config.bounds();
         let border = (tank.pos.x - bounds.x)
