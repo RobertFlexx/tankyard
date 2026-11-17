@@ -1154,7 +1154,9 @@ pub const TRIGGER_CONDITIONS: usize = 4;
 pub struct TriggerTest {
     #[serde(default)]
     pub kind: TestKind,
-    /// The counter (1 to 8) or group (1 to 32) to look at.
+    /// The counter (1 to 8) or group (1 to 32) to look at. Inside and Time
+    /// look at neither, so maps may leave it out.
+    #[serde(default)]
     pub index: u8,
     #[serde(default)]
     pub compare: Compare,
@@ -2923,6 +2925,27 @@ mod tests {
             ..base
         };
         assert!(validate_trigger(&boss).is_err());
+    }
+
+    #[test]
+    fn time_and_crowd_conditions_need_no_index() {
+        // As the modding guide writes them.
+        for source in [
+            r#"{ "kind": "time", "compare": "at_least", "value": 300 }"#,
+            r#"{ "kind": "inside", "compare": "at_least", "value": 2 }"#,
+        ] {
+            let trigger = MapTrigger {
+                only_if: Some(serde_json::from_str(source).expect(source)),
+                ..Default::default()
+            };
+            validate_trigger(&trigger).expect(source);
+        }
+        // Counters and groups still have to say which.
+        let trigger = MapTrigger {
+            only_if: Some(serde_json::from_str(r#"{ "kind": "counter", "value": 3 }"#).unwrap()),
+            ..Default::default()
+        };
+        assert!(validate_trigger(&trigger).is_err());
     }
 
     #[test]

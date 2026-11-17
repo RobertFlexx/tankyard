@@ -10,6 +10,7 @@ mod plugins;
 mod preview;
 
 use crate::{
+    profile,
     render::View,
     settings::Settings,
     ui::{AMBER, *},
@@ -752,27 +753,32 @@ impl Editor {
         let mut action = Action::None;
         let on_edge = self.panel_edges(&layout);
         if !resumed {
-            action = self.keys(&layout);
-            if !on_edge {
-                self.canvas_input(&layout);
-            }
+            action = profile::phase("editor input", || {
+                let action = self.keys(&layout);
+                if !on_edge {
+                    self.canvas_input(&layout);
+                }
+                action
+            });
         }
         // Keys can hide the panels; the rest of the frame uses the new layout.
         let layout = self.layout(s);
         self.canvas_area = layout.canvas;
-        self.run_preview(&layout, dt);
+        profile::phase("editor preview", || self.run_preview(&layout, dt));
         let config = self.config();
         clear_background(bg_color());
-        self.draw_canvas(&layout, settings, &config);
+        profile::phase("editor canvas", || {
+            self.draw_canvas(&layout, settings, &config)
+        });
         if self.help || on_edge {
             set_interactive(false);
         }
-        if let Some(chosen) = self.top_bar(&layout) {
+        if let Some(chosen) = profile::phase("editor bar", || self.top_bar(&layout)) {
             action = chosen;
         }
         if !self.prefs.hide_panels {
-            self.dock(&layout, settings);
-            self.inspector(&layout);
+            profile::phase("editor dock", || self.dock(&layout, settings));
+            profile::phase("editor inspector", || self.inspector(&layout));
         }
         self.draw_edges(&layout);
         set_interactive(true);

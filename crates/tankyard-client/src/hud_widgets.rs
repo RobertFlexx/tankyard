@@ -82,9 +82,8 @@ struct Seen {
     since: f64,
     frame: u64,
     progress: f32,
-    /// The widget as it last showed, and where, for its exit.
+    /// The widget as it last showed, for its exit.
     widget: HudWidget,
-    pinned: Option<Pinned>,
     gone: Option<f64>,
 }
 thread_local! {
@@ -1217,10 +1216,8 @@ pub fn draw(
                 frame,
                 progress: target,
                 widget: widget.clone(),
-                pinned,
                 gone: None,
             });
-            seen.pinned = pinned;
             if seen.gone.is_some() {
                 // Back before its exit ended: show it again at once.
                 seen.gone = None;
@@ -1268,9 +1265,11 @@ pub fn draw(
             if calm {
                 return false;
             }
-            if seen.widget.pinned() && anchor(&seen.widget, place).is_none() {
+            // A pinned widget fades over what it floated over, moving with
+            // the view, and goes at once when that is gone too.
+            let Some(pinned) = anchor(&seen.widget, place) else {
                 return false;
-            }
+            };
             let gone = *seen.gone.get_or_insert(now);
             let t = ((now - gone) / EXIT_SECONDS) as f32;
             if t >= 1. {
@@ -1287,7 +1286,7 @@ pub fn draw(
                     seen.progress,
                     now,
                     None,
-                    seen.pinned,
+                    pinned,
                 );
             }
             true

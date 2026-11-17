@@ -1,6 +1,6 @@
 [mod]
 name = "Arcade Hall"
-version = "1.1.0"
+version = "1.1.1"
 description = "A neon hall built from the 1.5 workshop's UI triggers: a coin counter with a jackpot, a shop menu, a vault countdown and a vote for the next event."
 license = "MIT"
 icon = "icon.svg"

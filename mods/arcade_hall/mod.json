@@ -2,7 +2,7 @@
   "api_version": 2,
   "id": "arcade_hall",
   "name": "Arcade Hall",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "maps": [
     {
       "id": "arcade_hall",
@@ -873,6 +873,7 @@
             230,
             150
           ],
+          "amount": 100,
           "tween": 1
         },
         {
@@ -1334,6 +1335,12 @@
                 150
               ]
             }
+          },
+          "only_if": {
+            "kind": "time",
+            "index": 0,
+            "compare": "below",
+            "value": 40
           }
         },
         {
@@ -1425,6 +1432,44 @@
                 64
               ]
             }
+          }
+        },
+        {
+          "when": "signal",
+          "action": "ui",
+          "rect": [
+            0.07,
+            0.37,
+            0.12,
+            0.26
+          ],
+          "source": 9,
+          "group": 30,
+          "duration": 12,
+          "ui": {
+            "pin": "area",
+            "to": "cause",
+            "widget": {
+              "title": "VAULT",
+              "text": "Gate open",
+              "style": "card",
+              "icon": "key",
+              "size": 16,
+              "point": true,
+              "glow": true,
+              "enter": "pop",
+              "accent": [
+                110,
+                230,
+                150
+              ]
+            }
+          },
+          "only_if": {
+            "kind": "time",
+            "index": 0,
+            "compare": "at_least",
+            "value": 40
           }
         }
       ],

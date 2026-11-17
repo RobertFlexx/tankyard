@@ -21,8 +21,8 @@ pub use status::*;
 
 /// Version 31 carries widgets pinned over the arena or a tank, choice
 /// layouts and glow, which version 30 can't hold, so clients and servers
-/// update together. Tank Yard 1.5.0 uses it; 1.4.0 used version 30, 1.3.0
-/// version 29, and 1.1.0 and 1.2.0 version 28.
+/// update together. Tank Yard 1.5.0 and 1.5.1 use it; 1.4.0 used version
+/// 30, 1.3.0 version 29, and 1.1.0 and 1.2.0 version 28.
 pub const PROTOCOL_VERSION: u32 = 31;
 /// The oldest client version servers accept.
 pub const MIN_PROTOCOL_VERSION: u32 = 31;

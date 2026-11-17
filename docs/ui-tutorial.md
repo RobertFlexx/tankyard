@@ -24,6 +24,7 @@ Each choice sends its channel with the player who picked it as the cause. Add li
 2. Use slot **30**, title **VAULT**, text **Opens at 0:40**, and the **Lock** icon. Set a **12-second** duration.
 3. Set **Where** to **Over the area** and enable **Point the way when out of view**. The sign floats at its area; outside the view, an arrow points toward it from clear of the normal HUD.
 4. If the vault moves, give this trigger the same **member group** as its blocks. The sign follows the group's paths, motions and pushed bodies. Hiding the group hides its sign too.
+5. To keep the text true once the vault opens, give the sign **Only if: Round time < 40**. Duplicate it with **Ctrl+D**, drag the copy back over the vault, and give the copy the text **Gate open**, the **Key** icon and **Round time ≥ 40**. Both use slot 30, so a newer pick replaces the older sign.
 
 The shop's **Vault guide** choice now shows a personal waypoint. Another player's choice does not put it on your screen.
 

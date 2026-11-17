@@ -2,13 +2,13 @@
 //! arena drawn with the editor's overlays.
 use super::{Editor, Layout, Mode, Tab, alt, brushes, command, shift};
 use crate::{
-    scenery,
+    profile, scenery,
     settings::Settings,
     ui::{AMBER, CYAN, RED, VIOLET, *},
     ui_layout,
 };
 use macroquad::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tankyard_client::editor_document::{
     Key, Link, Object, describe_trigger_named, link, trigger_badge_tag,
 };
@@ -890,8 +890,10 @@ impl Editor {
             poses: self.preview.poses(),
             focus: self.preview.probe(),
         };
-        scenery::floor(map, config, &shown, &self.view, self.time);
-        scenery::decorations(map, config, &shown, &self.view, self.time, false, settings);
+        profile::phase("editor decor", || {
+            scenery::floor(map, config, &shown, &self.view, self.time);
+            scenery::decorations(map, config, &shown, &self.view, self.time, false, settings);
+        });
         let style = |style: BlockStyle| {
             scenery::wall_style(
                 if style == BlockStyle::Map {
@@ -912,121 +914,129 @@ impl Editor {
             .bodies
             .iter()
             .fold(0, |mask, body| mask | MapDef::group_bit(body.group));
-        for (key, r, group) in self.doc.items() {
-            // The logic preview glides groups; their homes stay outlined,
-            // since that is where editing moves them.
-            let moved = shown.poses.offset(group) != [0., 0.];
-            if moved {
-                dashed_rect(self.on_screen(r), 1., 4., alpha(muted_color(), 0.45));
-            }
-            let rect = self.on_screen(shown.poses.shift(r, group));
-            if !overlaps(view, rect) {
-                continue;
-            }
-            let hidden = MapDef::group_bit(group) & ghost != 0;
-            if hidden && !self.show_hidden {
-                continue;
-            }
-            let point = |least: f32| {
-                let c = rect.center();
-                let size = rect.w.max(least);
-                Rect::new(c.x - size * 0.5, c.y - size * 0.5, size, size)
-            };
-            match key {
-                Key::Wall(_) => scenery::block(
-                    rect,
-                    style(BlockStyle::Map),
-                    None,
-                    settings.dark_arena,
-                    settings.shape_quality,
-                ),
-                Key::Block(i) => {
-                    let b = &map.blocks[i];
-                    scenery::block(
+        profile::phase("editor items", || {
+            for (key, r, group) in self.doc.items() {
+                // The logic preview glides groups; their homes stay outlined,
+                // since that is where editing moves them.
+                let moved = shown.poses.offset(group) != [0., 0.];
+                if moved {
+                    dashed_rect(self.on_screen(r), 1., 4., alpha(muted_color(), 0.45));
+                }
+                let rect = self.on_screen(shown.poses.shift(r, group));
+                if !overlaps(view, rect) {
+                    continue;
+                }
+                let hidden = MapDef::group_bit(group) & ghost != 0;
+                if hidden && !self.show_hidden {
+                    continue;
+                }
+                let point = |least: f32| {
+                    let c = rect.center();
+                    let size = rect.w.max(least);
+                    Rect::new(c.x - size * 0.5, c.y - size * 0.5, size, size)
+                };
+                match key {
+                    Key::Wall(_) => scenery::block(
                         rect,
-                        style(b.style),
-                        b.color.map(scenery::color),
+                        style(BlockStyle::Map),
+                        None,
                         settings.dark_arena,
                         settings.shape_quality,
-                    );
-                    if body_mask & MapDef::group_bit(b.group) != 0 {
-                        scenery::body_marks(rect, settings.dark_arena);
-                    }
-                }
-                Key::Trigger(i) => self.draw_trigger(i, rect),
-                Key::Spawn(i) => brushes::spawn_mark(map.spawn_regions[i].team, rect, s),
-                Key::Base(i) => brushes::base_mark(map.team_bases[i].team, point(20.)),
-                Key::Objective(_) => brushes::objective_mark(point(20.)),
-                Key::Decor(i) if map.decor[i].kind == DecorKind::Emitter => {
-                    dashed_rect(rect, 1., 5., alpha(line_color(), 0.7));
-                    if !self.animate && rect.w > 24. {
-                        center_label(
-                            "FX",
-                            rect.center().x,
-                            rect.center().y + 4.,
-                            11.,
-                            muted_color(),
+                    ),
+                    Key::Block(i) => {
+                        let b = &map.blocks[i];
+                        scenery::block(
+                            rect,
+                            style(b.style),
+                            b.color.map(scenery::color),
+                            settings.dark_arena,
+                            settings.shape_quality,
                         );
+                        if body_mask & MapDef::group_bit(b.group) != 0 {
+                            scenery::body_marks(rect, settings.dark_arena);
+                        }
                     }
+                    Key::Trigger(i) => self.draw_trigger(i, rect),
+                    Key::Spawn(i) => brushes::spawn_mark(map.spawn_regions[i].team, rect, s),
+                    Key::Base(i) => brushes::base_mark(map.team_bases[i].team, point(20.)),
+                    Key::Objective(_) => brushes::objective_mark(point(20.)),
+                    Key::Decor(i) if map.decor[i].kind == DecorKind::Emitter => {
+                        dashed_rect(rect, 1., 5., alpha(line_color(), 0.7));
+                        if !self.animate && rect.w > 24. {
+                            center_label(
+                                "FX",
+                                rect.center().x,
+                                rect.center().y + 4.,
+                                11.,
+                                muted_color(),
+                            );
+                        }
+                    }
+                    Key::Zone(_) | Key::Decor(_) => {}
                 }
-                Key::Zone(_) | Key::Decor(_) => {}
+                if hidden {
+                    draw_rectangle(rect.x, rect.y, rect.w, rect.h, alpha(bg_color(), 0.5));
+                    dashed_rect(rect, 1.5, 6., alpha(text_color(), 0.55));
+                }
             }
-            if hidden {
-                draw_rectangle(rect.x, rect.y, rect.w, rect.h, alpha(bg_color(), 0.5));
-                dashed_rect(rect, 1.5, 6., alpha(text_color(), 0.55));
-            }
-        }
-        scenery::decorations(map, config, &shown, &self.view, self.time, true, settings);
+        });
+        profile::phase("editor decor above", || {
+            scenery::decorations(map, config, &shown, &self.view, self.time, true, settings)
+        });
         let lighting = shown.poses.lighting(&map.ambient);
         if lighting[3] > 0.004 {
-            let mut lights = Vec::new();
-            scenery::lights(
-                map,
-                config,
-                &shown,
-                &self.view,
-                self.time,
-                settings.reduced_motion,
-                &mut lights,
-            );
-            if let Some(probe) = shown.focus {
-                let at = self.view.screen(probe);
-                lights.push(crate::lighting::Light::Spot {
-                    at: vec2(at.x, at.y),
-                    radius: 380. * self.view.zoom,
-                    color: alpha(WHITE, 0.95),
-                });
-            }
-            // While editing, the dark is lifted halfway so everything stays
-            // easy to place; the running preview shows it in full.
-            let [r, g, b, dark] = lighting;
-            let dark = if self.preview.running {
-                dark
-            } else {
-                dark * 0.5
-            };
-            crate::lighting::darken([r, g, b, dark], &lights, arena.intersect(canvas));
+            profile::phase("editor darkness", || {
+                let mut lights = Vec::new();
+                scenery::lights(
+                    map,
+                    config,
+                    &shown,
+                    &self.view,
+                    self.time,
+                    settings.reduced_motion,
+                    &mut lights,
+                );
+                if let Some(probe) = shown.focus {
+                    let at = self.view.screen(probe);
+                    lights.push(crate::lighting::Light::Spot {
+                        at: vec2(at.x, at.y),
+                        radius: 380. * self.view.zoom,
+                        color: alpha(WHITE, 0.95),
+                    });
+                }
+                // While editing, the dark is lifted halfway so everything stays
+                // easy to place; the running preview shows it in full.
+                let [r, g, b, dark] = lighting;
+                let dark = if self.preview.running {
+                    dark
+                } else {
+                    dark * 0.5
+                };
+                crate::lighting::darken([r, g, b, dark], &lights, arena.intersect(canvas));
+            });
         }
-        if let Some(focus) = self.focus {
-            for (key, r, group) in self.doc.items() {
-                if group != focus {
-                    let a = self.hit_area(key, r);
-                    if overlaps(view, a) {
-                        draw_rectangle(a.x, a.y, a.w, a.h, alpha(bg_color(), 0.62));
+        profile::phase("editor marks", || {
+            if let Some(focus) = self.focus {
+                for (key, r, group) in self.doc.items() {
+                    if group != focus {
+                        let a = self.hit_area(key, r);
+                        if overlaps(view, a) {
+                            draw_rectangle(a.x, a.y, a.w, a.h, alpha(bg_color(), 0.62));
+                        }
                     }
                 }
             }
-        }
-        draw_rectangle_lines(arena.x, arena.y, arena.w, arena.h, 2., muted_color());
-        self.draw_links();
-        self.draw_trigger_tags(view, s);
-        if self.show_groups {
-            self.draw_group_badges(view, s);
-        }
-        self.draw_paths(s);
-        self.draw_selection(s);
-        self.draw_preview_marks(s);
-        self.draw_gesture(canvas);
+            draw_rectangle_lines(arena.x, arena.y, arena.w, arena.h, 2., muted_color());
+            self.draw_links();
+            let tags = self.draw_trigger_tags(view, s);
+            if self.show_groups {
+                self.draw_group_badges(view, s, &tags);
+            }
+            self.draw_paths(s);
+            self.draw_selection(s);
+            self.draw_preview_marks(s);
+            self.draw_gesture(canvas);
+        });
         drop(clip);
         self.draw_canvas_status(layout);
     }
@@ -1111,9 +1121,10 @@ impl Editor {
     /// Each trigger's tag under its badge, or above it when that spot is
     /// taken. A tag that fits neither is left out; the pointer shows it.
     /// Selected and hovered triggers place theirs first, so they always show.
-    fn draw_trigger_tags(&self, view: Rect, s: f32) {
+    /// Returns where the tags went.
+    fn draw_trigger_tags(&self, view: Rect, s: f32) -> Vec<Rect> {
         if self.view.zoom <= 0.12 {
-            return;
+            return Vec::new();
         }
         let map = &self.doc.map;
         let ghost = self.ghost_mask();
@@ -1173,6 +1184,7 @@ impl Editor {
             center_label(&tag, c.x, spot.y + size, size, brushes::LOGIC);
             placed.push(spot);
         }
+        placed
     }
     fn trigger_point(&self, index: usize) -> Vec2 {
         let trigger = &self.doc.map.triggers[index];
@@ -1259,28 +1271,77 @@ impl Editor {
             }
         }
     }
-    fn draw_group_badges(&self, view: Rect, s: f32) {
+    /// Each grouped object's group number at its corner. Where badges
+    /// would pile up, one of the same group stands for the rest and another
+    /// group's moves beside it, or is left out when that leaves its object;
+    /// the pointer still shows it. Badges keep off trigger `tags` too, but
+    /// selected and hovered objects go first and may cover them.
+    fn draw_group_badges(&self, view: Rect, s: f32, tags: &[Rect]) {
+        // Placed badges are found by the cells of this grid they touch.
+        const CELL: f32 = 48.;
         let size = 10. * s.max(0.8);
-        for (key, r, group) in self.doc.items() {
-            if group == 0 {
-                continue;
+        let first = |key: Key| self.selected(key) || self.hover == Some(key);
+        let mut wanted: Vec<(bool, Rect, u8)> = self
+            .doc
+            .items()
+            .filter(|&(_, _, group)| group != 0)
+            .filter_map(|(key, r, group)| {
+                let a = self.hit_area(key, r);
+                (overlaps(view, a) && a.w >= 14.).then_some((!first(key), a, group))
+            })
+            .collect();
+        // Stable, so the rest keep their order and the picture stays still.
+        wanted.sort_by_key(|&(later, _, _)| later);
+        let cells_of = |r: Rect| {
+            let (x0, x1) = (
+                (r.x / CELL).floor() as i32,
+                (r.right() / CELL).floor() as i32,
+            );
+            let (y0, y1) = (
+                (r.y / CELL).floor() as i32,
+                (r.bottom() / CELL).floor() as i32,
+            );
+            (x0..=x1).flat_map(move |x| (y0..=y1).map(move |y| (x, y)))
+        };
+        // Tags stand in as group 0, which no badge shares.
+        let mut placed: Vec<(Rect, u8)> = tags.iter().map(|&tag| (tag, 0)).collect();
+        let mut cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        for (index, &(tag, _)) in placed.iter().enumerate() {
+            for cell in cells_of(tag) {
+                cells.entry(cell).or_default().push(index);
             }
-            let a = self.hit_area(key, r);
-            if !overlaps(view, a) || a.w < 14. {
-                continue;
-            }
+        }
+        'badges: for (later, a, group) in wanted {
             let text = group.to_string();
             let width = label_width(&text, size) + 6.;
-            let x = a.x - 2.;
-            let y = a.y - size - 4.;
-            draw_rectangle(x, y, width, size + 4., alpha(VIOLET, 0.9));
+            let mut badge = Rect::new(a.x - 2., a.y - size - 4., width, size + 4.);
+            loop {
+                let met = cells_of(badge)
+                    .filter_map(|cell| cells.get(&cell))
+                    .flatten()
+                    .map(|&i| placed[i])
+                    .find(|&(other, owner)| other.overlaps(&badge) && (later || owner != 0));
+                match met {
+                    None => break,
+                    Some((_, other)) if other == group => continue 'badges,
+                    Some((other, _)) if other.right() + 2. + badge.w <= a.right() => {
+                        badge.x = other.right() + 2.;
+                    }
+                    Some(_) => continue 'badges,
+                }
+            }
+            draw_rectangle(badge.x, badge.y, badge.w, badge.h, alpha(VIOLET, 0.9));
             label(
                 &text,
-                x + 3.,
-                y + size,
+                badge.x + 3.,
+                badge.y + size,
                 size,
                 Color::new(0.1, 0.08, 0.14, 1.),
             );
+            for cell in cells_of(badge) {
+                cells.entry(cell).or_default().push(placed.len());
+            }
+            placed.push((badge, group));
         }
     }
     fn draw_selection(&self, s: f32) {
@@ -1762,7 +1823,14 @@ impl Editor {
             }
             _ => None,
         };
-        let width = 260. * s;
+        // Wide enough for its title, and for a description to wrap in.
+        let fits = label_width(&title, size) + 16. * s;
+        let width = if detail.is_some() {
+            fits.max(260. * s)
+        } else {
+            fits
+        }
+        .min(layout.canvas.w - 8.);
         let lines = detail
             .as_deref()
             .map(|text| wrapped_lines(text, width - 16. * s, size))
