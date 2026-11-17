@@ -319,7 +319,13 @@ function tankyard.hud(widget_id, widget, tank)
     optional("string", widget.enter, "hud", "enter"), optional("boolean", widget.pulse, "hud", "pulse"),
     optional("number", widget.segments, "hud", "segments"), choices, pin_x, pin_y, pin_tank,
     optional("boolean", widget.point, "hud", "point"), optional("string", widget.layout, "hud", "layout"),
-    optional("boolean", widget.glow, "hud", "glow"), pin_group)
+    optional("boolean", widget.glow, "hud", "glow"), pin_group,
+    optional("string", widget.shape, "hud", "shape"), optional("string", widget.border, "hud", "border"),
+    optional("string", widget.fill, "hud", "fill"), packed_color("hud", widget.fill_color, "fill_color"),
+    optional("string", widget.lettering, "hud", "lettering"), optional("boolean", widget.caps, "hud", "caps"),
+    packed_color("hud", widget.title_color, "title_color"),
+    optional("string", widget.bar_style, "hud", "bar_style"),
+    optional("string", widget.buttons, "hud", "buttons"))
 end
 
 -- Definitions (load phase only; ignored while a round is running) ------------

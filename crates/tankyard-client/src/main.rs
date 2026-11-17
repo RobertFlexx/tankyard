@@ -20,6 +20,7 @@ mod graphics;
 mod hardware;
 mod hosting;
 mod hud;
+mod hud_skin;
 mod hud_widgets;
 mod lighting;
 mod links;
@@ -37,6 +38,7 @@ mod practice_ui;
 mod presentation;
 mod profile;
 mod render;
+mod rifts;
 mod rules_ui;
 mod scenery;
 mod server_browser;
@@ -119,7 +121,7 @@ struct Cli {
     #[arg(long)]
     screenshot: Option<String>,
     /// Open a menu page instead of a game (for screenshots and checks).
-    #[arg(long, hide = true, value_parser = ["main", "mods", "tree", "credits", "settings", "party", "modes", "party-panel", "mods-review", "mods-files", "lobbies", "community", "graphics", "join", "editor"])]
+    #[arg(long, hide = true, value_parser = ["main", "mods", "tree", "credits", "settings", "party", "modes", "party-panel", "mods-review", "mods-files", "lobbies", "community", "graphics", "join", "editor", "host-map"])]
     page: Option<String>,
     #[arg(long = "mod")]
     mods: Vec<std::path::PathBuf>,
@@ -413,6 +415,7 @@ impl App {
                 "party" => Page::Party,
                 "modes" => Page::Modes,
                 "community" => Page::Host,
+                "host-map" => Page::HostMap,
                 "join" => Page::Join,
                 _ => Page::Main,
             };
@@ -594,13 +597,18 @@ impl App {
             Action::StartCommunity => {
                 let _ = self.settings.save();
                 let mods = self.ready_mods();
-                let result = hosting::settings(
-                    &self.settings.community_server,
-                    self.menu.config(),
-                    mods,
-                    self.menu.difficulty_name(),
-                )
-                .and_then(|settings| self.menu.dedicated.start(&settings));
+                let result = self
+                    .menu
+                    .host_setup(mods)
+                    .and_then(|(config, mods)| {
+                        hosting::settings(
+                            &self.settings.community_server,
+                            config,
+                            mods,
+                            self.menu.difficulty_name(),
+                        )
+                    })
+                    .and_then(|settings| self.menu.dedicated.start(&settings));
                 match result {
                     Ok(()) => self.menu.info = "Community server starting…".into(),
                     Err(error) => self.menu.error = error,
@@ -879,8 +887,9 @@ impl App {
     }
     fn host_session(&mut self) -> Result<Session, String> {
         let mods = self.ready_mods();
+        let (config, mods) = self.menu.host_setup(mods)?;
         Session::host(
-            self.menu.config(),
+            config,
             self.menu.bots,
             &self.settings.player_name,
             &self.menu.password,
@@ -1817,6 +1826,7 @@ impl App {
                 self.settings.reduced_motion,
             );
             self.effects.note_bosses(&snapshot.bosses);
+            self.effects.note_rifts(&snapshot.rifts, dt);
             let sounds = self.effects.ingest(
                 &session.events,
                 session.player,
@@ -1835,16 +1845,17 @@ impl App {
             }
             // Map sounds play where their trigger is, heard from the camera.
             let listener = self.view.center;
+            let volume = self.settings.master_volume * self.settings.effects_volume;
             for event in &sounds {
+                let falloff = map_sounds::falloff(event.pos.distance(listener));
                 if matches!(event.kind, tankyard_core::EventKind::MapSound)
-                    && let Some((sound, volume)) = tankyard_core::sound_of(event.value)
+                    && let Some((sound, gain)) = tankyard_core::sound_of(event.value)
                 {
-                    let gain = volume * map_sounds::falloff(event.pos.distance(listener));
-                    self.voice.map_sound(
-                        sound,
-                        gain,
-                        self.settings.master_volume * self.settings.effects_volume,
-                    );
+                    self.voice
+                        .cue(map_sounds::samples(sound), gain * falloff, volume);
+                } else if let Some((cue, gain)) = map_sounds::rift_cue(event) {
+                    self.voice
+                        .cue(map_sounds::rift_samples(cue), gain * falloff, volume);
                 }
             }
         }
@@ -2765,6 +2776,7 @@ async fn run(cli: Cli) {
     let mut native_resolution = native_resolution::NativeResolution::new(&initial_settings);
     ui::init_font();
     pocket_view::prepare();
+    rifts::prepare();
     // The splash hands over the live arena it revealed, which the password
     // prompt and then the menu carry on drawing.
     let mut arena = None;

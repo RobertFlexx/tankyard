@@ -262,6 +262,13 @@ pub struct Tank {
     /// Private, non-shooting doubles. Only the host advances their pursuit.
     #[serde(default)]
     pub pocket_echoes: Vec<PocketEcho>,
+    /// Rift shots left after activating a rift ability: 2 opens the entry
+    /// next, 1 the exit.
+    #[serde(default)]
+    pub rift_shots: u8,
+    /// Seconds left to fire `rift_shots`.
+    #[serde(default)]
+    pub rift_armed: f32,
     /// Set only after the server verifies the creator's signing key.
     #[serde(default)]
     pub game_creator: bool,
@@ -392,6 +399,8 @@ impl Clone for Tank {
             stasis: self.stasis,
             pocket: self.pocket,
             pocket_echoes: self.pocket_echoes.clone(),
+            rift_shots: self.rift_shots,
+            rift_armed: self.rift_armed,
             game_creator: self.game_creator,
             creator_boss: self.creator_boss,
             creator_attacks: self.creator_attacks,
@@ -447,6 +456,8 @@ impl Clone for Tank {
         self.stasis = source.stasis;
         self.pocket = source.pocket;
         self.pocket_echoes.clone_from(&source.pocket_echoes);
+        self.rift_shots = source.rift_shots;
+        self.rift_armed = source.rift_armed;
         self.game_creator = source.game_creator;
         self.creator_boss = source.creator_boss;
         self.creator_attacks = source.creator_attacks;
@@ -498,6 +509,43 @@ pub struct FrozenShot {
     pub anchor: EntityId,
     pub offset: V2,
     pub velocity: V2,
+}
+/// Which end of a linked pair a rift is: tanks and shots go in at the
+/// entry and come out at the exit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RiftEnd {
+    Entry,
+    Exit,
+}
+/// One open end of a rift pair.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Rift {
+    pub id: EntityId,
+    pub owner: EntityId,
+    pub team: u8,
+    pub end: RiftEnd,
+    pub pos: V2,
+    /// The direction its shot was flying when it opened.
+    pub angle: f32,
+    /// Seconds since it opened.
+    pub age: f32,
+    /// Seconds left open. Below zero it is collapsing, until
+    /// `-RIFT_CLOSING`, and carries nothing.
+    pub life: f32,
+    /// The other end of its pair once both are open; 0 before.
+    pub partner: EntityId,
+}
+/// The bolt a rift gun fires; it opens a rift where it stops.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RiftShot {
+    pub id: EntityId,
+    pub owner: EntityId,
+    pub team: u8,
+    pub end: RiftEnd,
+    pub pos: V2,
+    pub vel: V2,
+    /// Distance left before it opens where it is.
+    pub range: f32,
 }
 impl Projectile {
     /// Captured swarms use a drone body and remember the attacking owner.
@@ -813,6 +861,15 @@ pub enum EventKind {
     /// A Zoom view trigger reached tank `subject`; see [`crate::zoom_of`]
     /// for `value`.
     MapZoom,
+    /// Rift `subject` opened; `value` is 0 for an entry, 1 for an exit.
+    RiftOpen,
+    /// Rift `subject` finished collapsing; `value` as for `RiftOpen`.
+    RiftClose,
+    /// Something went through a rift pair owned by `subject`: `value` is
+    /// 0 for a tank, 1 for a shot. One event marks each end.
+    RiftTravel,
+    /// A rift shot found no room to open; `subject` is its owner.
+    RiftFizzle,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Elimination {
@@ -854,6 +911,11 @@ pub struct Snapshot {
     pub wall_revision: u32,
     /// Whether `walls` holds this revision's geometry in this snapshot.
     pub walls_included: bool,
+    /// Open and collapsing rifts, and rift shots in flight.
+    #[serde(default)]
+    pub rifts: Vec<Rift>,
+    #[serde(default)]
+    pub rift_shots: Vec<RiftShot>,
 }
 
 /// Strip a distant opponent down to what the leaderboard and minimap need.

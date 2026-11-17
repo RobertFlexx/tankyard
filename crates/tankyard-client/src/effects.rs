@@ -1,4 +1,4 @@
-use crate::ui::{AMBER, CYAN, RED, alpha};
+use crate::ui::{AMBER, CYAN, RED, alpha, mix};
 use macroquad::prelude::*;
 use std::collections::{HashMap, HashSet};
 use tankyard_content::ProjectileKind;
@@ -58,6 +58,14 @@ pub struct Popup {
     pub life: f32,
     pub color: Color,
 }
+/// The color of a rift event's end: 0 for an entry, 1 for an exit.
+fn rift_color(end: u32) -> Color {
+    if end == 0 {
+        crate::rifts::ENTRY
+    } else {
+        crate::rifts::EXIT
+    }
+}
 pub struct HullVisual {
     pub radius: f32,
     pub health: f32,
@@ -97,6 +105,8 @@ pub struct Effects {
     /// Bosses seen in recent snapshots, by ID, so a kill can be recognized
     /// after the boss itself is gone.
     bosses: HashMap<EntityId, &'static str>,
+    /// Rifts' ages and time left, run on between snapshots.
+    pub rift_clocks: crate::rifts::Clocks,
     last_tick: u64,
     random: u64,
 }
@@ -128,6 +138,7 @@ impl Effects {
             deaths: 0,
             boss_defeat: None,
             bosses: HashMap::new(),
+            rift_clocks: Default::default(),
             last_tick: 0,
             random: 7919,
         }
@@ -157,6 +168,10 @@ impl Effects {
         for boss in bosses {
             self.bosses.insert(boss.id, boss.kind.name());
         }
+    }
+    /// Run the rifts in this snapshot on by `dt`.
+    pub fn note_rifts(&mut self, rifts: &[tankyard_core::Rift], dt: f32) {
+        self.rift_clocks.note(rifts, dt);
     }
     /// Whether the boss banner at the top is showing.
     pub fn boss_banner(&self) -> bool {
@@ -229,6 +244,13 @@ impl Effects {
                 // Heard rather than seen.
                 EventKind::MapSound => (AMBER, 0, false),
                 EventKind::Launch => (Color::from_rgba(166, 204, 60, 255), 8, true),
+                EventKind::RiftOpen => (rift_color(event.value), 14, true),
+                EventKind::RiftClose => (mix(rift_color(event.value), WHITE, 0.3), 28, true),
+                EventKind::RiftTravel if event.value == 0 => {
+                    (mix(crate::rifts::ENTRY, WHITE, 0.45), 10, true)
+                }
+                EventKind::RiftTravel => (mix(crate::rifts::EXIT, WHITE, 0.3), 3, false),
+                EventKind::RiftFizzle => (Color::new(0.74, 0.74, 0.84, 1.), 8, true),
             };
             let count = (count as f32 * intensity) as usize;
             for _ in 0..count {
@@ -238,7 +260,12 @@ impl Effects {
                 let angle = self.rand() * std::f32::consts::TAU;
                 let spark = matches!(
                     event.kind,
-                    EventKind::BodyParry | EventKind::Parry | EventKind::StasisRelease
+                    EventKind::BodyParry
+                        | EventKind::Parry
+                        | EventKind::StasisRelease
+                        | EventKind::RiftOpen
+                        | EventKind::RiftClose
+                        | EventKind::RiftFizzle
                 );
                 let speed = if spark {
                     160. + self.rand() * 460.
@@ -317,6 +344,9 @@ impl Effects {
                     EventKind::Parry => Some("Parried".into()),
                     EventKind::BodyParry => Some("SMASHER COUNTERED".into()),
                     EventKind::StasisRelease => Some("RELEASE".into()),
+                    EventKind::RiftFizzle => {
+                        Some("No room for a rift there: your shot came back".into())
+                    }
                     _ => None,
                 };
                 if let Some(text) = text {

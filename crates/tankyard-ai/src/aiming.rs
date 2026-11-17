@@ -130,6 +130,9 @@ pub(super) fn use_ability(class: &ClassDef, tank: &Tank, brain: &Brain, distance
         Ability::Magnet => distance < 280. || brain.danger > 0.4,
         Ability::Stasis => brain.danger > 0.45 && distance < 650.,
         Ability::Pocket => health < 0.5 && !tank.carrying,
+        // Rifts need two placements planned around the map; bots fight
+        // with the gun alone.
+        Ability::Rift => false,
     }
 }
 

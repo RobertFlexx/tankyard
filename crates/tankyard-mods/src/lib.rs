@@ -578,8 +578,9 @@ pub const MAX_HUD_WIDGETS: usize = 16;
 /// Widgets a player receives from every pack together.
 pub const MAX_HUD_SENT: usize = 64;
 pub use tankyard_content::{
-    HUD_CHOICE, HUD_CHOICES, HUD_REACH, HUD_SEGMENTS, HUD_TEXT, HUD_TITLE, HudAlign, HudEnter,
-    HudIcon, HudLayout, HudPin, HudStyle, HudWidget, clip_text,
+    HUD_CHOICE, HUD_CHOICES, HUD_REACH, HUD_SEGMENTS, HUD_TEXT, HUD_TITLE, HudAlign, HudBar,
+    HudBorder, HudButtons, HudEnter, HudFill, HudIcon, HudLayout, HudLettering, HudPin, HudShape,
+    HudStyle, HudWidget, clip_text,
 };
 impl Effect {
     pub fn validate(&self, content: &Content) -> Result<(), String> {

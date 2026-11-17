@@ -14,6 +14,44 @@ pub fn samples(sound: MapSound) -> Arc<[f32]> {
         .clone()
 }
 
+/// The sounds rifts make.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RiftCue {
+    /// A rising, shimmering swell as a rift opens.
+    Open,
+    /// A rush and a falling chirp as something goes through.
+    Travel,
+    /// A soft pop as a rift finishes collapsing.
+    Pop,
+    /// A dull fizz when a rift shot finds no room.
+    Fizzle,
+}
+impl RiftCue {
+    const ALL: [Self; 4] = [Self::Open, Self::Travel, Self::Pop, Self::Fizzle];
+}
+
+/// The cue and its loudness for a rift event, if it makes one.
+pub fn rift_cue(event: &tankyard_core::GameEvent) -> Option<(RiftCue, f32)> {
+    use tankyard_core::EventKind;
+    match event.kind {
+        EventKind::RiftOpen => Some((RiftCue::Open, 0.55)),
+        // Rounds going through stay quiet; tanks are heard at both ends.
+        EventKind::RiftTravel if event.value == 0 => Some((RiftCue::Travel, 0.5)),
+        EventKind::RiftClose => Some((RiftCue::Pop, 0.6)),
+        EventKind::RiftFizzle => Some((RiftCue::Fizzle, 0.45)),
+        _ => None,
+    }
+}
+
+/// The samples for `cue`, made once.
+pub fn rift_samples(cue: RiftCue) -> Arc<[f32]> {
+    static BANK: [OnceLock<Arc<[f32]>>; RiftCue::ALL.len()] =
+        [const { OnceLock::new() }; RiftCue::ALL.len()];
+    BANK[cue as usize]
+        .get_or_init(|| normalised(rift_synth(cue)))
+        .clone()
+}
+
 /// Prepare fixed-size clips without holding up the first map trigger.
 pub fn prepare() {
     static STARTED: OnceLock<()> = OnceLock::new();
@@ -23,6 +61,9 @@ pub fn prepare() {
             .spawn(|| {
                 for sound in MapSound::ALL {
                     let _ = samples(sound);
+                }
+                for cue in RiftCue::ALL {
+                    let _ = rift_samples(cue);
                 }
             });
     }
@@ -177,9 +218,80 @@ fn synth(sound: MapSound) -> Vec<f32> {
         .collect()
 }
 
+fn rift_synth(cue: RiftCue) -> Vec<f32> {
+    use std::f32::consts::TAU;
+    let seconds = match cue {
+        RiftCue::Open => 0.9,
+        RiftCue::Travel => 0.5,
+        RiftCue::Pop => 0.4,
+        RiftCue::Fizzle => 0.35,
+    };
+    let count = (seconds * RATE) as usize;
+    let mut noise = Noise(0x9e37_79b9);
+    let (mut low, mut band, mut phase, mut shimmer) = (0f32, 0f32, 0f32, 0f32);
+    (0..count)
+        .map(|i| {
+            let t = i as f32 / RATE;
+            let tail = ((seconds - t) / 0.02).min(1.);
+            let value = match cue {
+                RiftCue::Open => {
+                    // A swell gliding up an octave, with a fifth above
+                    // shimmering in and out, over a breath of air.
+                    let pitch = 196. * 2f32.powf((t / 0.7).min(1.));
+                    phase = (phase + TAU * pitch / RATE) % TAU;
+                    shimmer =
+                        (shimmer + TAU * pitch * 1.5 * (1. + 0.004 * (t * 37.).sin()) / RATE) % TAU;
+                    let swell = (t / 0.25).min(1.) * ((seconds - t) / 0.5).clamp(0., 1.);
+                    low += (noise.next() - low) * 0.06;
+                    (phase.sin() * 0.6 + shimmer.sin() * 0.3 * (t * 9.).sin().abs() + low * 0.8)
+                        * swell
+                }
+                RiftCue::Travel => {
+                    // Air rushing through a filter that opens and closes,
+                    // with a chirp falling away beneath it.
+                    let shape = (t / seconds * std::f32::consts::PI).sin();
+                    low += (noise.next() - low) * (0.05 + 0.3 * shape);
+                    band += (low - band) * 0.1;
+                    let pitch = 1400. * (-t / 0.12).exp() + 260.;
+                    phase = (phase + TAU * pitch / RATE) % TAU;
+                    (low - band) * shape * 1.6 + phase.sin() * strike(t, 0.004, 0.14) * 0.5
+                }
+                RiftCue::Pop => {
+                    // A bubble bursting: a pitch dropping fast, a click, and
+                    // a few high glints after it.
+                    let pitch = 90. + 900. * (-t / 0.035).exp();
+                    phase = (phase + TAU * pitch / RATE) % TAU;
+                    let glints =
+                        bell(t - 0.05, 2093., 0.12) * 0.25 + bell(t - 0.11, 2637., 0.1) * 0.18;
+                    phase.sin() * strike(t, 0.002, 0.07)
+                        + noise.next() * strike(t, 0.0005, 0.006) * 0.6
+                        + glints
+                }
+                RiftCue::Fizzle => {
+                    low += (noise.next() - low) * 0.2;
+                    let pitch = 180. - 90. * (t / seconds);
+                    phase = (phase + TAU * pitch / RATE) % TAU;
+                    (low * 0.8 + phase.sin() * 0.5) * strike(t, 0.01, 0.12)
+                }
+            };
+            value * tail
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rift_cues_are_short_finite_and_end_in_silence() {
+        for cue in RiftCue::ALL {
+            let samples = rift_samples(cue);
+            assert!(samples.len() > 1000 && samples.len() < RATE as usize);
+            assert!(samples.iter().all(|s| s.is_finite() && s.abs() <= 0.81));
+            assert!(samples[samples.len() - 1].abs() < 0.01);
+        }
+    }
 
     #[test]
     fn alarm_pitch_changes_do_not_jump_the_waveform() {

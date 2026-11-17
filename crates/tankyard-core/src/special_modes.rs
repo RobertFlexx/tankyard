@@ -21,6 +21,8 @@ impl World {
                     format!("Outbreak in {}s", self.mode_timer.ceil() as u32);
                 if self.mode_timer <= 0. {
                     self.projectiles.clear();
+                    self.rifts.clear();
+                    self.rift_shots.clear();
                     for tank in &mut self.tanks {
                         tank.team = 1;
                         tank.alive = true;

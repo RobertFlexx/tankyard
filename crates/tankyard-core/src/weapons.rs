@@ -161,6 +161,7 @@ impl World {
     pub(crate) fn fire_weapons(&mut self) {
         let mut shots = Vec::new();
         let mut abilities = Vec::new();
+        let mut rifts = Vec::new();
         let mut events = Vec::new();
         for index in 0..self.tanks.len() {
             let tank = &self.tanks[index];
@@ -229,6 +230,12 @@ impl World {
                 if class.ability == Ability::Pocket {
                     continue;
                 }
+            }
+            if class.ability == Ability::Rift && tank.rift_shots > 0 {
+                if crate::rifts::pull_trigger(tank, class, DT) {
+                    rifts.push(index);
+                }
+                continue;
             }
             if tank.input.fire {
                 tank.protection = 0.;
@@ -411,6 +418,9 @@ impl World {
         for (pos, id, team, value) in events {
             self.event(EventKind::Shot, pos, id, value, team);
         }
+        for index in rifts {
+            self.fire_rift(index);
+        }
         for (index, ability) in abilities {
             self.activate_ability(index, ability);
         }
@@ -534,6 +544,8 @@ impl World {
                     }
                 }
             }
+            // A new activation closes the last pair; the gun is armed again.
+            Ability::Rift => self.collapse_rifts(id),
             Ability::None
             | Ability::Dash
             | Ability::Shield

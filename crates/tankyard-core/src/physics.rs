@@ -422,6 +422,7 @@ pub fn predict_tank(
     tank.boost = (tank.boost - dt).max(0.0);
     tank.knockback = (tank.knockback - dt).max(0.);
     tank.stasis = (tank.stasis - dt).max(0.);
+    crate::rifts::tick_armed(tank, dt);
     let was_pocket = tank.pocket > 0.;
     crate::pocket::advance(tank, dt, false);
     if was_pocket {
@@ -483,6 +484,14 @@ pub fn predict_tank(
             .collect();
     }
     tank.barrel_shots.resize(class.barrels.len(), 0);
+    if class.ability == Ability::Rift && tank.rift_shots > 0 {
+        crate::rifts::pull_trigger(tank, class, dt);
+        if activate {
+            apply_personal_ability(tank, class.ability, config, walls);
+        }
+        constrain_tank(tank, config, walls);
+        return;
+    }
     let previous_charge = tank.charge;
     if tank.input.fire {
         tank.charge = (tank.charge + dt).min(1.5);
@@ -573,6 +582,10 @@ pub(crate) fn apply_personal_ability(
         }
         Ability::Shield => tank.shield = 3.5,
         Ability::Stasis => tank.stasis = crate::STASIS_SECONDS,
+        Ability::Rift => {
+            tank.rift_shots = 2;
+            tank.rift_armed = crate::RIFT_ARMED;
+        }
         Ability::Pocket => {
             tank.pocket = crate::POCKET_SECONDS;
             tank.pocket_echoes.clear();

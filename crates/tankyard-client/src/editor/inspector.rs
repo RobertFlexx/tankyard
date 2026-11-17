@@ -2635,7 +2635,41 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
     f.text("Text", &mut w.text, HUD_TEXT);
     f.note("{1} to {8} show counters, {left} the seconds before it goes, {time} the round's clock, {name} and {score} the player's own, and {cause} the tank that set it off.");
     f.heading("Look");
+    f.note("A look restyles the widget in one click: colors, outline, border, fill, lettering, bar and buttons. Change any of them after.");
+    for row in HudLook::ALL.chunks(4) {
+        let names: Vec<&str> = row.iter().map(|look| look.name()).collect();
+        if let Some(index) = f.buttons(&names, true) {
+            row[index].apply(w);
+        }
+    }
     f.pick("Style", &mut w.style, &HudStyle::ALL, HudStyle::name, 3);
+    if matches!(w.style, HudStyle::Panel | HudStyle::Card) {
+        f.pick("Shape", &mut w.shape, &HudShape::ALL, HudShape::name, 3);
+    }
+    if w.style != HudStyle::Plain {
+        f.pick("Border", &mut w.border, &HudBorder::ALL, HudBorder::name, 3);
+        f.pick("Fill", &mut w.fill, &HudFill::ALL, HudFill::name, 3);
+        if matches!(
+            w.fill,
+            HudFill::Gradient | HudFill::Stripes | HudFill::Grid | HudFill::Dots
+        ) {
+            let mut own = w.fill_color.is_some();
+            if f.toggle("Own fill color", &mut own) {
+                w.fill_color = own.then_some(w.fill_color.unwrap_or([90, 60, 160]));
+            }
+            if let Some(rgb) = &mut w.fill_color {
+                f.color(rgb);
+            }
+        }
+    }
+    f.pick(
+        "Lettering",
+        &mut w.lettering,
+        &HudLettering::ALL,
+        HudLettering::name,
+        3,
+    );
+    f.toggle("Capital letters", &mut w.caps);
     f.cycle("Icon", &mut w.icon, &HudIcon::ALL, |icon| {
         icon.name().to_owned()
     });
@@ -2647,14 +2681,21 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
             w.opacity = (opacity / 100.).clamp(0., 1.);
         }
     }
-    let mut colors = [w.color, w.panel, w.accent];
-    let defaults = [[240, 244, 248], [24, 30, 40], [0, 178, 225]];
-    for ((title, color), fallback) in ["Own text color", "Own panel color", "Own accent color"]
-        .into_iter()
-        .zip(&mut colors)
-        .zip(defaults)
+    let mut colors = [w.color, w.panel, w.accent, w.title_color];
+    let defaults = [[240, 244, 248], [24, 30, 40], [0, 178, 225], [255, 214, 90]];
+    for ((title, color), fallback) in [
+        "Own text color",
+        "Own panel color",
+        "Own accent color",
+        "Own title color",
+    ]
+    .into_iter()
+    .zip(&mut colors)
+    .zip(defaults)
     {
-        if title == "Own panel color" && w.style == HudStyle::Plain {
+        if (title == "Own panel color" && w.style == HudStyle::Plain)
+            || (title == "Own title color" && w.title.trim().is_empty())
+        {
             continue;
         }
         let mut own = color.is_some();
@@ -2665,7 +2706,7 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
             f.color(rgb);
         }
     }
-    [w.color, w.panel, w.accent] = colors;
+    [w.color, w.panel, w.accent, w.title_color] = colors;
     f.note("Without its own colors, a widget follows the player's theme. The accent colors the border, stripe, icon, bar and choices.");
     f.heading("Place");
     f.pick("Where", &mut ui.pin, &UiPin::ALL, UiPin::name, 1);
@@ -2791,6 +2832,7 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
         if f.number("Bar width (% of screen)", &mut width, [2., 100.], 1.) {
             w.width = (width / 100.).clamp(0.02, 1.);
         }
+        f.pick("Bar look", &mut w.bar_style, &HudBar::ALL, HudBar::name, 3);
         let mut own = w.bar_color.is_some();
         if f.toggle("Own bar color", &mut own) {
             w.bar_color = own.then_some(w.bar_color.unwrap_or([255, 176, 0]));
@@ -2845,6 +2887,13 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
                 3,
             );
         }
+        f.pick(
+            "Buttons",
+            &mut ui.widget.buttons,
+            &HudButtons::ALL,
+            HudButtons::name,
+            4,
+        );
         f.toggle("Stay open after a pick", &mut ui.keep);
         // Keep choices pickable: never leave one blank.
         for (index, choice) in ui.widget.choices.iter_mut().enumerate() {

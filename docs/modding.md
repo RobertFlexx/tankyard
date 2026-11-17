@@ -461,6 +461,15 @@ end)
 | (1.5) `glow` | `false` | a soft glow in the accent color around the widget; plain text gets a halo instead of its shadow |
 | (1.5) `pin` | none | floats the widget over the arena instead of placing it at `x` and `y`: a tank ID floats it just above that tank and follows it, and `{ x, y }` (or `{ x = ..., y = ... }`) centers it over that spot in world units. It moves with the view and draws under the HUD. A widget over a tank hides while the tank is down or hidden from the viewer |
 | (1.5) `point` | `false` | for a pinned widget: while what it floats over is out of view, it waits near the edge of the screen, clear of the HUD, with an arrow toward it, instead of leaving the screen |
+| (1.6) `shape` | `"rounded"` | the outline of a panel or card: `"rounded"`, `"square"`, `"chamfer"` (cut corners), `"slant"` (leaning sides), `"tag"` (a point on the right) or `"ribbon"` (notched ends). Pills stay round and banners straight |
+| (1.6) `border` | `"line"` | `"line"`, `"none"`, `"thick"`, `"double"`, `"dashed"` or `"corners"` (brackets at the corners) |
+| (1.6) `fill` | `"solid"` | `"solid"`, `"gradient"` (the panel color shading into `fill_color` toward the bottom), `"glass"` (see-through with a sheen), or a pattern in `fill_color` over the panel: `"stripes"`, `"grid"` or `"dots"` |
+| (1.6) `fill_color` | a shade of the panel | the second color of a gradient or pattern |
+| (1.6) `lettering` | `"auto"` | how the words stand out: `"auto"` (a shadow for plain text, a halo with `glow`), `"clean"`, `"shadow"`, `"block"` (a painted block shadow in the accent), `"outline"` or `"glow"` |
+| (1.6) `caps` | `false` | shows the title, text and choices in capital letters |
+| (1.6) `title_color` | a blend of accent and text | the title's color |
+| (1.6) `bar_style` | `"capsule"` | `"capsule"`, `"flat"`, `"thin"`, `"striped"` (moving stripes), `"glow"` or `"pips"` (a row of dots: `segments` of them, or 10) |
+| (1.6) `buttons` | `"capsule"` | how choices look: `"capsule"`, `"box"`, `"outline"` or `"underline"` |
 
 ```lua
 tankyard.on("spawn", function(event)
@@ -475,6 +484,16 @@ tankyard.on("spawn", function(event)
     pin = event.actor,
   })
 end)
+-- A warning in its own look: a slanted, striped panel with outlined
+-- capitals and a striped bar.
+tankyard.on("round_start", function()
+  tankyard.hud("storm", {
+    title = "Storm", text = "Shelter in the bunkers", style = "panel", y = 0.12,
+    shape = "slant", fill = "stripes", border = "thick", lettering = "outline", caps = true,
+    panel = "#181818", accent = "#ffc800", fill_color = "#ffc800", progress = 1,
+    bar_style = "striped",
+  })
+end)
 tankyard.on("choice", function(event)
   if event.name ~= "shop" then return end
   if event.value == 1 then tankyard.heal(event.actor, 200) end
@@ -486,7 +505,7 @@ A menu shown to one player closes when they pick; one shown to everyone stays un
 
 Widget IDs use lowercase letters, digits and `_`. A pack may show 16 widgets to everyone and 16 to each player, and a player receives at most 64 from all packs. Bots have no screen, so widgets for bots are dropped. Widgets end with the round, with their player, or when the pack is disabled.
 
-The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. A pinned widget follows its tank or group on each player's screen by itself, so it needs no updates as the tank moves. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, styles, icons and choices in 1.4, and pins, choice layouts and glow in 1.5. Tank Yard 1.5.0, 1.5.1 and 1.5.2 use protocol 31; players and servers must use matching protocols.
+The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. A pinned widget follows its tank or group on each player's screen by itself, so it needs no updates as the tank moves. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, styles, icons and choices in 1.4, pins, choice layouts and glow in 1.5, and shapes, borders, fills, lettering, title colors, bar looks and button looks in 1.6. Tank Yard 1.6.0 uses protocol 32; players and servers must use matching protocols.
 
 A coordinate pin can follow a moving map group:
 

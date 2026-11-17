@@ -19,13 +19,13 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 31 carries widgets pinned over the arena or a tank, choice
-/// layouts and glow, which version 30 can't hold, so clients and servers
-/// update together. Tank Yard 1.5.0 and 1.5.1 use it; 1.4.0 used version
-/// 30, 1.3.0 version 29, and 1.1.0 and 1.2.0 version 28.
-pub const PROTOCOL_VERSION: u32 = 31;
+/// Version 32 carries rifts, rift shots and a tank's armed rift gun, which
+/// version 31 can't hold, so clients and servers update together. Tank Yard
+/// 1.6.0 uses it; 1.5.0 to 1.5.2 used version 31, 1.4.0 version 30, 1.3.0
+/// version 29, and 1.1.0 and 1.2.0 version 28.
+pub const PROTOCOL_VERSION: u32 = 32;
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 31;
+pub const MIN_PROTOCOL_VERSION: u32 = 32;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
 pub const SERVER_OUTDATED: &str =
     "This server runs an older Tank Yard. Its host needs to update it.";
@@ -600,6 +600,8 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && (0.0..=1.).contains(&t.knockback)
                 && (0.0..=tankyard_core::STASIS_SECONDS).contains(&t.stasis)
                 && (0.0..=tankyard_core::POCKET_SECONDS).contains(&t.pocket)
+                && t.rift_shots <= 2
+                && (0.0..=tankyard_core::RIFT_ARMED).contains(&t.rift_armed)
                 && t.pocket_echoes.len() <= tankyard_core::POCKET_ECHO_LIMIT
                 && (t.pocket > 0. || t.pocket_echoes.is_empty())
                 && t.pocket_echoes.iter().all(|echo| {
@@ -688,6 +690,19 @@ fn snapshot_valid(s: &Snapshot) -> bool {
         && s.match_state.tweens.iter().all(|t| t.valid())
         && s.match_state.bodies.len() <= usize::from(tankyard_content::MAP_GROUPS)
         && s.match_state.bodies.iter().all(|b| b.valid())
+        && s.rifts.len() <= tankyard_core::MAX_RIFTS
+        && s.rifts.iter().all(|r| {
+            vector(r.pos)
+                && scalar(r.angle)
+                && (0.0..=1_000_000.).contains(&r.age)
+                && (-tankyard_core::RIFT_CLOSING..=tankyard_core::RIFT_SECONDS).contains(&r.life)
+        })
+        && s.rift_shots.len() <= 512
+        && s.rift_shots.iter().all(|shot| {
+            vector(shot.pos)
+                && vector(shot.vel)
+                && (0.0..=tankyard_core::RIFT_RANGE).contains(&shot.range)
+        })
         && s.objectives.iter().all(|o| {
             vector(o.pos)
                 && vector(o.home)

@@ -1147,6 +1147,45 @@ fn hud(args: &[Value]) -> mlua::Result<Effect> {
                 tankyard_mods::HudLayout::id,
             )?,
             glow: matches!(arg(26), Some(Value::Boolean(true))),
+            shape: named(
+                arg(28),
+                "shape",
+                &tankyard_mods::HudShape::ALL,
+                tankyard_mods::HudShape::id,
+            )?,
+            border: named(
+                arg(29),
+                "border",
+                &tankyard_mods::HudBorder::ALL,
+                tankyard_mods::HudBorder::id,
+            )?,
+            fill: named(
+                arg(30),
+                "fill",
+                &tankyard_mods::HudFill::ALL,
+                tankyard_mods::HudFill::id,
+            )?,
+            fill_color: color(31)?,
+            lettering: named(
+                arg(32),
+                "lettering",
+                &tankyard_mods::HudLettering::ALL,
+                tankyard_mods::HudLettering::id,
+            )?,
+            caps: matches!(arg(33), Some(Value::Boolean(true))),
+            title_color: color(34)?,
+            bar_style: named(
+                arg(35),
+                "bar_style",
+                &tankyard_mods::HudBar::ALL,
+                tankyard_mods::HudBar::id,
+            )?,
+            buttons: named(
+                arg(36),
+                "buttons",
+                &tankyard_mods::HudButtons::ALL,
+                tankyard_mods::HudButtons::id,
+            )?,
         }),
     })
 }

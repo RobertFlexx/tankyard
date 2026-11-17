@@ -2,8 +2,9 @@
 //! bars and panels with titles, icons and choices to pick, on the screen
 //! or floating over a spot in the arena or a tank. The editor's preview
 //! draws them with the same code, into a smaller frame.
-use crate::ui::{self, alpha, fitted_label, label, label_width, mix};
+use crate::ui::{self, alpha, fitted_label, label_width, mix};
 // Page-space shapes, so widgets scroll with an editor page like its text.
+use crate::hud_skin;
 use crate::ui::{
     ui_circle as draw_circle, ui_circle_lines as draw_circle_lines, ui_line as draw_line,
     ui_rectangle as draw_rectangle, ui_triangle as draw_triangle,
@@ -11,7 +12,10 @@ use crate::ui::{
 use macroquad::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use tankyard_mods::{HudAlign, HudEnter, HudIcon, HudLayout, HudPin, HudStyle, HudWidget};
+use tankyard_mods::{
+    HudAlign, HudBar, HudBorder, HudEnter, HudFill, HudIcon, HudLayout, HudPin, HudShape, HudStyle,
+    HudWidget,
+};
 
 /// Seconds an entrance takes.
 const ENTER_SECONDS: f64 = 0.32;
@@ -209,7 +213,16 @@ fn layout_at(
     };
     let gap = size * 0.4;
     let inner_room = (room - pad * 2.).max(1.);
-    let line_text = fitted_label(&widget.text, size, inner_room - icon_size - gap).into_owned();
+    let caps = |words: &str| {
+        if widget.caps {
+            words.to_uppercase()
+        } else {
+            words.to_owned()
+        }
+    };
+    let (shown_text, shown_title) = (caps(&widget.text), caps(&widget.title));
+    let shown_choices: Vec<String> = widget.choices.iter().map(|choice| caps(choice)).collect();
+    let line_text = fitted_label(&shown_text, size, inner_room - icon_size - gap).into_owned();
     let text_width = if line_text.is_empty() {
         0.
     } else {
@@ -221,7 +234,7 @@ fn layout_at(
         } else {
             0.
         };
-    let title_text = fitted_label(&widget.title, title_size, inner_room).into_owned();
+    let title_text = fitted_label(&shown_title, title_size, inner_room).into_owned();
     let title_width = if title_text.is_empty() {
         0.
     } else {
@@ -233,8 +246,7 @@ fn layout_at(
     let choice_size = (size * 0.8).max(10. * scale);
     let choice_pad = choice_size * 0.9;
     let fit = |room: f32| -> Vec<String> {
-        widget
-            .choices
+        shown_choices
             .iter()
             .map(|choice| fitted_label(choice, choice_size, room - choice_pad * 2.).into_owned())
             .collect()
@@ -286,7 +298,11 @@ fn layout_at(
         height += size * 1.05;
         at
     });
-    let bar_height = (size * 0.45).max(7. * scale);
+    let bar_height = match widget.bar_style {
+        HudBar::Thin => (size * 0.16).max(3. * scale),
+        HudBar::Pips => (size * 0.55).max(8. * scale),
+        _ => (size * 0.45).max(7. * scale),
+    };
     let bar_at = widget.progress.map(|_| {
         let at = height + if height > 0. { size * 0.2 } else { 0. };
         height = at + bar_height;
@@ -311,12 +327,18 @@ fn layout_at(
     } else {
         0.
     };
+    let full_height = height + pad * 2.;
+    // Points, notches and leaning sides need room clear of the words.
+    let (room_left, room_right) = if boxed && !banner && !pill {
+        crate::hud_skin::shape_room(widget.shape, full_height)
+    } else {
+        (0., 0.)
+    };
     let width = if banner {
         screen.w
     } else {
-        content_width + side * 2. + stripe
+        content_width + side * 2. + stripe + room_left + room_right
     };
-    let full_height = height + pad * 2.;
     let anchor = pinned.map_or(screen.x + widget.x * screen.w, |pinned| pinned.at.x);
     // Screen widgets stay on screen. A pinned widget moves with the arena;
     // one that points the way stays in the middle of the screen, clear of
@@ -381,7 +403,7 @@ fn layout_at(
             (screen.x + screen.w - pad - content_width).max(screen.x),
         )
     } else {
-        left + stripe + side
+        left + stripe + side + room_left
     };
     let y0 = top + pad;
     let line_left = |line: f32| match (boxed && !banner, widget.align) {
@@ -967,6 +989,18 @@ fn paint(
     let panel = rgb(widget.panel, ui::surface_color());
     let frame = l.frame;
     let banner = widget.style == HudStyle::Banner && pinned.is_none();
+    // A pill is always a capsule; the other panels take the chosen shape.
+    let shape = if widget.style == HudStyle::Pill {
+        HudShape::Rounded
+    } else {
+        widget.shape
+    };
+    let ink = mix(panel, BLACK, 0.75);
+    let drift = if ui::reduced_motion() {
+        0.
+    } else {
+        (time * 18.) as f32
+    };
     if widget.glow && widget.style != HudStyle::Plain {
         // Rings that widen and fade, so the glow is soft at its edge.
         let strength = 0.075 * (1. + pulse * 0.8);
@@ -978,115 +1012,172 @@ fn paint(
                 frame.w + spread * 2.,
                 frame.h + spread * 2.,
             );
-            rounded(halo, l.corner + spread, fade(accent, strength));
+            let glow_shape = if banner { HudShape::Square } else { shape };
+            hud_skin::fill(
+                &hud_skin::outline(halo, glow_shape, l.corner + spread).points,
+                fade(accent, strength),
+                fade(accent, strength),
+            );
         }
     }
-    match widget.style {
-        HudStyle::Plain => {}
-        HudStyle::Banner if banner => {
-            draw_rectangle(
-                frame.x,
-                frame.y,
-                frame.w,
-                frame.h,
-                fade(panel, widget.opacity),
-            );
-            let edge = (2. * scale).max(1.);
-            for y in [frame.y, frame.y + frame.h - edge] {
-                draw_rectangle(frame.x, y, frame.w, edge, fade(accent, 0.75 + pulse * 0.25));
+    let edge = (1.5 * scale).max(1.) * (1. + pulse * 0.6);
+    let edge_color = fade(
+        accent,
+        if widget.border == HudBorder::Thick {
+            0.8 + pulse * 0.2
+        } else {
+            0.45 + pulse * 0.45
+        },
+    );
+    if widget.style != HudStyle::Plain {
+        let body_shape = if banner { HudShape::Square } else { shape };
+        let body = hud_skin::outline(frame, body_shape, l.corner);
+        if !banner {
+            let mut shadow = body.points.clone();
+            for point in &mut shadow {
+                point.y += 3. * scale;
             }
-        }
-        _ => {
-            let shadow = Rect::new(frame.x, frame.y + 3. * scale, frame.w, frame.h);
-            rounded(
-                shadow,
-                l.corner,
+            hud_skin::fill(
+                &shadow,
+                fade(BLACK, 0.22 * widget.opacity.max(0.3)),
                 fade(BLACK, 0.22 * widget.opacity.max(0.3)),
             );
-            rounded(frame, l.corner, fade(panel, widget.opacity));
-            if widget.style == HudStyle::Card {
-                let stripe = Rect::new(frame.x, frame.y, 5. * scale * grow, frame.h);
-                rounded(stripe, l.corner.min(stripe.w * 0.5), fade(accent, 1.));
-            }
-            rounded_lines(
-                frame,
-                l.corner,
-                (1.5 * scale).max(1.) * (1. + pulse * 0.6),
-                fade(accent, 0.45 + pulse * 0.45),
-            );
         }
-    }
-    let shadowed = |value: &str, at: Vec2, size: f32, color: Color| {
-        if widget.style == HudStyle::Plain && widget.glow {
-            // Plain text glows with a halo of its accent instead.
-            let reach = (size * 0.08).max(1.5);
-            let halo = fade(accent, 0.2 * (1. + pulse * 0.6));
-            for k in 0..8 {
-                let a = k as f32 * std::f32::consts::FRAC_PI_4;
-                label(
-                    value,
-                    at.x + a.cos() * reach,
-                    at.y + a.sin() * reach,
-                    size,
-                    halo,
+        let second = rgb(
+            widget.fill_color,
+            match widget.fill {
+                HudFill::Gradient => mix(panel, BLACK, 0.45),
+                _ => mix(panel, accent, 0.3),
+            },
+        );
+        match widget.fill {
+            HudFill::Gradient => hud_skin::fill(
+                &body.points,
+                fade(panel, widget.opacity),
+                fade(second, widget.opacity),
+            ),
+            HudFill::Glass => {
+                hud_skin::fill(
+                    &body.points,
+                    fade(panel, widget.opacity * 0.5),
+                    fade(panel, widget.opacity * 0.72),
+                );
+                let sheen = [
+                    vec2(frame.x, frame.y),
+                    vec2(frame.right(), frame.y),
+                    vec2(frame.right(), frame.y + frame.h * 0.45),
+                    vec2(frame.x, frame.y + frame.h * 0.45),
+                ];
+                hud_skin::fill(
+                    &hud_skin::clip(&sheen, &body.core),
+                    fade(WHITE, 0.16),
+                    fade(WHITE, 0.02),
                 );
             }
-        } else if widget.style == HudStyle::Plain && !crate::accessibility::contrast() {
-            let off = (size * 0.06).max(1.);
-            label(value, at.x + off, at.y + off, size, fade(BLACK, 0.55));
+            HudFill::Solid | HudFill::Stripes | HudFill::Grid | HudFill::Dots => {
+                hud_skin::fill(
+                    &body.points,
+                    fade(panel, widget.opacity),
+                    fade(panel, widget.opacity),
+                );
+                hud_skin::pattern(
+                    widget.fill,
+                    &body.core,
+                    frame,
+                    fade(second, 0.4 * widget.opacity.max(0.4)),
+                    scale,
+                    if widget.fill == HudFill::Stripes {
+                        drift * 0.3
+                    } else {
+                        0.
+                    },
+                );
+            }
         }
-        label(value, at.x, at.y, size, fade(color, 1.));
-    };
+        if widget.style == HudStyle::Card {
+            for piece in hud_skin::side_band(frame, shape, l.corner, 5. * scale * grow) {
+                hud_skin::fill(&piece, fade(accent, 1.), fade(accent, 1.));
+            }
+        }
+        if banner {
+            // A banner's edges run along its top and bottom.
+            let line = match widget.border {
+                HudBorder::None => 0.,
+                HudBorder::Thick => edge * 2.4,
+                _ => edge * 1.3,
+            };
+            if line > 0. {
+                for y in [frame.y, frame.y + frame.h - line] {
+                    if widget.border == HudBorder::Dashed {
+                        let mut x = frame.x;
+                        while x < frame.right() {
+                            draw_rectangle(
+                                x,
+                                y,
+                                (line * 5.).min(frame.right() - x),
+                                line,
+                                edge_color,
+                            );
+                            x += line * 8.;
+                        }
+                    } else {
+                        draw_rectangle(frame.x, y, frame.w, line, edge_color);
+                    }
+                }
+                if widget.border == HudBorder::Double {
+                    let gap = line * 2.5;
+                    for y in [frame.y + gap, frame.y + frame.h - line - gap] {
+                        draw_rectangle(frame.x, y, frame.w, line * 0.7, fade(accent, 0.4));
+                    }
+                }
+            }
+        } else {
+            hud_skin::border(frame, shape, l.corner, widget.border, edge, edge_color);
+        }
+    }
+    let lettering = hud_skin::settle(
+        widget.lettering,
+        widget.style == HudStyle::Plain,
+        widget.glow,
+        crate::accessibility::contrast(),
+    );
+    let glow_accent = fade(accent, 1. + pulse * 0.6);
     if let Some((at, size)) = l.title {
-        shadowed(&l.words[0], at, size, mix(accent, text_color, 0.35));
+        hud_skin::words(
+            lettering,
+            &l.words[0],
+            at,
+            size,
+            fade(rgb(widget.title_color, mix(accent, text_color, 0.35)), 1.),
+            glow_accent,
+            fade(ink, 1.),
+        );
     }
     if let Some((at, size)) = l.icon {
         icon(widget.icon, at, size, fade(accent, 1.));
     }
     if let Some(at) = l.text {
-        shadowed(&l.words[1], at, l.size, text_color);
+        hud_skin::words(
+            lettering,
+            &l.words[1],
+            at,
+            l.size,
+            fade(text_color, 1.),
+            glow_accent,
+            fade(ink, 1.),
+        );
     }
     if let Some(bar) = l.bar {
-        let fill = rgb(widget.bar_color, accent);
-        if widget.segments > 1 {
-            let n = usize::from(widget.segments);
-            let gap = (bar.h * 0.35).max(2. * scale);
-            let piece = (bar.w - gap * (n - 1) as f32) / n as f32;
-            let filled = progress * n as f32;
-            for i in 0..n {
-                let r = Rect::new(
-                    bar.x + i as f32 * (piece + gap),
-                    bar.y,
-                    piece.max(1.),
-                    bar.h,
-                );
-                rounded(r, bar.h * 0.3, fade(Color::new(0.2, 0.22, 0.25, 1.), 0.85));
-                let part = (filled - i as f32).clamp(0., 1.);
-                if part > 0. {
-                    rounded(
-                        Rect::new(r.x, r.y, r.w * part, r.h),
-                        bar.h * 0.3,
-                        fade(fill, 1.),
-                    );
-                }
-            }
-        } else {
-            ui::capsule(bar, fade(Color::new(0.2, 0.22, 0.25, 1.), 0.9));
-            let edge = (bar.h * 0.18).clamp(1., 3.);
-            let inner = Rect::new(
-                bar.x + edge,
-                bar.y + edge,
-                bar.w - edge * 2.,
-                bar.h - edge * 2.,
-            );
-            let width = inner.w * progress.clamp(0., 1.);
-            if width > 0.5 {
-                ui::capsule(
-                    Rect::new(inner.x, inner.y, width.max(inner.h).min(inner.w), inner.h),
-                    fade(fill, 1.),
-                );
-            }
-        }
+        hud_skin::bar(
+            widget.bar_style,
+            bar,
+            progress,
+            widget.segments,
+            fade(rgb(widget.bar_color, accent), 1.),
+            fade(Color::new(0.2, 0.22, 0.25, 1.), 0.88),
+            scale,
+            drift,
+        );
     }
     if let Some((edge, way)) = l.toward {
         // A pointer at the edge nearest what the widget is pinned to.
@@ -1108,26 +1199,19 @@ fn paint(
         } else {
             mix(panel, WHITE, if ui::is_dark() { 0.08 } else { 0.4 })
         };
-        let fill = if hovered {
-            mix(base, accent, 0.45)
-        } else {
-            base
-        };
-        let r = rect.h * 0.5;
-        rounded(*rect, r, fade(fill, 0.95));
-        rounded_lines(
+        hud_skin::choice(
+            widget.buttons,
             *rect,
-            r,
-            (1.5 * scale).max(1.),
-            fade(accent, if hovered { 1. } else { 0.6 }),
-        );
-        let size = rect.h * 0.5;
-        ui::center_label(
             choice,
-            rect.x + rect.w * 0.5,
-            rect.y + rect.h * 0.5 + size * 0.33,
-            size,
+            hovered,
+            fade(base, 0.95),
+            fade(accent, 1.),
             fade(text_color, 1.),
+            match shape {
+                HudShape::Rounded => l.corner,
+                _ => 0.,
+            },
+            scale,
         );
         if hovered && is_mouse_button_pressed(MouseButton::Left) {
             picked = Some(index as u8);

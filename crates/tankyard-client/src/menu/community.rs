@@ -144,19 +144,18 @@ impl Menu {
             ) {
                 let server = server.clone();
                 let server_mods = crate::mod_library::ready_paths(settings).paths;
-                let saved = crate::hosting::settings(
-                    &server,
-                    self.config(),
-                    server_mods,
-                    self.difficulty_name(),
-                )
-                .and_then(|config| {
-                    std::fs::create_dir_all(crate::hosting::server_dir())
-                        .map_err(|e| e.to_string())?;
-                    config
-                        .save(crate::hosting::config_path())
-                        .map_err(|e| e.to_string())
-                });
+                let saved = self
+                    .host_setup(server_mods)
+                    .and_then(|(config, mods)| {
+                        crate::hosting::settings(&server, config, mods, self.difficulty_name())
+                    })
+                    .and_then(|config| {
+                        std::fs::create_dir_all(crate::hosting::server_dir())
+                            .map_err(|e| e.to_string())?;
+                        config
+                            .save(crate::hosting::config_path())
+                            .map_err(|e| e.to_string())
+                    });
                 match saved {
                     Ok(()) => {
                         drop(crate::clipboard::copy(&crate::hosting::start_command()));

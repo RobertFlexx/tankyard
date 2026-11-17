@@ -128,6 +128,12 @@ Per match is the default. Each achievement can be claimed once in a round, inclu
 
 Choose Host server to play with friends or Join server to enter an address. A local match pauses when you open its menu; a shared server keeps running. The [hosting guide](hosting.md) covers LAN and internet connections, moderation, and match controls.
 
+## Gatewright
+
+Gatewright is a level-55 evolution from Switchback, Wisp, Undertow or Meteor, built around a rift gun. Its **Rift pair** ability has an 18-second cooldown. Activating it arms the gun for 8 seconds: your next shot opens the violet entry rift where it lands and the shot after opens the teal exit. A pair lasts 15 seconds, then each rift collapses with a short pop. The HUD shows which end you fire next and how long the pair stays open.
+
+You, your teammates and every round that goes into the entry come out of the exit, keeping their heading and speed, so a shot into the entry can hit from an unexpected side. Opponents, drones, traps, mines and anyone carrying a flag stay on their side. A pair opens at least 216 units apart and at most 1300 away; when a shot finds no room (inside a wall, too close to the other end or to another rift) it fizzles and the charge comes back. Activating the ability again, dying or changing tank closes your pair, and moving walls crush rifts they cover. Bots don't use rifts.
+
 ## New combat trials and Chronarch
 
 Practice (F6) has Foundations, Combat trials and Boss encounters pages. Counter school teaches body parries, Frozen front introduces the Chronarch, Sentinel hunt is a one-life boss duel, and Hold the line tests trap placement. Each challenge saves its own personal best and supports Retry. Offline modes also offer a bot-count slider, level 1/30/45 starts, arena-size presets, and an adaptive-border toggle. Preset levels disable arena achievements.
@@ -187,7 +193,7 @@ The party roster includes **I'm ready** and a ready count. Readiness is shared w
 
 Siege Engine, Skirmisher and Trapper add three boss encounters, each with a practice trial. Special attacks lock their aim during the warning. Heavy siege shots, a straight skirmisher charge and side-pocket mines each leave a different escape route. Boss models use distinct mechanical silhouettes rather than a shared stack of rotating armor.
 
-Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Server and client must both use protocol 31, so Tank Yard 1.5.0, 1.5.1 and 1.5.2 play only with each other.
+Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Server and client must both use protocol 32, so Tank Yard 1.6.0 plays only with 1.6.0. Versions 1.5.0 to 1.5.2 used protocol 31.
 
 ## Bacteria’s pocket dimension
 

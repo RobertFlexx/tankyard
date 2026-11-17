@@ -437,6 +437,12 @@ impl VoiceChat {
     /// Play a map sound with its trigger/distance gain and the current effects
     /// volume. Bursts coalesce and already playing cues follow volume changes.
     pub fn map_sound(&mut self, sound: tankyard_content::MapSound, gain: f32, volume: f32) {
+        self.cue(crate::map_sounds::samples(sound), gain, volume);
+    }
+
+    /// Play synthesized `samples` at `gain` and the current effects volume,
+    /// as `map_sound` does.
+    pub fn cue(&mut self, samples: std::sync::Arc<[f32]>, gain: f32, volume: f32) {
         self.poll_errors();
         self.effects_volume(volume);
         if self.disabled
@@ -456,7 +462,6 @@ impl VoiceChat {
                 return;
             }
         }
-        let samples = crate::map_sounds::samples(sound);
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.cue(samples, gain);
         }

@@ -34,6 +34,9 @@ pub struct World {
     pub tanks: Vec<Tank>,
     pub(crate) pocket_plan: Option<Box<crate::PocketLayout>>,
     pub projectiles: Vec<Projectile>,
+    /// Rifts open or collapsing, and rift shots in flight.
+    pub rifts: Vec<Rift>,
+    pub rift_shots: Vec<RiftShot>,
     pub targets: Vec<Target>,
     pub bosses: Vec<Boss>,
     /// Cover as it stands now, moved by map logic: what everything collides with.
@@ -80,7 +83,7 @@ pub struct World {
     pub(crate) scratch: Vec<Body>,
     collision_hits: Vec<(f32, Body, EntityId)>,
     drone_contacts: DroneContacts,
-    wall_index: WallIndex,
+    pub(crate) wall_index: WallIndex,
     body_padding: f32,
     pub(crate) contributions: BTreeMap<EntityId, Vec<(EntityId, f32, u64)>>,
     pub(crate) mode_timer: f32,
@@ -199,6 +202,8 @@ impl World {
             tick: 0,
             tanks: Vec::with_capacity(128),
             projectiles: Vec::with_capacity(config.max_projectiles),
+            rifts: Vec::new(),
+            rift_shots: Vec::new(),
             targets: Vec::with_capacity(config.target_count),
             bosses: vec![],
             walls: vec![],
@@ -399,6 +404,8 @@ impl World {
             stasis: 0.,
             pocket: 0.,
             pocket_echoes: vec![],
+            rift_shots: 0,
+            rift_armed: 0.,
             game_creator: false,
             creator_boss: false,
             creator_attacks: [0.; crate::creator_boss::ATTACK_COUNT],
@@ -519,6 +526,8 @@ impl World {
             t.barrel_shots.clear();
             t.barrel_aims.clear();
             t.charge = 0.;
+            t.rift_shots = 0;
+            t.rift_armed = 0.;
             let pos = t.pos;
             let team = t.team;
             self.refresh_stats(id, false);
@@ -721,6 +730,7 @@ impl World {
         self.rebuild_grid();
         self.update_stasis();
         self.update_projectiles();
+        self.update_rifts();
         self.drone_contacts
             .resolve(&mut self.projectiles, &self.config);
         self.resolve_contacts();
@@ -836,6 +846,7 @@ impl World {
             tank.knockback = (tank.knockback - DT).max(0.);
             tank.stasis = (tank.stasis - DT).max(0.);
             tank.ability_cooldown = (tank.ability_cooldown - DT).max(0.);
+            crate::rifts::tick_armed(tank, DT);
             let def = self.content.class(&tank.class);
             let regen = 2. * stat_scale(tank.stats[1]) * def.map_or(1., |c| c.multipliers[1])
                 + def.map_or(0., |c| c.passive_regen);
@@ -887,6 +898,8 @@ impl World {
                 t.health = t.max_health;
                 t.pocket = 0.;
                 t.pocket_echoes.clear();
+                t.rift_shots = 0;
+                t.rift_armed = 0.;
                 t.cooldowns.clear();
             }
         }
@@ -1138,6 +1151,8 @@ impl World {
         snapshot.objectives.clone_from(&self.objectives);
         snapshot.match_state.clone_from(&self.match_state);
         snapshot.events.clone_from(&self.events);
+        snapshot.rifts.clone_from(&self.rifts);
+        snapshot.rift_shots.clone_from(&self.rift_shots);
         snapshot.walls_included = true;
     }
     pub fn snapshot_for(&self, center: V2, radius: f32) -> Snapshot {
@@ -1160,6 +1175,22 @@ impl World {
         snapshot.objectives.clone_from(&self.objectives);
         snapshot.match_state.clone_from(&self.match_state);
         clone_filtered(&mut snapshot.events, &self.events, |e| visible(e.pos));
+        // A pair stays whole on screen when either end is in view, so a
+        // client can draw the thread between them.
+        let near_rift = |rift: &Rift| {
+            (rift.pos - center).length_squared() < (radius.clamp(400., 5000.) + RIFT_RADIUS).powi(2)
+        };
+        clone_filtered(&mut snapshot.rifts, &self.rifts, |rift| {
+            near_rift(rift)
+                || (rift.partner != 0
+                    && self
+                        .rifts
+                        .iter()
+                        .any(|other| other.id == rift.partner && near_rift(other)))
+        });
+        clone_filtered(&mut snapshot.rift_shots, &self.rift_shots, |shot| {
+            visible(shot.pos)
+        });
         snapshot.walls_included = true;
     }
     fn make_snapshot(&self, view: Option<(V2, f32)>) -> Snapshot {
@@ -1195,6 +1226,25 @@ impl World {
                 .collect(),
             wall_revision: 0,
             walls_included: true,
+            rifts: self
+                .rifts
+                .iter()
+                .filter(|rift| {
+                    visible(rift.pos)
+                        || (rift.partner != 0
+                            && self
+                                .rifts
+                                .iter()
+                                .any(|other| other.id == rift.partner && visible(other.pos)))
+                })
+                .cloned()
+                .collect(),
+            rift_shots: self
+                .rift_shots
+                .iter()
+                .filter(|shot| visible(shot.pos))
+                .cloned()
+                .collect(),
         }
     }
     pub(crate) fn hostile(&self, team: u8, other: u8) -> bool {
@@ -2283,7 +2333,12 @@ pub fn target_sides(kind: TargetKind) -> u8 {
         TargetKind::Custom(sides) => sides,
     }
 }
-fn boundary_hits(start: V2, end: V2, r: f32, config: &WorldConfig) -> [Option<(f32, V2)>; 2] {
+pub(crate) fn boundary_hits(
+    start: V2,
+    end: V2,
+    r: f32,
+    config: &WorldConfig,
+) -> [Option<(f32, V2)>; 2] {
     let d = end - start;
     let mut hits = [None; 2];
     let bounds = config.bounds();

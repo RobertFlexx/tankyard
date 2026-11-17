@@ -139,6 +139,116 @@ pub fn cannon_profile(
     );
 }
 
+/// Where and how big a rift gun is drawn.
+struct RiftGun {
+    p: Vec2,
+    r: f32,
+    aim: f32,
+    angle: f32,
+    offset: V2,
+    length: f32,
+    width: f32,
+    recoil: f32,
+    unit: f32,
+    time: f32,
+    opacity: f32,
+}
+
+/// The Gatewright's rift gun: a collar around the barrel, two claws
+/// cradling a lens at the muzzle, and a rift core in the hull with a violet
+/// and a teal mark for the two ends it opens.
+fn rift_gun(emit: &mut impl FnMut(Primitive), gun: RiftGun) {
+    let RiftGun {
+        p,
+        r,
+        aim,
+        angle,
+        offset,
+        length,
+        width,
+        recoil,
+        unit,
+        time,
+        opacity,
+    } = gun;
+    let ink = Color::new(0.15, 0.16, 0.22, opacity);
+    let steel = Color::new(0.58, 0.61, 0.70, opacity);
+    let pale = Color::new(0.86, 0.88, 0.96, opacity);
+    let violet = Color::new(0.72, 0.45, 1.0, opacity);
+    let teal = Color::new(0.27, 0.96, 0.84, opacity);
+    let d = vec2(angle.cos(), angle.sin());
+    let n = vec2(-d.y, d.x);
+    let base = p + vec2(offset.x, offset.y) * unit - d * recoil;
+    let at = |along: f32, across: f32| base + d * along + n * across;
+    // The collar, two thirds of the way along.
+    for (half, inset, tint) in [
+        (width * 0.70, 0., ink),
+        (width * 0.70 - 2.2 * unit, 2.2 * unit, steel),
+    ] {
+        quad(
+            emit,
+            [
+                at(length * 0.52 + inset, half),
+                at(length * 0.52 + inset, -half),
+                at(length * 0.70 - inset, -half),
+                at(length * 0.70 - inset, half),
+            ],
+            tint,
+        );
+    }
+    // Two claws reaching past the muzzle and curling in toward the lens.
+    for side in [-1., 1.] {
+        let root = width * 0.52 * side;
+        let mut claw = [
+            at(length * 0.80, root + 2.4 * unit * side),
+            at(length * 0.80, root - 3.6 * unit * side),
+            at(length * 1.10, width * 0.26 * side),
+            at(length * 1.04, width * 0.48 * side),
+        ];
+        if side < 0. {
+            claw.reverse();
+        }
+        quad(emit, claw, ink);
+        let mut edge = [
+            at(length * 0.84, root + 0.6 * unit * side),
+            at(length * 0.84, root - 1.8 * unit * side),
+            at(length * 1.05, width * 0.30 * side),
+            at(length * 1.01, width * 0.40 * side),
+        ];
+        if side < 0. {
+            edge.reverse();
+        }
+        quad(emit, edge, steel);
+    }
+    // The lens the rifts leave through.
+    polygon(emit, at(length * 0.98, 0.), 0, width * 0.30, 0., ink);
+    polygon(emit, at(length * 0.98, 0.), 0, width * 0.20, 0., pale);
+    // The core: a recessed ring, a slowly turning lens and the two marks.
+    polygon(emit, p, 0, r * 0.60, 0., ink);
+    polygon(emit, p, 0, r * 0.50, 0., steel);
+    polygon(emit, p, 0, r * 0.42, 0., ink);
+    polygon(
+        emit,
+        p,
+        6,
+        r * 0.30,
+        time * 0.6 + aim,
+        Color::new(0.30, 0.27, 0.46, opacity),
+    );
+    for (mark, tint) in [(0., violet), (std::f32::consts::PI, teal)] {
+        let a = aim + mark + std::f32::consts::FRAC_PI_2;
+        polygon(
+            emit,
+            p + vec2(a.cos(), a.sin()) * r * 0.46,
+            0,
+            r * 0.075,
+            0.,
+            tint,
+        );
+    }
+    polygon(emit, p, 0, r * 0.12, 0., pale);
+}
+
 pub fn minion_model_geometry(
     p: Vec2,
     radius: f32,
@@ -658,6 +768,31 @@ pub fn class_model_geometry(
             r * 0.065,
             0.,
             Color::new(0.98, 0.91, 0.65, color.a),
+        );
+    }
+    if class.ability == tankyard_content::Ability::Rift
+        && let Some(barrel) = class.barrels.first()
+    {
+        rift_gun(
+            emit,
+            RiftGun {
+                p,
+                r,
+                aim,
+                angle: angles[0],
+                offset: V2::new(barrel.offset[0], barrel.offset[1]).rotate(aim),
+                length: (barrel.length + r / unit * 0.45) * unit,
+                width: visual_barrel_width(class, 0, &angles, aim, mount_count) * unit,
+                recoil: barrel_recoils
+                    .and_then(|values| values.first())
+                    .copied()
+                    .unwrap_or(recoil)
+                    * 60.0
+                    * unit,
+                unit,
+                time,
+                opacity: color.a,
+            },
         );
     }
     // Automatic mounts sit above the hull and rotate independently. Every

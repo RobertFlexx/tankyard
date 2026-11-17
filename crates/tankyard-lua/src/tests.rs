@@ -598,6 +598,57 @@ fn packs_using_the_global_table_see_every_global_write() {
 }
 
 #[test]
+fn scripts_style_widgets_with_every_look_option() {
+    let (world, runtime) = run(
+        r##"
+        tankyard.on("tick", function()
+          tankyard.hud("storm", {
+            title = "Storm", text = "Take cover", style = "panel", progress = 0.5,
+            shape = "slant", border = "dashed", fill = "stripes", fill_color = "#ffc800",
+            lettering = "outline", caps = true, title_color = { 255, 255, 255 },
+            bar_style = "pips", buttons = "underline", choices = { "Run" },
+          })
+          tankyard.hud("plain", { text = "Default look" })
+        end)
+        "##,
+        2,
+    );
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    let player = world.tanks.iter().find(|t| !t.bot).unwrap().id;
+    let mine = world.hud_for(player);
+    let storm = mine.iter().find(|w| w.title == "Storm").unwrap();
+    assert_eq!(storm.shape, tankyard_mods::HudShape::Slant);
+    assert_eq!(storm.border, tankyard_mods::HudBorder::Dashed);
+    assert_eq!(storm.fill, tankyard_mods::HudFill::Stripes);
+    assert_eq!(storm.fill_color, Some([255, 200, 0]));
+    assert_eq!(storm.lettering, tankyard_mods::HudLettering::Outline);
+    assert!(storm.caps);
+    assert_eq!(storm.title_color, Some([255, 255, 255]));
+    assert_eq!(storm.bar_style, tankyard_mods::HudBar::Pips);
+    assert_eq!(storm.buttons, tankyard_mods::HudButtons::Underline);
+    let plain = mine.iter().find(|w| w.text == "Default look").unwrap();
+    assert_eq!(
+        (plain.shape, plain.border, plain.fill, plain.caps),
+        Default::default()
+    );
+
+    // A misspelt look is an error that names the field, not a silent default.
+    let (_, runtime) = run(
+        r##"
+        tankyard.on("tick", function()
+          tankyard.hud("oops", { text = "Hi", shape = "hexagon" })
+        end)
+        "##,
+        2,
+    );
+    assert!(
+        runtime.errors.iter().any(|e| e.contains("shape")),
+        "{:?}",
+        runtime.errors
+    );
+}
+
+#[test]
 fn scripts_pin_widgets_over_spots_and_tanks() {
     let (world, runtime) = run(
         r##"

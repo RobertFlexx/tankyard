@@ -3015,7 +3015,8 @@
         "gearbox"
       ],
       "upgrades": [
-        "bastille"
+        "bastille",
+        "gatewright"
       ],
       "multipliers": [
         1.0,
@@ -3610,7 +3611,8 @@
       "upgrades": [
         "rook",
         "mirage",
-        "bacteria"
+        "bacteria",
+        "gatewright"
       ],
       "multipliers": [
         0.9,
@@ -5698,7 +5700,8 @@
         "backdraft"
       ],
       "upgrades": [
-        "bastille"
+        "bastille",
+        "gatewright"
       ],
       "multipliers": [
         1.0,
@@ -6776,7 +6779,8 @@
         "comet"
       ],
       "upgrades": [
-        "juggernaut"
+        "juggernaut",
+        "gatewright"
       ],
       "multipliers": [
         1.45,
@@ -11115,6 +11119,62 @@
       "strengths": "Escape arena combat and repair while finding a route through the private maze.",
       "weaknesses": "Moderate firepower. Doubles cut visits short on contact. Entry drops cores and clears deployed weapons; the cooldown continues after an early return.",
       "ai_range": 390
+    },
+    {
+      "id": "gatewright",
+      "name": "Gatewright",
+      "description": "A rift gun. Activate the ability, then fire twice: the first shot opens an entry rift and the second its exit. For 15 seconds you, your team and every bullet that goes in come out the other side.",
+      "tier": 4,
+      "min_level": 55,
+      "parents": [
+        "switchback",
+        "wisp",
+        "undertow",
+        "meteor"
+      ],
+      "upgrades": [],
+      "multipliers": [
+        1.1,
+        1,
+        1,
+        1.05,
+        1,
+        1.05,
+        1,
+        1.02
+      ],
+      "hull_sides": 0,
+      "barrels": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 40,
+          "width": 22,
+          "cooldown": 0.5,
+          "delay": 0,
+          "recoil": 12,
+          "pattern": "Normal",
+          "projectile": "Bullet",
+          "speed": 450,
+          "damage": 22,
+          "radius": 7,
+          "lifetime": 2.0,
+          "penetration": 1.7,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0,
+          "profile": "rectangle"
+        }
+      ],
+      "ability": "Rift",
+      "ability_cooldown": 18,
+      "passive_regen": 0,
+      "strengths": "Instant flanking routes and escapes for you and your team. Shots fired into the entry, yours or an opponent's, leave the exit from an unexpected side.",
+      "weaknesses": "A pair takes two well-aimed shots and open floor. Rifts are visible to everyone, carry no drones or traps, and close to anyone holding a flag.",
+      "ai_range": 420
     }
   ]
 }

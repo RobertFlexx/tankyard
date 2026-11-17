@@ -68,6 +68,7 @@ pub enum Ability {
     VolleyParry,
     Stasis,
     Pocket,
+    Rift,
 }
 
 impl Ability {
@@ -89,6 +90,7 @@ impl Ability {
             Self::VolleyParry => "Reprisal",
             Self::Stasis => "Stasis wave",
             Self::Pocket => "Pocket dimension",
+            Self::Rift => "Rift pair",
         }
     }
 
@@ -593,6 +595,10 @@ mod tests {
             ("gunner_trapper", "gunner", 3),
             ("bacteria", "specter", 4),
             ("bacteria", "wisp", 4),
+            ("gatewright", "switchback", 4),
+            ("gatewright", "wisp", 4),
+            ("gatewright", "undertow", 4),
+            ("gatewright", "meteor", 4),
         ] {
             let class = content.class(id).expect("new class must exist");
             assert_eq!(class.tier, tier);
@@ -605,7 +611,7 @@ mod tests {
                     .contains(&id.to_owned())
             );
         }
-        assert_eq!(content.classes.len(), 112);
+        assert_eq!(content.classes.len(), 113);
         content.validate().unwrap();
     }
 
@@ -765,6 +771,7 @@ mod tests {
             Ability::Magnet,
             Ability::Parry,
             Ability::Pocket,
+            Ability::Rift,
         ] {
             assert!(content.classes.iter().any(|c| c.ability == ability));
         }

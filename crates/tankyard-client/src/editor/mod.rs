@@ -1297,7 +1297,7 @@ impl Editor {
     }
     fn save(&mut self) {
         let result: Result<PathBuf, String> = (|| {
-            let root = directory()?.join("projects");
+            let root = projects_dir()?;
             std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
             if !tankyard_mods::identifier(&self.doc.map.id) || self.doc.map.id.len() > 48 {
                 return Err("Choose a map id of lowercase letters, digits and underscores (48 at most), on the Map tab.".into());
@@ -1348,9 +1348,9 @@ impl Editor {
         }
     }
     fn refresh_library(&mut self) {
-        self.library = directory()
+        self.library = projects_dir()
             .ok()
-            .and_then(|root| std::fs::read_dir(root.join("projects")).ok())
+            .and_then(|root| std::fs::read_dir(root).ok())
             .into_iter()
             .flatten()
             .filter_map(Result::ok)
@@ -1413,7 +1413,11 @@ fn directory() -> Result<PathBuf, String> {
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
     Ok(path)
 }
-fn read_document(path: &Path) -> Result<Document, String> {
+/// Where the editor saves projects.
+pub(crate) fn projects_dir() -> Result<PathBuf, String> {
+    Ok(directory()?.join("projects"))
+}
+pub(crate) fn read_document(path: &Path) -> Result<Document, String> {
     let bytes = tankyard_mods::read_bounded_limit(path, 2 * 1024 * 1024)?;
     Document::from_json(&bytes)
 }

@@ -18,12 +18,17 @@ mod modes;
 mod parry;
 mod pocket;
 mod pocket_layout;
+mod rifts;
 pub use pocket::{
     POCKET_ECHO_LIMIT, POCKET_ECHO_WAKE, POCKET_HEAL_RATE, POCKET_SECONDS, walls as pocket_walls,
 };
 pub use pocket_layout::{
     LightState, PocketEdge, PocketLayout, PocketLight, bounds as pocket_bounds,
     with_layout as with_pocket_layout,
+};
+pub use rifts::{
+    MAX_RIFTS, RIFT_ARMED, RIFT_CLOSING, RIFT_FORMING, RIFT_RADIUS, RIFT_RANGE, RIFT_SECONDS,
+    RIFT_SHOT_SPEED, RIFT_SPACING,
 };
 pub mod physics;
 pub mod progression;

@@ -939,6 +939,15 @@ impl Hud {
             {
                 let ready = tank.ability_cooldown <= 0.0;
                 let parrying = class.ability.is_parry() && tank.shield > 0.0;
+                // A rift gun shows which end it opens next, then how long
+                // its pair stays open.
+                let open_pair = snapshot
+                    .rifts
+                    .iter()
+                    .filter(|rift| rift.owner == tank.id && rift.partner != 0 && rift.life > 0.)
+                    .map(|rift| rift.life)
+                    .reduce(f32::min);
+                let rift_armed = tank.rift_shots > 0;
                 let status = format!(
                     "[{}] {}  {}",
                     settings.bindings[4],
@@ -947,6 +956,25 @@ impl Hud {
                         format!("{:.1}s · REPAIRING", tank.pocket)
                     } else if parrying {
                         "ACTIVE".into()
+                    } else if rift_armed {
+                        format!(
+                            "FIRE THE {} · {:.1}s",
+                            match crate::rifts::next_end(snapshot, tank.id) {
+                                tankyard_core::RiftEnd::Entry => "ENTRY",
+                                tankyard_core::RiftEnd::Exit => "EXIT",
+                            },
+                            tank.rift_armed
+                        )
+                    } else if let Some(life) = open_pair {
+                        format!(
+                            "{} · rifts close in {:.0}s",
+                            if ready {
+                                "READY".to_owned()
+                            } else {
+                                format!("{:.1}s", tank.ability_cooldown)
+                            },
+                            life.ceil()
+                        )
                     } else if ready {
                         "READY".into()
                     } else {
@@ -964,6 +992,8 @@ impl Hud {
                         15.0 * s,
                         if parrying {
                             AMBER
+                        } else if rift_armed {
+                            crate::rifts::color(crate::rifts::next_end(snapshot, tank.id))
                         } else if ready {
                             accent()
                         } else {

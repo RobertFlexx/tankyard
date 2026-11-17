@@ -1,5 +1,6 @@
 mod about;
 mod community;
+mod host_map;
 mod mods_page;
 mod play;
 mod settings_page;
@@ -56,6 +57,8 @@ pub enum Page {
     Practice,
     Controls,
     Party,
+    /// The map a hosted game plays on.
+    HostMap,
 }
 pub enum Action {
     None,
@@ -129,6 +132,20 @@ pub struct Menu {
     scale_edit: crate::ui_layout::ScaleEdit,
     scale_anchor: Option<f32>,
     pub maps: Vec<tankyard_content::MapDef>,
+    /// The built-in arenas' IDs, to tell them from pack maps.
+    builtin_maps: Vec<String>,
+    /// A map saved in the editor that hosted games play on instead of the
+    /// arena list's choice.
+    host_map: Option<host_map::SavedMap>,
+    host_source: host_map::MapSource,
+    /// Saved projects and pack maps, read when their tab opens.
+    saved_maps: Option<Vec<host_map::Project>>,
+    pack_maps: Option<Vec<host_map::PackMap>>,
+    host_map_page: usize,
+    /// A pack map chosen before its pack's maps had loaded.
+    host_pick: Option<String>,
+    /// The file chooser opened from the map picker.
+    host_chooser: Option<crate::file_dialog::Pending>,
     mod_entries: Vec<crate::mod_library::Entry>,
     pub mods_scanned: bool,
     mod_path: String,
@@ -182,6 +199,7 @@ pub struct Menu {
 }
 impl Menu {
     pub fn new() -> Self {
+        let maps = tankyard_content::builtin_maps();
         Self {
             page: Page::Main,
             party_setup: false,
@@ -223,7 +241,15 @@ impl Menu {
             scroll_page: None,
             scale_edit: Default::default(),
             scale_anchor: None,
-            maps: tankyard_content::builtin_maps(),
+            builtin_maps: maps.iter().map(|map| map.id.clone()).collect(),
+            maps,
+            host_map: None,
+            host_source: Default::default(),
+            saved_maps: None,
+            pack_maps: None,
+            host_map_page: 0,
+            host_pick: None,
+            host_chooser: None,
             mod_entries: vec![],
             mods_scanned: false,
             mod_path: String::new(),
@@ -598,6 +624,7 @@ impl Menu {
             Page::Practice => self.practice(settings, s),
             Page::Controls => self.controls(settings, s),
             Page::Party => self.party(settings, s),
+            Page::HostMap => self.host_maps(settings, s),
         };
         drop(canvas);
         if reviewing {

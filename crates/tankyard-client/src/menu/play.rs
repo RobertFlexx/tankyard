@@ -75,6 +75,7 @@ impl Menu {
                 s * 0.70,
             ) {
                 self.map = index;
+                self.host_map = None;
             }
         }
         let total = screen_width() - 80. * s;
@@ -126,23 +127,37 @@ impl Menu {
         }
         let right = middle + column + 18. * s;
         label("ARENA SIZE", right, by + 96. * s, 13. * s, muted_color());
+        // The size the chosen map was made at, within what servers accept.
+        let (own_width, own_height) = self
+            .host_map
+            .as_ref()
+            .map(|saved| saved.size)
+            .or_else(|| self.maps.get(self.map).map(|map| (map.width, map.height)))
+            .filter(|(width, height)| width.is_finite() && height.is_finite())
+            .map_or((3600., 2600.), |(width, height)| {
+                (
+                    width.clamp(900., 16000.).round(),
+                    height.clamp(700., 16000.).round(),
+                )
+            });
         for (i, (name, width, height)) in [
             ("Compact", 2400., 1800.),
             ("Standard", 3600., 2600.),
             ("Large", 6000., 4000.),
+            ("Map's own", own_width, own_height),
         ]
         .into_iter()
         .enumerate()
         {
             if button(
                 Rect::new(
-                    right + i as f32 * column / 3.,
+                    right + i as f32 * column / 4.,
                     by + 108. * s,
-                    column / 3. - 5. * s,
+                    column / 4. - 5. * s,
                     28. * s,
                 ),
                 name,
-                self.width == width,
+                self.width == width && self.height == height,
                 true,
                 s * 0.65,
             ) {
@@ -784,7 +799,15 @@ impl Menu {
                 s,
                 true,
             );
+            self.resolve_host_pick();
             label(self.mode.name(), x, y + 219.0 * s, 24.0 * s, accent());
+            label(
+                &fitted_label(&self.host_map_line(), 17.0 * s, width),
+                x,
+                y + 245.0 * s,
+                17.0 * s,
+                text_color(),
+            );
             label(
                 &if community {
                     format!(
@@ -799,16 +822,23 @@ impl Menu {
                     )
                 },
                 x,
-                y + 248.0 * s,
-                18.0 * s,
+                y + 267.0 * s,
+                15.0 * s,
                 muted_color(),
             );
             if small_button(
-                Rect::new(x, y + 269.0 * s, 200.0 * s, 35.0 * s),
+                Rect::new(x, y + 282.0 * s, 200.0 * s, 35.0 * s),
                 "Configure arena",
                 s,
             ) {
                 return Action::Page(Page::Modes);
+            }
+            if small_button(
+                Rect::new(x + 208.0 * s, y + 282.0 * s, 170.0 * s, 35.0 * s),
+                "Change map…",
+                s,
+            ) {
+                return Action::Page(Page::HostMap);
             }
             wrap(
                 if community {
@@ -817,7 +847,7 @@ impl Menu {
                     "For LAN games, share your local IP. For internet games, share your public IP and forward UDP port 5000."
                 },
                 x,
-                y + 341.0 * s,
+                y + 352.0 * s,
                 width,
                 18.0 * s,
                 muted_color(),

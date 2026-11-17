@@ -679,6 +679,14 @@ pub fn world(
             }
         }
     });
+    crate::rifts::draw(
+        snapshot,
+        view,
+        &effects.rift_clocks,
+        local,
+        animation_time,
+        settings.reduced_motion,
+    );
     if snapshot.config.mode == Mode::Survival {
         let p = view.screen(V2::new(
             snapshot.config.width * 0.5,
@@ -903,6 +911,7 @@ pub fn world(
             }
         }
     }
+    crate::rifts::draw_shots(&snapshot.rift_shots, view, interpolation);
     for boss in &snapshot.bosses {
         let position = previous_positions
             .get(&boss.id)
@@ -1118,6 +1127,27 @@ pub fn world(
                 Some(z),
             );
         }
+        if tank.rift_shots > 0
+            && class.ability == tankyard_content::Ability::Rift
+            && let Some(barrel) = class.barrels.first()
+        {
+            let aim = *effects.display_aim.get(&tank.id).unwrap_or(&tank.aim);
+            let d = vec2((aim + barrel.angle).cos(), (aim + barrel.angle).sin());
+            let mount = V2::new(barrel.offset[0], barrel.offset[1]).rotate(aim);
+            let lens = p + vec2(mount.x, mount.y) * z + d * (barrel.length * z + r * 0.45) * 0.98;
+            crate::rifts::armed(
+                p,
+                r,
+                lens,
+                crate::rifts::next_end(snapshot, tank.id),
+                z,
+                if settings.reduced_motion {
+                    0.
+                } else {
+                    animation_time
+                },
+            );
+        }
         if local != 0 && tank.id != local {
             arcade_player_label(tank, "", vec2(p.x, p.y - r - 14. * z), 320. * z, 15. * z);
         }
@@ -1330,6 +1360,20 @@ fn arena_lights(
                     ),
                     0.8,
                 ),
+            },
+        );
+    }
+    for rift in &snapshot.rifts {
+        if !view.visible(rift.pos, tankyard_core::RIFT_RADIUS * 3.) {
+            continue;
+        }
+        let size = crate::rifts::scale(rift.age, rift.life);
+        crate::lighting::gather(
+            out,
+            Light::Spot {
+                at: view.screen(rift.pos),
+                radius: tankyard_core::RIFT_RADIUS * 3.4 * size * z,
+                color: alpha(crate::rifts::color(rift.end), 0.9),
             },
         );
     }

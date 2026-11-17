@@ -163,6 +163,8 @@ impl World {
             boss.goal = pos;
         }
         self.projectiles.clear();
+        self.rifts.clear();
+        self.rift_shots.clear();
         self.targets.clear();
         for _ in 0..self.target_capacity() {
             self.spawn_target();

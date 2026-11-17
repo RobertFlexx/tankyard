@@ -1356,6 +1356,24 @@ fn map_widget<S: serde::Serializer>(widget: &crate::HudWidget, out: S) -> Result
         layout: crate::HudLayout,
         #[serde(skip_serializing_if = "is_default")]
         glow: bool,
+        #[serde(skip_serializing_if = "is_default")]
+        shape: crate::HudShape,
+        #[serde(skip_serializing_if = "is_default")]
+        border: crate::HudBorder,
+        #[serde(skip_serializing_if = "is_default")]
+        fill: crate::HudFill,
+        #[serde(skip_serializing_if = "is_default")]
+        fill_color: Option<[u8; 3]>,
+        #[serde(skip_serializing_if = "is_default")]
+        lettering: crate::HudLettering,
+        #[serde(skip_serializing_if = "is_default")]
+        caps: bool,
+        #[serde(skip_serializing_if = "is_default")]
+        title_color: Option<[u8; 3]>,
+        #[serde(skip_serializing_if = "is_default")]
+        bar_style: crate::HudBar,
+        #[serde(skip_serializing_if = "is_default")]
+        buttons: crate::HudButtons,
     }
     let crate::HudWidget {
         text,
@@ -1382,6 +1400,15 @@ fn map_widget<S: serde::Serializer>(widget: &crate::HudWidget, out: S) -> Result
         point,
         layout,
         glow,
+        shape,
+        border,
+        fill,
+        fill_color,
+        lettering,
+        caps,
+        title_color,
+        bar_style,
+        buttons,
     } = widget;
     Written {
         text,
@@ -1408,6 +1435,15 @@ fn map_widget<S: serde::Serializer>(widget: &crate::HudWidget, out: S) -> Result
         point: *point,
         layout: *layout,
         glow: *glow,
+        shape: *shape,
+        border: *border,
+        fill: *fill,
+        fill_color: *fill_color,
+        lettering: *lettering,
+        caps: *caps,
+        title_color: *title_color,
+        bar_style: *bar_style,
+        buttons: *buttons,
     }
     .serialize(out)
 }
