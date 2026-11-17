@@ -1,10 +1,11 @@
 //! On-screen widgets that scripts and map triggers show players: a line of
-//! text, a bar, or a small panel with a title, an icon and choices. The
-//! server decides what each player sees and clients only draw it.
+//! text, a bar, or a small panel with a title, an icon and choices, on the
+//! screen or floating over a spot in the arena or a tank. The server
+//! decides what each player sees and clients only draw it.
 use serde::{Deserialize, Serialize};
 
 /// Choices a widget offers at most.
-pub const HUD_CHOICES: usize = 4;
+pub const HUD_CHOICES: usize = 6;
 /// Bytes in a widget's text.
 pub const HUD_TEXT: usize = 120;
 /// Bytes in a widget's title.
@@ -13,6 +14,8 @@ pub const HUD_TITLE: usize = 48;
 pub const HUD_CHOICE: usize = 32;
 /// The most segments a bar splits into.
 pub const HUD_SEGMENTS: u8 = 20;
+/// How far from the arena's origin a widget may be pinned, in world units.
+pub const HUD_REACH: f32 = 100_000.;
 
 /// A line of text, a progress bar or both, drawn on players' screens,
 /// optionally on a panel and with choices a player can pick.
@@ -77,6 +80,23 @@ pub struct HudWidget {
     /// Which menu a pick answers. The server sets it.
     #[serde(default)]
     pub menu: u32,
+    // Added in 1.5.0. Map files leave these out when unused (see
+    // `MapUi`), but the wire format always carries them.
+    /// Where the widget sits: on the screen at `x` and `y`, or floating
+    /// over a spot in the arena or a tank as the view moves.
+    #[serde(default)]
+    pub pin: HudPin,
+    /// Whether a pinned widget waits at the edge of the screen, pointing
+    /// the way, while what it is pinned to is out of view. Otherwise it
+    /// shows only while that is in view.
+    #[serde(default)]
+    pub point: bool,
+    /// How choices are laid out.
+    #[serde(default)]
+    pub layout: HudLayout,
+    /// A soft glow in the accent color around the widget.
+    #[serde(default)]
+    pub glow: bool,
 }
 impl Default for HudWidget {
     fn default() -> Self {
@@ -101,6 +121,10 @@ impl Default for HudWidget {
             segments: 0,
             choices: Vec::new(),
             menu: 0,
+            pin: HudPin::Screen,
+            point: false,
+            layout: HudLayout::Auto,
+            glow: false,
         }
     }
 }
@@ -142,6 +166,11 @@ impl HudWidget {
                 .choices
                 .iter()
                 .all(|choice| !choice.trim().is_empty() && plain_text(choice, HUD_CHOICE))
+            && self.pin.valid()
+    }
+    /// Whether the widget floats over something in the arena.
+    pub fn pinned(&self) -> bool {
+        self.pin != HudPin::Screen
     }
 }
 fn plain_text(text: &str, max: usize) -> bool {
@@ -252,9 +281,17 @@ pub enum HudIcon {
     Target,
     Info,
     Alert,
+    // Added in 1.5.0.
+    Crown,
+    Skull,
+    Lock,
+    Check,
+    Cross,
+    Fire,
+    Bomb,
 }
 impl HudIcon {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 21] = [
         Self::None,
         Self::Star,
         Self::Heart,
@@ -269,6 +306,13 @@ impl HudIcon {
         Self::Target,
         Self::Info,
         Self::Alert,
+        Self::Crown,
+        Self::Skull,
+        Self::Lock,
+        Self::Check,
+        Self::Cross,
+        Self::Fire,
+        Self::Bomb,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -286,6 +330,13 @@ impl HudIcon {
             Self::Target => "Target",
             Self::Info => "Info",
             Self::Alert => "Alert",
+            Self::Crown => "Crown",
+            Self::Skull => "Skull",
+            Self::Lock => "Lock",
+            Self::Check => "Check",
+            Self::Cross => "Cross",
+            Self::Fire => "Fire",
+            Self::Bomb => "Bomb",
         }
     }
     pub fn id(self) -> &'static str {
@@ -304,6 +355,13 @@ impl HudIcon {
             Self::Target => "target",
             Self::Info => "info",
             Self::Alert => "alert",
+            Self::Crown => "crown",
+            Self::Skull => "skull",
+            Self::Lock => "lock",
+            Self::Check => "check",
+            Self::Cross => "cross",
+            Self::Fire => "fire",
+            Self::Bomb => "bomb",
         }
     }
 }
@@ -345,6 +403,65 @@ impl HudEnter {
     }
 }
 
+/// What a widget floats over.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HudPin {
+    /// A fixed place on the screen, at the widget's `x` and `y`.
+    #[default]
+    Screen,
+    /// A spot in the arena, in world units: centered on it.
+    World([f32; 2]),
+    /// A tank, by its id: just above it, following it around. The widget
+    /// hides while the tank is dead or hidden from the viewer.
+    Tank(u64),
+    /// A map point before motion, carried by group `id` with its cover.
+    Group { id: u8, at: [f32; 2] },
+}
+impl HudPin {
+    fn valid(self) -> bool {
+        match self {
+            Self::Screen => true,
+            Self::World(at) => at.iter().all(|v| range(*v, -HUD_REACH, HUD_REACH)),
+            Self::Tank(id) => id != 0,
+            Self::Group { id, at } => {
+                (1..=crate::MAP_GROUPS).contains(&id)
+                    && at.iter().all(|v| range(*v, -HUD_REACH, HUD_REACH))
+            }
+        }
+    }
+}
+
+/// How a widget's choices are arranged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HudLayout {
+    /// In a row, or one under another when the row does not fit.
+    #[default]
+    Auto,
+    /// One under another, all as wide as the widest.
+    Column,
+    /// Two to a row, all the same size.
+    Grid,
+}
+impl HudLayout {
+    pub const ALL: [Self; 3] = [Self::Auto, Self::Column, Self::Grid];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "Row",
+            Self::Column => "Column",
+            Self::Grid => "Grid",
+        }
+    }
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Column => "column",
+            Self::Grid => "grid",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,6 +478,8 @@ mod tests {
         assert!(!widget.valid(), "a long choice");
         widget.choices = vec!["Go".into(); HUD_CHOICES + 1];
         assert!(!widget.valid(), "too many choices");
+        widget.choices = vec!["Go".into(); HUD_CHOICES];
+        assert!(widget.valid(), "six choices");
         widget = HudWidget {
             title: "Shop".into(),
             ..HudWidget::default()
@@ -383,6 +502,28 @@ mod tests {
                 x: f32::NAN,
                 ..widget.clone()
             },
+            HudWidget {
+                pin: HudPin::World([f32::INFINITY, 0.]),
+                ..widget.clone()
+            },
+            HudWidget {
+                pin: HudPin::Tank(0),
+                ..widget.clone()
+            },
+            HudWidget {
+                pin: HudPin::Group {
+                    id: 33,
+                    at: [0., 0.],
+                },
+                ..widget.clone()
+            },
+            HudWidget {
+                pin: HudPin::Group {
+                    id: 1,
+                    at: [f32::NAN, 0.],
+                },
+                ..widget.clone()
+            },
         ] {
             assert!(!broken.valid(), "{broken:?}");
         }
@@ -403,5 +544,21 @@ mod tests {
         assert_eq!(widget.enter, HudEnter::Fade);
         assert!((widget.opacity - 0.85).abs() < 1e-6);
         assert!(widget.valid());
+        assert_eq!(widget.pin, HudPin::Screen);
+        assert_eq!(widget.layout, HudLayout::Auto);
+    }
+
+    #[test]
+    fn pins_read_as_a_spot_or_a_tank() {
+        let widget: HudWidget =
+            serde_json::from_str(r#"{ "text": "Shop", "pin": { "world": [640, 480] } }"#)
+                .expect("reads");
+        assert_eq!(widget.pin, HudPin::World([640., 480.]));
+        assert!(widget.pinned() && widget.valid());
+        let widget: HudWidget =
+            serde_json::from_str(r#"{ "text": "It", "pin": { "tank": 7 }, "point": true }"#)
+                .expect("reads");
+        assert_eq!(widget.pin, HudPin::Tank(7));
+        assert!(widget.point);
     }
 }

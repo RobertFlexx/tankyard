@@ -891,6 +891,19 @@ pub(crate) fn ring(center: Vec2, radius: f32, thickness: f32, c: Color) {
 /// `a` and `b`, in two pieces that meet at a mitred point without
 /// overlapping.
 pub(crate) fn chevron(tip: Vec2, a: Vec2, b: Vec2, thickness: f32, c: Color) {
+    chevron_with(draw_triangle, tip, a, b, thickness, c);
+}
+
+/// [`chevron`], drawn with `draw_triangle`, such as the page-space one
+/// widgets use.
+pub(crate) fn chevron_with(
+    draw_triangle: fn(Vec2, Vec2, Vec2, Color),
+    tip: Vec2,
+    a: Vec2,
+    b: Vec2,
+    thickness: f32,
+    c: Color,
+) {
     let (to_a, to_b) = ((a - tip).normalize_or_zero(), (b - tip).normalize_or_zero());
     let forward = -(to_a + to_b).normalize_or_zero();
     if forward == Vec2::ZERO || to_a == Vec2::ZERO || to_b == Vec2::ZERO {

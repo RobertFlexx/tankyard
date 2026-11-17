@@ -55,6 +55,67 @@ impl View {
         self.shake = vec2((t * 73.0).sin(), (t * 97.0).cos()) * shake;
     }
 }
+/// Where a HUD widget pinned to `pin` floats on screen in `snapshot`, as
+/// `local` sees it: over a spot in the arena, or just above a tank while
+/// it is alive and not hidden from them, where the arena draws it.
+pub fn pin_place(
+    snapshot: &Snapshot,
+    local: EntityId,
+    view: &View,
+    interpolation: f32,
+    previous_positions: &HashMap<EntityId, (V2, f32)>,
+    pin: tankyard_content::HudPin,
+) -> Option<crate::hud_widgets::Pinned> {
+    let in_pocket = snapshot
+        .tanks
+        .iter()
+        .any(|tank| tank.id == local && tank.alive && tank.pocket > 0.);
+    match pin {
+        tankyard_content::HudPin::Screen => None,
+        tankyard_content::HudPin::World(_) | tankyard_content::HudPin::Group { .. }
+            if in_pocket =>
+        {
+            None
+        }
+        tankyard_content::HudPin::Group { id, at } => {
+            if snapshot.match_state.hidden_groups & tankyard_content::MapDef::group_bit(id) != 0 {
+                return None;
+            }
+            let poses = tankyard_core::snapshot_poses(snapshot, snapshot.match_state.elapsed);
+            let offset = poses.offset(id);
+            let config = &snapshot.config;
+            let bounds = config.bounds();
+            Some(crate::hud_widgets::Pinned {
+                at: view.screen(V2::new(
+                    bounds.x + (at[0] / config.width + offset[0]) * bounds.w,
+                    bounds.y + (at[1] / config.height + offset[1]) * bounds.h,
+                )),
+                above: None,
+            })
+        }
+        tankyard_content::HudPin::World([x, y]) => Some(crate::hud_widgets::Pinned {
+            at: view.screen(V2::new(x, y)),
+            above: None,
+        }),
+        tankyard_content::HudPin::Tank(id) => {
+            let tank = snapshot.tanks.iter().find(|tank| {
+                tank.id == id
+                    && tank.alive
+                    && (tank.pocket <= 0. || id == local)
+                    && (!in_pocket || id == local)
+            })?;
+            let pos = previous_positions
+                .get(&id)
+                .map_or(tank.pos, |&(previous, _)| {
+                    crate::session::interpolate_position(previous, tank.pos, interpolation)
+                });
+            Some(crate::hud_widgets::Pinned {
+                at: view.screen(pos),
+                above: Some(tank.radius * view.zoom),
+            })
+        }
+    }
+}
 /// A dashed outline in world space, skipping edges on the arena border.
 fn dashed_rect(view: &View, rect: tankyard_core::Rect, color: Color, thickness: f32) {
     let corners = [

@@ -19,13 +19,13 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 30 carries designed HUD widgets with choices, and players' picks
-/// from them, which version 29 can't hold, so clients and servers update
-/// together. Tank Yard 1.4.0 uses it; 1.3.0 used version 29, and 1.1.0 and
-/// 1.2.0 version 28.
-pub const PROTOCOL_VERSION: u32 = 30;
+/// Version 31 carries widgets pinned over the arena or a tank, choice
+/// layouts and glow, which version 30 can't hold, so clients and servers
+/// update together. Tank Yard 1.5.0 uses it; 1.4.0 used version 30, 1.3.0
+/// version 29, and 1.1.0 and 1.2.0 version 28.
+pub const PROTOCOL_VERSION: u32 = 31;
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 30;
+pub const MIN_PROTOCOL_VERSION: u32 = 31;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
 pub const SERVER_OUTDATED: &str =
     "This server runs an older Tank Yard. Its host needs to update it.";

@@ -2209,7 +2209,7 @@ fn trigger_form(
         }
         TriggerAction::Announce => {
             f.text("Announcement", &mut t.text, 96);
-            f.note("{1} to {8} show the value of that counter.");
+            f.note("{1} to {8} show counters. {cause} names the tank that set it off, or stays empty when there is none.");
         }
         TriggerAction::Boss => {
             let mut boss = BossKind::from_id(&t.boss).unwrap_or(BossKind::Sentinel);
@@ -2553,13 +2553,38 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
             Color::new(1., 1., 1., 0.04),
         );
     }
-    // A tank in the middle, for scale.
-    draw_circle(
-        frame.center().x,
-        frame.center().y,
-        step * 0.4,
-        Color::new(0.0, 0.70, 0.88, 0.9),
-    );
+    // A tank in the middle, for scale, and the area a widget pinned over
+    // its area floats over.
+    let tank = vec2(frame.center().x, frame.y + frame.h * 0.62);
+    if ui.pin == UiPin::Area {
+        let area = Rect::new(
+            frame.center().x - step * 2.5,
+            frame.center().y - step * 1.5,
+            step * 5.,
+            step * 3.,
+        );
+        draw_rectangle(area.x, area.y, area.w, area.h, alpha(brushes::LOGIC, 0.12));
+        draw_rectangle_lines(
+            area.x,
+            area.y,
+            area.w,
+            area.h,
+            1.5,
+            alpha(brushes::LOGIC, 0.7),
+        );
+    }
+    draw_circle(tank.x, tank.y, step * 0.4, Color::new(0.0, 0.70, 0.88, 0.9));
+    let pinned = match ui.pin {
+        UiPin::Screen => None,
+        UiPin::Area => Some(crate::hud_widgets::Pinned {
+            at: frame.center(),
+            above: None,
+        }),
+        UiPin::Cause => Some(crate::hud_widgets::Pinned {
+            at: tank,
+            above: Some(step * 0.4),
+        }),
+    };
     let mut shown = ui.widget.clone();
     if ui.bar > 0 || ui.timer {
         shown.progress = Some(0.6);
@@ -2587,6 +2612,7 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
             age,
             0.6,
             frame.contains(pointer).then_some(pointer),
+            pinned,
         );
     } else {
         center_label(
@@ -2607,13 +2633,14 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
     f.heading("Words");
     f.text("Title", &mut w.title, HUD_TITLE);
     f.text("Text", &mut w.text, HUD_TEXT);
-    f.note("{1} to {8} show counters, {left} the seconds before it goes, {time} the round's clock, and {name} and {score} the player's own.");
+    f.note("{1} to {8} show counters, {left} the seconds before it goes, {time} the round's clock, {name} and {score} the player's own, and {cause} the tank that set it off.");
     f.heading("Look");
     f.pick("Style", &mut w.style, &HudStyle::ALL, HudStyle::name, 3);
     f.cycle("Icon", &mut w.icon, &HudIcon::ALL, |icon| {
         icon.name().to_owned()
     });
     f.number("Text size", &mut w.size, [10., 48.], 1.);
+    f.toggle("Glow in the accent color", &mut w.glow);
     if w.style != HudStyle::Plain {
         let mut opacity = w.opacity * 100.;
         if f.number("Panel opacity (%)", &mut opacity, [0., 100.], 5.) {
@@ -2641,25 +2668,41 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
     [w.color, w.panel, w.accent] = colors;
     f.note("Without its own colors, a widget follows the player's theme. The accent colors the border, stripe, icon, bar and choices.");
     f.heading("Place");
-    match f.buttons(&["Top", "Middle", "Bottom"], true) {
-        Some(0) => w.y = 0.14,
-        Some(1) => w.y = 0.5,
-        Some(2) => w.y = 0.84,
-        _ => {}
-    }
-    match f.buttons(&["Left", "Center", "Right"], true) {
-        Some(0) => (w.x, w.align) = (0.02, HudAlign::Left),
-        Some(1) => (w.x, w.align) = (0.5, HudAlign::Center),
-        Some(2) => (w.x, w.align) = (0.98, HudAlign::Right),
-        _ => {}
-    }
-    let mut x = w.x * 100.;
-    if f.number("Across (%)", &mut x, [0., 100.], 1.) {
-        w.x = (x / 100.).clamp(0., 1.);
-    }
-    let mut y = w.y * 100.;
-    if f.number("Down (%)", &mut y, [0., 100.], 1.) {
-        w.y = (y / 100.).clamp(0., 1.);
+    f.pick("Where", &mut ui.pin, &UiPin::ALL, UiPin::name, 1);
+    let w = &mut ui.widget;
+    if ui.pin == UiPin::Screen {
+        // Only pinned widgets point the way; keep the file plain.
+        w.point = false;
+        match f.buttons(&["Top", "Middle", "Bottom"], true) {
+            Some(0) => w.y = 0.14,
+            Some(1) => w.y = 0.5,
+            Some(2) => w.y = 0.84,
+            _ => {}
+        }
+        match f.buttons(&["Left", "Center", "Right"], true) {
+            Some(0) => (w.x, w.align) = (0.02, HudAlign::Left),
+            Some(1) => (w.x, w.align) = (0.5, HudAlign::Center),
+            Some(2) => (w.x, w.align) = (0.98, HudAlign::Right),
+            _ => {}
+        }
+        let mut x = w.x * 100.;
+        if f.number("Across (%)", &mut x, [0., 100.], 1.) {
+            w.x = (x / 100.).clamp(0., 1.);
+        }
+        let mut y = w.y * 100.;
+        if f.number("Down (%)", &mut y, [0., 100.], 1.) {
+            w.y = (y / 100.).clamp(0., 1.);
+        }
+    } else {
+        f.toggle("Point the way when out of view", &mut w.point);
+        f.note(if ui.pin == UiPin::Area {
+            "Floats over the middle of this trigger's area and moves with the arena, like a sign."
+        } else {
+            "Floats just above the tank that set it off and follows it, like a name tag. It hides while that tank is down."
+        });
+        if w.point {
+            f.note("While what it floats over is out of view, it waits near the edge of the screen, clear of the HUD, with an arrow toward it.");
+        }
     }
     f.pick(
         "Line up by",
@@ -2793,6 +2836,15 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
     if ui.widget.choices.is_empty() {
         f.note("Add choices to make a menu. Picking one sends its signal, and the player who picked is the tank that set off what listens: set Who to Tank that set it off to reward or move just them.");
     } else {
+        if ui.widget.choices.len() > 1 {
+            f.pick(
+                "Arrange",
+                &mut ui.widget.layout,
+                &HudLayout::ALL,
+                HudLayout::name,
+                3,
+            );
+        }
         f.toggle("Stay open after a pick", &mut ui.keep);
         // Keep choices pickable: never leave one blank.
         for (index, choice) in ui.widget.choices.iter_mut().enumerate() {
@@ -2817,6 +2869,7 @@ fn fill_preview(text: &str) -> String {
             left: 12.,
             time: 95.,
             name: "Player",
+            cause: "Runner",
             score: 1250,
         },
         HUD_TEXT,

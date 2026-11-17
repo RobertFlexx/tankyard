@@ -386,11 +386,7 @@ impl ModRuntime {
                                     && (actor == 0
                                         || world.tanks.iter().any(|t| t.id == actor && !t.bot)) =>
                             {
-                                widget.menu = if widget.choices.is_empty() {
-                                    0
-                                } else {
-                                    crate::map_features::menu_number(&key.0, &key.2)
-                                };
+                                widget.menu = crate::map_features::menu_number(&key.0, &key.2);
                                 world.hud.insert(key, widget);
                             }
                             Some(_) => {}
@@ -474,7 +470,10 @@ fn validate_commands(module: &Module, world: &World) -> Result<(), String> {
                 tankyard_mods::MAX_HUD_WIDGETS
             ));
         }
-        if world.hud.len() + widgets.len() > 4096 {
+        // Up to 128 players can each receive 64 widgets, including the
+        // map's 32 slots. Keep a bounded store without penalizing script
+        // widgets just because the map uses personal menus.
+        if world.hud.len() + widgets.len() > 8192 {
             return Err("HUD widget budget exceeded".into());
         }
     }

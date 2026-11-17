@@ -450,13 +450,17 @@ end)
 | `width` | `0.2` | the bar's width as a fraction of the screen, 0.02 to 1 |
 | (1.4) `style` | `"plain"` | `"plain"` (text with a soft shadow), `"panel"`, `"card"` (a panel with a stripe), `"banner"` (across the whole screen) or `"pill"` |
 | (1.4) `title` | none | a smaller line above the text, up to 48 bytes |
-| (1.4) `icon` | `"none"` | `"star"`, `"heart"`, `"coin"`, `"clock"`, `"flag"`, `"bolt"`, `"shield"`, `"key"`, `"gem"`, `"trophy"`, `"target"`, `"info"` or `"alert"` |
+| (1.4) `icon` | `"none"` | `"star"`, `"heart"`, `"coin"`, `"clock"`, `"flag"`, `"bolt"`, `"shield"`, `"key"`, `"gem"`, `"trophy"`, `"target"`, `"info"`, `"alert"`, and (1.5) `"crown"`, `"skull"`, `"lock"`, `"check"`, `"cross"`, `"fire"` or `"bomb"` |
 | (1.4) `panel`, `accent` | theme colors | the panel's color, and the border, stripe, icon, bar and choice color |
 | (1.4) `opacity` | `0.85` | how solid the panel is, 0 to 1 |
 | (1.4) `enter` | `"fade"` | how it appears: `"none"`, `"fade"`, `"pop"`, `"slide"` or `"drop"` |
 | (1.4) `pulse` | `false` | gently brightens the border to draw the eye |
 | (1.4) `segments` | `0` | splits the bar into 2 to 20 pieces, such as lives |
-| (1.4) `choices` | none | up to 4 buttons of 1 to 32 bytes; a pick raises the pack's `choice` event |
+| (1.4) `choices` | none | up to 6 (4 before 1.5) buttons of 1 to 32 bytes; a pick raises the pack's `choice` event |
+| (1.5) `layout` | `"auto"` | how choices sit: `"auto"` (in a row, one under another when the row doesn't fit), `"column"` (one under another, all one width) or `"grid"` (two to a row, all one size) |
+| (1.5) `glow` | `false` | a soft glow in the accent color around the widget; plain text gets a halo instead of its shadow |
+| (1.5) `pin` | none | floats the widget over the arena instead of placing it at `x` and `y`: a tank ID floats it just above that tank and follows it, and `{ x, y }` (or `{ x = ..., y = ... }`) centers it over that spot in world units. It moves with the view and draws under the HUD. A widget over a tank hides while the tank is down or hidden from the viewer |
+| (1.5) `point` | `false` | for a pinned widget: while what it floats over is out of view, it waits near the edge of the screen, clear of the HUD, with an arrow toward it, instead of leaving the screen |
 
 ```lua
 tankyard.on("spawn", function(event)
@@ -464,6 +468,12 @@ tankyard.on("spawn", function(event)
     title = "Armory", text = "Pick one upgrade", style = "card", icon = "coin",
     enter = "pop", y = 0.7, choices = { "Repair", "Armor", "Later" },
   }, event.actor)
+  -- Everyone sees who to chase: a glowing tag over the new tank that
+  -- points the way while they are off screen.
+  tankyard.hud("bounty", {
+    text = "Bounty", style = "pill", icon = "skull", glow = true, point = true,
+    pin = event.actor,
+  })
 end)
 tankyard.on("choice", function(event)
   if event.name ~= "shop" then return end
@@ -476,7 +486,21 @@ A menu shown to one player closes when they pick; one shown to everyone stays un
 
 Widget IDs use lowercase letters, digits and `_`. A pack may show 16 widgets to everyone and 16 to each player, and a player receives at most 64 from all packs. Bots have no screen, so widgets for bots are dropped. Widgets end with the round, with their player, or when the pack is disabled.
 
-The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, and styles, icons and choices in 1.4. Tank Yard 1.4.0 uses protocol 30; players and servers must use matching protocols.
+The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. A pinned widget follows its tank or group on each player's screen by itself, so it needs no updates as the tank moves. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, styles, icons and choices in 1.4, and pins, choice layouts and glow in 1.5. Tank Yard 1.5.0 uses protocol 31; players and servers must use matching protocols.
+
+A coordinate pin can follow a moving map group:
+
+```lua
+tankyard.hud("lift", {
+  text = "Board here", style = "pill", icon = "flag", point = true,
+  pin = { x = 640, y = 480, group = 2 },
+})
+```
+
+Here `x` and `y` are map coordinates before motion. The marker follows group 2,
+including pushed bodies and paths, and hides while that group is hidden.
+Menus shrink to fit small screens; picking a choice takes priority over controls
+underneath it. Labels keep their own identity even when they overlap or move.
 
 ### Defining content
 
@@ -958,7 +982,7 @@ Maps allow 2,048 walls/blocks combined, 512 zones, 2,048 decor items (48 emitter
 
 #### UI
 
-Tank Yard 1.4.0 (protocol 30) adds `ui` and `hide_ui` actions. A `ui` trigger shows its `ui` widget in slot `group` (1–16); a `hide_ui` trigger takes slot `group` away (0 for every slot) from the players its `ui.to` names, or from everyone without a `ui`:
+Tank Yard 1.4.0 (protocol 30) adds `ui` and `hide_ui` actions. A `ui` trigger shows its `ui` widget in slot `group` (1–32 in 1.5; 1–16 in 1.4); a `hide_ui` trigger takes slot `group` away (0 for every slot) from the players its `ui.to` names, or from everyone without a `ui`:
 
 ```json
 { "when": "enter", "action": "ui", "rect": [0.45, 0.4, 0.1, 0.1], "group": 3, "seconds": 2,
@@ -970,7 +994,18 @@ Tank Yard 1.4.0 (protocol 30) adds `ui` and `hide_ui` actions. A `ui` trigger sh
     "to": "cause", "channels": [1, 2, 0] } }
 ```
 
-`widget` takes the [HUD widget](#hud-widgets) fields; its `text` and `title` fill in `{1}`–`{8}` (counters), `{left}` (seconds before it goes), `{time}` (the round's clock), `{name}` and `{score}` (the viewer's). `to` is `everyone` (the default; later arrivals see it too), `inside` (players the trigger notices in its `rect`) or `cause` (the player that set it off). `bar` (1–8) fills the bar from that counter out of `bar_max` (1–99,999); `timer: true` empties it as `duration` runs out instead. Each choice signals its channel in `channels` (0 for none) with the picker as the tank that set it off, and the menu closes for them unless `keep` is true. `duration` above 0 takes the widget away after that many seconds. Bots never see widgets.
+`widget` takes the [HUD widget](#hud-widgets) fields; its `text` and `title` fill in `{1}`–`{8}` (counters), `{left}` (seconds before it goes), `{time}` (the round's clock), `{name}` and `{score}` (the viewer's), and `{cause}` (the tank that set it off; empty when there is none). `to` is `everyone` (the default; later arrivals see it too), `inside` (players the trigger notices in its `rect`) or `cause` (the player that set it off). `bar` (1–8) fills the bar from that counter out of `bar_max` (1–99,999); `timer: true` empties it as `duration` runs out instead. Each choice signals its channel in `channels` (0 for none) with the picker as the tank that set it off, and the menu closes for them unless `keep` is true. `duration` above 0 takes the widget away after that many seconds. Bots never see widgets.
+
+(1.5) `pin` floats the widget over the arena: `area` centers it over the middle of the trigger's `rect`, like a sign, following the trigger's group motion, and `cause` floats it just above the tank that set the trigger off and follows it, like a name tag, for everyone it shows to. A `cause` widget shows nothing when no tank set the trigger off (timers have none) and goes when that tank leaves the game. Set the widget's `point: true` to keep it near the edge of the screen with an arrow while what it floats over is out of view. Map widgets pin with the trigger's `pin`, never the widget's own. Maps save `pin`, `point`, `layout` and `glow` only when they're used, so maps that don't use them still open in 1.4.0:
+
+```json
+{ "when": "start", "action": "ui", "rect": [0.03, 0.3, 0.12, 0.08], "group": 4,
+  "ui": {
+    "widget": { "title": "Armory", "text": "Pick a loadout", "style": "card", "icon": "crown",
+                "glow": true, "layout": "grid",
+                "choices": ["Twin", "Sniper", "Machine", "Flank", "Smash", "Trap"] },
+    "pin": "area", "channels": [1, 2, 3, 4, 5, 6], "keep": true } }
+```
 
 Boss IDs are `sentinel`, `prism`, `foundry`, `tempest`, `bastion`, `eclipse`, `guardian`, `summoner`, `defender`, `fallen_overlord`, `fallen_booster`, `siege_engine`, `skirmisher`, `trapper`. Boss triggers use these IDs. Scripts' `spawn_boss` also accepts the existing display names.
 

@@ -966,10 +966,10 @@ impl Document {
             }
             // Timers have no tank behind them.
             let to_cause = trigger.who == TriggerWho::Cause
-                || trigger
-                    .ui
-                    .as_ref()
-                    .is_some_and(|ui| ui.to == UiAudience::Cause);
+                || trigger.ui.as_ref().is_some_and(|ui| {
+                    ui.to == UiAudience::Cause
+                        || (trigger.action == TriggerAction::Ui && ui.pin == UiPin::Cause)
+                });
             if to_cause && matches!(trigger.when, TriggerWhen::Start | TriggerWhen::Every) {
                 note(
                     key,
@@ -1404,6 +1404,11 @@ fn describe_ui(t: &MapTrigger) -> String {
         UiAudience::Cause => "the player that set it off",
     };
     let mut text = format!("show {what} in UI slot {} to {to}", t.group);
+    text += match ui.pin {
+        UiPin::Screen => "",
+        UiPin::Area => " over this area",
+        UiPin::Cause => " over the tank that set it off",
+    };
     if !w.choices.is_empty() {
         let picks: Vec<String> = w
             .choices

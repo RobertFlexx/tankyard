@@ -1065,6 +1065,38 @@ fn hud(args: &[Value]) -> mlua::Result<Effect> {
     if segments.fract() != 0. {
         return Err(rt("tankyard.hud: segments must be a whole number"));
     }
+    // The prelude passes a spot as x and y, or a tank as its id.
+    let pin = match (
+        optional_number(arg(21), "pin x")?,
+        optional_number(arg(22), "pin y")?,
+        arg(23).filter(|value| !value.is_nil()),
+    ) {
+        (Some(x), Some(y), None) => {
+            let reach = f64::from(tankyard_mods::HUD_REACH);
+            if !(-reach..=reach).contains(&x) || !(-reach..=reach).contains(&y) {
+                return Err(rt(format!(
+                    "tankyard.hud: pin x and y must be between -{reach} and {reach}"
+                )));
+            }
+            let at = [x as f32, y as f32];
+            match optional_number(arg(27), "pin group")? {
+                None => tankyard_mods::HudPin::World(at),
+                Some(group) if group.fract() == 0. && (1. ..=32.).contains(&group) => {
+                    tankyard_mods::HudPin::Group {
+                        id: group as u8,
+                        at,
+                    }
+                }
+                _ => return Err(rt("tankyard.hud: pin group must be a whole number 1..32")),
+            }
+        }
+        (None, None, Some(tank)) => match entity(Some(tank)) {
+            Ok(id) if id != 0 => tankyard_mods::HudPin::Tank(id),
+            _ => return Err(rt("tankyard.hud: pin must be a tank id or { x, y }")),
+        },
+        (None, None, None) => tankyard_mods::HudPin::Screen,
+        _ => return Err(rt("tankyard.hud: pin must be a tank id or { x, y }")),
+    };
     Ok(Effect::Hud {
         id,
         widget: Some(tankyard_mods::HudWidget {
@@ -1106,6 +1138,15 @@ fn hud(args: &[Value]) -> mlua::Result<Effect> {
             segments: segments as u8,
             choices,
             menu: 0,
+            pin,
+            point: matches!(arg(24), Some(Value::Boolean(true))),
+            layout: named(
+                arg(25),
+                "layout",
+                &tankyard_mods::HudLayout::ALL,
+                tankyard_mods::HudLayout::id,
+            )?,
+            glow: matches!(arg(26), Some(Value::Boolean(true))),
         }),
     })
 }

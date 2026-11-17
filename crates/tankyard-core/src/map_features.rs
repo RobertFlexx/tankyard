@@ -221,14 +221,18 @@ pub struct Occupant {
 /// inside [`MapLogic`] itself.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LogicEffect {
-    /// Text with counter placeholders already filled in.
-    Announce(String),
+    /// Text with counter placeholders filled in, and the tank that set it off.
+    Announce {
+        text: String,
+        cause: EntityId,
+    },
     /// Show trigger `trigger`'s widget in `slot` to `viewers`, or to every
-    /// player.
+    /// player; `cause` is the tank that set it off, or 0.
     Ui {
         trigger: usize,
         slot: u8,
         viewers: Option<Vec<EntityId>>,
+        cause: EntityId,
     },
     /// Take `slot`'s widget (every slot for 0) off `viewers`' screens, or
     /// everyone's.
@@ -1440,9 +1444,11 @@ impl MapLogic {
                     at: V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5),
                 });
             }
-            TriggerAction::Announce => effects.push(LogicEffect::Announce(
-                tankyard_content::fill_counters(trigger.text.trim(), &self.counters).into_owned(),
-            )),
+            TriggerAction::Announce => effects.push(LogicEffect::Announce {
+                text: tankyard_content::fill_counters(trigger.text.trim(), &self.counters)
+                    .into_owned(),
+                cause: self.cause,
+            }),
             TriggerAction::Ui | TriggerAction::HideUi => {
                 let viewers = trigger.ui.as_deref().and_then(|ui| {
                     let players = |tank: &&Occupant| {
@@ -1484,6 +1490,7 @@ impl MapLogic {
                             trigger: index,
                             slot: trigger.group,
                             viewers,
+                            cause: self.cause,
                         }
                     } else {
                         LogicEffect::HideUi {
@@ -2012,12 +2019,21 @@ impl World {
         self.logic_tanks = tanks;
         for effect in effects {
             match effect {
-                LogicEffect::Announce(text) => self.match_state.announcement = text,
+                LogicEffect::Announce { text, cause } => {
+                    let name = self
+                        .tanks
+                        .iter()
+                        .find(|tank| tank.id == cause)
+                        .map_or("", |tank| tank.name.as_str());
+                    self.match_state.announcement =
+                        tankyard_content::clip_text(&text.replace("{cause}", name), 256);
+                }
                 LogicEffect::Ui {
                     trigger,
                     slot,
                     viewers,
-                } => self.show_ui(trigger, slot, viewers),
+                    cause,
+                } => self.show_ui(trigger, slot, viewers, cause),
                 LogicEffect::HideUi { slot, viewers } => self.hide_ui(slot, viewers),
                 LogicEffect::Boss { kind, at } => {
                     self.spawn_boss_near(kind, at);
@@ -3146,7 +3162,10 @@ mod tests {
         assert_eq!(bench.logic.counters[1], 3);
         assert_eq!(
             bench.effects,
-            vec![LogicEffect::Announce("Counter two is 3".into())]
+            vec![LogicEffect::Announce {
+                text: "Counter two is 3".into(),
+                cause: 0
+            }]
         );
         bench.run(1., &[]);
         assert_eq!(
@@ -3287,7 +3306,10 @@ mod tests {
         assert_eq!(bench.logic.counters[0], 40);
         assert_eq!(
             bench.effects,
-            vec![LogicEffect::Announce("Forty".into())],
+            vec![LogicEffect::Announce {
+                text: "Forty".into(),
+                cause: 0
+            }],
             "a set that lands on the threshold fires it once"
         );
         let picks = &bench.logic.counters[1..4];
@@ -3507,7 +3529,13 @@ mod tests {
             run(&mut bench, index);
         }
         assert_eq!(bench.logic.counters[1], 42);
-        assert_eq!(bench.effects, vec![LogicEffect::Announce("Answer".into())]);
+        assert_eq!(
+            bench.effects,
+            vec![LogicEffect::Announce {
+                text: "Answer".into(),
+                cause: 0
+            }]
+        );
         run(&mut bench, 3);
         assert_eq!(bench.logic.counters[1], -11, "division rounds down");
         run(&mut bench, 7);

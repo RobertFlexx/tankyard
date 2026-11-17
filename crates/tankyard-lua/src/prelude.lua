@@ -298,6 +298,16 @@ function tankyard.hud(widget_id, widget, tank)
     end
     choices = table.concat(list, "\n")
   end
+  -- pin is a tank id to float over that tank, or { x, y } (or
+  -- { x = ..., y = ... }) to float over that spot in the arena.
+  local pin_x, pin_y, pin_tank, pin_group
+  if type(widget.pin) == "table" then
+    pin_x = number("hud", widget.pin.x or widget.pin[1], "pin x")
+    pin_y = number("hud", widget.pin.y or widget.pin[2], "pin y")
+    pin_group = optional("number", widget.pin.group, "hud", "pin group")
+  elseif widget.pin ~= nil then
+    pin_tank = id("hud", widget.pin)
+  end
   emit("hud", tank or 0, widget_id, text ~= nil and tostring(text) or "",
     optional("number", widget.x, "hud", "x"), optional("number", widget.y, "hud", "y"),
     optional("string", widget.align, "hud", "align"), optional("number", widget.size, "hud", "size"),
@@ -307,7 +317,9 @@ function tankyard.hud(widget_id, widget, tank)
     optional("string", widget.icon, "hud", "icon"), packed_color("hud", widget.panel, "panel"),
     optional("number", widget.opacity, "hud", "opacity"), packed_color("hud", widget.accent, "accent"),
     optional("string", widget.enter, "hud", "enter"), optional("boolean", widget.pulse, "hud", "pulse"),
-    optional("number", widget.segments, "hud", "segments"), choices)
+    optional("number", widget.segments, "hud", "segments"), choices, pin_x, pin_y, pin_tank,
+    optional("boolean", widget.point, "hud", "point"), optional("string", widget.layout, "hud", "layout"),
+    optional("boolean", widget.glow, "hud", "glow"), pin_group)
 end
 
 -- Definitions (load phase only; ignored while a round is running) ------------

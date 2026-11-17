@@ -2,7 +2,9 @@
 //! and the choices players pick from them.
 use crate::*;
 use std::collections::BTreeMap;
-use tankyard_content::{HUD_TEXT, HUD_TITLE, HudWidget, MAP_UI_SLOTS, MapUi, UiFill, fill_ui_text};
+use tankyard_content::{
+    HUD_TEXT, HUD_TITLE, HudPin, HudWidget, MAP_UI_SLOTS, MapUi, UiFill, UiPin, fill_ui_text,
+};
 
 /// The pack name map widgets file under in [`World::hud`]; packs always
 /// have a name.
@@ -28,6 +30,9 @@ pub struct ShownUi {
     pub except: Vec<EntityId>,
     /// The menu number its choices answer.
     pub menu: u32,
+    /// The tank that set it off, which a widget pinned to it floats over;
+    /// 0 for none.
+    pub cause: EntityId,
 }
 
 /// A player's pick from a script's widget, for the pack's `choice` event.
@@ -54,12 +59,22 @@ pub fn menu_number(pack: &str, id: &str) -> u32 {
 
 impl World {
     /// Show trigger `trigger`'s widget in `slot` to `viewers`, or to every
-    /// player without a list.
-    pub(crate) fn show_ui(&mut self, trigger: usize, slot: u8, viewers: Option<Vec<EntityId>>) {
+    /// player without a list. `cause` is the tank that set it off.
+    pub(crate) fn show_ui(
+        &mut self,
+        trigger: usize,
+        slot: u8,
+        viewers: Option<Vec<EntityId>>,
+        cause: EntityId,
+    ) {
         let Some(found) = self.map.triggers.get(trigger) else {
             return;
         };
-        if found.ui.is_none() || !(1..=MAP_UI_SLOTS).contains(&slot) {
+        let Some(ui) = found.ui.as_deref() else {
+            return;
+        };
+        // A widget over the tank that set it off needs that tank.
+        if !(1..=MAP_UI_SLOTS).contains(&slot) || (ui.pin == UiPin::Cause && cause == 0) {
             return;
         }
         let now = self.match_state.elapsed;
@@ -78,6 +93,7 @@ impl World {
             until,
             except: Vec::new(),
             menu,
+            cause,
         };
         match viewers {
             None => {
@@ -141,9 +157,15 @@ impl World {
             let mut ids: Vec<EntityId> = self.tanks.iter().map(|tank| tank.id).collect();
             ids.sort_unstable();
             let here = |id: &EntityId| ids.binary_search(id).is_ok();
+            let triggers = &self.map.triggers;
             self.map_ui.retain_mut(|ui| {
                 ui.except.retain(here);
-                ui.viewer == 0 || here(&ui.viewer)
+                // A widget over a tank that left goes with it.
+                let over_cause = triggers[ui.trigger]
+                    .ui
+                    .as_deref()
+                    .is_some_and(|ui| ui.pin == UiPin::Cause);
+                (ui.viewer == 0 || here(&ui.viewer)) && !(over_cause && !here(&ui.cause))
             });
         }
         if self.map_ui.len() == before && !self.map_ui_dirty && !refresh {
@@ -152,10 +174,32 @@ impl World {
         self.map_ui_dirty = false;
         let mut wanted: BTreeMap<(String, EntityId, String), HudWidget> = BTreeMap::new();
         for shown in &self.map_ui {
-            let Some(ui) = self.map.triggers[shown.trigger].ui.as_deref() else {
+            let trigger = &self.map.triggers[shown.trigger];
+            let Some(ui) = trigger.ui.as_deref() else {
                 continue;
             };
-            let duration = self.map.triggers[shown.trigger].duration;
+            let duration = trigger.duration;
+            let cause = self
+                .tanks
+                .iter()
+                .find(|tank| tank.id == shown.cause)
+                .map_or("", |tank| tank.name.as_str());
+            let [x, y, w, h] = trigger.rect;
+            let pin = match ui.pin {
+                UiPin::Screen => HudPin::Screen,
+                UiPin::Area if trigger.member != 0 => HudPin::Group {
+                    id: trigger.member,
+                    at: [
+                        (x + w * 0.5) * self.config.width,
+                        (y + h * 0.5) * self.config.height,
+                    ],
+                },
+                UiPin::Area => {
+                    let at = crate::map_point(&self.config, [x + w * 0.5, y + h * 0.5]);
+                    HudPin::World([at.x, at.y])
+                }
+                UiPin::Cause => HudPin::Tank(shown.cause),
+            };
             // A widget some players no longer see goes to each of the others.
             let personal = ui.personal() || shown.viewer != 0 || !shown.except.is_empty();
             let viewers = self.tanks.iter().filter(|tank| {
@@ -173,9 +217,10 @@ impl World {
                         left: shown.until - now,
                         time: now,
                         name: &tank.name,
+                        cause,
                         score: u64::from(tank.score),
                     };
-                    if let Some(widget) = fill_widget(ui, &fill, duration, shown.menu) {
+                    if let Some(widget) = fill_widget(ui, &fill, duration, shown.menu, pin) {
                         wanted.insert((MAP_HUD.into(), tank.id, ui_slot_id(shown.slot)), widget);
                     }
                 }
@@ -185,9 +230,10 @@ impl World {
                     left: shown.until - now,
                     time: now,
                     name: "",
+                    cause,
                     score: 0,
                 };
-                if let Some(widget) = fill_widget(ui, &fill, duration, shown.menu) {
+                if let Some(widget) = fill_widget(ui, &fill, duration, shown.menu, pin) {
                     wanted.insert((MAP_HUD.into(), 0, ui_slot_id(shown.slot)), widget);
                 }
             }
@@ -290,10 +336,17 @@ impl World {
     }
 }
 
-/// `ui`'s widget with its fields filled in, or None when nothing is left
-/// to show.
-fn fill_widget(ui: &MapUi, fill: &UiFill, duration: f32, menu: u32) -> Option<HudWidget> {
+/// `ui`'s widget with its fields filled in and pinned to `pin`, or None
+/// when nothing is left to show.
+fn fill_widget(
+    ui: &MapUi,
+    fill: &UiFill,
+    duration: f32,
+    menu: u32,
+    pin: HudPin,
+) -> Option<HudWidget> {
     let mut widget = ui.widget.clone();
+    widget.pin = pin;
     widget.text = fill_ui_text(&widget.text, fill, HUD_TEXT);
     widget.title = fill_ui_text(&widget.title, fill, HUD_TITLE);
     if ui.bar > 0 {
@@ -306,7 +359,9 @@ fn fill_widget(ui: &MapUi, fill: &UiFill, duration: f32, menu: u32) -> Option<Hu
     } else if ui.timer && duration > 0. {
         widget.progress = Some((fill.left / duration).clamp(0., 1.));
     }
-    widget.menu = if widget.choices.is_empty() { 0 } else { menu };
+    // Even a label needs a stable identity while its text or pin moves.
+    // A pick is still rejected when the widget has no choices.
+    widget.menu = menu;
     widget.valid().then_some(widget)
 }
 
@@ -394,6 +449,58 @@ mod tests {
         run(&mut world, 2.);
         assert!(mine(&world, player).is_empty(), "gone after its duration");
         assert!(world.shown_ui().is_empty());
+    }
+
+    #[test]
+    fn pinned_widgets_float_over_their_area_or_the_tank_that_set_them_off() {
+        let mut world = world_with(vec![
+            show(
+                1,
+                MapUi {
+                    widget: widget("Shop"),
+                    pin: UiPin::Area,
+                    ..MapUi::default()
+                },
+            ),
+            show(
+                2,
+                MapUi {
+                    widget: widget("It"),
+                    pin: UiPin::Cause,
+                    ..MapUi::default()
+                },
+            ),
+        ]);
+        let watcher = world.add_player("Watcher", false);
+        let it = world.add_player("It", false);
+        run(&mut world, 1.);
+        let shown = mine(&world, watcher);
+        assert_eq!(
+            shown.len(),
+            1,
+            "nothing to float over without a tank that set it off: {shown:?}"
+        );
+        let HudPin::World([x, y]) = shown[0].pin else {
+            panic!("over the area: {:?}", shown[0].pin);
+        };
+        assert!((x - world.config.width * 0.5).abs() < 0.01);
+        assert!((y - world.config.height * 0.5).abs() < 0.01);
+        world.show_ui(1, 2, None, it);
+        run(&mut world, 0.2);
+        let over = mine(&world, watcher)
+            .into_iter()
+            .find(|widget| widget.text == "It")
+            .expect("shown over the tank");
+        assert_eq!(over.pin, HudPin::Tank(it));
+        world.remove_player(it);
+        run(&mut world, 0.2);
+        assert!(
+            mine(&world, watcher)
+                .iter()
+                .all(|widget| widget.text != "It"),
+            "it goes with its tank"
+        );
+        assert_eq!(mine(&world, watcher).len(), 1, "the shop sign stays");
     }
 
     #[test]
@@ -516,6 +623,7 @@ mod tests {
             left: 3.2,
             time: 125.,
             name: "Bo",
+            cause: "Zoë",
             score: 7,
         };
         assert_eq!(
@@ -523,11 +631,151 @@ mod tests {
             "5/-2 4 2:05 Bo 7 {9} {x} {"
         );
         assert_eq!(fill_ui_text("{name}", &fill, 1), "B");
+        assert_eq!(fill_ui_text("{cause}", &fill, 120), "Zoë");
+        assert_eq!(fill_ui_text("{cause}", &fill, 3), "Zo");
         let staying = UiFill {
             left: f32::INFINITY,
             ..fill
         };
         assert_eq!(fill_ui_text("[{left}]", &staying, 120), "[]");
+    }
+
+    #[test]
+    fn all_thirty_two_slots_stay_distinct_and_hide_independently() {
+        let mut world = world_with(
+            (1..=32)
+                .map(|slot| {
+                    show(
+                        slot,
+                        MapUi {
+                            widget: widget(&format!("Slot {slot}")),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+        );
+        let player = world.add_player("Pilot", false);
+        run(&mut world, 1.);
+        let shown = mine(&world, player);
+        assert_eq!(shown.len(), 32);
+        let ids: std::collections::BTreeSet<_> = shown.iter().map(|widget| widget.menu).collect();
+        assert_eq!(
+            ids.len(),
+            32,
+            "overlapping labels keep their own identities"
+        );
+        assert!(
+            !world.choose(player, shown[0].menu, 0),
+            "labels are not choices"
+        );
+        world.hide_ui(32, None);
+        run(&mut world, 0.2);
+        assert_eq!(mine(&world, player).len(), 31);
+        assert!(
+            mine(&world, player)
+                .iter()
+                .all(|widget| widget.text != "Slot 32")
+        );
+    }
+
+    #[test]
+    fn cause_names_survive_delays_without_expanding_fields_inside_names() {
+        let mut world = world_with(vec![
+            MapTrigger {
+                group: 1,
+                amount: 7,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Set)
+            },
+            MapTrigger {
+                group: 2,
+                delay: 0.2,
+                ..trigger(TriggerWhen::Enter, TriggerAction::Signal)
+            },
+            MapTrigger {
+                source: 2,
+                text: "{cause} switched {1}".into(),
+                ..trigger(TriggerWhen::Signal, TriggerAction::Announce)
+            },
+            MapTrigger {
+                source: 2,
+                group: 1,
+                ui: Some(Box::new(MapUi {
+                    widget: widget("{cause}: {1}"),
+                    ..Default::default()
+                })),
+                ..trigger(TriggerWhen::Signal, TriggerAction::Ui)
+            },
+        ]);
+        let who = world.add_player("Zoë {2}", false);
+        let spectator = world.add_player("Viewer", false);
+        world
+            .tanks
+            .iter_mut()
+            .find(|tank| tank.id == who)
+            .unwrap()
+            .pos = V2::new(1800., 1300.);
+        world
+            .tanks
+            .iter_mut()
+            .find(|tank| tank.id == spectator)
+            .unwrap()
+            .pos = V2::new(100., 100.);
+        run(&mut world, 0.1);
+        world
+            .tanks
+            .iter_mut()
+            .find(|tank| tank.id == who)
+            .unwrap()
+            .pos = V2::new(200., 200.);
+        run(&mut world, 0.4);
+        assert_eq!(world.match_state.announcement, "Zoë {2} switched 7");
+        assert_eq!(mine(&world, spectator)[0].text, "Zoë {2}: 7");
+        world.remove_player(who);
+        run(&mut world, 0.2);
+        assert_eq!(mine(&world, spectator)[0].text, ": 7");
+    }
+
+    #[test]
+    fn area_markers_follow_group_poses_without_changing_identity() {
+        let mut world = world_with(vec![
+            MapTrigger {
+                member: 1,
+                seconds: 0.,
+                ..show(
+                    1,
+                    MapUi {
+                        widget: widget("Platform"),
+                        pin: UiPin::Area,
+                        ..Default::default()
+                    },
+                )
+            },
+            MapTrigger {
+                group: 1,
+                seconds: 0.,
+                travel: [0.1, 0.],
+                tween: 1.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Move)
+            },
+        ]);
+        let player = world.add_player("Pilot", false);
+        run(&mut world, 0.2);
+        let before = mine(&world, player).remove(0);
+        assert_eq!(
+            before.pin,
+            HudPin::Group {
+                id: 1,
+                at: [1800., 1300.]
+            }
+        );
+        run(&mut world, 1.);
+        let after = mine(&world, player).remove(0);
+        assert_eq!(before.menu, after.menu);
+        let snapshot = world.snapshot();
+        let poses = crate::snapshot_poses(&snapshot, snapshot.match_state.elapsed);
+        assert!((poses.offset(1)[0] - 0.1).abs() < 0.0001);
     }
 
     #[test]
@@ -537,7 +785,7 @@ mod tests {
         assert_eq!(menu_number("pack", "menu"), menu_number("pack", "menu"));
         let mut world = world_with(vec![]);
         world.map.triggers = vec![show(1, MapUi::starter())];
-        world.show_ui(0, 1, None);
+        world.show_ui(0, 1, None, 0);
         assert_eq!(world.shown_ui()[0].menu & 1 << 31, 0);
     }
 }

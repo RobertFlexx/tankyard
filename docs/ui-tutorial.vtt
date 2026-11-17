@@ -1,0 +1,31 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:03.000
+Arcade Hall open in the Arena Workshop. Select its Show UI trigger.
+
+00:00:03.000 --> 00:00:07.000
+The live preview shows six choices in a grid. Replay entrance runs its animation.
+
+00:00:07.000 --> 00:00:12.000
+{name} becomes the viewer’s name. {cause} names the tank that set it off.
+
+00:00:12.000 --> 00:00:18.000
+Choose a screen position, an area in the arena, or the tank that set it off.
+
+00:00:18.000 --> 00:00:21.800
+Point at the shop and press Shift+F5 to playtest from here.
+
+00:00:21.800 --> 00:00:24.000
+Vault guide sends a signal that shows a personal waypoint.
+
+00:00:24.000 --> 00:00:26.000
+The arrow points toward the vault, clear of the normal HUD.
+
+00:00:26.000 --> 00:00:28.300
+Escape returns to the editor. Start another playtest to try another choice.
+
+00:00:28.300 --> 00:00:31.000
++300 points rewards the player who chose it. The click does not fire a shot.
+
+00:00:31.000 --> 00:00:34.233
+Check lists map issues. Save keeps a project; Export makes a shareable pack.

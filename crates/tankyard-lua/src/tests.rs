@@ -598,6 +598,49 @@ fn packs_using_the_global_table_see_every_global_write() {
 }
 
 #[test]
+fn scripts_pin_widgets_over_spots_and_tanks() {
+    let (world, runtime) = run(
+        r##"
+        tankyard.on("tick", function(event)
+          local players = tankyard.players()
+          tankyard.hud("tag", { text = "It", pin = players[1].id, point = true, glow = true })
+          tankyard.hud("shop", {
+            title = "Shop", pin = { x = 640, y = 480.5 }, layout = "grid",
+            choices = { "a", "b", "c", "d", "e", "f" },
+          })
+          tankyard.hud("sign", { text = "Here", pin = { 10, 20 } })
+          tankyard.hud("platform", { text = "Ride", pin = { x = 10, y = 20, group = 2 } })
+        end)
+        "##,
+        2,
+    );
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    let player = world.tanks.iter().find(|t| !t.bot).unwrap().id;
+    let mine = world.hud_for(player);
+    let find = |text: &str| {
+        mine.iter()
+            .find(|w| w.text == text || w.title == text)
+            .unwrap()
+    };
+    let tag = find("It");
+    assert_eq!(tag.pin, tankyard_mods::HudPin::Tank(player));
+    assert!(tag.point && tag.glow);
+    let shop = find("Shop");
+    assert_eq!(shop.pin, tankyard_mods::HudPin::World([640., 480.5]));
+    assert_eq!(shop.layout, tankyard_mods::HudLayout::Grid);
+    assert_eq!(shop.choices.len(), 6);
+    assert_eq!(find("Here").pin, tankyard_mods::HudPin::World([10., 20.]));
+    assert_eq!(
+        find("Ride").pin,
+        tankyard_mods::HudPin::Group {
+            id: 2,
+            at: [10., 20.]
+        }
+    );
+    assert_ne!(find("Here").menu, find("Ride").menu);
+}
+
+#[test]
 fn scripts_show_hud_widgets_to_everyone_or_one_player() {
     let (world, runtime) = run(
         r##"
@@ -639,8 +682,32 @@ fn scripts_show_hud_widgets_to_everyone_or_one_player() {
             "style must be one of",
         ),
         (
-            r#"tankyard.hud("a", { choices = { "a", "b", "c", "d", "e" } })"#,
-            "up to 4 choices",
+            r#"tankyard.hud("a", { choices = { "a", "b", "c", "d", "e", "f", "g" } })"#,
+            "up to 6 choices",
+        ),
+        (
+            r#"tankyard.hud("a", { text = "x", pin = { 10 } })"#,
+            "pin y must be a number",
+        ),
+        (
+            r#"tankyard.hud("a", { text = "x", pin = "me" })"#,
+            "tank id must be a number",
+        ),
+        (
+            r#"tankyard.hud("a", { text = "x", pin = { 1e9, 0 } })"#,
+            "pin x and y must be between",
+        ),
+        (
+            r#"tankyard.hud("a", { text = "x", layout = "spiral" })"#,
+            "layout must be one of",
+        ),
+        (
+            r#"tankyard.hud("a", { text = "x", pin = { x = 1, y = 2, group = 33 } })"#,
+            "pin group must be a whole number",
+        ),
+        (
+            r#"tankyard.hud("a", { text = "x", pin = { x = 1, y = 2, group = 1.5 } })"#,
+            "pin group must be a whole number",
         ),
         (
             r#"tankyard.hud("a", { text = "x", segments = 2.5 })"#,
@@ -685,7 +752,8 @@ fn empty_choice_lists_and_control_characters_in_choices_are_harmless() {
     let menu = shown.iter().find(|w| w.text == "Go?").expect("the menu");
     assert_eq!(menu.choices, ["Go now", "Line break"]);
     let plain = shown.iter().find(|w| w.text == "Wave 2").expect("the line");
-    assert!(plain.choices.is_empty() && plain.menu == 0);
+    assert!(plain.choices.is_empty());
+    assert!(!world.choose(player, plain.menu, 0));
 }
 
 #[test]

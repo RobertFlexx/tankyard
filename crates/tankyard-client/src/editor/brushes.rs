@@ -1292,6 +1292,60 @@ pub fn catalog() -> Vec<Vec<Brush>> {
             )
             .hint("Asks the player who drives in to pick; choices send signals 1 and 2"),
             logic(
+                "Sign",
+                [240., 240.],
+                MapTrigger {
+                    when: TriggerWhen::Start,
+                    action: TriggerAction::Ui,
+                    group: 4,
+                    seconds: 0.,
+                    ui: Some(Box::new(MapUi {
+                        widget: HudWidget {
+                            title: "Shop".into(),
+                            text: "Drive in to browse".into(),
+                            style: HudStyle::Card,
+                            icon: HudIcon::Coin,
+                            enter: HudEnter::Pop,
+                            glow: true,
+                            ..HudWidget::default()
+                        },
+                        pin: UiPin::Area,
+                        ..MapUi::default()
+                    })),
+                    ..Default::default()
+                },
+            )
+            .hint("Floats a glowing sign over its area all round"),
+            logic(
+                "Tank marker",
+                [240., 240.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Ui,
+                    group: 5,
+                    seconds: 2.,
+                    ui: Some(Box::new(MapUi {
+                        widget: HudWidget {
+                            text: "Bounty".into(),
+                            style: HudStyle::Pill,
+                            icon: HudIcon::Crown,
+                            size: 15.,
+                            enter: HudEnter::Pop,
+                            glow: true,
+                            pulse: true,
+                            point: true,
+                            ..HudWidget::default()
+                        },
+                        pin: UiPin::Cause,
+                        ..MapUi::default()
+                    })),
+                    ..Default::default()
+                },
+            )
+            .hint(
+                "Marks the tank that drives in for everyone, with an arrow while it's off screen",
+            ),
+            logic(
                 "Hide UI",
                 small,
                 MapTrigger {
@@ -2318,7 +2372,12 @@ mod tests {
         assert_eq!(hidden & lights, still);
         let opened = effects
             .iter()
-            .filter(|e| **e == LogicEffect::Announce("The vault is open!".into()))
+            .filter(|e| {
+                **e == LogicEffect::Announce {
+                    text: "The vault is open!".into(),
+                    cause: 1,
+                }
+            })
             .count();
         assert_eq!(opened, 2, "the alarm announces each opening");
     }
@@ -2380,7 +2439,10 @@ mod tests {
         assert_eq!(logic.poses().offset(5), [0., 0.]);
         let (_, said) = run(4., away, &mut logic);
         assert!((3..=5).all(|group| landed(&logic, group)));
-        let set = LogicEffect::Announce("The gates are set!".into());
+        let set = LogicEffect::Announce {
+            text: "The gates are set!".into(),
+            cause: 0,
+        };
         assert_eq!(said.iter().filter(|e| **e == set).count(), 1);
 
         // A tank drives up: the door slides open and the light blinks.

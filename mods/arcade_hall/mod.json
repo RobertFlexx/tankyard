@@ -2,12 +2,12 @@
   "api_version": 2,
   "id": "arcade_hall",
   "name": "Arcade Hall",
-  "version": "1.0",
+  "version": "1.1.0",
   "maps": [
     {
       "id": "arcade_hall",
       "name": "Arcade Hall",
-      "description": "A neon hall built from the 1.4 workshop's UI triggers: a coin counter with a jackpot, a shop menu, a vault countdown and a vote for the next event.",
+      "description": "A neon hall built from the 1.5 workshop's UI triggers: a coin counter with a jackpot, a shop menu, a vault countdown and a vote for the next event.",
       "width": 3200,
       "height": 2200,
       "capacity": 16,
@@ -1098,13 +1098,20 @@
               "choices": [
                 "Repair",
                 "+300 points",
+                "Vault guide",
+                "How to play",
+                "Stage lights",
                 "Leave"
-              ]
+              ],
+              "layout": "grid"
             },
             "to": "cause",
             "channels": [
               1,
               2,
+              9,
+              10,
+              11,
               0
             ]
           }
@@ -1296,6 +1303,129 @@
           ],
           "source": 6,
           "group": 7
+        },
+        {
+          "when": "signal",
+          "action": "ui",
+          "rect": [
+            0.07,
+            0.37,
+            0.12,
+            0.26
+          ],
+          "source": 9,
+          "group": 30,
+          "duration": 12,
+          "ui": {
+            "pin": "area",
+            "to": "cause",
+            "widget": {
+              "title": "VAULT",
+              "text": "Opens at 0:40",
+              "style": "card",
+              "icon": "lock",
+              "size": 16,
+              "point": true,
+              "glow": true,
+              "enter": "pop",
+              "accent": [
+                110,
+                230,
+                150
+              ]
+            }
+          }
+        },
+        {
+          "when": "signal",
+          "action": "ui",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "source": 10,
+          "group": 31,
+          "duration": 7,
+          "ui": {
+            "to": "cause",
+            "widget": {
+              "title": "Arcade basics",
+              "text": "Collect 20 coins for a jackpot. First inside the vault wins 1,000 points.",
+              "style": "card",
+              "icon": "info",
+              "y": 0.36,
+              "enter": "fade",
+              "accent": [
+                64,
+                220,
+                230
+              ]
+            }
+          }
+        },
+        {
+          "when": "signal",
+          "action": "light",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "source": 11,
+          "amount": 15,
+          "tween": 1,
+          "duration": 8,
+          "color": [
+            20,
+            24,
+            40
+          ]
+        },
+        {
+          "when": "signal",
+          "action": "announce",
+          "rect": [
+            0.45,
+            0.45,
+            0.1,
+            0.1
+          ],
+          "source": 11,
+          "text": "{cause} called the stage lights."
+        },
+        {
+          "when": "enter",
+          "action": "ui",
+          "rect": [
+            0.07,
+            0.37,
+            0.12,
+            0.26
+          ],
+          "group": 32,
+          "once": true,
+          "duration": 8,
+          "ui": {
+            "pin": "cause",
+            "widget": {
+              "title": "{cause}",
+              "text": "Vault champion",
+              "style": "pill",
+              "icon": "crown",
+              "size": 15,
+              "point": true,
+              "glow": true,
+              "enter": "pop",
+              "accent": [
+                255,
+                196,
+                64
+              ]
+            }
+          }
         }
       ],
       "ambient": {

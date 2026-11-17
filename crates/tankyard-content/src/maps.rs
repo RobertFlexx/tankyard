@@ -1237,7 +1237,7 @@ impl TriggerWho {
 }
 
 /// The map widget slots, numbered from 1.
-pub const MAP_UI_SLOTS: u8 = 16;
+pub const MAP_UI_SLOTS: u8 = 32;
 
 /// Who sees a Show UI trigger's widget.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1263,6 +1263,29 @@ impl UiAudience {
     }
 }
 
+/// Where a Show UI trigger's widget sits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiPin {
+    /// On the screen, where the widget's `x` and `y` put it.
+    #[default]
+    Screen,
+    /// Over the middle of the trigger's area.
+    Area,
+    /// Over the tank that set the trigger off, following it.
+    Cause,
+}
+impl UiPin {
+    pub const ALL: [Self; 3] = [Self::Screen, Self::Area, Self::Cause];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Screen => "On the screen",
+            Self::Area => "Over the area",
+            Self::Cause => "Over the tank that set it off",
+        }
+    }
+}
+
 /// A widget a Show UI trigger puts on players' screens. Its text and title
 /// fill in `{1}` to `{8}` (counters, as in announcements), `{left}` (seconds
 /// before it goes), `{time}` (the round's clock), `{name}` and `{score}`
@@ -1270,6 +1293,7 @@ impl UiAudience {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MapUi {
+    #[serde(serialize_with = "map_widget")]
     pub widget: crate::HudWidget,
     #[serde(default, skip_serializing_if = "is_default")]
     pub to: UiAudience,
@@ -1289,6 +1313,101 @@ pub struct MapUi {
     /// Whether a menu stays open after a pick.
     #[serde(default, skip_serializing_if = "is_default")]
     pub keep: bool,
+    // Added in 1.5.0, and likewise left out when unused.
+    /// What the widget floats over. Servers pin the widget itself; a map
+    /// widget's own `pin` stays on the screen.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub pin: UiPin,
+}
+
+/// Writes a map widget leaving out the fields added in 1.5.0 while they
+/// are unused, so maps that do without them still load in 1.4.0. Every
+/// field is named here, so a new one cannot be forgotten.
+fn map_widget<S: serde::Serializer>(widget: &crate::HudWidget, out: S) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Written<'a> {
+        text: &'a String,
+        x: f32,
+        y: f32,
+        align: crate::HudAlign,
+        size: f32,
+        color: Option<[u8; 3]>,
+        progress: Option<f32>,
+        bar_color: Option<[u8; 3]>,
+        width: f32,
+        style: crate::HudStyle,
+        title: &'a String,
+        icon: crate::HudIcon,
+        panel: Option<[u8; 3]>,
+        opacity: f32,
+        accent: Option<[u8; 3]>,
+        enter: crate::HudEnter,
+        pulse: bool,
+        segments: u8,
+        choices: &'a Vec<String>,
+        menu: u32,
+        #[serde(skip_serializing_if = "is_default")]
+        pin: crate::HudPin,
+        #[serde(skip_serializing_if = "is_default")]
+        point: bool,
+        #[serde(skip_serializing_if = "is_default")]
+        layout: crate::HudLayout,
+        #[serde(skip_serializing_if = "is_default")]
+        glow: bool,
+    }
+    let crate::HudWidget {
+        text,
+        x,
+        y,
+        align,
+        size,
+        color,
+        progress,
+        bar_color,
+        width,
+        style,
+        title,
+        icon,
+        panel,
+        opacity,
+        accent,
+        enter,
+        pulse,
+        segments,
+        choices,
+        menu,
+        pin,
+        point,
+        layout,
+        glow,
+    } = widget;
+    Written {
+        text,
+        x: *x,
+        y: *y,
+        align: *align,
+        size: *size,
+        color: *color,
+        progress: *progress,
+        bar_color: *bar_color,
+        width: *width,
+        style: *style,
+        title,
+        icon: *icon,
+        panel: *panel,
+        opacity: *opacity,
+        accent: *accent,
+        enter: *enter,
+        pulse: *pulse,
+        segments: *segments,
+        choices,
+        menu: *menu,
+        pin: *pin,
+        point: *point,
+        layout: *layout,
+        glow: *glow,
+    }
+    .serialize(out)
 }
 impl MapUi {
     /// A widget for a new Show UI trigger: a card near the top.
@@ -1325,6 +1444,8 @@ pub struct UiFill<'a> {
     pub left: f32,
     pub time: f32,
     pub name: &'a str,
+    /// The tank that set off the trigger, or empty when it has no tank.
+    pub cause: &'a str,
     pub score: u64,
 }
 /// `template` with its fields filled, cut to `max` bytes. Unknown fields
@@ -1354,6 +1475,7 @@ pub fn fill_ui_text(template: &str, fill: &UiFill, max: usize) -> String {
             "left" => Some(format!("{}", fill.left.max(0.).ceil() as u64)),
             "time" => Some(clock(fill.time)),
             "name" => Some(fill.name.to_owned()),
+            "cause" => Some(fill.cause.to_owned()),
             "score" => Some(fill.score.to_string()),
             _ => Some(field)
                 .filter(|n| n.len() == 1)
@@ -2127,6 +2249,9 @@ fn validate_ui(ui: &MapUi) -> Result<(), String> {
     if ui.widget.menu != 0 {
         return Err("leave the widget's menu number to the game".into());
     }
+    if ui.widget.pinned() {
+        return Err("pin a map widget with the trigger's pin, not the widget's".into());
+    }
     if ui.bar > MAP_COUNTERS || (ui.bar > 0 && !(1..=COUNTER_LIMIT).contains(&ui.bar_max)) {
         return Err(format!(
             "fill the bar from a counter from 1 to {MAP_COUNTERS}, out of 1 to {COUNTER_LIMIT}"
@@ -2830,5 +2955,24 @@ mod tests {
             assert_eq!(action.channels(4, i32::MIN), 4..=4);
             assert!(action.channels(u8::MAX, i32::MAX).is_empty());
         }
+    }
+
+    #[test]
+    fn map_widgets_write_newer_fields_only_when_used() {
+        let mut ui = MapUi::starter();
+        let plain = serde_json::to_string(&ui).expect("writes");
+        for newer in ["\"pin\"", "\"point\"", "\"layout\"", "\"glow\""] {
+            assert!(!plain.contains(newer), "{newer} in {plain}");
+        }
+        assert_eq!(serde_json::from_str::<MapUi>(&plain).expect("reads"), ui);
+        ui.pin = UiPin::Cause;
+        ui.widget.point = true;
+        ui.widget.layout = crate::HudLayout::Grid;
+        ui.widget.glow = true;
+        let styled = serde_json::to_string(&ui).expect("writes");
+        assert_eq!(serde_json::from_str::<MapUi>(&styled).expect("reads"), ui);
+        assert!(validate_ui(&ui).is_ok());
+        ui.widget.pin = crate::HudPin::Tank(3);
+        assert!(validate_ui(&ui).is_err(), "maps pin with the trigger");
     }
 }

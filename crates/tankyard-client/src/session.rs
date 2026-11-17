@@ -1096,6 +1096,23 @@ impl Session {
             };
         }
     }
+    /// Where a HUD widget pinned to `pin` floats on screen through `view`,
+    /// `fraction` of a tick after the last one, as the arena is drawn.
+    pub fn pin_place(
+        &self,
+        view: &crate::render::View,
+        fraction: f32,
+        pin: tankyard_content::HudPin,
+    ) -> Option<crate::hud_widgets::Pinned> {
+        crate::render::pin_place(
+            self.display.as_ref()?,
+            self.player,
+            view,
+            self.render_fraction(fraction),
+            &self.previous_positions,
+            pin,
+        )
+    }
     pub fn render_fraction(&self, fraction: f32) -> f32 {
         if self.offline_mode() {
             fraction.clamp(0.0, 1.0)

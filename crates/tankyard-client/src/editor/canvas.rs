@@ -538,17 +538,24 @@ impl Editor {
         // The preview's widgets sit over the arena: a click on one of their
         // choices picks it, and a click elsewhere on them does nothing.
         if inside && self.gesture.is_none() && !self.preview.ui.is_empty() {
-            let widgets = self.preview.widgets();
-            let over = widgets.iter().position(|(widget, _)| {
-                crate::hud_widgets::covers(widget, canvas, layout.s, pointer)
-                    && !widget.choices.is_empty()
+            let config = self.config();
+            let widgets = self.preview.widgets(&config);
+            // The last drawn is on top.
+            let over = widgets.iter().rev().find_map(|(index, widget, age)| {
+                let pinned = self.pin_place(widget.pin);
+                if widget.choices.is_empty() || (widget.pinned() && pinned.is_none()) {
+                    return None;
+                }
+                crate::hud_widgets::covers(widget, canvas, layout.s, pointer, pinned, *age)
+                    .then_some((index, widget, pinned, *age))
             });
-            if let Some(index) = over {
+            if let Some((index, widget, pinned, age)) = over {
                 if is_mouse_button_pressed(MouseButton::Left)
-                    && let Some(option) =
-                        crate::hud_widgets::choice_at(&widgets[index].0, canvas, layout.s, pointer)
+                    && let Some(option) = crate::hud_widgets::choice_at(
+                        widget, canvas, layout.s, pointer, pinned, age,
+                    )
                 {
-                    let config = self.config();
+                    let index = *index;
                     self.preview.pick(&self.doc.map, &config, index, option);
                 }
                 self.hover = None;
@@ -1490,6 +1497,34 @@ impl Editor {
             }
         }
     }
+    /// Where a widget pinned to `pin` floats on the canvas: over a spot in
+    /// the arena, or over the test tank while there is one.
+    fn pin_place(&self, pin: HudPin) -> Option<crate::hud_widgets::Pinned> {
+        match pin {
+            HudPin::Screen => None,
+            HudPin::Group { id, at } => {
+                if self.preview.hidden & MapDef::group_bit(id) != 0 {
+                    return None;
+                }
+                let offset = self.preview.poses().offset(id);
+                Some(crate::hud_widgets::Pinned {
+                    at: self.view.screen(V2::new(
+                        at[0] + offset[0] * self.doc.map.width,
+                        at[1] + offset[1] * self.doc.map.height,
+                    )),
+                    above: None,
+                })
+            }
+            HudPin::World([x, y]) => Some(crate::hud_widgets::Pinned {
+                at: self.view.screen(V2::new(x, y)),
+                above: None,
+            }),
+            HudPin::Tank(_) => self.preview.probe().map(|at| crate::hud_widgets::Pinned {
+                at: self.view.screen(at),
+                above: Some((28. * self.view.zoom).max(5.)),
+            }),
+        }
+    }
     fn draw_preview_marks(&self, s: f32) {
         let preview = &self.preview;
         if preview.at_start() && !preview.running {
@@ -1642,7 +1677,11 @@ impl Editor {
                     canvas.bottom() - size - 20. * s,
                 );
             }
-            for (widget, age) in preview.widgets() {
+            for (_, widget, age) in preview.widgets(&self.config()) {
+                let pinned = self.pin_place(widget.pin);
+                if widget.pinned() && pinned.is_none() {
+                    continue;
+                }
                 crate::hud_widgets::preview(
                     &widget,
                     canvas,
@@ -1650,6 +1689,7 @@ impl Editor {
                     age,
                     0.,
                     canvas.contains(pointer).then_some(pointer),
+                    pinned,
                 );
             }
             if let Some((at, text)) = &preview.banner

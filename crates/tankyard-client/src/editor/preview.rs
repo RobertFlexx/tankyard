@@ -1,8 +1,8 @@
 //! Logic preview: the arena's triggers run in the editor with the same rule
 //! engine servers use, with a test tank at the pointer for area triggers.
 use tankyard_content::{
-    GroupPoses, HUD_TEXT, HUD_TITLE, HudWidget, MAP_COUNTERS, MapDef, MapSound, MapTrigger, UiFill,
-    fill_ui_text,
+    GroupPoses, HUD_TEXT, HUD_TITLE, HudPin, HudWidget, MAP_COUNTERS, MapDef, MapSound, MapTrigger,
+    UiFill, UiPin, fill_ui_text,
 };
 use tankyard_core::{DT, LogicEffect, LogicInput, MapLogic, Occupant, V2, WorldConfig};
 
@@ -27,6 +27,8 @@ pub struct PreviewUi {
     pub trigger: usize,
     pub since: f32,
     pub until: f32,
+    /// Whether the test tank set it off, for widgets pinned over it.
+    pub by_test_tank: bool,
 }
 
 pub struct Preview {
@@ -252,9 +254,17 @@ impl Preview {
                     trigger,
                     slot,
                     viewers,
+                    cause,
                 } => {
                     let reached = viewers.as_ref().is_none_or(|list| list.contains(&1));
-                    if reached {
+                    // As on a server, a widget over the tank that set it off
+                    // needs that tank.
+                    let over_nothing = self
+                        .triggers
+                        .get(trigger)
+                        .and_then(|t| t.ui.as_deref())
+                        .is_some_and(|ui| ui.pin == UiPin::Cause && cause == 0);
+                    if reached && !over_nothing {
                         let duration = self.triggers.get(trigger).map_or(0., |t| t.duration);
                         self.ui.retain(|ui| ui.slot != slot);
                         self.ui.push(PreviewUi {
@@ -266,10 +276,13 @@ impl Preview {
                             } else {
                                 f32::INFINITY
                             },
+                            by_test_tank: cause == 1,
                         });
                     }
                     (
-                        if reached {
+                        if over_nothing {
+                            format!("Shows UI slot {slot}, but no tank set it off")
+                        } else if reached {
                             format!("Shows UI slot {slot}")
                         } else {
                             format!("Shows UI slot {slot}, but not to the test tank")
@@ -290,7 +303,11 @@ impl Preview {
                         None,
                     )
                 }
-                LogicEffect::Announce(text) => {
+                LogicEffect::Announce { text, cause } => {
+                    let text = tankyard_content::clip_text(
+                        &text.replace("{cause}", if cause == 1 { "Test tank" } else { "" }),
+                        256,
+                    );
                     self.banner = Some((self.time, text.clone()));
                     (format!("Announced \u{201c}{text}\u{201d}"), None)
                 }
@@ -402,22 +419,40 @@ impl Preview {
             self.events.drain(..self.events.len() - 40);
         }
     }
-    /// The widgets on the test tank's screen, filled in, with how long each
-    /// has shown.
-    pub fn widgets(&self) -> Vec<(HudWidget, f32)> {
+    /// The widgets on the test tank's screen, filled in and pinned in an
+    /// arena of `config`'s size, with how long each has shown and its
+    /// index for [`Preview::pick`]. The test tank is tank 1.
+    pub fn widgets(&self, config: &WorldConfig) -> Vec<(usize, HudWidget, f32)> {
         self.ui
             .iter()
-            .filter_map(|shown| {
+            .enumerate()
+            .filter_map(|(index, shown)| {
                 let trigger = self.triggers.get(shown.trigger)?;
                 let ui = trigger.ui.as_deref()?;
+                let [x, y, w, h] = trigger.rect;
+                let pin = match ui.pin {
+                    UiPin::Screen => HudPin::Screen,
+                    UiPin::Area if trigger.member != 0 => HudPin::Group {
+                        id: trigger.member,
+                        at: [(x + w * 0.5) * config.width, (y + h * 0.5) * config.height],
+                    },
+                    UiPin::Area => {
+                        let at = tankyard_core::map_point(config, [x + w * 0.5, y + h * 0.5]);
+                        HudPin::World([at.x, at.y])
+                    }
+                    UiPin::Cause if shown.by_test_tank => HudPin::Tank(1),
+                    UiPin::Cause => return None,
+                };
                 let fill = UiFill {
                     counters: &self.counters,
                     left: shown.until - self.time,
                     time: self.time,
                     name: "Test tank",
+                    cause: if shown.by_test_tank { "Test tank" } else { "" },
                     score: 0,
                 };
                 let mut widget = ui.widget.clone();
+                widget.pin = pin;
                 widget.text = fill_ui_text(&widget.text, &fill, HUD_TEXT);
                 widget.title = fill_ui_text(&widget.title, &fill, HUD_TITLE);
                 if ui.bar > 0 {
@@ -429,11 +464,11 @@ impl Preview {
                 }
                 widget
                     .valid()
-                    .then_some((widget, (self.time - shown.since).max(0.)))
+                    .then_some((index, widget, (self.time - shown.since).max(0.)))
             })
             .collect()
     }
-    /// The test tank picks choice `option` of the widget at `index` of
+    /// The test tank picks choice `option` of the widget with `index` from
     /// [`Preview::widgets`], as a player would.
     pub fn pick(&mut self, map: &MapDef, config: &WorldConfig, index: usize, option: u8) {
         let Some(shown) = self.ui.get(index) else {

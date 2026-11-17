@@ -9,7 +9,7 @@ Anyone can host a Tank Yard server: from the game in a few clicks, or as a dedic
 | It to start with the machine and restart if it stops | [Run it as a service](#run-it-as-a-service) | 10 minutes |
 | Players to join `play.example.com`, or no port forwarding | [Your own domain](hosting-domain.md) | 20 minutes |
 
-Players never install your mods: the server sends its checked mod data when they join. Clients and the server must use compatible protocol versions. Tank Yard 1.4.0 uses protocol 30, so its clients and servers play only with each other. Version 1.3.0 used protocol 29, 1.1.0 and 1.2.0 used protocol 28, 1.0.0 used 26, and 0.15 and 0.16 used 25.
+Players never install your mods: the server sends its checked mod data when they join. Clients and the server must use compatible protocol versions. Tank Yard 1.5.0 uses protocol 31, so its clients and servers play only with each other. Version 1.4.0 used protocol 30, 1.3.0 used protocol 29, 1.1.0 and 1.2.0 used protocol 28, 1.0.0 used 26, and 0.15 and 0.16 used 25.
 
 ## From the game
 
@@ -192,7 +192,7 @@ cargo build --locked --release -p tankyard-server --bin tankyard-server
 
 The port is UDP 5000. Local players join `127.0.0.1:5000`; LAN players use the host's local address. Internet players need a reachable public address and a forwarded UDP port. IPv6 addresses use brackets, such as `[2001:db8::1234]:5000`.
 
-Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default; `snapshot_rate` takes 1 to 60, and higher rates are smoother at the cost of bandwidth. Tank Yard 1.4.0 uses protocol 30; clients from 1.3.0 and earlier must update before joining. Validated mod data is sent when joining, so clients do not need to install server packs.
+Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default; `snapshot_rate` takes 1 to 60, and higher rates are smoother at the cost of bandwidth. Tank Yard 1.5.0 uses protocol 31; clients from 1.4.0 and earlier must update before joining. Validated mod data is sent when joining, so clients do not need to install server packs.
 
 Inputs are sent as soon as each frame's update finishes, before drawing; menu commands go out before the frame ends. Movement abilities use shared prediction rules. Remote movement can bridge a packet gap for up to 75 ms, constrained by walls and the arena boundary; longer gaps freeze until a new snapshot arrives. The server reuses snapshot storage between viewers and bounds catch-up work during overload.
 
@@ -204,7 +204,7 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 
 Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
 
-Tank Yard 1.4.0 uses protocol 30, which carries designed HUD widgets with choices and players' picks from them. Version 1.3.0 used 29, 1.1.0 and 1.2.0 used 28, 1.0.1 used 27, 1.0.0 used 26, and 0.15 and 0.16 used 25. When upgrading from those versions, update clients, servers and any separate relay together; older snapshots are incompatible. Older clients receive an update message. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
+Tank Yard 1.5.0 uses protocol 31, which carries HUD widgets pinned over the arena or a tank, choice layouts and glow. Version 1.4.0 used 30, which added designed widgets with choices and players' picks, 1.3.0 used 29, 1.1.0 and 1.2.0 used 28, 1.0.1 used 27, 1.0.0 used 26, and 0.15 and 0.16 used 25. When upgrading from those versions, update clients, servers and any separate relay together; older snapshots are incompatible. Older clients receive an update message. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
 
 The ordinary server includes signed creator tools by default on official public arenas (`--central`); `creator_admin = false` overrides that policy. Default community/personal hosts are disabled; public community operators can explicitly opt in. Password-protected hosts cannot enable the tools. See [creator administration](creator-administration.md) for policy, immediate revocation, auditing, and updating the central Raspberry Pi/Docker deployment.
 

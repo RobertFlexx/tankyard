@@ -996,7 +996,13 @@ editor.tool { id = "spin", name = "Spin", run = function() while true do end end
         tankyard_content::validate_map_features(&built).unwrap();
         let (logic, _, effects) = run(&built, &[], 7.);
         assert_eq!(logic.counters[0], 0);
-        assert_eq!(effects, vec![LogicEffect::Announce("Time is up!".into())]);
+        assert_eq!(
+            effects,
+            vec![LogicEffect::Announce {
+                text: "Time is up!".into(),
+                cause: 0
+            }]
+        );
 
         let sequence = tool("sequence");
         let mut steps = map.clone();

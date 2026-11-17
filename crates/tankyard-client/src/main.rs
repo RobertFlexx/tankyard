@@ -481,6 +481,7 @@ impl App {
         self.effects = effects::Effects::new();
         self.spectate_death = 0;
         self.hud = Hud::new();
+        hud_widgets::clear();
         self.hud.practice = self
             .session
             .as_ref()
@@ -1224,7 +1225,9 @@ impl App {
                     _ => false,
                 };
                 community
-                    || hud_widgets::captures_pointer(&session.mod_hud(), s)
+                    || hud_widgets::captures_pointer(&session.mod_hud(), s, &|pin| {
+                        session.pin_place(&self.view, self.accumulator / DT, pin)
+                    })
                     || session.display.as_ref().is_some_and(|snapshot| {
                         self.hud
                             .captures_pointer(snapshot, &self.content, session.player, s)
@@ -2156,6 +2159,28 @@ impl App {
                         render,
                     )
                 });
+                // Widgets pinned over the arena sit under the HUD, and leave
+                // the pointer to it where they meet.
+                let widgets = session.mod_hud();
+                let place = |pin| session.pin_place(&self.view, self.accumulator / DT, pin);
+                let pointing = !self.paused && !self.menu_over_game;
+                let input_allowed = ui::interactive();
+                let screen_menu = hud_widgets::captures_layer_pointer(
+                    &widgets,
+                    s,
+                    &place,
+                    Some(hud_widgets::Layer::Screen),
+                );
+                let over_hud =
+                    self.hud
+                        .captures_pointer(snapshot, &self.content, session.player, s);
+                let arena_pick = hud_widgets::draw(
+                    &widgets,
+                    s,
+                    &place,
+                    hud_widgets::Layer::Arena,
+                    pointing && !over_hud && !screen_menu,
+                );
                 self.hud.local_simulation = session.offline_mode();
                 self.hud.sandbox_allowed = match &session.engine {
                     session::Engine::Offline(_) => true,
@@ -2175,6 +2200,7 @@ impl App {
                         .find(|map| map.id == snapshot.config.map)
                         .map_or("slate", |map| map.background.as_str()),
                 );
+                set_interactive(input_allowed && !screen_menu);
                 actions = self.hud.draw(
                     snapshot,
                     &self.content,
@@ -2185,11 +2211,10 @@ impl App {
                     s,
                     &self.view,
                 );
-                if !self.paused && !self.menu_over_game {
-                    widget_pick = hud_widgets::draw(&session.mod_hud(), s);
-                } else {
-                    hud_widgets::draw(&session.mod_hud(), s);
-                }
+                set_interactive(input_allowed);
+                widget_pick =
+                    hud_widgets::draw(&widgets, s, &place, hud_widgets::Layer::Screen, pointing)
+                        .or(arena_pick);
                 if let Some(axiom) = axiom {
                     let r = hud::boss_banner_layout(screen_width(), s);
                     let r = Rect::new(r.x, 106. * s, r.w, 52. * s);
