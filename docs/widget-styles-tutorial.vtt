@@ -1,0 +1,31 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:03.470
+Select a Show UI trigger, then press P to run the logic preview.
+
+00:00:03.470 --> 00:00:05.870
+Its widget appears over the canvas as players will see it.
+
+00:00:05.870 --> 00:00:09.830
+Twelve preset looks change the colors and style in one click.
+
+00:00:09.830 --> 00:00:13.720
+Neon: cut corners, a grid fill and glowing capitals. Shift+P restarts the preview.
+
+00:00:13.720 --> 00:00:17.620
+Parchment: a ribbon with a double border and underlined choices.
+
+00:00:17.620 --> 00:00:21.510
+Hazard: a slanted, striped panel with outlined capitals and a striped bar.
+
+00:00:21.510 --> 00:00:24.110
+Royal: cut corners, a double border and a gradient fill.
+
+00:00:24.110 --> 00:00:30.700
+Or set each part yourself: here a tag shape, corner brackets and a glass fill.
+
+00:00:30.700 --> 00:00:35.000
+F5 plays the map, and the widget appears in the match.
+
+00:00:35.000 --> 00:00:37.700
+Escape returns to the workshop. Scripts set the same options with tankyard.hud.

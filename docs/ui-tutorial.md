@@ -38,4 +38,4 @@ Use a signal instead of **On enter** if opening the vault already has a trigger.
 
 Open **Check**, then point at the shop on the canvas and press **Shift+F5**. Pick **Vault guide** and check the arrow. Press **Escape** to return, start another playtest and pick **+300 points**. The score rises without firing your tank's weapon through the menu.
 
-**Save** keeps an editable project; **Export** makes a pack for a server or the Mods page. Update the server and players to 1.5.0 before using the new widgets. The [UI reference](map-editor.md#ui) covers every setting, and [HUD widgets in Luau](modding.md#hud-widgets) covers scripted menus and pins.
+**Save** keeps an editable project; **Export** makes a pack for a server or the Mods page. Update the server and players to 1.5.0 before using the new widgets. The [UI reference](map-editor.md#ui) covers every setting, and [HUD widgets in Luau](modding.md#hud-widgets) covers scripted menus and pins. To restyle the shop, follow the [widget styles tutorial](widget-styles-tutorial.md).
