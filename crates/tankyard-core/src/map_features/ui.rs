@@ -3,7 +3,8 @@
 use crate::*;
 use std::collections::BTreeMap;
 use tankyard_content::{
-    HUD_TEXT, HUD_TITLE, HudPin, HudWidget, MAP_UI_SLOTS, MapUi, UiFill, UiPin, fill_ui_text,
+    HUD_CELL_TEXT, HUD_TEXT, HUD_TITLE, HudCellKind, HudPin, HudWidget, MAP_UI_SLOTS, MapUi,
+    UiFill, UiPin, fill_ui_text,
 };
 
 /// The pack name map widgets file under in [`World::hud`]; packs always
@@ -11,8 +12,8 @@ use tankyard_content::{
 pub const MAP_HUD: &str = "";
 /// Ticks between refreshes of widgets whose text or bar changes.
 const REFRESH_TICKS: u64 = 6;
-/// Ticks a player waits between picks.
-const PICK_TICKS: u64 = 6;
+/// Ticks a player waits between picks: quick enough to type on a keypad.
+const PICK_TICKS: u64 = 3;
 
 /// A Show UI trigger's widget on screen.
 #[derive(Clone, Debug)]
@@ -214,26 +215,28 @@ impl World {
                 for tank in viewers {
                     let fill = UiFill {
                         counters: &self.match_state.counters,
+                        hidden: self.match_state.hidden_groups,
                         left: shown.until - now,
                         time: now,
                         name: &tank.name,
                         cause,
                         score: u64::from(tank.score),
                     };
-                    if let Some(widget) = fill_widget(ui, &fill, duration, shown.menu, pin) {
+                    if let Some(widget) = fill_map_widget(ui, &fill, duration, shown.menu, pin) {
                         wanted.insert((MAP_HUD.into(), tank.id, ui_slot_id(shown.slot)), widget);
                     }
                 }
             } else {
                 let fill = UiFill {
                     counters: &self.match_state.counters,
+                    hidden: self.match_state.hidden_groups,
                     left: shown.until - now,
                     time: now,
                     name: "",
                     cause,
                     score: 0,
                 };
-                if let Some(widget) = fill_widget(ui, &fill, duration, shown.menu, pin) {
+                if let Some(widget) = fill_map_widget(ui, &fill, duration, shown.menu, pin) {
                     wanted.insert((MAP_HUD.into(), 0, ui_slot_id(shown.slot)), widget);
                 }
             }
@@ -248,10 +251,11 @@ impl World {
         }
     }
 
-    /// Player `viewer` picks choice `option` of the widget numbered `menu`.
-    /// A map menu signals its choice's channel with the player as the tank
-    /// that set it off; a script's raises its pack's `choice` event. Returns
-    /// whether the pick counted.
+    /// Player `viewer` picks choice `option` of the widget numbered `menu`,
+    /// or on a board, the button that is cell `option`. A map menu signals
+    /// its choice's channel with the player as the tank that set it off; a
+    /// script's raises its pack's `choice` event. Boards stay up after a
+    /// pick. Returns whether the pick counted.
     pub fn choose(&mut self, viewer: EntityId, menu: u32, option: u8) -> bool {
         if menu == 0 {
             return false;
@@ -263,19 +267,23 @@ impl World {
         {
             return false;
         }
-        let Some((key, choices)) = self
+        let Some((key, board)) = self
             .hud
             .iter()
             .find(|((_, shown_to, _), widget)| {
                 (*shown_to == 0 || *shown_to == viewer) && widget.menu == menu
             })
-            .map(|(key, widget)| (key.clone(), widget.choices.len()))
+            .filter(|(_, widget)| match &widget.board {
+                Some(board) => board
+                    .cells
+                    .get(usize::from(option))
+                    .is_some_and(|cell| cell.kind == HudCellKind::Button),
+                None => usize::from(option) < widget.choices.len(),
+            })
+            .map(|(key, widget)| (key.clone(), widget.board.is_some()))
         else {
             return false;
         };
-        if usize::from(option) >= choices {
-            return false;
-        }
         if self.pick_ticks.len() > 4096 {
             self.pick_ticks.clear();
         }
@@ -290,7 +298,7 @@ impl World {
                 });
             }
             // A menu shown to one player closes once they pick.
-            if key.1 == viewer {
+            if key.1 == viewer && !board {
                 self.hud.remove(&key);
             }
             return true;
@@ -311,14 +319,20 @@ impl World {
         else {
             return false;
         };
-        let channel = ui.channels.get(usize::from(option)).copied().unwrap_or(0);
+        let channel = match &ui.widget.board {
+            Some(board) => board
+                .cells
+                .get(usize::from(option))
+                .map_or(0, |cell| cell.channel),
+            None => ui.channels.get(usize::from(option)).copied().unwrap_or(0),
+        };
         if channel > 0 {
             self.logic.input(crate::map_features::LogicInput::Pick {
                 channel,
                 tank: viewer,
             });
         }
-        if !ui.keep {
+        if !ui.keep && !board {
             if shown.viewer == viewer {
                 self.map_ui.remove(index);
             } else {
@@ -337,8 +351,9 @@ impl World {
 }
 
 /// `ui`'s widget with its fields filled in and pinned to `pin`, or None
-/// when nothing is left to show.
-fn fill_widget(
+/// when nothing is left to show. A board's cells fill their text, and
+/// lights, buttons and meters that watch a counter or group read it.
+pub fn fill_map_widget(
     ui: &MapUi,
     fill: &UiFill,
     duration: f32,
@@ -349,6 +364,17 @@ fn fill_widget(
     widget.pin = pin;
     widget.text = fill_ui_text(&widget.text, fill, HUD_TEXT);
     widget.title = fill_ui_text(&widget.title, fill, HUD_TITLE);
+    if let Some(board) = &mut widget.board {
+        for cell in &mut board.cells {
+            cell.text = fill_ui_text(&cell.text, fill, HUD_CELL_TEXT);
+            if cell.watches() {
+                cell.lit = cell.lit_by(fill.counters, fill.hidden);
+            }
+            if cell.kind == HudCellKind::Meter && cell.counter > 0 {
+                cell.progress = cell.fill_with(fill.counters);
+            }
+        }
+    }
     if ui.bar > 0 {
         let value = fill
             .counters
@@ -369,7 +395,8 @@ fn fill_widget(
 mod tests {
     use super::*;
     use tankyard_content::{
-        HudStyle, MapTrigger, MapUi, TriggerAction, TriggerWhen, TriggerWho, UiAudience,
+        HudBoard, HudCell, HudStyle, MapTrigger, MapUi, TriggerAction, TriggerWhen, TriggerWho,
+        UiAudience,
     };
 
     fn world_with(triggers: Vec<MapTrigger>) -> World {
@@ -620,6 +647,7 @@ mod tests {
         let counters = [5, -2, 0, 0, 0, 0, 0, 0];
         let fill = UiFill {
             counters: &counters,
+            hidden: 0,
             left: 3.2,
             time: 125.,
             name: "Bo",
@@ -787,5 +815,125 @@ mod tests {
         world.map.triggers = vec![show(1, MapUi::starter())];
         world.show_ui(0, 1, None, 0);
         assert_eq!(world.shown_ui()[0].menu & 1 << 31, 0);
+    }
+
+    #[test]
+    fn board_buttons_signal_their_cells_channel_and_the_board_stays_up() {
+        let board = HudBoard {
+            columns: 3,
+            rows: 2,
+            cells: vec![
+                HudCell {
+                    kind: HudCellKind::Digits,
+                    span: [3, 1],
+                    text: "{2|1:4}".into(),
+                    ..HudCell::default()
+                },
+                HudCell {
+                    kind: HudCellKind::Button,
+                    at: [0, 1],
+                    text: "+1".into(),
+                    channel: 4,
+                    ..HudCell::default()
+                },
+                HudCell {
+                    kind: HudCellKind::Light,
+                    at: [1, 1],
+                    counter: 1,
+                    bit: 1,
+                    ..HudCell::default()
+                },
+                HudCell {
+                    kind: HudCellKind::Meter,
+                    at: [2, 1],
+                    counter: 1,
+                    max: 4,
+                    ..HudCell::default()
+                },
+            ],
+            ..HudBoard::default()
+        };
+        let mut world = world_with(vec![
+            show(
+                1,
+                MapUi {
+                    widget: HudWidget {
+                        board: Some(board),
+                        ..widget("")
+                    },
+                    ..MapUi::default()
+                },
+            ),
+            MapTrigger {
+                source: 4,
+                group: 1,
+                amount: 1,
+                ..trigger(TriggerWhen::Signal, TriggerAction::Count)
+            },
+            MapTrigger {
+                group: 2,
+                amount: 12,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Set)
+            },
+        ]);
+        let player = world.add_player("Player", false);
+        run(&mut world, 1.);
+        let cells = |world: &World| mine(world, player)[0].board.clone().unwrap().cells;
+        let menu = mine(&world, player)[0].menu;
+        assert_eq!(cells(&world)[0].text, "120000");
+        assert!(!cells(&world)[2].lit);
+        assert!(!world.choose(player, menu, 0), "digits are no button");
+        assert!(!world.choose(player, menu, 9), "no such cell");
+        assert!(world.choose(player, menu, 1));
+        assert!(!world.choose(player, menu, 1), "one pick a moment");
+        run(&mut world, 0.2);
+        let after = cells(&world);
+        assert_eq!(after[0].text, "120001");
+        assert!(after[2].lit, "bit 1 is set");
+        assert_eq!(after[3].progress, 0.25);
+        for _ in 0..3 {
+            assert!(world.choose(player, menu, 1), "the board stays up");
+            run(&mut world, 0.1);
+        }
+        assert_eq!(world.match_state.counters[0], 4);
+        assert!(!cells(&world)[2].lit, "4 has bit 1 clear");
+        assert_eq!(cells(&world)[3].progress, 1.);
+    }
+
+    #[test]
+    fn pack_boards_pass_button_picks_to_the_pack_and_stay_up() {
+        let mut world = world_with(vec![]);
+        let player = world.add_player("Player", false);
+        let key = ("pack".to_owned(), player, "panel".to_owned());
+        let menu = crate::map_features::menu_number(&key.0, &key.2);
+        world.hud.insert(
+            key,
+            HudWidget {
+                board: Some(HudBoard {
+                    columns: 2,
+                    cells: vec![
+                        HudCell {
+                            text: "Power".into(),
+                            ..HudCell::default()
+                        },
+                        HudCell {
+                            kind: HudCellKind::Button,
+                            at: [1, 0],
+                            text: "On".into(),
+                            ..HudCell::default()
+                        },
+                    ],
+                    ..HudBoard::default()
+                }),
+                menu,
+                ..widget("")
+            },
+        );
+        assert!(!world.choose(player, menu, 0), "labels can't be picked");
+        assert!(world.choose(player, menu, 1));
+        assert_eq!(world.picks_in.len(), 1);
+        assert_eq!(world.picks_in[0].option, 1);
+        assert_eq!(world.hud.len(), 1, "the board stays up");
     }
 }

@@ -1,6 +1,7 @@
 //! The arena workshop: Build, Edit and Delete modes over a snapped grid, an
 //! icon palette, groups, trigger logic with a live preview, checks, particle
 //! authoring, portable packs, and playtests from anywhere on the map.
+mod board_design;
 mod brushes;
 mod canvas;
 mod dock;
@@ -1418,13 +1419,17 @@ pub(crate) fn projects_dir() -> Result<PathBuf, String> {
     Ok(directory()?.join("projects"))
 }
 pub(crate) fn read_document(path: &Path) -> Result<Document, String> {
-    let bytes = tankyard_mods::read_bounded_limit(path, 2 * 1024 * 1024)?;
+    let bytes =
+        tankyard_mods::read_bounded_limit(path, tankyard_client::editor_document::DOCUMENT_BYTES)?;
     Document::from_json(&bytes)
 }
 fn write_document(path: &Path, doc: &Document) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(doc).map_err(|e| e.to_string())?;
-    if bytes.len() > 2 * 1024 * 1024 {
-        return Err("Editor project exceeds 2 MiB.".into());
+    if bytes.len() > tankyard_client::editor_document::DOCUMENT_BYTES {
+        return Err(format!(
+            "Editor project exceeds {} MiB.",
+            tankyard_client::editor_document::DOCUMENT_BYTES >> 20
+        ));
     }
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

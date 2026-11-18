@@ -193,6 +193,27 @@ local function packed_color(call, value, what)
   end
   return packed
 end
+-- `board` with its cells' colors as "#rrggbb" or { r, g, b } turned into
+-- the { r, g, b } lists maps write, copying only the cells with colors.
+local function board_colors(board)
+  if board == nil or type(board.cells) ~= "table" then return board end
+  local copy, cells = {}, {}
+  for key, value in pairs(board) do copy[key] = value end
+  for index, cell in ipairs(board.cells) do
+    if type(cell) == "table" and (cell.color ~= nil or cell.fill ~= nil) then
+      local own = {}
+      for key, value in pairs(cell) do own[key] = value end
+      for _, key in ipairs({ "color", "fill" }) do
+        local packed = packed_color("hud", cell[key], "a cell's " .. key)
+        if packed then own[key] = { packed // 65536, packed // 256 % 256, packed % 256 } end
+      end
+      cell = own
+    end
+    cells[index] = cell
+  end
+  copy.cells = cells
+  return copy
+end
 -- Map logic requests take effect at the start of the next tick.
 function tankyard.map_signal(channel) emit("map_signal", number("map_signal", channel, "channel")) end
 function tankyard.set_map_counter(counter, value)
@@ -325,7 +346,8 @@ function tankyard.hud(widget_id, widget, tank)
     optional("string", widget.lettering, "hud", "lettering"), optional("boolean", widget.caps, "hud", "caps"),
     packed_color("hud", widget.title_color, "title_color"),
     optional("string", widget.bar_style, "hud", "bar_style"),
-    optional("string", widget.buttons, "hud", "buttons"))
+    optional("string", widget.buttons, "hud", "buttons"),
+    board_colors(optional("table", widget.board, "hud", "board")))
 end
 
 -- Definitions (load phase only; ignored while a round is running) ------------

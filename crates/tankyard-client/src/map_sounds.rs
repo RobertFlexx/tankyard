@@ -14,16 +14,16 @@ pub fn samples(sound: MapSound) -> Arc<[f32]> {
         .clone()
 }
 
-/// The sounds rifts make.
+/// The sounds rifts make, all tones: no hiss.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RiftCue {
-    /// A rising, shimmering swell as a rift opens.
+    /// A warm swell gliding up an octave, with bells climbing over it.
     Open,
-    /// A rush and a falling chirp as something goes through.
+    /// A quick warp up and back down, landing on a soft thump.
     Travel,
-    /// A soft pop as a rift finishes collapsing.
+    /// A bubble bursting as a rift finishes collapsing.
     Pop,
-    /// A dull fizz when a rift shot finds no room.
+    /// Two low notes stepping down when a rift shot finds no room.
     Fizzle,
 }
 impl RiftCue {
@@ -227,51 +227,69 @@ fn rift_synth(cue: RiftCue) -> Vec<f32> {
         RiftCue::Fizzle => 0.35,
     };
     let count = (seconds * RATE) as usize;
-    let mut noise = Noise(0x9e37_79b9);
-    let (mut low, mut band, mut phase, mut shimmer) = (0f32, 0f32, 0f32, 0f32);
+    // Phases advance sample by sample, so gliding pitches never jump.
+    let mut phases = [0f32; 4];
+    let mut turn = |voice: usize, pitch: f32| {
+        phases[voice] = (phases[voice] + TAU * pitch / RATE) % TAU;
+        phases[voice]
+    };
+    // Smoothly from 0 to 1 as `t` goes from 0 to 1.
+    let smooth = |t: f32| {
+        let t = t.clamp(0., 1.);
+        t * t * (3. - 2. * t)
+    };
     (0..count)
         .map(|i| {
             let t = i as f32 / RATE;
             let tail = ((seconds - t) / 0.02).min(1.);
             let value = match cue {
                 RiftCue::Open => {
-                    // A swell gliding up an octave, with a fifth above
-                    // shimmering in and out, over a breath of air.
-                    let pitch = 196. * 2f32.powf((t / 0.7).min(1.));
-                    phase = (phase + TAU * pitch / RATE) % TAU;
-                    shimmer =
-                        (shimmer + TAU * pitch * 1.5 * (1. + 0.004 * (t * 37.).sin()) / RATE) % TAU;
-                    let swell = (t / 0.25).min(1.) * ((seconds - t) / 0.5).clamp(0., 1.);
-                    low += (noise.next() - low) * 0.06;
-                    (phase.sin() * 0.6 + shimmer.sin() * 0.3 * (t * 9.).sin().abs() + low * 0.8)
-                        * swell
+                    // D3 rising to D4, easing out, with a fifth above it and
+                    // a glassy partial that fades as it settles.
+                    let pitch = 146.83 * 2f32.powf(1. - (1. - (t / 0.45).min(1.)).powi(2));
+                    let body = turn(0, pitch).sin() + 0.35 * turn(1, pitch * 1.5 * 1.003).sin();
+                    let glass = turn(2, pitch * 4.).sin() * 0.12 * (-t / 0.4).exp();
+                    let swell = smooth(t / 0.12) * smooth((seconds - t) / 0.4);
+                    let thump =
+                        turn(3, 60. + 60. * (-t / 0.05).exp()).sin() * strike(t, 0.004, 0.09);
+                    let bells = bell(t - 0.18, 587.33, 0.35) * 0.22
+                        + bell(t - 0.27, 880., 0.3) * 0.18
+                        + bell(t - 0.36, 1174.66, 0.28) * 0.14;
+                    (body + glass) * swell * 0.5 + thump * 0.45 + bells
                 }
                 RiftCue::Travel => {
-                    // Air rushing through a filter that opens and closes,
-                    // with a chirp falling away beneath it.
-                    let shape = (t / seconds * std::f32::consts::PI).sin();
-                    low += (noise.next() - low) * (0.05 + 0.3 * shape);
-                    band += (low - band) * 0.1;
-                    let pitch = 1400. * (-t / 0.12).exp() + 260.;
-                    phase = (phase + TAU * pitch / RATE) % TAU;
-                    (low - band) * shape * 1.6 + phase.sin() * strike(t, 0.004, 0.14) * 0.5
+                    // Up two octaves in a blink and back down one, bright at
+                    // first and mellowing, over a low thump.
+                    let rise = smooth(t / 0.09);
+                    let fall = smooth((t - 0.09) / 0.26);
+                    let pitch = 261.63 * 2f32.powf(2. * rise - fall);
+                    let bright = 1.5 * (-t / 0.08).exp();
+                    let tone = (turn(0, pitch) + bright * turn(1, pitch * 2.).sin()).sin();
+                    let thump =
+                        turn(2, 90. + 50. * (-t / 0.03).exp()).sin() * strike(t, 0.003, 0.07);
+                    tone * strike(t, 0.005, 0.16) * 0.7
+                        + thump * 0.4
+                        + bell(t - 0.06, 1567.98, 0.18) * 0.12
                 }
                 RiftCue::Pop => {
-                    // A bubble bursting: a pitch dropping fast, a click, and
-                    // a few high glints after it.
-                    let pitch = 90. + 900. * (-t / 0.035).exp();
-                    phase = (phase + TAU * pitch / RATE) % TAU;
+                    // A pitch dropping fast, then a few high glints.
+                    let pitch = 110. + 760. * (-t / 0.03).exp();
                     let glints =
-                        bell(t - 0.05, 2093., 0.12) * 0.25 + bell(t - 0.11, 2637., 0.1) * 0.18;
-                    phase.sin() * strike(t, 0.002, 0.07)
-                        + noise.next() * strike(t, 0.0005, 0.006) * 0.6
-                        + glints
+                        bell(t - 0.05, 2093., 0.12) * 0.22 + bell(t - 0.11, 2637., 0.1) * 0.15;
+                    turn(0, pitch).sin() * strike(t, 0.002, 0.07) + glints
                 }
                 RiftCue::Fizzle => {
-                    low += (noise.next() - low) * 0.2;
-                    let pitch = 180. - 90. * (t / seconds);
-                    phase = (phase + TAU * pitch / RATE) % TAU;
-                    (low * 0.8 + phase.sin() * 0.5) * strike(t, 0.01, 0.12)
+                    // E4, then B3, soft and hollow: odd partials only.
+                    let mut note = |voice: usize, start: f32, pitch: f32| {
+                        let local = t - start;
+                        if local < 0. {
+                            return 0.;
+                        }
+                        let phase = turn(voice, pitch);
+                        (phase.sin() + (phase * 3.).sin() * 0.25 + (phase * 5.).sin() * 0.08)
+                            * strike(local, 0.005, 0.07)
+                    };
+                    note(0, 0., 329.63) + note(1, 0.11, 246.94)
                 }
             };
             value * tail
@@ -290,6 +308,27 @@ mod tests {
             assert!(samples.len() > 1000 && samples.len() < RATE as usize);
             assert!(samples.iter().all(|s| s.is_finite() && s.abs() <= 0.81));
             assert!(samples[samples.len() - 1].abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn rift_cues_are_tones_without_hiss_or_clicks() {
+        for cue in RiftCue::ALL {
+            let samples = rift_samples(cue);
+            // How much of the sound changes from one sample to the next:
+            // about 2 for white noise, tiny for the tones these are made of.
+            let energy: f32 = samples.iter().map(|s| s * s).sum();
+            let change: f32 = samples.windows(2).map(|p| (p[1] - p[0]).powi(2)).sum();
+            assert!(
+                change / energy < 0.05,
+                "{cue:?} hisses: {}",
+                change / energy
+            );
+            let jump = samples
+                .windows(2)
+                .map(|p| (p[1] - p[0]).abs())
+                .fold(0., f32::max);
+            assert!(jump < 0.3, "{cue:?} clicks: {jump}");
         }
     }
 

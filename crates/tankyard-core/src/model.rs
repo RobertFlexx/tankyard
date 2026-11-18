@@ -823,9 +823,13 @@ pub struct MatchState {
     /// Map groups hidden right now, one bit per group (group 1 is bit 0).
     #[serde(default)]
     pub hidden_groups: u32,
-    /// Map counters 1 to 8, which labels and announcements can show.
+    /// Every map counter. Snapshots leave these out and carry
+    /// `shown_counters` instead.
+    #[serde(skip)]
+    pub counters: tankyard_content::MapCounters,
+    /// The counters the map's labels show, as (counter, value) pairs.
     #[serde(default)]
-    pub counters: [i32; tankyard_content::MAP_COUNTERS as usize],
+    pub shown_counters: Vec<(u8, i32)>,
     /// Pushed bodies away from where the map places them, or sliding.
     #[serde(default)]
     pub bodies: Vec<tankyard_content::BodyPose>,
@@ -870,6 +874,9 @@ pub enum EventKind {
     RiftTravel,
     /// A rift shot found no room to open; `subject` is its owner.
     RiftFizzle,
+    /// Where a Zoom view on tank `subject` turns; it follows that view's
+    /// `MapZoom`. See [`crate::focus_of`] for `value`.
+    MapFocus,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Elimination {

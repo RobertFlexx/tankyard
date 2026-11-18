@@ -55,6 +55,8 @@ pub struct World {
     pub(crate) static_walls: Vec<Rect>,
     pub(crate) logic: crate::map_features::MapLogic,
     pub(crate) logic_tanks: Vec<crate::map_features::Occupant>,
+    /// Zoom views that widen or move what players see.
+    pub(crate) map_views: Vec<crate::map_features::MapView>,
     /// Script events map triggers raised this tick.
     pub map_events: Vec<crate::map_features::MapEvent>,
     /// Picks from packs' widgets this tick, for their `choice` events.
@@ -215,6 +217,7 @@ impl World {
             static_walls: vec![],
             logic: Default::default(),
             logic_tanks: Vec::new(),
+            map_views: Vec::new(),
             map_events: Vec::new(),
             hud_picks: Vec::new(),
             picks_in: Vec::new(),
@@ -241,7 +244,8 @@ impl World {
                     .unwrap_or_else(|| config.mode.name().into()),
                 arena: ArenaStatus::default(),
                 hidden_groups: map.starting_mask(),
-                counters: [0; tankyard_content::MAP_COUNTERS as usize],
+                counters: Default::default(),
+                shown_counters: Vec::new(),
                 tweens: Vec::new(),
                 bodies: Vec::new(),
             },

@@ -1,8 +1,89 @@
 use crate::ui::{AMBER, CYAN, RED, alpha, mix};
 use macroquad::prelude::*;
 use std::collections::{HashMap, HashSet};
-use tankyard_content::ProjectileKind;
+use tankyard_content::{Easing, ProjectileKind};
 use tankyard_core::{EntityId, EventKind, GameEvent, Projectile, Tank, V2, sanitize_name};
+
+/// How a map's Zoom view frames the local tank.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Look {
+    /// The zoom: 1 as usual.
+    pub scale: f32,
+    /// How far the camera turns from the tank toward a spot, from 0 to 1.
+    pub focus: f32,
+    /// That spot, as fractions of the arena's size, times `focus`; kept
+    /// this way so two looks blend along a straight line.
+    pub pull: [f32; 2],
+}
+impl Look {
+    pub const USUAL: Self = Self {
+        scale: 1.,
+        focus: 0.,
+        pull: [0., 0.],
+    };
+    /// Partway from `self` to `to`: `k` 0 is `self` and 1 is `to`, past
+    /// either for curves that overshoot. Zooms blend evenly in steps of
+    /// scale, so going in feels as quick as coming out.
+    fn toward(self, to: Self, k: f32) -> Self {
+        let blend = |a: f32, b: f32| a + (b - a) * k;
+        Self {
+            scale: blend(self.scale.ln(), to.scale.ln()).exp(),
+            focus: blend(self.focus, to.focus),
+            pull: [
+                blend(self.pull[0], to.pull[0]),
+                blend(self.pull[1], to.pull[1]),
+            ],
+        }
+    }
+    /// Where the camera looks for a tank at `tank` in an arena `size` wide
+    /// and high.
+    pub fn camera(&self, tank: V2, size: [f32; 2]) -> V2 {
+        tank * (1. - self.focus) + V2::new(self.pull[0] * size[0], self.pull[1] * size[1])
+    }
+}
+
+/// A map's Zoom view on the local tank, easing from the look the view had
+/// when it began.
+#[derive(Clone, Copy, Debug)]
+struct MapView {
+    from: Look,
+    to: Look,
+    /// Seconds since it began.
+    age: f32,
+    /// How long it lasts, its return included; None until the next view.
+    seconds: Option<f32>,
+    /// Seconds each change takes.
+    ease: f32,
+    easing: Easing,
+}
+impl MapView {
+    /// The change's length: a short view spends half its time going in
+    /// and half coming back.
+    fn ease(&self) -> f32 {
+        self.seconds
+            .map_or(self.ease, |seconds| self.ease.min(seconds * 0.5))
+            .max(0.01)
+    }
+    fn look(&self) -> Look {
+        let ease = self.ease();
+        let look = self
+            .from
+            .toward(self.to, self.easing.apply(self.age / ease));
+        match self.seconds {
+            Some(seconds) if self.age > seconds - ease => look.toward(
+                Look::USUAL,
+                self.easing.apply((self.age - (seconds - ease)) / ease),
+            ),
+            _ => look,
+        }
+    }
+    fn done(&self) -> bool {
+        match self.seconds {
+            Some(seconds) => self.age >= seconds,
+            None => self.to == Look::USUAL && self.age >= self.ease(),
+        }
+    }
+}
 
 pub struct Particle {
     pub pos: V2,
@@ -89,9 +170,8 @@ pub struct Effects {
     /// A map's Shake screen on the local tank: strength from 0 to 1, seconds
     /// left and its full length.
     map_shake: (f32, f32, f32),
-    /// A map's Zoom view on the local tank: the zoom, seconds left and its
-    /// full length.
-    map_zoom: (f32, f32, f32),
+    /// A map's Zoom view on the local tank.
+    map_view: Option<MapView>,
     pub notice: String,
     pub notice_life: f32,
     pub boss_arrival: Option<(tankyard_core::BossKind, f32)>,
@@ -129,7 +209,7 @@ impl Effects {
             seen: HashSet::new(),
             shake: 0.0,
             map_shake: (0., 0., 0.),
-            map_zoom: (1., 0., 0.),
+            map_view: None,
             notice: String::new(),
             notice_life: 0.0,
             boss_arrival: None,
@@ -235,9 +315,30 @@ impl Effects {
                 }
                 EventKind::MapZoom => {
                     if event.subject == local {
-                        let (scale, seconds) = tankyard_core::zoom_of(event.value);
-                        // The newest zoom takes over from wherever the view is.
-                        self.map_zoom = (scale, seconds, seconds);
+                        let view = tankyard_core::zoom_of(event.value);
+                        // The newest zoom takes over from wherever the view
+                        // is; a MapFocus right after it may turn it.
+                        self.map_view = Some(MapView {
+                            from: self.map_look(),
+                            to: Look {
+                                scale: view.scale,
+                                ..Look::USUAL
+                            },
+                            age: 0.,
+                            seconds: view.seconds,
+                            ease: view.ease,
+                            easing: view.easing,
+                        });
+                    }
+                    (AMBER, 0, false)
+                }
+                EventKind::MapFocus => {
+                    if event.subject == local
+                        && let Some(view) = &mut self.map_view
+                    {
+                        let (spot, focus) = tankyard_core::focus_of(event.value);
+                        view.to.focus = focus;
+                        view.to.pull = [spot[0] * focus, spot[1] * focus];
                     }
                     (AMBER, 0, false)
                 }
@@ -620,22 +721,38 @@ impl Effects {
             self.shake = self.shake.max(level);
             self.map_shake.1 = (left - dt).max(0.);
         }
-        self.map_zoom.1 = (self.map_zoom.1 - dt).max(0.);
+        if let Some(view) = &mut self.map_view {
+            view.age += dt;
+            if view.done() {
+                self.map_view = None;
+            }
+        }
         self.notice_life = (self.notice_life - dt).max(0.0);
     }
-    /// How much a map's Zoom view scales the camera now: it eases in over
-    /// the first half second, holds, and eases back over the last.
-    pub fn map_zoom(&self) -> f32 {
-        let (scale, left, total) = self.map_zoom;
-        if left <= 0. || total <= 0. {
-            return 1.;
+    /// How a map's Zoom view frames the local tank now.
+    pub fn map_look(&self) -> Look {
+        self.map_view.map_or(Look::USUAL, |view| {
+            let look = view.look();
+            Look {
+                scale: look.scale.clamp(0.25, 4.),
+                ..look
+            }
+        })
+    }
+    /// Ease a map's Zoom view back to the usual one, as when the local tank
+    /// is destroyed.
+    pub fn end_map_view(&mut self) {
+        if let Some(view) = self.map_view
+            && view.to != Look::USUAL
+        {
+            self.map_view = Some(MapView {
+                from: self.map_look(),
+                to: Look::USUAL,
+                age: 0.,
+                seconds: None,
+                ..view
+            });
         }
-        let ease = |t: f32| {
-            let t = t.clamp(0., 1.);
-            t * t * (3. - 2. * t)
-        };
-        let blend = ease((total - left) / 0.5).min(ease(left / 0.5));
-        1. + (scale.clamp(0.25, 4.) - 1.) * blend
     }
     pub fn notice(&mut self, text: &str) {
         self.notice = text.into();
@@ -1116,5 +1233,93 @@ mod elimination_regressions {
         effects.sync_round(1);
         effects.sync_round(2);
         assert!(effects.seen.is_empty());
+    }
+    fn zoom(tick: u64, view: tankyard_core::ZoomView) -> GameEvent {
+        GameEvent {
+            tick,
+            kind: EventKind::MapZoom,
+            pos: V2::ZERO,
+            subject: 7,
+            value: tankyard_core::zoom_event(&view),
+            team: 0,
+            elimination: None,
+        }
+    }
+
+    #[test]
+    fn map_zooms_ease_hold_and_take_over_without_jumping() {
+        let mut effects = Effects::new();
+        let wide = tankyard_core::ZoomView {
+            scale: 0.5,
+            seconds: None,
+            ease: 1.,
+            easing: Easing::default(),
+        };
+        effects.ingest(&[zoom(1, wide)], 7, 1.);
+        assert_eq!(effects.map_look().scale, 1., "starts where the view was");
+        effects.update(0.5, false);
+        let halfway = effects.map_look().scale;
+        assert!(halfway < 0.9 && halfway > 0.6, "{halfway}");
+        effects.update(0.6, false);
+        assert!((effects.map_look().scale - 0.5).abs() < 1e-3);
+        effects.update(100., false);
+        assert!((effects.map_look().scale - 0.5).abs() < 1e-3, "held");
+        // The next view eases from this one, not from the usual zoom.
+        let close = tankyard_core::ZoomView {
+            scale: 2.,
+            seconds: Some(4.),
+            ease: 0.5,
+            easing: Easing::default(),
+        };
+        effects.ingest(&[zoom(2, close)], 7, 1.);
+        assert!((effects.map_look().scale - 0.5).abs() < 1e-3);
+        effects.update(1., false);
+        assert!((effects.map_look().scale - 2.).abs() < 1e-3);
+        effects.update(3.1, false);
+        assert_eq!(effects.map_look(), Look::USUAL, "back after its time");
+        // Someone else's zoom is theirs.
+        effects.ingest(&[zoom(3, wide)], 8, 1.);
+        effects.update(2., false);
+        assert_eq!(effects.map_look(), Look::USUAL);
+    }
+
+    #[test]
+    fn short_zooms_go_both_ways_and_focus_turns_the_camera() {
+        let mut effects = Effects::new();
+        let quick = tankyard_core::ZoomView {
+            scale: 0.5,
+            seconds: Some(0.4),
+            ease: 3.,
+            easing: Easing::LINEAR,
+        };
+        effects.ingest(&[zoom(1, quick)], 7, 1.);
+        effects.update(0.19, false);
+        assert!(effects.map_look().scale < 0.55, "all the way out");
+        effects.update(0.22, false);
+        assert_eq!(effects.map_look(), Look::USUAL, "and back in time");
+        let turn = tankyard_core::ZoomView {
+            scale: 1.,
+            seconds: None,
+            ease: 0.5,
+            easing: Easing::LINEAR,
+        };
+        let focus = GameEvent {
+            kind: EventKind::MapFocus,
+            value: tankyard_core::focus_event([0.25, 0.75], 100),
+            ..zoom(2, turn)
+        };
+        effects.ingest(&[zoom(2, turn), focus], 7, 1.);
+        let tank = V2::new(100., 100.);
+        assert_eq!(effects.map_look().camera(tank, [4000., 2000.]), tank);
+        effects.update(1., false);
+        let camera = effects.map_look().camera(tank, [4000., 2000.]);
+        assert!(camera.distance(V2::new(1000., 1500.)) < 1., "{camera:?}");
+        effects.end_map_view();
+        effects.update(0.25, false);
+        let back = effects.map_look().camera(tank, [4000., 2000.]);
+        assert!(back.distance(tank) > 100. && back.distance(camera) > 100.);
+        effects.update(0.3, false);
+        assert_eq!(effects.map_look(), Look::USUAL);
+        assert!(effects.map_view.is_none());
     }
 }

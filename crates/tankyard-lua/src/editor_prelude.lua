@@ -117,7 +117,14 @@ function editor.free_group(map)
   return lowest_free(used, 32)
 end
 
--- A signal channel (1-32) nothing sends or listens on yet.
+-- The board cells of a Show UI trigger's widget, or none.
+local function board_cells(trigger)
+  local ui = trigger.action == "ui" and trigger.ui
+  local board = ui and ui.widget and ui.widget.board
+  return board and board.cells or {}
+end
+
+-- A signal channel (1-255) nothing sends or listens on yet.
 function editor.free_channel(map)
   local used = {}
   for _, trigger in ipairs(map.triggers or {}) do
@@ -130,15 +137,38 @@ function editor.free_channel(map)
       for n = trigger.group or 0, (trigger.group or 0) + (trigger.amount or 1) - 1 do
         used[n] = true
       end
+    elseif trigger.action == "ui" and trigger.ui then
+      for _, channel in ipairs(trigger.ui.channels or {}) do
+        used[channel] = true
+      end
+      for _, cell in ipairs(board_cells(trigger)) do
+        if cell.kind == "button" then
+          used[cell.channel or 0] = true
+        end
+      end
     end
     used[trigger.otherwise or 0] = true
   end
-  return lowest_free(used, 32)
+  return lowest_free(used, 255)
 end
 
--- A counter (1-8) no trigger reads or changes yet.
+-- Marks the counters `{…}` fields in `text` name, such as {3}, {3:04} and
+-- {3|2|1:4}.
+local function named_counters(text, used)
+  for field in (text or ""):gmatch("{([^{}]*)}") do
+    local names = field:match("^([%d|]+)")
+    for n in (names or ""):gmatch("%d+") do
+      used[tonumber(n)] = true
+    end
+  end
+end
+
+-- A counter (1-255) nothing reads, changes or shows yet.
 function editor.free_counter(map)
   local used = {}
+  for _, decor in ipairs(map.decor or {}) do
+    named_counters(decor.text, used)
+  end
   for _, trigger in ipairs(map.triggers or {}) do
     if trigger.when == "counter" or trigger.when == "changed" then
       used[trigger.source or 0] = true
@@ -146,6 +176,8 @@ function editor.free_counter(map)
     if trigger.action == "count" or trigger.action == "set" or trigger.action == "calculate" then
       used[trigger.group or 0] = true
       used[trigger.operand or 0] = true
+      used[trigger.target_offset or 0] = true
+      used[trigger.operand_offset or 0] = true
     end
     for _, test in ipairs(conditions(trigger)) do
       if (test.kind or "counter") == "counter" then
@@ -153,8 +185,21 @@ function editor.free_counter(map)
       end
       used[test.against or 0] = true
     end
+    if trigger.action == "announce" then
+      named_counters(trigger.text, used)
+    end
+    local ui = trigger.action == "ui" and trigger.ui
+    if ui then
+      used[ui.bar or 0] = true
+      named_counters(ui.widget and ui.widget.title, used)
+      named_counters(ui.widget and ui.widget.text, used)
+      for _, cell in ipairs(board_cells(trigger)) do
+        used[cell.counter or 0] = true
+        named_counters(cell.text, used)
+      end
+    end
   end
-  return lowest_free(used, 8)
+  return lowest_free(used, 255)
 end
 
 local host = {}

@@ -535,7 +535,7 @@ pub fn world(
     };
     let shown = crate::scenery::Shown {
         hidden: snapshot.match_state.hidden_groups,
-        counters: snapshot.match_state.counters,
+        counters: tankyard_content::MapCounters::from_shown(&snapshot.match_state.shown_counters),
         poses: tankyard_core::snapshot_poses(snapshot, snapshot.match_state.elapsed),
         focus: snapshot
             .tanks

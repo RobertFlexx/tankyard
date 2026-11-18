@@ -21,7 +21,7 @@ pub const API_VERSION: u32 = 1;
 /// Manifests that also run sandboxed Lua scripts.
 pub const SCRIPT_API_VERSION: u32 = 2;
 pub const MAX_SCRIPTS: usize = 16;
-pub const MAX_PACK_BYTES: usize = 1024 * 1024;
+pub const MAX_PACK_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MODS: usize = 16;
 pub const MAX_COMMANDS: usize = 512;
 
@@ -186,7 +186,7 @@ impl GameBundle {
             }
         }
         if serde_json::to_vec(self).map_err(|e| e.to_string())?.len() > MAX_PACK_BYTES {
-            return Err("game data exceeds 1 MiB".into());
+            return Err("game data exceeds 4 MiB".into());
         }
         Ok(())
     }
@@ -463,11 +463,11 @@ pub enum Effect {
         #[serde(default)]
         widget: Option<HudWidget>,
     },
-    /// Fire the map's On signal triggers on `channel` (1 to 32).
+    /// Fire the map's On signal triggers on `channel` (1 to 255).
     MapSignal {
         channel: u8,
     },
-    /// Set map counter `counter` (1 to 8) to `value`, or add `value` to it.
+    /// Set map counter `counter` (1 to 255) to `value`, or add `value` to it.
     MapCounter {
         counter: u8,
         value: i32,
@@ -578,9 +578,10 @@ pub const MAX_HUD_WIDGETS: usize = 16;
 /// Widgets a player receives from every pack together.
 pub const MAX_HUD_SENT: usize = 64;
 pub use tankyard_content::{
-    HUD_CHOICE, HUD_CHOICES, HUD_REACH, HUD_SEGMENTS, HUD_TEXT, HUD_TITLE, HudAlign, HudBar,
-    HudBorder, HudButtons, HudEnter, HudFill, HudIcon, HudLayout, HudLettering, HudPin, HudShape,
-    HudStyle, HudWidget, clip_text,
+    HUD_BOARD_SIDE, HUD_CELL_TEXT, HUD_CELLS, HUD_CHOICE, HUD_CHOICES, HUD_REACH, HUD_SEGMENTS,
+    HUD_TEXT, HUD_TITLE, HudAlign, HudBar, HudBoard, HudBorder, HudButtons, HudCell, HudCellKind,
+    HudEnter, HudFill, HudIcon, HudLayout, HudLettering, HudPin, HudShape, HudStyle, HudWidget,
+    clip_text,
 };
 impl Effect {
     pub fn validate(&self, content: &Content) -> Result<(), String> {
@@ -639,7 +640,7 @@ impl Effect {
             Self::Hud { id, widget } => {
                 identifier(id) && widget.as_ref().is_none_or(HudWidget::valid)
             }
-            Self::MapSignal { channel } => (1..=tankyard_content::MAP_GROUPS).contains(channel),
+            Self::MapSignal { channel } => (1..=tankyard_content::MAP_CHANNELS).contains(channel),
             Self::MapCounter { counter, value, .. } => {
                 (1..=tankyard_content::MAP_COUNTERS).contains(counter)
                     && (-tankyard_content::COUNTER_LIMIT..=tankyard_content::COUNTER_LIMIT)
@@ -838,7 +839,7 @@ pub fn read_pack(path: &Path) -> Result<(Manifest, PackFiles), String> {
 pub fn parse_manifest(pack: &PackFiles) -> Result<Manifest, String> {
     let bytes = pack.get("mod.json").ok_or("missing mod.json")?;
     if bytes.len() > MAX_PACK_BYTES {
-        return Err("mod.json exceeds 1 MiB".into());
+        return Err("mod.json exceeds 4 MiB".into());
     }
     let manifest: Manifest = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     let scripts_allowed = manifest.api_version == SCRIPT_API_VERSION;
@@ -1156,7 +1157,7 @@ pub fn validate_hooks(hooks: &[Hook], content: &Content) -> Result<(), String> {
     Ok(())
 }
 pub fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
-    read_bounded_limit(path, MAX_PACK_BYTES).map_err(|e| e.replace("2 MiB", "1 MiB"))
+    read_bounded_limit(path, MAX_PACK_BYTES)
 }
 /// Read a regular disk file with a byte limit. Special files are rejected
 /// before reading, and Unix opens are nonblocking to tolerate replacement by

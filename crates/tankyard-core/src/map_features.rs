@@ -6,10 +6,11 @@
 //! the server's arithmetic.
 use crate::*;
 use tankyard_content::{
-    AnimateStyle, CONVEYOR_SPEED, COUNTER_LIMIT, Easing, GateState, GroupPoses, ICE_GRIP,
-    LAUNCH_SPEED, MAP_COUNTERS, MAP_GROUPS, MapDef, MapSound, MapTrigger, MapZone, MathOp,
-    PULL_SPEED, SCALE_LIMIT, SHAKE_SECONDS, TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction,
-    TriggerWhen, TriggerWho, Tween, TweenChannel, TweenValue, UiAudience, ZOOM_SECONDS, ZoneKind,
+    AnimateStyle, CONVEYOR_SPEED, COUNTER_LIMIT, Curve, EaseMode, Easing, GateState, GroupPoses,
+    ICE_GRIP, LAUNCH_SPEED, MAP_CHANNELS, MAP_COUNTERS, MAP_GROUPS, MapCounters, MapDef, MapSound,
+    MapTrigger, MapZone, MathOp, PULL_SPEED, SCALE_LIMIT, SHAKE_SECONDS, TRIGGER_AWARD,
+    TRIGGER_SHAPES, TriggerAction, TriggerWhen, TriggerWho, Tween, TweenChannel, TweenValue,
+    UiAudience, ZOOM_EASE, ZOOM_RANGE, ZOOM_SECONDS, ZoneKind,
 };
 
 mod bodies;
@@ -17,7 +18,7 @@ mod paths;
 mod ui;
 pub use bodies::{BodySpace, BodyState, BodyStep, snapshot_body_states, snapshot_poses};
 use paths::PathPlay;
-pub use ui::{HudPick, MAP_HUD, ShownUi, menu_number, ui_slot_id};
+pub use ui::{HudPick, MAP_HUD, ShownUi, fill_map_widget, menu_number, ui_slot_id};
 
 /// A normalized map rectangle in world units, following animated borders the
 /// same way walls do.
@@ -303,27 +304,149 @@ pub enum LogicEffect {
         center: V2,
         speed: f32,
     },
-    /// Zoom `tanks`' views to `scale` (1 as usual) for `seconds`.
+    /// Change `tanks`' views to `view`, turning `focus` percent of the way
+    /// toward `at`.
     Zoom {
         tanks: Vec<EntityId>,
-        scale: f32,
-        seconds: f32,
+        view: ZoomView,
+        at: V2,
+        focus: u8,
     },
 }
 
-/// A Zoom view as an event value: the zoom in percent in the low 16 bits
-/// and its length in tenths of a second above them.
-pub fn zoom_event(scale: f32, seconds: f32) -> u32 {
-    let percent = (scale * 100.).round().clamp(1., 1000.) as u32;
-    let tenths = (seconds * 10.).round().clamp(1., ZOOM_SECONDS * 10.) as u32;
-    percent | tenths << 16
+/// A Zoom view on a player's screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ZoomView {
+    /// 1 as usual; below 1 shows more of the arena, above it closes in.
+    pub scale: f32,
+    /// How long it lasts, its return included; `None` until the next one.
+    pub seconds: Option<f32>,
+    /// Seconds the view takes to change, on the way in and back.
+    pub ease: f32,
+    pub easing: Easing,
 }
-/// The zoom (1 as usual) and seconds from a [`zoom_event`] value.
-pub fn zoom_of(value: u32) -> (f32, f32) {
+impl ZoomView {
+    /// The change a trigger's 0 ease stands for.
+    pub const EASE: f32 = 0.5;
+    /// What `trigger`, a Zoom view, does to the view.
+    pub fn of(trigger: &MapTrigger) -> Self {
+        Self {
+            scale: trigger.amount.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1) as f32 / 100.,
+            seconds: (!trigger.hold).then(|| trigger.tween.clamp(0.1, ZOOM_SECONDS)),
+            ease: if trigger.ease > 0. {
+                trigger.ease.clamp(0.1, ZOOM_EASE)
+            } else {
+                Self::EASE
+            },
+            easing: trigger.easing,
+        }
+    }
+}
+
+/// A Zoom view as an event value: the zoom in percent above the lowest in
+/// the low byte, then its length in tenths of a second (0 until the next),
+/// its change in tenths, the curve and the ease mode.
+pub fn zoom_event(view: &ZoomView) -> u32 {
+    let percent =
+        ((view.scale * 100.).round() as i32).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1) - ZOOM_RANGE.0;
+    let tenths = view.seconds.map_or(0, |s| {
+        (s * 10.).round().clamp(1., ZOOM_SECONDS * 10.) as u32
+    });
+    let ease = (view.ease * 10.).round().clamp(0., ZOOM_EASE * 10.) as u32;
+    let curve = Curve::ALL
+        .iter()
+        .position(|&c| c == view.easing.curve)
+        .unwrap_or(0) as u32;
+    let mode = EaseMode::ALL
+        .iter()
+        .position(|&m| m == view.easing.mode)
+        .unwrap_or(0) as u32;
+    percent as u32 | tenths << 8 | ease << 18 | curve << 25 | mode << 29
+}
+/// The view a [`zoom_event`] value describes.
+pub fn zoom_of(value: u32) -> ZoomView {
+    let tenths = (value >> 8) & 0x3ff;
+    ZoomView {
+        scale: ((value & 0xff) as i32 + ZOOM_RANGE.0).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1) as f32
+            / 100.,
+        seconds: (tenths > 0).then(|| (tenths as f32 / 10.).min(ZOOM_SECONDS)),
+        ease: (((value >> 18) & 0x7f) as f32 / 10.).min(ZOOM_EASE),
+        easing: Easing {
+            curve: Curve::ALL
+                .get(((value >> 25) & 0xf) as usize)
+                .copied()
+                .unwrap_or_default(),
+            mode: EaseMode::ALL
+                .get(((value >> 29) & 0x3) as usize)
+                .copied()
+                .unwrap_or_default(),
+        },
+    }
+}
+/// Where a Zoom view turns as an event value: the spot as fractions of the
+/// arena's width and height, 12 bits each, then how far toward it in percent.
+pub fn focus_event(at: [f32; 2], percent: u8) -> u32 {
+    let fraction = |v: f32| (v.clamp(0., 1.) * 4095.).round() as u32;
+    fraction(at[0]) | fraction(at[1]) << 12 | u32::from(percent.min(100)) << 24
+}
+/// The spot, as fractions of the arena's size, and how far toward it (0 to
+/// 1) from a [`focus_event`] value.
+pub fn focus_of(value: u32) -> ([f32; 2], f32) {
     (
-        ((value & 0xffff).clamp(1, 1000)) as f32 / 100.,
-        ((value >> 16) as f32 / 10.).min(ZOOM_SECONDS),
+        [
+            (value & 0xfff) as f32 / 4095.,
+            ((value >> 12) & 0xfff) as f32 / 4095.,
+        ],
+        ((value >> 24) & 0x7f).min(100) as f32 / 100.,
     )
+}
+
+/// Seconds a view stays in reach past its end, for players whose screens
+/// run behind the server.
+const VIEW_GRACE: f32 = 0.5;
+/// Views kept for one tank; a burst of zooms keeps the newest.
+const VIEW_LIMIT: usize = 8;
+
+/// A Zoom view that widens or moves what a player sees, kept so servers
+/// send everything on their screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MapView {
+    pub tank: EntityId,
+    pub scale: f32,
+    /// Round time it stops counting; infinite until the next view.
+    pub until: f32,
+    /// The spot it turns toward, and how far, from 0 to 1.
+    pub spot: V2,
+    pub focus: f32,
+}
+
+/// The smallest circle around two circles, each a middle and a radius.
+fn enclose(a: (V2, f32), b: (V2, f32)) -> (V2, f32) {
+    let apart = a.0.distance(b.0);
+    if apart + b.1 <= a.1 {
+        return a;
+    }
+    if apart + a.1 <= b.1 {
+        return b;
+    }
+    let radius = (apart + a.1 + b.1) * 0.5;
+    // From a's far side toward b's.
+    let middle = a.0.lerp(b.0, (radius - a.1) / apart.max(f32::EPSILON));
+    (middle, radius)
+}
+
+impl World {
+    /// The middle and radius of the arena tank `id`'s player sees: `radius`
+    /// around `pos`, widened and moved by the map's Zoom views.
+    pub fn view_reach(&self, id: EntityId, pos: V2, radius: f32) -> (V2, f32) {
+        self.map_views
+            .iter()
+            .filter(|view| view.tank == id)
+            .fold((pos, radius), |reach, view| {
+                let camera = pos.lerp(view.spot, view.focus.clamp(0., 1.));
+                enclose(reach, (camera, radius / view.scale.clamp(0.25, 1.)))
+            })
+    }
 }
 
 /// A Shake screen as an event value: strength in percent in the low byte and
@@ -426,9 +549,12 @@ pub struct MapEvent {
 }
 
 /// Trigger actions per step, so signals that fire each other stop.
-const CHAIN_BUDGET: u32 = 256;
+const CHAIN_BUDGET: u32 = 4096;
+/// Triggers woken per step, acting or not: a signal heard by many shut
+/// gates costs no actions but still takes checking.
+const CHECK_BUDGET: u32 = 65_536;
 /// Delayed actions waiting at once.
-const PENDING_LIMIT: usize = 512;
+const PENDING_LIMIT: usize = 4096;
 /// Script requests waiting for the next step.
 const INBOX_LIMIT: usize = 256;
 /// Script events raised in one tick.
@@ -438,9 +564,9 @@ pub const MAP_EVENT_LIMIT: usize = 64;
 /// or a counter change reaches its listeners without a search.
 #[derive(Clone, Debug, Default)]
 struct Listeners {
-    /// By signal channel, 1 to 32.
+    /// By signal channel, from 1.
     signal: Vec<Vec<usize>>,
-    /// By counter, 1 to 8: triggers waiting for a value, then those
+    /// By counter, from 1: triggers waiting for a value, then those
     /// waiting for any change.
     reach: Vec<Vec<usize>>,
     change: Vec<Vec<usize>>,
@@ -452,11 +578,13 @@ struct Listeners {
     /// Triggers with a schedule or an area; event triggers never need the
     /// per-step scan.
     stepped: Vec<usize>,
+    /// The counters the map's labels show, which players need.
+    labels: Vec<u8>,
 }
 impl Listeners {
     fn new(map: &MapDef) -> Self {
         let mut lists = Self {
-            signal: vec![Vec::new(); usize::from(MAP_GROUPS) + 1],
+            signal: vec![Vec::new(); usize::from(MAP_CHANNELS) + 1],
             reach: vec![Vec::new(); usize::from(MAP_COUNTERS) + 1],
             change: vec![Vec::new(); usize::from(MAP_COUNTERS) + 1],
             ..Self::default()
@@ -474,6 +602,9 @@ impl Listeners {
             } {
                 list.push(index);
             }
+        }
+        for decor in &map.decor {
+            tankyard_content::counters_named(&decor.text, &mut lists.labels);
         }
         lists
     }
@@ -523,9 +654,11 @@ pub struct MapLogic {
     /// Requests from scripts, oldest first.
     inbox: Vec<LogicInput>,
     budget: u32,
+    /// Woken triggers left to check this step.
+    checks: u32,
     /// How many times each trigger has acted this round.
     pub acted: Vec<u32>,
-    pub counters: [i32; MAP_COUNTERS as usize],
+    pub counters: MapCounters,
     /// Whether each On touch or On release trigger's group overlapped its
     /// area last step; None until it first looks.
     touching: Vec<Option<bool>>,
@@ -794,6 +927,7 @@ impl MapLogic {
         }
         self.prepare(map, now, *hidden);
         self.budget = CHAIN_BUDGET;
+        self.checks = CHECK_BUDGET;
         self.alive.clear();
         self.alive.extend(tanks.iter().map(|tank| tank.id));
         self.alive.sort_unstable();
@@ -936,6 +1070,12 @@ impl MapLogic {
         let mut cursor = 0;
         loop {
             while cursor < self.queue.len() {
+                // Past the check budget the rest of this step's wake-ups go.
+                if self.checks == 0 {
+                    cursor = self.queue.len();
+                    break;
+                }
+                self.checks -= 1;
                 let (index, cause) = self.queue[cursor];
                 cursor += 1;
                 self.cause = cause;
@@ -974,6 +1114,7 @@ impl MapLogic {
         self.prepare(map, now, *hidden);
         self.poses = self.current_poses(now);
         self.budget = CHAIN_BUDGET;
+        self.checks = CHECK_BUDGET;
         self.alive.clear();
         self.alive.extend(tanks.iter().map(|tank| tank.id));
         self.alive.sort_unstable();
@@ -1332,9 +1473,11 @@ impl MapLogic {
     /// Queue every trigger listening on signal channel `channel`.
     fn signal(&mut self, channel: u8) {
         let cause = self.cause;
+        // Wake-ups past what this step can still check would only be dropped.
+        let room = (self.checks as usize).saturating_sub(self.queue.len());
         if let Some(listeners) = self.listeners.signal.get(usize::from(channel)) {
             self.queue
-                .extend(listeners.iter().map(|&index| (index, cause)));
+                .extend(listeners.iter().take(room).map(|&index| (index, cause)));
         }
     }
 
@@ -1351,7 +1494,7 @@ impl MapLogic {
         }
     }
 
-    /// Store `value` in counter `counter` (1 to 8) and queue the triggers
+    /// Store `value` in counter `counter` (1 to 255) and queue the triggers
     /// waiting for a value it passed.
     fn set_counter(&mut self, map: &MapDef, counter: u8, value: i32) {
         let Some(slot) = usize::from(counter)
@@ -1515,12 +1658,12 @@ impl MapLogic {
             }),
             TriggerAction::Signal => self.signal(trigger.group),
             TriggerAction::Random => {
-                let choices = trigger.amount.clamp(1, i32::from(MAP_GROUPS)) as f32;
+                let choices = trigger.amount.clamp(1, i32::from(MAP_CHANNELS)) as f32;
                 let pick = (random() * choices).floor().clamp(0., choices - 1.) as u8;
                 self.signal(trigger.group.saturating_add(pick));
             }
             TriggerAction::Sequence => {
-                let choices = trigger.amount.clamp(1, i32::from(MAP_GROUPS)) as u8;
+                let choices = trigger.amount.clamp(1, i32::from(MAP_CHANNELS)) as u8;
                 let step = self.steps[index] % choices;
                 self.steps[index] = (step + 1) % choices;
                 self.signal(trigger.group.saturating_add(step));
@@ -1534,14 +1677,28 @@ impl MapLogic {
             }
             TriggerAction::Set => self.set_counter(map, trigger.group, trigger.amount),
             TriggerAction::Calculate => {
-                let counter = |n: u8| {
-                    usize::from(n)
-                        .checked_sub(1)
+                let counter = |n: usize| {
+                    n.checked_sub(1)
                         .and_then(|slot| self.counters.get(slot).copied())
                 };
-                if let Some(value) = counter(trigger.group) {
-                    let other = if trigger.operand > 0 {
-                        counter(trigger.operand).unwrap_or(0)
+                // A counter's number, moved along by another counter's value
+                // when `by` is set: lists of counters, read and written by
+                // position.
+                let number = |base: u8, by: u8| -> Option<usize> {
+                    if by == 0 {
+                        return Some(usize::from(base));
+                    }
+                    usize::try_from(i64::from(base) + i64::from(counter(usize::from(by))?)).ok()
+                };
+                let target = number(trigger.group, trigger.target_offset)
+                    .filter(|n| (1..=usize::from(MAP_COUNTERS)).contains(n));
+                if let Some(target) = target
+                    && let Some(value) = counter(target)
+                {
+                    let other = if trigger.operand > 0 || trigger.operand_offset > 0 {
+                        number(trigger.operand, trigger.operand_offset)
+                            .and_then(counter)
+                            .unwrap_or(0)
                     } else {
                         trigger.amount
                     };
@@ -1552,7 +1709,7 @@ impl MapLogic {
                         0.
                     };
                     if let Some(result) = trigger.math.apply(value, other, roll) {
-                        self.set_counter(map, trigger.group, result);
+                        self.set_counter(map, target as u8, result);
                     }
                 }
             }
@@ -1591,12 +1748,9 @@ impl MapLogic {
                     },
                     TriggerAction::Zoom => LogicEffect::Zoom {
                         tanks: ids,
-                        scale: trigger.amount.clamp(
-                            tankyard_content::ZOOM_RANGE.0,
-                            tankyard_content::ZOOM_RANGE.1,
-                        ) as f32
-                            / 100.,
-                        seconds: trigger.tween.clamp(0.1, ZOOM_SECONDS),
+                        view: ZoomView::of(trigger),
+                        at: V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5),
+                        focus: trigger.focus.min(100),
                     },
                     TriggerAction::Shake => LogicEffect::Shake {
                         tanks: ids,
@@ -1645,6 +1799,13 @@ impl MapLogic {
     pub fn waiting(&self) -> usize {
         self.pending.len()
     }
+    /// The counters the map's labels show, with their values.
+    pub fn shown_counters(&self) -> impl Iterator<Item = (u8, i32)> + '_ {
+        self.listeners.labels.iter().filter_map(|&counter| {
+            let slot = usize::from(counter).checked_sub(1)?;
+            Some((counter, *self.counters.get(slot)?))
+        })
+    }
 }
 
 /// The phase that keeps an animation at the same point of its cycle at
@@ -1669,7 +1830,7 @@ fn schedule(trigger: &MapTrigger, from: f32) -> f32 {
 pub fn gate_state<'a>(
     trigger: &MapTrigger,
     config: &WorldConfig,
-    counters: &'a [i32; MAP_COUNTERS as usize],
+    counters: &'a [i32],
     now: f32,
     hidden: u32,
     poses: &GroupPoses,
@@ -1873,6 +2034,11 @@ impl World {
     /// Pads: speed and conveyors for movement, portals, then repair and
     /// hazard over time.
     pub(crate) fn update_zones(&mut self) {
+        // Rifts rest tanks too, on maps without a single pad.
+        self.portal_rest.retain(|_, rest| {
+            *rest -= DT;
+            *rest > 0.
+        });
         if self.map.zones.is_empty() {
             for tank in &mut self.tanks {
                 tank.terrain = 1.;
@@ -1898,10 +2064,6 @@ impl World {
                     )
                 }),
         );
-        self.portal_rest.retain(|_, rest| {
-            *rest -= DT;
-            *rest > 0.
-        });
         for index in 0..self.tanks.len() {
             let tank = &self.tanks[index];
             if !tank.tangible() {
@@ -2015,6 +2177,14 @@ impl World {
         );
         self.rng = rng;
         self.match_state.counters = logic.counters;
+        self.match_state.shown_counters.clear();
+        self.match_state
+            .shown_counters
+            .extend(logic.shown_counters());
+        let alive = &self.tanks;
+        self.map_views.retain(|view| {
+            view.until > now && alive.iter().any(|tank| tank.id == view.tank && tank.alive)
+        });
         self.logic = logic;
         self.logic_tanks = tanks;
         for effect in effects {
@@ -2117,14 +2287,48 @@ impl World {
                 }
                 LogicEffect::Zoom {
                     tanks,
-                    scale,
-                    seconds,
+                    view,
+                    at,
+                    focus,
                 } => {
-                    let value = zoom_event(scale, seconds);
+                    let value = zoom_event(&view);
+                    let spot = [
+                        at.x / self.config.width.max(1.),
+                        at.y / self.config.height.max(1.),
+                    ];
+                    let aim = focus_event(spot, focus);
                     for id in tanks {
-                        if let Some(tank) = self.tanks.iter().find(|t| t.id == id && t.alive) {
-                            let (pos, team) = (tank.pos, tank.team);
-                            self.event(EventKind::MapZoom, pos, id, value, team);
+                        let Some(tank) = self.tanks.iter().find(|t| t.id == id && t.alive) else {
+                            continue;
+                        };
+                        let (pos, team) = (tank.pos, tank.team);
+                        // Both ride at the tank, so its player always gets
+                        // them, the zoom first.
+                        self.event(EventKind::MapZoom, pos, id, value, team);
+                        if focus > 0 {
+                            self.event(EventKind::MapFocus, pos, id, aim, team);
+                        }
+                        // Earlier views stay in reach while this one eases in.
+                        let handover = now + view.ease + VIEW_GRACE;
+                        for other in self.map_views.iter_mut().filter(|v| v.tank == id) {
+                            other.until = other.until.min(handover);
+                        }
+                        if view.scale < 1. || focus > 0 {
+                            let mut extra = (self.map_views.iter().filter(|v| v.tank == id))
+                                .count()
+                                .saturating_sub(VIEW_LIMIT - 1);
+                            self.map_views.retain(|v| {
+                                let old = extra > 0 && v.tank == id;
+                                extra -= usize::from(old);
+                                !old
+                            });
+                            self.map_views.push(MapView {
+                                tank: id,
+                                scale: view.scale,
+                                until: view.seconds.map_or(f32::INFINITY, |s| now + s + VIEW_GRACE),
+                                spot: at,
+                                focus: f32::from(focus) / 100.,
+                            });
                         }
                     }
                 }
@@ -2210,7 +2414,7 @@ fn swept_by(pos: V2, radius: f32, from: Rect, to: Rect, vertical: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tankyard_content::{Compare, MapBlock, MapTrigger, TestKind, TriggerTest};
+    use tankyard_content::{Compare, MapBlock, MapDecor, MapTrigger, TestKind, TriggerTest};
 
     fn world_with(edit: impl FnOnce(&mut MapDef)) -> World {
         let mut maps = tankyard_content::builtin_maps();
@@ -4073,5 +4277,249 @@ mod tests {
             .is_err(),
             "zoom stays within its range"
         );
+    }
+
+    #[test]
+    fn calculate_finds_counters_by_offset_and_skips_numbers_out_of_range() {
+        let calc = |group: u8, by: u8, math: MathOp, operand: u8, operand_by: u8| MapTrigger {
+            seconds: 1000.,
+            group,
+            target_offset: by,
+            math,
+            operand,
+            operand_offset: operand_by,
+            amount: 5,
+            ..trigger(TriggerWhen::Every, TriggerAction::Calculate)
+        };
+        let set = |group: u8, amount: i32| MapTrigger {
+            seconds: 1000.,
+            group,
+            amount,
+            ..trigger(TriggerWhen::Every, TriggerAction::Set)
+        };
+        let mut bench = Bench::new(vec![
+            set(10, 2),
+            set(32, 40),
+            // Counter 20 + 2: counter 22, from counter 30 + 2.
+            calc(20, 10, MathOp::Copy, 30, 10),
+            // Counter 22 plus 5, the amount, with no operand.
+            calc(20, 10, MathOp::Add, 0, 0),
+            set(10, 300),
+            set(10, -30),
+            set(10, 245),
+        ]);
+        bench.step(&[]);
+        let run = |bench: &mut Bench, index: usize| {
+            let seed = &mut bench.seed;
+            bench.logic.act_now(
+                index,
+                &bench.map,
+                &bench.config,
+                bench.now,
+                &mut bench.hidden,
+                &[],
+                &mut || crate::world::next_random(seed),
+                &mut bench.effects,
+            );
+        };
+        for index in [0, 1, 2] {
+            run(&mut bench, index);
+        }
+        assert_eq!(bench.logic.counters[21], 40);
+        run(&mut bench, 3);
+        assert_eq!(bench.logic.counters[21], 45);
+        let before = bench.logic.counters;
+        for setting in [4, 5] {
+            run(&mut bench, setting);
+            run(&mut bench, 2);
+            run(&mut bench, 3);
+        }
+        // Counter 10 aside, nothing moved.
+        let others = |counters: &[i32]| [&counters[..9], &counters[10..]].concat();
+        assert_eq!(others(&bench.logic.counters), others(&before));
+        // 20 + 245 is past the last counter.
+        run(&mut bench, 6);
+        run(&mut bench, 2);
+        run(&mut bench, 3);
+        assert_eq!(others(&bench.logic.counters), others(&before));
+    }
+
+    #[test]
+    fn many_shut_listeners_cost_checks_not_a_frozen_step() {
+        let mut triggers = vec![
+            MapTrigger {
+                group: 1,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Signal)
+            },
+            MapTrigger {
+                source: 1,
+                group: 1,
+                ..trigger(TriggerWhen::Signal, TriggerAction::Signal)
+            },
+        ];
+        // Counter 1 stays 0, so these never act.
+        triggers.extend((0..4000).map(|_| MapTrigger {
+            source: 1,
+            group: 2,
+            amount: 1,
+            only_if: Some(TriggerTest {
+                kind: TestKind::Counter,
+                index: 1,
+                compare: Compare::AtLeast,
+                value: 1,
+                against: 0,
+            }),
+            ..trigger(TriggerWhen::Signal, TriggerAction::Count)
+        }));
+        let mut bench = Bench::new(triggers);
+        let started = std::time::Instant::now();
+        bench.step(&[]);
+        bench.step(&[]);
+        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+        let loops = bench.logic.acted[1];
+        assert!((1..=17).contains(&loops), "{loops}");
+        assert_eq!(bench.logic.counters[1], 0);
+        assert!(bench.logic.queue.is_empty());
+    }
+
+    #[test]
+    fn labels_send_the_counters_they_show() {
+        let mut world = world_with(|map| {
+            map.decor.push(MapDecor {
+                kind: tankyard_content::DecorKind::Label,
+                rect: [0.1, 0.1, 0.2, 0.05],
+                color: [255; 3],
+                alpha: 255,
+                rotation: 0.,
+                pulse: 0.,
+                spin: 0.,
+                flicker: 0.,
+                above: false,
+                text: "Score {200:,} of {3|4:4}".into(),
+                effect: None,
+                group: 0,
+                react: Default::default(),
+                reach: 0.,
+            });
+            map.triggers.push(MapTrigger {
+                group: 200,
+                amount: 12345,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Set)
+            });
+        });
+        world.step();
+        let mut shown = world.match_state.shown_counters.clone();
+        shown.sort_unstable();
+        assert_eq!(shown, [(3, 0), (4, 0), (200, 12345)]);
+        let counters = tankyard_content::MapCounters::from_shown(&shown);
+        assert_eq!(counters[199], 12345);
+        assert_eq!(
+            tankyard_content::fill_counters("{200:,}", &counters),
+            "12,345"
+        );
+        let snapshot = world.snapshot_for(V2::new(0., 0.), 100.);
+        assert_eq!(snapshot.match_state.shown_counters.len(), 3);
+    }
+
+    #[test]
+    fn zoom_and_focus_values_survive_the_trip() {
+        // Each part fits its bits.
+        const {
+            assert!(ZOOM_RANGE.1 - ZOOM_RANGE.0 <= 0xff);
+            assert!(ZOOM_SECONDS * 10. <= 1023.);
+            assert!(ZOOM_EASE * 10. <= 127.);
+            assert!(Curve::ALL.len() <= 16 && EaseMode::ALL.len() <= 4);
+        }
+        for (curve, mode) in Curve::ALL
+            .into_iter()
+            .zip(EaseMode::ALL.into_iter().cycle())
+        {
+            for (percent, seconds, ease) in [
+                (ZOOM_RANGE.0, Some(0.1), 0.1),
+                (ZOOM_RANGE.1, Some(ZOOM_SECONDS), ZOOM_EASE),
+                (100, None, 2.5),
+            ] {
+                let view = ZoomView {
+                    scale: percent as f32 / 100.,
+                    seconds,
+                    ease,
+                    easing: Easing { curve, mode },
+                };
+                assert_eq!(zoom_of(zoom_event(&view)), view);
+            }
+        }
+        let (spot, focus) = focus_of(focus_event([0.25, 1.], 100));
+        assert!((spot[0] - 0.25).abs() < 1e-3 && spot[1] == 1.);
+        assert_eq!(focus, 1.);
+        assert_eq!(focus_of(focus_event([-1., 2.], 255)), ([0., 1.], 1.));
+    }
+
+    #[test]
+    fn zoomed_out_views_widen_what_the_server_sends_until_they_end() {
+        let mut world = world_with(|map| {
+            map.triggers.push(MapTrigger {
+                amount: 50,
+                tween: 2.,
+                ease: 0.5,
+                focus: 100,
+                rect: [0., 0., 1., 1.],
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Zoom)
+            });
+        });
+        let id = world.add_player("Viewer", false);
+        let pos = world.tanks.iter().find(|t| t.id == id).unwrap().pos;
+        world.step();
+        let (middle, reach) = world.view_reach(id, pos, 1000.);
+        assert!(reach >= 2000., "half the zoom sees twice as far: {reach}");
+        let spot = V2::new(world.config.width * 0.5, world.config.height * 0.5);
+        assert!(middle.distance(spot) + 2000. <= reach + 1.);
+        assert!(
+            middle.distance(pos) + 1000. <= reach + 1.,
+            "and still the tank"
+        );
+        assert_eq!(world.view_reach(7777, pos, 1000.), (pos, 1000.));
+        for _ in 0..((2. + VIEW_GRACE) * 60.) as usize + 2 {
+            world.step();
+        }
+        assert_eq!(world.view_reach(id, pos, 1000.), (pos, 1000.));
+        let circle = |x: f32, r: f32| (V2::new(x, 0.), r);
+        assert_eq!(enclose(circle(0., 10.), circle(3., 2.)), circle(0., 10.));
+        assert_eq!(enclose(circle(0., 2.), circle(3., 10.)), circle(3., 10.));
+        let (middle, radius) = enclose(circle(0., 1.), circle(10., 1.));
+        assert!((middle.x - 5.).abs() < 1e-4 && (radius - 6.).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_burst_of_zooms_keeps_a_few_views_per_tank() {
+        // A signal that sets itself off zooms as often as a step allows.
+        let mut world = world_with(|map| {
+            map.triggers.extend([
+                MapTrigger {
+                    group: 1,
+                    seconds: 0.,
+                    ..trigger(TriggerWhen::Start, TriggerAction::Signal)
+                },
+                MapTrigger {
+                    source: 1,
+                    group: 1,
+                    ..trigger(TriggerWhen::Signal, TriggerAction::Signal)
+                },
+                MapTrigger {
+                    source: 1,
+                    amount: 50,
+                    hold: true,
+                    rect: [0., 0., 1., 1.],
+                    ..trigger(TriggerWhen::Signal, TriggerAction::Zoom)
+                },
+            ]);
+        });
+        let id = world.add_player("Viewer", false);
+        world.step();
+        assert!(world.logic.acted.iter().sum::<u32>() > 1000);
+        let views = world.map_views.iter().filter(|v| v.tank == id).count();
+        assert!((1..=VIEW_LIMIT).contains(&views), "{views}");
     }
 }

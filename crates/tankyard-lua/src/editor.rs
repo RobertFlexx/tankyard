@@ -703,6 +703,64 @@ editor.tool {
     }
 
     #[test]
+    fn free_channels_and_counters_skip_boards_offsets_and_text() {
+        use tankyard_content::{
+            HudBoard, HudCell, HudCellKind, HudWidget, MapTrigger, MapUi, TriggerAction,
+            TriggerWhen,
+        };
+        const PICK: &str = r#"
+editor.tool {
+  id = "pick",
+  name = "Pick numbers",
+  run = function(map, params, ctx)
+    ctx.say(("%s %s"):format(editor.free_channel(map), editor.free_counter(map)))
+  end,
+}
+"#;
+        let mut plugins = Plugins::load(&[plugin_pack("pick", PICK)]);
+        assert!(plugins.errors.is_empty(), "{:?}", plugins.errors);
+        let mut map = tankyard_content::builtin_maps().remove(0);
+        map.decor.clear();
+        let button = |channel: u8| HudCell {
+            kind: HudCellKind::Button,
+            channel,
+            text: "{4:,}".into(),
+            ..HudCell::default()
+        };
+        map.triggers = vec![
+            MapTrigger {
+                action: TriggerAction::Ui,
+                group: 1,
+                ui: Some(Box::new(MapUi {
+                    widget: HudWidget {
+                        title: "{1|2:4}".into(),
+                        board: Some(HudBoard {
+                            cells: vec![button(1), button(2)],
+                            ..HudBoard::default()
+                        }),
+                        ..HudWidget::default()
+                    },
+                    channels: vec![3],
+                    bar: 5,
+                    ..MapUi::default()
+                })),
+                ..Default::default()
+            },
+            MapTrigger {
+                when: TriggerWhen::Signal,
+                source: 4,
+                action: TriggerAction::Calculate,
+                group: 3,
+                target_offset: 6,
+                operand_offset: 7,
+                ..Default::default()
+            },
+        ];
+        let outcome = plugins.run(0, 0, &map, &[], &Context::default()).unwrap();
+        assert_eq!(outcome.messages, vec!["5 8".to_owned()]);
+    }
+
+    #[test]
     fn broken_tools_and_runaway_loops_change_nothing() {
         let mut plugins = Plugins::load(&[plugin_pack(
             "broken",

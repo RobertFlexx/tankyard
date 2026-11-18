@@ -845,7 +845,7 @@ impl TriggerAction {
             Self::Signal => group..=group,
             Self::Random | Self::Sequence => {
                 let last = (i64::from(group) + i64::from(amount.max(1)) - 1)
-                    .clamp(0, i64::from(MAP_GROUPS));
+                    .clamp(0, i64::from(MAP_CHANNELS));
                 group..=last as u8
             }
             #[allow(clippy::reversed_empty_ranges)]
@@ -929,9 +929,24 @@ pub enum MathOp {
     Random,
     /// 1 when the counter is 0, otherwise 0; the other value is unused.
     Flip,
+    // Added in 1.7.0.
+    /// Keeps the bits set in both.
+    And,
+    /// Keeps the bits set in either.
+    Or,
+    /// Keeps the bits set in just one of them.
+    Xor,
+    /// Doubles the counter as many times as the other value says.
+    ShiftLeft,
+    /// Halves the counter, rounding down, as many times as the other value
+    /// says.
+    ShiftRight,
+    /// The counter to the power of the other value; a negative power
+    /// changes nothing.
+    Power,
 }
 impl MathOp {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 16] = [
         Self::Add,
         Self::Subtract,
         Self::Multiply,
@@ -942,6 +957,12 @@ impl MathOp {
         Self::Copy,
         Self::Random,
         Self::Flip,
+        Self::And,
+        Self::Or,
+        Self::Xor,
+        Self::ShiftLeft,
+        Self::ShiftRight,
+        Self::Power,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -955,6 +976,12 @@ impl MathOp {
             Self::Copy => "Copy",
             Self::Random => "Random",
             Self::Flip => "Flip 0/1",
+            Self::And => "Bits AND",
+            Self::Or => "Bits OR",
+            Self::Xor => "Bits XOR",
+            Self::ShiftLeft => "Shift left",
+            Self::ShiftRight => "Shift right",
+            Self::Power => "Power",
         }
     }
     /// Whether the result depends on the other value.
@@ -986,6 +1013,15 @@ impl MathOp {
             Self::Random if b < 1 => return None,
             Self::Random => ((f64::from(roll.clamp(0., 1.)) * b as f64).floor() as i64).min(b - 1),
             Self::Flip => i64::from(value == 0),
+            Self::And => a & b,
+            Self::Or => a | b,
+            Self::Xor => a ^ b,
+            // Counters hold 31 bits with the sign, so 62 places reach the
+            // limit from any value but 0; saturating keeps the sign.
+            Self::ShiftLeft => a.saturating_mul(1 << b.clamp(0, 62)),
+            Self::ShiftRight => a >> b.clamp(0, 63),
+            Self::Power if b < 0 => return None,
+            Self::Power => a.saturating_pow(b.min(64) as u32),
         };
         Some(result.clamp(-i64::from(COUNTER_LIMIT), i64::from(COUNTER_LIMIT)) as i32)
     }
@@ -1137,7 +1173,8 @@ impl GateMode {
 /// What a gate can see when it is checked.
 #[derive(Clone, Copy, Debug)]
 pub struct GateState<'a> {
-    pub counters: &'a [i32; MAP_COUNTERS as usize],
+    /// Counter 1 first.
+    pub counters: &'a [i32],
     pub hidden: u32,
     /// Seconds since the round started.
     pub time: f32,
@@ -1154,7 +1191,7 @@ pub const TRIGGER_CONDITIONS: usize = 4;
 pub struct TriggerTest {
     #[serde(default)]
     pub kind: TestKind,
-    /// The counter (1 to 8) or group (1 to 32) to look at. Inside and Time
+    /// The counter (1 to 255) or group (1 to 32) to look at. Inside and Time
     /// look at neither, so maps may leave it out.
     #[serde(default)]
     pub index: u8,
@@ -1162,7 +1199,7 @@ pub struct TriggerTest {
     pub compare: Compare,
     #[serde(default)]
     pub value: i32,
-    /// Compare with this counter (1 to 8) instead of `value`; 0 uses `value`.
+    /// Compare with this counter (1 to 255) instead of `value`; 0 uses `value`.
     #[serde(default)]
     pub against: u8,
 }
@@ -1299,7 +1336,7 @@ pub struct MapUi {
     pub widget: crate::HudWidget,
     #[serde(default, skip_serializing_if = "is_default")]
     pub to: UiAudience,
-    /// Fills the bar from counter `bar` (1 to 8) out of `bar_max`; 0 keeps
+    /// Fills the bar from counter `bar` (1 to 255) out of `bar_max`; 0 keeps
     /// the widget's own progress.
     #[serde(default, skip_serializing_if = "is_default")]
     pub bar: u8,
@@ -1374,6 +1411,50 @@ fn map_widget<S: serde::Serializer>(widget: &crate::HudWidget, out: S) -> Result
         bar_style: crate::HudBar,
         #[serde(skip_serializing_if = "is_default")]
         buttons: crate::HudButtons,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        board: Option<WrittenBoard<'a>>,
+    }
+    // Cells leave out what they don't use, so boards stay readable.
+    #[derive(Serialize)]
+    struct WrittenBoard<'a> {
+        columns: u8,
+        rows: u8,
+        cell: f32,
+        gap: f32,
+        cells: Vec<WrittenCell<'a>>,
+    }
+    #[derive(Serialize)]
+    struct WrittenCell<'a> {
+        kind: crate::HudCellKind,
+        at: [u8; 2],
+        #[serde(skip_serializing_if = "is_one_square")]
+        span: [u8; 2],
+        #[serde(skip_serializing_if = "String::is_empty")]
+        text: &'a String,
+        #[serde(skip_serializing_if = "is_default")]
+        channel: u8,
+        #[serde(skip_serializing_if = "is_default")]
+        counter: u8,
+        #[serde(skip_serializing_if = "is_default")]
+        bit: u8,
+        #[serde(skip_serializing_if = "is_default")]
+        group: u8,
+        #[serde(skip_serializing_if = "is_hundred")]
+        max: i32,
+        #[serde(skip_serializing_if = "is_default")]
+        color: Option<[u8; 3]>,
+        #[serde(skip_serializing_if = "is_default")]
+        fill: Option<[u8; 3]>,
+        #[serde(skip_serializing_if = "is_default")]
+        size: f32,
+        #[serde(skip_serializing_if = "is_default")]
+        align: crate::HudAlign,
+    }
+    fn is_one_square(span: &[u8; 2]) -> bool {
+        *span == [1, 1]
+    }
+    fn is_hundred(max: &i32) -> bool {
+        *max == 100
     }
     let crate::HudWidget {
         text,
@@ -1409,7 +1490,35 @@ fn map_widget<S: serde::Serializer>(widget: &crate::HudWidget, out: S) -> Result
         title_color,
         bar_style,
         buttons,
+        board,
     } = widget;
+    // Servers work out whether cells are lit and how full, so maps never
+    // store it.
+    let board = board.as_ref().map(|board| WrittenBoard {
+        columns: board.columns,
+        rows: board.rows,
+        cell: board.cell,
+        gap: board.gap,
+        cells: board
+            .cells
+            .iter()
+            .map(|cell| WrittenCell {
+                kind: cell.kind,
+                at: cell.at,
+                span: cell.span,
+                text: &cell.text,
+                channel: cell.channel,
+                counter: cell.counter,
+                bit: cell.bit,
+                group: cell.group,
+                max: cell.max,
+                color: cell.color,
+                fill: cell.fill,
+                size: cell.size,
+                align: cell.align,
+            })
+            .collect(),
+    });
     Written {
         text,
         x: *x,
@@ -1444,6 +1553,7 @@ fn map_widget<S: serde::Serializer>(widget: &crate::HudWidget, out: S) -> Result
         title_color: *title_color,
         bar_style: *bar_style,
         buttons: *buttons,
+        board,
     }
     .serialize(out)
 }
@@ -1467,18 +1577,37 @@ impl MapUi {
     /// copy of their own.
     pub fn personal(&self) -> bool {
         let names = |text: &str| text.contains("{name}") || text.contains("{score}");
-        !self.widget.choices.is_empty() || names(&self.widget.text) || names(&self.widget.title)
+        let board = self.widget.board.as_ref().is_some_and(|board| {
+            board
+                .cells
+                .iter()
+                .any(|cell| cell.kind == crate::HudCellKind::Button || names(&cell.text))
+        });
+        !self.widget.choices.is_empty()
+            || board
+            || names(&self.widget.text)
+            || names(&self.widget.title)
     }
-    /// Whether the text, title or bar change while it shows.
+    /// Whether the text, title, bar or board change while it shows.
     pub fn live(&self) -> bool {
         let fills = |text: &str| text.contains('{');
-        self.bar > 0 || self.timer || fills(&self.widget.text) || fills(&self.widget.title)
+        let board = self.widget.board.as_ref().is_some_and(|board| {
+            board.cells.iter().any(|cell| {
+                fills(&cell.text)
+                    || cell.watches()
+                    || (cell.kind == crate::HudCellKind::Meter && cell.counter > 0)
+            })
+        });
+        self.bar > 0 || self.timer || board || fills(&self.widget.text) || fills(&self.widget.title)
     }
 }
 
 /// What fills a map widget's `{…}` fields.
 pub struct UiFill<'a> {
+    /// Counter 1 first.
     pub counters: &'a [i32],
+    /// Hidden groups, group 1 as bit 0, for board lights that watch them.
+    pub hidden: u32,
     pub left: f32,
     pub time: f32,
     pub name: &'a str,
@@ -1515,12 +1644,7 @@ pub fn fill_ui_text(template: &str, fill: &UiFill, max: usize) -> String {
             "name" => Some(fill.name.to_owned()),
             "cause" => Some(fill.cause.to_owned()),
             "score" => Some(fill.score.to_string()),
-            _ => Some(field)
-                .filter(|n| n.len() == 1)
-                .and_then(|n| n.parse::<usize>().ok())
-                .and_then(|n| n.checked_sub(1))
-                .and_then(|n| fill.counters.get(n))
-                .map(i32::to_string),
+            _ => counter_field(field, fill.counters),
         };
         match filled {
             Some(text) => out.push_str(&text),
@@ -1599,7 +1723,7 @@ pub struct MapTrigger {
     /// How Calculate changes its counter.
     #[serde(default, skip_serializing_if = "is_default")]
     pub math: MathOp,
-    /// Calculate uses counter `operand` (1 to 8) instead of `amount`; 0
+    /// Calculate uses counter `operand` (1 to 255) instead of `amount`; 0
     /// uses `amount`.
     #[serde(default, skip_serializing_if = "is_default")]
     pub operand: u8,
@@ -1647,18 +1771,51 @@ pub struct MapTrigger {
     /// it from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<Box<MapUi>>,
+    // Added in 1.7.0, and likewise left out when unused.
+    /// Calculate changes counter `group` plus the value of this counter, for
+    /// lists of counters; 0 changes counter `group` itself.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub target_offset: u8,
+    /// Calculate reads counter `operand` plus the value of this counter; 0
+    /// reads counter `operand` itself.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub operand_offset: u8,
+    /// Zoom view stays until another Zoom view changes it, instead of for
+    /// `tween` seconds.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub hold: bool,
+    /// How far Zoom view turns the view toward the middle of the area, in
+    /// percent.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub focus: u8,
+    /// Seconds Zoom view takes to change the view, with `easing`; 0 takes
+    /// half a second.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub ease: f32,
 }
 impl MapTrigger {
     /// Every signal channel acting can send on: its action's, each choice's
     /// and the otherwise channel's.
     pub fn sends(&self) -> impl Iterator<Item = u8> + '_ {
-        let choices = match (&self.ui, self.action) {
-            (Some(ui), TriggerAction::Ui) => ui.channels.as_slice(),
-            _ => &[],
+        let ui = match (&self.ui, self.action) {
+            (Some(ui), TriggerAction::Ui) => Some(ui.as_ref()),
+            _ => None,
         };
+        let choices = ui.map_or(&[][..], |ui| ui.channels.as_slice());
+        let cells = ui
+            .and_then(|ui| ui.widget.board.as_ref())
+            .map_or(&[][..], |board| board.cells.as_slice());
+        // Channel 0 is no channel, wherever it turns up.
         self.action
             .channels(self.group, self.amount)
-            .chain(choices.iter().copied().filter(|&c| c > 0))
+            .chain(choices.iter().copied())
+            .chain(
+                cells
+                    .iter()
+                    .filter(|cell| cell.kind == crate::HudCellKind::Button)
+                    .map(|cell| cell.channel),
+            )
+            .filter(|&c| c > 0)
     }
     /// Animate's pace in cycles a second, after the style's default.
     pub fn animate_speed(&self) -> f32 {
@@ -1719,6 +1876,11 @@ impl Default for MapTrigger {
             sound: MapSound::Chime,
             angle: 0.,
             ui: None,
+            target_offset: 0,
+            operand_offset: 0,
+            hold: false,
+            focus: 0,
+            ease: 0.,
         }
     }
 }
@@ -1752,10 +1914,77 @@ impl MapTrigger {
     }
 }
 
-/// Counters triggers can add to and watch; labels show them as `{1}`-`{8}`.
-pub const MAP_COUNTERS: u8 = 8;
-/// Counter values stay within this magnitude.
-pub const COUNTER_LIMIT: i32 = 99_999;
+/// Counters triggers can add to and watch; labels show them as `{1}` to
+/// `{255}`.
+pub const MAP_COUNTERS: u8 = 255;
+/// Counter values stay within this magnitude: 30 bits, so two of them add
+/// up without overflowing and bitwise math keeps every pattern.
+pub const COUNTER_LIMIT: i32 = (1 << 30) - 1;
+/// Signal channels triggers and widget buttons send on, from 1.
+pub const MAP_CHANNELS: u8 = 255;
+
+/// Every map counter's value, counter 1 first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapCounters(pub [i32; MAP_COUNTERS as usize]);
+impl Default for MapCounters {
+    fn default() -> Self {
+        Self([0; MAP_COUNTERS as usize])
+    }
+}
+impl std::ops::Deref for MapCounters {
+    type Target = [i32];
+    fn deref(&self) -> &[i32] {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for MapCounters {
+    fn deref_mut(&mut self) -> &mut [i32] {
+        &mut self.0
+    }
+}
+impl MapCounters {
+    /// The counters `shown` names, as (counter, value) pairs, set over 0.
+    pub fn from_shown(shown: &[(u8, i32)]) -> Self {
+        let mut counters = Self::default();
+        for &(counter, value) in shown {
+            if let Some(slot) = usize::from(counter)
+                .checked_sub(1)
+                .and_then(|slot| counters.0.get_mut(slot))
+            {
+                *slot = value;
+            }
+        }
+        counters
+    }
+}
+
+/// Add the counters `text`'s fields name (see [`counter_field`]) to
+/// `named`, each once, in no particular order.
+pub fn counters_named(text: &str, named: &mut Vec<u8>) {
+    // Every counter present, so a field fills in exactly when it names
+    // counters; read as [`fill_counters`] reads.
+    static EVERY: [i32; MAP_COUNTERS as usize] = [1; MAP_COUNTERS as usize];
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let field = after
+            .find('}')
+            .filter(|&close| counter_field(&after[..close], &EVERY).is_some());
+        let Some(close) = field else {
+            rest = after;
+            continue;
+        };
+        let names = after[..close].split(':').next().unwrap_or("");
+        for name in names.split('|') {
+            if let Ok(counter) = name.parse::<u8>()
+                && !named.contains(&counter)
+            {
+                named.push(counter);
+            }
+        }
+        rest = &after[close + 1..];
+    }
+}
 /// How far one Move or Move to trigger may glide its group, in arena widths
 /// or heights.
 pub const TRAVEL_LIMIT: f32 = 2.;
@@ -1783,11 +2012,9 @@ pub const TRIGGER_AWARD: i32 = 100_000;
 /// A While inside trigger waits for at most this many tanks.
 pub const TRIGGER_CROWD: i32 = 64;
 
-/// `text` with `{1}` to `{8}` replaced by the counters' values.
-pub fn fill_counters<'a>(
-    text: &'a str,
-    counters: &[i32; MAP_COUNTERS as usize],
-) -> std::borrow::Cow<'a, str> {
+/// `text` with its counter fields (see [`counter_field`]) filled from
+/// `counters`, counter 1 first.
+pub fn fill_counters<'a>(text: &'a str, counters: &[i32]) -> std::borrow::Cow<'a, str> {
     if !text.contains('{') {
         return text.into();
     }
@@ -1796,13 +2023,15 @@ pub fn fill_counters<'a>(
     while let Some(open) = rest.find('{') {
         out.push_str(&rest[..open]);
         let after = &rest[open..];
-        let digit = after.as_bytes().get(1).copied();
-        match (digit, after.as_bytes().get(2)) {
-            (Some(d @ b'1'..=b'8'), Some(b'}')) => {
-                out.push_str(&counters[usize::from(d - b'1')].to_string());
-                rest = &after[3..];
+        let filled = after
+            .find('}')
+            .and_then(|close| Some((close, counter_field(&after[1..close], counters)?)));
+        match filled {
+            Some((close, value)) => {
+                out.push_str(&value);
+                rest = &after[close + 1..];
             }
-            _ => {
+            None => {
                 out.push('{');
                 rest = &after[1..];
             }
@@ -1812,14 +2041,125 @@ pub fn fill_counters<'a>(
     out.into()
 }
 
+/// The text for a `{…}` field that names counters, from `counters` (counter
+/// 1 first), or `None` when it names none:
+///
+/// - `{12}`: counter 12.
+/// - `{12:,}`: with commas between groups of three digits.
+/// - `{12:04}`: at least four digits, with zeros in front.
+/// - `{12:b}`, `{12:b8}`: binary, optionally at least eight digits.
+/// - `{12:x}`, `{12:x4}`: hexadecimal, optionally at least four digits.
+/// - `{3|2|1:9}`: counters 3, 2 and 1 as nine-digit parts of one long
+///   number, most significant first, as `{3|2|1:9,}` with commas. Two to
+///   eight parts of one to nine digits; the first part that isn't 0 gives
+///   the sign.
+pub fn counter_field(field: &str, counters: &[i32]) -> Option<String> {
+    let (names, spec) = match field.split_once(':') {
+        // A colon needs a format after it.
+        Some((_, "")) => return None,
+        Some(split) => split,
+        None => (field, ""),
+    };
+    let value = |name: &str| {
+        if name.is_empty() || name.len() > 3 || name.starts_with('0') {
+            return None;
+        }
+        let number: usize = name.parse().ok()?;
+        counters.get(number.checked_sub(1)?).copied()
+    };
+    // Widths of one or two digits, from 1 to `most`.
+    let width = |digits: &[u8], most: usize| -> Option<usize> {
+        if digits.is_empty() || digits.len() > 2 || !digits.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        let width = digits
+            .iter()
+            .fold(0, |sum, &d| sum * 10 + usize::from(d - b'0'));
+        (1..=most).contains(&width).then_some(width)
+    };
+    if names.contains('|') {
+        let parts = names.split('|').map(value).collect::<Option<Vec<i32>>>()?;
+        let (digits, commas) = match spec.strip_suffix(',') {
+            Some(digits) => (digits, true),
+            None => (spec, false),
+        };
+        return match digits.as_bytes() {
+            &[d @ b'1'..=b'9'] if (2..=8).contains(&parts.len()) => {
+                Some(joined_number(&parts, usize::from(d - b'0'), commas))
+            }
+            _ => None,
+        };
+    }
+    let number = value(names)?;
+    let sign = if number < 0 { "-" } else { "" };
+    let magnitude = number.unsigned_abs();
+    Some(match spec.as_bytes() {
+        [] => number.to_string(),
+        [b','] => format!("{sign}{}", digit_groups(&magnitude.to_string())),
+        [b'0', digits @ ..] => {
+            let w = width(digits, 20)?;
+            format!("{sign}{magnitude:0w$}")
+        }
+        [b'b'] => format!("{sign}{magnitude:b}"),
+        [b'b', digits @ ..] => {
+            let w = width(digits, 32)?;
+            format!("{sign}{magnitude:0w$b}")
+        }
+        [b'x'] => format!("{sign}{magnitude:X}"),
+        [b'x', digits @ ..] => {
+            let w = width(digits, 8)?;
+            format!("{sign}{magnitude:0w$X}")
+        }
+        _ => return None,
+    })
+}
+/// `parts`, most significant first, as one number of `digits` digits a
+/// part, with commas between groups of three when `commas`.
+fn joined_number(parts: &[i32], digits: usize, commas: bool) -> String {
+    let negative = parts
+        .iter()
+        .find(|&&part| part != 0)
+        .is_some_and(|&part| part < 0);
+    let mut text = String::new();
+    for part in parts {
+        let magnitude = part.unsigned_abs();
+        if !text.is_empty() {
+            text.push_str(&format!("{magnitude:0digits$}"));
+        } else if magnitude != 0 {
+            text = magnitude.to_string();
+        }
+    }
+    if text.is_empty() {
+        text.push('0');
+    }
+    if commas {
+        text = digit_groups(&text);
+    }
+    if negative {
+        text.insert(0, '-');
+    }
+    text
+}
+/// ASCII `digits` with a comma between each group of three from the right.
+fn digit_groups(digits: &str) -> String {
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
 /// Most groups a map can name; they fit one 32-bit mask in snapshots.
 pub const MAP_GROUPS: u8 = 32;
 /// Most walls and blocks together, pads, decorations and triggers in one
 /// map.
 pub const MAP_BLOCKS: usize = 2048;
 pub const MAP_ZONES: usize = 512;
-pub const MAP_DECOR: usize = 2048;
-pub const MAP_TRIGGERS: usize = 512;
+pub const MAP_DECOR: usize = 4096;
+pub const MAP_TRIGGERS: usize = 4096;
 /// Fastest Shove body, in world units a second.
 pub const SHOVE_LIMIT: i32 = 2000;
 /// Fastest Fling tanks or Blast, in world units a second.
@@ -1828,6 +2168,8 @@ pub const FLING_LIMIT: i32 = 3000;
 pub const ZOOM_RANGE: (i32, i32) = (40, 250);
 /// Longest Zoom view, in seconds.
 pub const ZOOM_SECONDS: f32 = 60.;
+/// Longest change from one Zoom view to the next, in seconds.
+pub const ZOOM_EASE: f32 = 10.;
 /// Stable IDs accepted by map boss triggers. Core verifies this catalog stays
 /// in sync with its boss enum.
 pub const BOSS_IDS: [&str; 14] = [
@@ -2293,6 +2635,15 @@ pub fn validate_map_features(map: &MapDef) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether `counter` names a counter, or is 0 for none.
+fn counter_or_none(counter: u8) -> bool {
+    counter == 0 || (1..=MAP_COUNTERS).contains(&counter)
+}
+/// Whether `channel` names a signal channel, or is 0 for none.
+fn channel_or_none(channel: u8) -> bool {
+    channel == 0 || (1..=MAP_CHANNELS).contains(&channel)
+}
+
 /// One trigger's settings, with a reason a map author can act on.
 fn validate_ui(ui: &MapUi) -> Result<(), String> {
     if !ui.widget.valid() {
@@ -2310,15 +2661,26 @@ fn validate_ui(ui: &MapUi) -> Result<(), String> {
     if ui.widget.pinned() {
         return Err("pin a map widget with the trigger's pin, not the widget's".into());
     }
-    if ui.bar > MAP_COUNTERS || (ui.bar > 0 && !(1..=COUNTER_LIMIT).contains(&ui.bar_max)) {
+    if !counter_or_none(ui.bar) || (ui.bar > 0 && !(1..=COUNTER_LIMIT).contains(&ui.bar_max)) {
         return Err(format!(
             "fill the bar from a counter from 1 to {MAP_COUNTERS}, out of 1 to {COUNTER_LIMIT}"
         ));
     }
-    if ui.channels.len() > ui.widget.choices.len() || ui.channels.iter().any(|&c| c > MAP_GROUPS) {
+    let cells = ui.widget.board.iter().flat_map(|board| &board.cells);
+    if ui.channels.len() > ui.widget.choices.len()
+        || !ui.channels.iter().copied().all(channel_or_none)
+        || !cells
+            .clone()
+            .all(|cell| channel_or_none(cell.channel) && counter_or_none(cell.counter))
+    {
         return Err(format!(
-            "each choice signals a channel from 1 to {MAP_GROUPS}, or 0 for none"
+            "each choice signals a channel from 1 to {MAP_CHANNELS}, or 0 for none"
         ));
+    }
+    if ui.widget.board.is_some() && (!ui.widget.choices.is_empty() || ui.bar > 0 || ui.timer) {
+        return Err(
+            "a board shows its title and cells: leave out the text, bar and choices".into(),
+        );
     }
     Ok(())
 }
@@ -2340,8 +2702,8 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         });
     }
     match trigger.when {
-        TriggerWhen::Signal if !(1..=MAP_GROUPS).contains(&trigger.source) => {
-            return Err(format!("listen on a channel from 1 to {MAP_GROUPS}"));
+        TriggerWhen::Signal if !(1..=MAP_CHANNELS).contains(&trigger.source) => {
+            return Err(format!("listen on a channel from 1 to {MAP_CHANNELS}"));
         }
         TriggerWhen::Counter if !(1..=MAP_COUNTERS).contains(&trigger.source) => {
             return Err(format!("watch a counter from 1 to {MAP_COUNTERS}"));
@@ -2376,8 +2738,8 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         TriggerAction::Boss if !BOSS_IDS.contains(&trigger.boss.as_str()) => {
             return Err(format!("unknown boss {:?}", trigger.boss));
         }
-        TriggerAction::Signal if !(1..=MAP_GROUPS).contains(&trigger.group) => {
-            return Err(format!("send on a channel from 1 to {MAP_GROUPS}"));
+        TriggerAction::Signal if !(1..=MAP_CHANNELS).contains(&trigger.group) => {
+            return Err(format!("send on a channel from 1 to {MAP_CHANNELS}"));
         }
         TriggerAction::Count
             if !(1..=MAP_COUNTERS).contains(&trigger.group)
@@ -2396,12 +2758,12 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
             ));
         }
         TriggerAction::Random | TriggerAction::Sequence
-            if !(1..=MAP_GROUPS).contains(&trigger.group)
-                || !(2..=i32::from(MAP_GROUPS)).contains(&trigger.amount)
-                || i32::from(trigger.group) + trigger.amount - 1 > i32::from(MAP_GROUPS) =>
+            if !(1..=MAP_CHANNELS).contains(&trigger.group)
+                || !(2..=i32::from(MAP_CHANNELS)).contains(&trigger.amount)
+                || i32::from(trigger.group) + trigger.amount - 1 > i32::from(MAP_CHANNELS) =>
         {
             return Err(format!(
-                "pick from 2 or more channels, all within 1 to {MAP_GROUPS}"
+                "pick from 2 or more channels, all within 1 to {MAP_CHANNELS}"
             ));
         }
         TriggerAction::Heal | TriggerAction::Hurt if !(1..=100).contains(&trigger.amount) => {
@@ -2414,8 +2776,9 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
             return Err(format!("spawn 1 to {TRIGGER_SHAPES} shapes"));
         }
         TriggerAction::Calculate
-            if !(1..=MAP_COUNTERS).contains(&trigger.group)
-                || trigger.operand > MAP_COUNTERS
+            if !counter_or_none(trigger.group)
+                || (trigger.group == 0 && trigger.target_offset == 0)
+                || !counter_or_none(trigger.operand)
                 || !(-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&trigger.amount) =>
         {
             return Err(format!(
@@ -2497,12 +2860,13 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
                 "blast at 1 to {FLING_LIMIT} units a second, or pull in with a negative amount"
             ));
         }
+        // A zoom that holds lasts until the next, whatever its length says.
         TriggerAction::Zoom
             if !(ZOOM_RANGE.0..=ZOOM_RANGE.1).contains(&trigger.amount)
-                || !range(trigger.tween, 0.1, ZOOM_SECONDS) =>
+                || (!trigger.hold && !range(trigger.tween, 0.1, ZOOM_SECONDS)) =>
         {
             return Err(format!(
-                "zoom to {} to {} percent for 0.1 to {ZOOM_SECONDS} seconds",
+                "zoom to {} to {} percent for 0.1 to {ZOOM_SECONDS} seconds, or until the next zoom",
                 ZOOM_RANGE.0, ZOOM_RANGE.1
             ));
         }
@@ -2549,11 +2913,11 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         let fits = match test.kind {
             TestKind::Counter => {
                 (1..=MAP_COUNTERS).contains(&test.index)
-                    && test.against <= MAP_COUNTERS
+                    && counter_or_none(test.against)
                     && (-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&test.value)
             }
             TestKind::Inside | TestKind::Time => {
-                test.against <= MAP_COUNTERS
+                counter_or_none(test.against)
                     && (-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&test.value)
             }
             TestKind::Shown | TestKind::Hidden => (1..=MAP_GROUPS).contains(&test.index),
@@ -2564,9 +2928,19 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
             ));
         }
     }
-    if trigger.otherwise > MAP_GROUPS {
+    if !channel_or_none(trigger.otherwise) {
         return Err(format!(
-            "send the otherwise signal on a channel from 1 to {MAP_GROUPS}, or 0 for none"
+            "send the otherwise signal on a channel from 1 to {MAP_CHANNELS}, or 0 for none"
+        ));
+    }
+    if !counter_or_none(trigger.target_offset) || !counter_or_none(trigger.operand_offset) {
+        return Err(format!(
+            "offset by a counter from 1 to {MAP_COUNTERS}, or 0 for none"
+        ));
+    }
+    if trigger.focus > 100 || !range(trigger.ease, 0., ZOOM_EASE) {
+        return Err(format!(
+            "turn the view 0 to 100 percent toward the area, over 0 to {ZOOM_EASE} seconds"
         ));
     }
     if !range(trigger.offset, 0., 3600.)
@@ -2964,16 +3338,19 @@ mod tests {
             "more conditions need a first"
         );
         let mut channel = base.clone();
-        channel.otherwise = MAP_GROUPS + 1;
-        assert!(validate_trigger(&channel).is_err());
+        channel.otherwise = MAP_CHANNELS;
+        validate_trigger(&channel).unwrap();
         let mut sequence = MapTrigger {
             action: TriggerAction::Sequence,
-            group: 31,
+            group: MAP_CHANNELS - 1,
             amount: 3,
             ..base.clone()
         };
-        assert!(validate_trigger(&sequence).is_err(), "runs past channel 32");
-        sequence.group = 30;
+        assert!(
+            validate_trigger(&sequence).is_err(),
+            "runs past the last channel"
+        );
+        sequence.group = MAP_CHANNELS - 2;
         validate_trigger(&sequence).unwrap();
         let boss = MapTrigger {
             when: TriggerWhen::Defeated,
@@ -3030,9 +3407,12 @@ mod tests {
         assert_eq!(TriggerAction::Sequence.channels(4, 3), 4..=6);
         assert!(TriggerAction::Count.channels(4, 3).is_empty());
         for action in [TriggerAction::Random, TriggerAction::Sequence] {
-            assert_eq!(action.channels(4, i32::MAX), 4..=MAP_GROUPS);
+            assert_eq!(action.channels(4, i32::MAX), 4..=MAP_CHANNELS);
             assert_eq!(action.channels(4, i32::MIN), 4..=4);
-            assert!(action.channels(u8::MAX, i32::MAX).is_empty());
+            assert_eq!(
+                action.channels(MAP_CHANNELS, i32::MAX),
+                MAP_CHANNELS..=MAP_CHANNELS
+            );
         }
     }
 
@@ -3053,5 +3433,77 @@ mod tests {
         assert!(validate_ui(&ui).is_ok());
         ui.widget.pin = crate::HudPin::Tank(3);
         assert!(validate_ui(&ui).is_err(), "maps pin with the trigger");
+    }
+
+    #[test]
+    fn counter_fields_pad_group_join_and_change_base() {
+        let mut counters = [0i32; MAP_COUNTERS as usize];
+        counters[0] = 1234567;
+        counters[1] = -42;
+        counters[2] = 5;
+        counters[3] = 12;
+        counters[4] = 345;
+        counters[254] = 9;
+        let field = |f: &str| counter_field(f, &counters);
+        assert_eq!(field("1").as_deref(), Some("1234567"));
+        assert_eq!(field("1:,").as_deref(), Some("1,234,567"));
+        assert_eq!(field("2:,").as_deref(), Some("-42"));
+        assert_eq!(field("2:05").as_deref(), Some("-00042"));
+        assert_eq!(field("3:b").as_deref(), Some("101"));
+        assert_eq!(field("3:b8").as_deref(), Some("00000101"));
+        assert_eq!(field("4:x2").as_deref(), Some("0C"));
+        assert_eq!(field("255").as_deref(), Some("9"));
+        // Parts of one long number, most significant first.
+        assert_eq!(field("3|4|5:4").as_deref(), Some("500120345"));
+        assert_eq!(field("3|4|5:4,").as_deref(), Some("500,120,345"));
+        assert_eq!(field("6|5:4").as_deref(), Some("345"), "leading zero parts");
+        assert_eq!(
+            field("6|2|3:4").as_deref(),
+            Some("-420005"),
+            "sign from the first"
+        );
+        for wrong in [
+            "", "0", "01", "256", "1:", "1:y", "1:0", "1:021", "1:b33", "1:x9", "3|4", "3:4|5",
+            "1|2:0", "x",
+        ] {
+            assert_eq!(field(wrong), None, "{wrong}");
+        }
+        assert_eq!(
+            fill_counters("{3}/{1:,} {name} {{4} {9", &counters),
+            "5/1,234,567 {name} {12 {9"
+        );
+        let mut named = Vec::new();
+        counters_named("{3}/{1:,} {name} {{4} {3|5:4} {300} {9", &mut named);
+        named.sort_unstable();
+        assert_eq!(named, [1, 3, 4, 5]);
+    }
+
+    #[test]
+    fn new_math_works_on_bits_and_powers_and_stays_in_range() {
+        let apply = |op: MathOp, a: i32, b: i32| op.apply(a, b, 0.);
+        assert_eq!(apply(MathOp::And, 0b1100, 0b1010), Some(0b1000));
+        assert_eq!(apply(MathOp::Or, 0b1100, 0b1010), Some(0b1110));
+        assert_eq!(apply(MathOp::Xor, 0b1100, 0b1010), Some(0b0110));
+        assert_eq!(apply(MathOp::ShiftLeft, 3, 4), Some(48));
+        assert_eq!(apply(MathOp::ShiftRight, 48, 4), Some(3));
+        assert_eq!(apply(MathOp::ShiftRight, -1, 4), Some(-1), "rounds down");
+        assert_eq!(apply(MathOp::ShiftLeft, 1, 200), Some(COUNTER_LIMIT));
+        assert_eq!(apply(MathOp::Power, 10, 4), Some(10_000));
+        assert_eq!(apply(MathOp::Power, -2, 3), Some(-8));
+        assert_eq!(apply(MathOp::Power, 7, 0), Some(1));
+        assert_eq!(apply(MathOp::Power, 10, 40), Some(COUNTER_LIMIT));
+        assert_eq!(apply(MathOp::Power, 2, -1), None, "no fractions");
+        assert_eq!(MathOp::ALL.len(), 16);
+        for op in MathOp::ALL {
+            for (a, b) in [
+                (COUNTER_LIMIT, COUNTER_LIMIT),
+                (-COUNTER_LIMIT, -COUNTER_LIMIT),
+                (7, 0),
+            ] {
+                if let Some(value) = op.apply(a, b, 0.5) {
+                    assert!(value.abs() <= COUNTER_LIMIT, "{op:?} {a} {b}");
+                }
+            }
+        }
     }
 }

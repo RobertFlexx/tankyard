@@ -69,6 +69,9 @@ struct Layout {
     icon: Option<(Vec2, f32)>,
     bar: Option<Rect>,
     choices: Vec<Rect>,
+    /// A board's cells, and how many pixels a grid unit takes.
+    cells: Vec<Rect>,
+    board_scale: f32,
     corner: f32,
     /// Where a pointer leaves the frame and which way it points, while a
     /// widget that points the way has its pin out of view.
@@ -281,10 +284,16 @@ fn layout_at(
         Arrange::Grid => cell * 2. + choice_gap,
     };
     let choice_height = choice_size * 2.;
+    // A board keeps its proportions, shrinking to the room there is.
+    let board_extent = widget.board.as_ref().map(|board| board.extent());
+    let board_scale = board_extent.map_or(0., |[w, _]| (scale * grow).min(inner_room / w.max(1.)));
+    let [board_width, board_height] =
+        board_extent.map_or([0., 0.], |[w, h]| [w * board_scale, h * board_scale]);
     let content_width = line_width
         .max(title_width)
         .max(bar_width)
         .max(choices_width)
+        .max(board_width)
         .min(inner_room);
     // Heights from the top of the content.
     let mut height = 0.;
@@ -316,6 +325,11 @@ fn layout_at(
             Arrange::Grid => count.div_ceil(2),
         };
         height = at + rows as f32 * choice_height + (rows - 1) as f32 * choice_gap;
+        at
+    });
+    let board_at = board_extent.map(|_| {
+        let at = height + if height > 0. { size * 0.45 } else { 0. };
+        height = at + board_height;
         at
     });
     // A banner runs across the screen, so pinned it is a panel.
@@ -463,6 +477,12 @@ fn layout_at(
             }
         }
     }
+    let cells = match (&widget.board, board_at) {
+        (Some(board), Some(at)) => {
+            crate::hud_board::cells(board, vec2(line_left(board_width), y0 + at), board_scale)
+        }
+        _ => Vec::new(),
+    };
     Layout {
         scale,
         frame,
@@ -474,6 +494,8 @@ fn layout_at(
         icon,
         bar,
         choices,
+        cells,
+        board_scale,
         corner: if pill {
             full_height * 0.5
         } else if banner {
@@ -1217,6 +1239,32 @@ fn paint(
             picked = Some(index as u8);
         }
     }
+    if let Some(board) = &widget.board {
+        let skin = crate::hud_board::Skin {
+            accent,
+            text: text_color,
+            panel,
+            buttons: widget.buttons,
+            bar: widget.bar_style,
+            segments: widget.segments,
+            lettering,
+            ink,
+            caps: widget.caps,
+            corner: match shape {
+                HudShape::Rounded => (6. * l.board_scale).max(2.),
+                _ => 0.,
+            },
+            opacity,
+            drift,
+        };
+        picked = picked.or(crate::hud_board::paint(
+            board,
+            &l.cells,
+            l.board_scale,
+            &skin,
+            pointer,
+        ));
+    }
     picked
 }
 
@@ -1237,7 +1285,7 @@ fn offset(l: &mut Layout, by: Vec2) {
     if let Some(bar) = &mut l.bar {
         *bar = bar.offset(by);
     }
-    for rect in &mut l.choices {
+    for rect in l.choices.iter_mut().chain(&mut l.cells) {
         *rect = rect.offset(by);
     }
     if let Some((edge, _)) = &mut l.toward {
@@ -1400,7 +1448,7 @@ pub fn captures_layer_pointer(
     widgets
         .iter()
         .filter(|widget| layer.is_none_or(|layer| widget.pinned() == (layer == Layer::Arena)))
-        .filter(|widget| !widget.choices.is_empty())
+        .filter(|widget| widget.pickable())
         .any(|widget| {
             anchor(widget, place).is_some_and(|pinned| {
                 let rest = layout(widget, screen, s, 1., pinned);
@@ -1442,8 +1490,11 @@ pub fn choice_at(
     if !ui::reduced_motion() && age < ENTER_SECONDS as f32 {
         return None;
     }
-    layout(widget, frame, scale, 1., pinned)
-        .choices
+    let laid = layout(widget, frame, scale, 1., pinned);
+    if let Some(board) = &widget.board {
+        return crate::hud_board::button_at(board, &laid.cells, point);
+    }
+    laid.choices
         .iter()
         .position(|rect| rect.contains(point))
         .map(|index| index as u8)

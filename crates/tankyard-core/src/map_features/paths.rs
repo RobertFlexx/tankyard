@@ -381,7 +381,9 @@ mod tests {
         }
         let tank = &world.tanks[0];
         assert!(tank.vel.y < -400., "flung upward: {:?}", tank.vel);
-        assert_eq!(zoom, Some((0.6, 3.)));
+        let zoom = zoom.expect("zoomed");
+        assert_eq!((zoom.scale, zoom.seconds), (0.6, Some(3.)));
+        assert_eq!(zoom.ease, crate::ZoomView::EASE, "the usual change");
 
         let mut world = world_with(|map| {
             map.triggers.push(MapTrigger {

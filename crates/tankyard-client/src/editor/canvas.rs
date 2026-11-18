@@ -10,7 +10,7 @@ use crate::{
 use macroquad::prelude::*;
 use std::collections::{HashMap, HashSet};
 use tankyard_client::editor_document::{
-    Key, Link, Object, describe_trigger_named, link, trigger_badge_tag,
+    Key, Link, LinkIndex, Object, describe_trigger_named, link, trigger_badge_tag,
 };
 use tankyard_content::*;
 use tankyard_core::{V2, WorldConfig};
@@ -53,6 +53,8 @@ pub enum Gesture {
 
 /// How near, in pixels, the pointer must be to grab a handle.
 const HANDLE_REACH: f32 = 11.;
+/// The most link arrows drawn in one frame.
+const LINK_ARROWS: usize = 3000;
 /// A selection side shorter than this on screen has the handles across it
 /// stand outside the edge, so pressing in a thin selection still moves it.
 const HANDLE_ROOM: f32 = 40.;
@@ -536,14 +538,15 @@ impl Editor {
         let canvas = layout.canvas;
         let inside = canvas.contains(pointer) && !self.help;
         // The preview's widgets sit over the arena: a click on one of their
-        // choices picks it, and a click elsewhere on them does nothing.
+        // choices or board buttons picks it, and a click elsewhere on them
+        // does nothing.
         if inside && self.gesture.is_none() && !self.preview.ui.is_empty() {
             let config = self.config();
             let widgets = self.preview.widgets(&config);
             // The last drawn is on top.
             let over = widgets.iter().rev().find_map(|(index, widget, age)| {
                 let pinned = self.pin_place(widget.pin);
-                if widget.choices.is_empty() || (widget.pinned() && pinned.is_none()) {
+                if !widget.pickable() || (widget.pinned() && pinned.is_none()) {
                     return None;
                 }
                 crate::hud_widgets::covers(widget, canvas, layout.s, pointer, pinned, *age)
@@ -1210,6 +1213,30 @@ impl Editor {
             }
         }
         let group_color = mix(accent_color(), CYAN, 0.4);
+        let color = |kind: Link| match kind {
+            Link::Signal | Link::Otherwise => VIOLET,
+            Link::Counter => AMBER,
+            Link::Group => group_color,
+            Link::Reset => RED,
+        };
+        // Big maps can link thousands of triggers: arrows off screen are
+        // skipped, and past a frame's worth the rest wait for a closer look.
+        let screen = Rect::new(0., 0., screen_width(), screen_height());
+        let mut budget = LINK_ARROWS;
+        let mut draw = |from: Vec2, to: Vec2, width: f32, tint: Color| {
+            let bounds = Rect::new(
+                from.x.min(to.x),
+                from.y.min(to.y),
+                (from.x - to.x).abs().max(1.),
+                (from.y - to.y).abs().max(1.),
+            );
+            if budget > 0 && bounds.overlaps(&screen) {
+                budget -= 1;
+                arrow(from, to, width, tint);
+            }
+        };
+        let links = LinkIndex::new(&map.triggers);
+        let mut affected = Vec::new();
         for (index, trigger) in map.triggers.iter().enumerate() {
             let outgoing = watched(index);
             let incoming = trigger.action.targets_group()
@@ -1228,7 +1255,7 @@ impl Editor {
                         Key::Trigger(other) => self.trigger_point(other),
                         _ => self.on_screen(r).center(),
                     };
-                    arrow(from, to, 2., alpha(group_color, 0.8));
+                    draw(from, to, 2., alpha(group_color, 0.8));
                     drawn += 1;
                     if drawn >= 64 {
                         break;
@@ -1238,35 +1265,30 @@ impl Editor {
             if !outgoing {
                 continue;
             }
-            let color = |kind: Link| match kind {
-                Link::Signal | Link::Otherwise => VIOLET,
-                Link::Counter => AMBER,
-                Link::Group => group_color,
-                Link::Reset => RED,
-            };
-            // What it sets off, and, when only it is watched, what sets it off.
-            for (other, target) in map.triggers.iter().enumerate() {
-                if other == index {
-                    continue;
-                }
-                if let Some(kind) = link(trigger, target) {
-                    let width = if kind == Link::Otherwise { 1.3 } else { 2. };
-                    arrow(
-                        from,
-                        self.trigger_point(other),
-                        width,
-                        alpha(color(kind), 0.85),
-                    );
-                }
-                if !self.show_links
-                    && let Some(kind) = link(target, trigger)
-                {
-                    arrow(
-                        self.trigger_point(other),
-                        from,
-                        1.5,
-                        alpha(color(kind), 0.5),
-                    );
+            // What it sets off.
+            links.affected(&map.triggers, index, &mut affected);
+            for &(other, kind) in &affected {
+                let width = if kind == Link::Otherwise { 1.3 } else { 2. };
+                draw(
+                    from,
+                    self.trigger_point(other),
+                    width,
+                    alpha(color(kind), 0.85),
+                );
+            }
+            // And, when only it is watched, what sets it off.
+            if !self.show_links {
+                for (other, source) in map.triggers.iter().enumerate() {
+                    if other != index
+                        && let Some(kind) = link(source, trigger)
+                    {
+                        draw(
+                            self.trigger_point(other),
+                            from,
+                            1.5,
+                            alpha(color(kind), 0.5),
+                        );
+                    }
                 }
             }
         }

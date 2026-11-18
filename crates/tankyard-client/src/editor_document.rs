@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 use tankyard_content::*;
 use tankyard_mods::{GameRules, PackFiles};
 
+/// Largest editor project, as written or read: room for a map at every
+/// limit, in readable JSON.
+pub const DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Document {
@@ -230,8 +234,11 @@ impl Document {
     /// Drafts may be temporarily unplayable, but imports still have strict size
     /// and coordinate limits. Full navigation validation runs on play/export.
     pub fn from_json(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.len() > 2 * 1024 * 1024 {
-            return Err("Editor document exceeds 2 MiB.".into());
+        if bytes.len() > DOCUMENT_BYTES {
+            return Err(format!(
+                "Editor document exceeds {} MiB.",
+                DOCUMENT_BYTES >> 20
+            ));
         }
         let doc: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
         if doc.format != 1 {
@@ -758,19 +765,75 @@ impl Document {
         let used = self.used_groups();
         (1..=MAP_GROUPS).find(|&group| MapDef::group_bit(group) & used == 0)
     }
-    /// The lowest signal channel no trigger sends or listens on.
-    pub fn next_free_channel(&self) -> Option<u8> {
-        let mut used = 0u32;
+    /// The counters anything refers to, in order: triggers that change,
+    /// watch or check them, bars, board cells, and text fields in labels,
+    /// announcements and widgets.
+    pub fn used_counters(&self) -> Vec<u8> {
+        let mut used = [false; MAP_COUNTERS as usize + 1];
+        let mut named = Vec::new();
+        for decor in &self.map.decor {
+            tankyard_content::counters_named(&decor.text, &mut named);
+        }
+        for t in &self.map.triggers {
+            let mut mark = |counter: u8| used[usize::from(counter)] = true;
+            if t.action.targets_counter() {
+                mark(t.group);
+                mark(t.target_offset);
+                if t.action == TriggerAction::Calculate {
+                    mark(t.operand);
+                    mark(t.operand_offset);
+                }
+            }
+            if matches!(t.when, TriggerWhen::Counter | TriggerWhen::Changed) {
+                mark(t.source);
+            }
+            for test in t.conditions() {
+                if test.kind == TestKind::Counter {
+                    mark(test.index);
+                }
+                if test.kind.compares() {
+                    mark(test.against);
+                }
+            }
+            if t.action == TriggerAction::Announce {
+                tankyard_content::counters_named(&t.text, &mut named);
+            }
+            if let Some(ui) = &t.ui {
+                mark(ui.bar);
+                tankyard_content::counters_named(&ui.widget.title, &mut named);
+                tankyard_content::counters_named(&ui.widget.text, &mut named);
+                for cell in ui.widget.board.iter().flat_map(|board| &board.cells) {
+                    mark(cell.counter);
+                    tankyard_content::counters_named(&cell.text, &mut named);
+                }
+            }
+        }
+        for counter in named {
+            used[usize::from(counter)] = true;
+        }
+        // Slot 0 is no counter.
+        (1..=MAP_COUNTERS)
+            .filter(|&counter| used[usize::from(counter)])
+            .collect()
+    }
+    /// Which signal channels triggers send or listen on, by number.
+    pub fn used_channels(&self) -> [bool; MAP_CHANNELS as usize + 1] {
+        let mut used = [false; MAP_CHANNELS as usize + 1];
         for t in &self.map.triggers {
             if t.when == TriggerWhen::Signal {
-                used |= MapDef::group_bit(t.source);
+                used[usize::from(t.source)] = true;
             }
             for channel in t.sends() {
-                used |= MapDef::group_bit(channel);
+                used[usize::from(channel)] = true;
             }
-            used |= MapDef::group_bit(t.otherwise);
+            used[usize::from(t.otherwise)] = true;
         }
-        (1..=MAP_GROUPS).find(|&channel| MapDef::group_bit(channel) & used == 0)
+        used
+    }
+    /// The lowest signal channel no trigger sends or listens on.
+    pub fn next_free_channel(&self) -> Option<u8> {
+        let used = self.used_channels();
+        (1..=MAP_CHANNELS).find(|&channel| !used[usize::from(channel)])
     }
     /// Every object in `group`.
     pub fn in_group(&self, group: u8) -> Vec<Key> {
@@ -1224,20 +1287,25 @@ pub enum Link {
 
 /// Whether, and how, `from` acting can affect `to`.
 pub fn link(from: &MapTrigger, to: &MapTrigger) -> Option<Link> {
+    // 0 names no counter or group: a Calculate that picks its counter by
+    // another's value can't be followed.
     let reads_counter = |counter: u8| {
-        (matches!(to.when, TriggerWhen::Counter | TriggerWhen::Changed) && to.source == counter)
-            || to.conditions().any(|test| {
-                (test.kind == TestKind::Counter && test.index == counter)
-                    || (test.kind.compares() && test.against == counter)
-            })
+        counter > 0
+            && ((matches!(to.when, TriggerWhen::Counter | TriggerWhen::Changed)
+                && to.source == counter)
+                || to.conditions().any(|test| {
+                    (test.kind == TestKind::Counter && test.index == counter)
+                        || (test.kind.compares() && test.against == counter)
+                }))
     };
     let reads_group = |group: u8| {
-        (matches!(to.when, TriggerWhen::Shown | TriggerWhen::Hidden) && to.source == group)
-            || to
-                .conditions()
-                .any(|test| !test.kind.compares() && test.index == group)
+        group > 0
+            && ((matches!(to.when, TriggerWhen::Shown | TriggerWhen::Hidden) && to.source == group)
+                || to
+                    .conditions()
+                    .any(|test| !test.kind.compares() && test.index == group))
     };
-    let awaits = |group: u8| to.when == TriggerWhen::Arrived && to.source == group;
+    let awaits = |group: u8| group > 0 && to.when == TriggerWhen::Arrived && to.source == group;
     let listens = |channel: u8| to.when == TriggerWhen::Signal && to.source == channel;
     if from.sends().any(&listens) {
         Some(Link::Signal)
@@ -1256,53 +1324,160 @@ pub fn link(from: &MapTrigger, to: &MapTrigger) -> Option<Link> {
     }
 }
 
+/// Which triggers each signal, counter and group reaches, so following
+/// links never searches every trigger.
+pub struct LinkIndex {
+    /// By channel: triggers waiting for its signal.
+    listeners: Vec<Vec<usize>>,
+    /// By counter: triggers that watch or check it.
+    counters: Vec<Vec<usize>>,
+    /// By group: triggers that watch, check or wait for it.
+    groups: Vec<Vec<usize>>,
+    /// By group: the triggers in it, which resetting it resets.
+    members: Vec<Vec<usize>>,
+}
+impl LinkIndex {
+    pub fn new(triggers: &[MapTrigger]) -> Self {
+        let mut index = Self {
+            listeners: vec![Vec::new(); usize::from(MAP_CHANNELS) + 1],
+            counters: vec![Vec::new(); usize::from(MAP_COUNTERS) + 1],
+            groups: vec![Vec::new(); usize::from(MAP_GROUPS) + 1],
+            members: vec![Vec::new(); usize::from(MAP_GROUPS) + 1],
+        };
+        // Slot 0 is no channel, counter or group.
+        fn add(lists: &mut [Vec<usize>], slot: u8, trigger: usize) {
+            if slot > 0
+                && let Some(list) = lists.get_mut(usize::from(slot))
+                && list.last() != Some(&trigger)
+            {
+                list.push(trigger);
+            }
+        }
+        for (at, t) in triggers.iter().enumerate() {
+            match t.when {
+                TriggerWhen::Signal => add(&mut index.listeners, t.source, at),
+                TriggerWhen::Counter | TriggerWhen::Changed => {
+                    add(&mut index.counters, t.source, at)
+                }
+                TriggerWhen::Shown | TriggerWhen::Hidden | TriggerWhen::Arrived => {
+                    add(&mut index.groups, t.source, at)
+                }
+                _ => {}
+            }
+            for test in t.conditions() {
+                if test.kind == TestKind::Counter {
+                    add(&mut index.counters, test.index, at);
+                }
+                if test.kind.compares() {
+                    add(&mut index.counters, test.against, at);
+                } else {
+                    add(&mut index.groups, test.index, at);
+                }
+            }
+            add(&mut index.members, t.member, at);
+        }
+        index
+    }
+    /// The triggers waiting for a signal on `channel`.
+    pub fn listening(&self, channel: u8) -> &[usize] {
+        self.listeners
+            .get(usize::from(channel))
+            .map_or(&[], Vec::as_slice)
+    }
+    /// What trigger `at` acting can affect and how, each once, into `out`.
+    pub fn affected(&self, triggers: &[MapTrigger], at: usize, out: &mut Vec<(usize, Link)>) {
+        out.clear();
+        let Some(from) = triggers.get(at) else {
+            return;
+        };
+        let mut reach: Vec<usize> = Vec::new();
+        for channel in from.sends() {
+            reach.extend_from_slice(self.listening(channel));
+        }
+        if from.otherwise > 0 && from.only_if.is_some() {
+            reach.extend_from_slice(self.listening(from.otherwise));
+        }
+        let slot = usize::from(from.group);
+        if from.action.targets_counter()
+            && let Some(list) = self.counters.get(slot)
+        {
+            reach.extend_from_slice(list);
+        }
+        if (from.action.switches_group() || from.action.animates())
+            && let Some(list) = self.groups.get(slot)
+        {
+            reach.extend_from_slice(list);
+        }
+        if from.action == TriggerAction::Reset {
+            if from.group == 0 {
+                reach.extend(0..triggers.len());
+            } else if let Some(list) = self.members.get(slot) {
+                reach.extend_from_slice(list);
+            }
+        }
+        reach.sort_unstable();
+        reach.dedup();
+        out.extend(
+            reach
+                .into_iter()
+                .filter(|&other| other != at)
+                .filter_map(|other| Some((other, link(from, triggers.get(other)?)?))),
+        );
+    }
+}
+
 /// Triggers that signal one another in a ring with nothing to stop them, by
 /// index, when there are any: no delay, gate or chance, and not once per round.
 fn signal_loop(triggers: &[MapTrigger]) -> Option<Vec<usize>> {
     let free = |t: &MapTrigger| t.delay == 0. && t.chance == 100 && !t.once && t.only_if.is_none();
+    let links = LinkIndex::new(triggers);
     let next: Vec<Vec<usize>> = triggers
         .iter()
         .map(|t| {
             if !free(t) {
                 return Vec::new();
             }
-            let channels: Vec<u8> = t.sends().collect();
-            triggers
-                .iter()
-                .enumerate()
-                .filter(|(_, other)| {
-                    other.when == TriggerWhen::Signal
-                        && free(other)
-                        && channels.contains(&other.source)
-                })
-                .map(|(i, _)| i)
-                .collect()
+            let mut to: Vec<usize> = t
+                .sends()
+                .flat_map(|channel| links.listening(channel).iter().copied())
+                .filter(|&other| free(&triggers[other]))
+                .collect();
+            to.sort_unstable();
+            to.dedup();
+            to
         })
         .collect();
-    // Depth-first search; 0 unvisited, 1 on the path, 2 finished.
-    fn visit(at: usize, next: &[Vec<usize>], state: &mut [u8], path: &mut Vec<usize>) -> bool {
-        state[at] = 1;
-        path.push(at);
-        for &to in &next[at] {
-            if state[to] == 1 {
-                let start = path.iter().position(|&i| i == to).unwrap_or(0);
-                path.drain(..start);
-                return true;
-            }
-            if state[to] == 0 && visit(to, next, state, path) {
-                return true;
-            }
-        }
-        path.pop();
-        state[at] = 2;
-        false
-    }
-    let mut state = vec![0; triggers.len()];
+    // Depth-first search with its own stack, so long chains can't overflow
+    // the thread's. 0 unvisited, 1 on the path, 2 finished.
+    let mut state = vec![0u8; triggers.len()];
     for start in 0..triggers.len() {
-        let mut path = Vec::new();
-        if state[start] == 0 && visit(start, &next, &mut state, &mut path) {
-            path.sort_unstable();
-            return Some(path);
+        if state[start] != 0 {
+            continue;
+        }
+        // Each step on the path, and the next of its links to follow.
+        let mut path: Vec<(usize, usize)> = vec![(start, 0)];
+        state[start] = 1;
+        while let Some(top) = path.last_mut() {
+            let (at, edge) = *top;
+            if let Some(&to) = next[at].get(edge) {
+                top.1 += 1;
+                match state[to] {
+                    0 => {
+                        state[to] = 1;
+                        path.push((to, 0));
+                    }
+                    1 => {
+                        let from = path.iter().position(|&(i, _)| i == to).unwrap_or(0);
+                        let mut ring: Vec<usize> = path[from..].iter().map(|&(i, _)| i).collect();
+                        ring.sort_unstable();
+                        return Some(ring);
+                    }
+                    _ => {}
+                }
+            } else {
+                state[at] = 2;
+                path.pop();
+            }
         }
     }
     None
@@ -1391,13 +1566,27 @@ fn describe_ui(t: &MapTrigger) -> String {
         return format!("show UI slot {} (not designed yet)", t.group);
     };
     let w = &ui.widget;
-    let what = [w.title.trim(), w.text.trim()]
-        .into_iter()
-        .find(|text| !text.is_empty())
-        .map_or_else(
-            || "a bar".to_owned(),
-            |text| format!("\u{201c}{text}\u{201d}"),
-        );
+    let what = match (
+        &w.board,
+        [w.title.trim(), w.text.trim()]
+            .into_iter()
+            .find(|t| !t.is_empty()),
+    ) {
+        (Some(board), Some(title)) => format!(
+            "board \u{201c}{title}\u{201d} ({}\u{d7}{}, {} cells)",
+            board.columns,
+            board.rows,
+            board.cells.len()
+        ),
+        (Some(board), None) => format!(
+            "a {}\u{d7}{} board of {} cells",
+            board.columns,
+            board.rows,
+            board.cells.len()
+        ),
+        (None, Some(text)) => format!("\u{201c}{text}\u{201d}"),
+        (None, None) => "a bar".to_owned(),
+    };
     let to = match ui.to {
         UiAudience::Everyone => "everyone",
         UiAudience::Inside => "the players here",
@@ -1778,27 +1967,48 @@ fn gate_tag(t: &MapTrigger, compact: bool) -> Option<String> {
         (gate, _) => format!("{}({})", gate.short(), tests.join(", ")),
     })
 }
+/// A counter Calculate reads or writes: `base`, or with `by` set, the
+/// counter that many places past it, by counter `by`'s value.
+fn counter_name(base: u8, by: u8) -> String {
+    match (base, by) {
+        (_, 0) => format!("counter {base}"),
+        (0, _) => format!("counter #{by}"),
+        _ => format!("counter {base}+#{by}"),
+    }
+}
+/// The same, short, for badges.
+fn counter_badge(base: u8, by: u8) -> String {
+    match (base, by) {
+        (_, 0) => format!("#{base}"),
+        (0, _) => format!("#(#{by})"),
+        _ => format!("#({base}+#{by})"),
+    }
+}
 /// What Calculate does, in words.
 fn describe_math(t: &MapTrigger) -> String {
-    let (c, x) = (
-        t.group,
-        if t.operand > 0 {
-            format!("counter {}", t.operand)
-        } else {
-            t.amount.to_string()
-        },
-    );
+    let c = counter_name(t.group, t.target_offset);
+    let x = if t.operand > 0 || t.operand_offset > 0 {
+        counter_name(t.operand, t.operand_offset)
+    } else {
+        t.amount.to_string()
+    };
     match t.math {
-        MathOp::Add => format!("add {x} to counter {c}"),
-        MathOp::Subtract => format!("take {x} from counter {c}"),
-        MathOp::Multiply => format!("multiply counter {c} by {x}"),
-        MathOp::Divide => format!("divide counter {c} by {x}, rounding down"),
-        MathOp::Remainder => format!("keep counter {c}'s remainder after dividing by {x}"),
-        MathOp::Lowest => format!("lower counter {c} to {x} if it is above"),
-        MathOp::Highest => format!("raise counter {c} to {x} if it is below"),
-        MathOp::Copy => format!("set counter {c} to {x}"),
-        MathOp::Random => format!("set counter {c} to a random number from 0 below {x}"),
-        MathOp::Flip => format!("flip counter {c} between 0 and 1"),
+        MathOp::Add => format!("add {x} to {c}"),
+        MathOp::Subtract => format!("take {x} from {c}"),
+        MathOp::Multiply => format!("multiply {c} by {x}"),
+        MathOp::Divide => format!("divide {c} by {x}, rounding down"),
+        MathOp::Remainder => format!("keep {c}'s remainder after dividing by {x}"),
+        MathOp::Lowest => format!("lower {c} to {x} if it is above"),
+        MathOp::Highest => format!("raise {c} to {x} if it is below"),
+        MathOp::Copy => format!("set {c} to {x}"),
+        MathOp::Random => format!("set {c} to a random number from 0 below {x}"),
+        MathOp::Flip => format!("flip {c} between 0 and 1"),
+        MathOp::And => format!("keep only the bits of {c} that {x} has too"),
+        MathOp::Or => format!("turn on {x}'s bits in {c}"),
+        MathOp::Xor => format!("flip {x}'s bits in {c}"),
+        MathOp::ShiftLeft => format!("shift {c} left by {x} bits"),
+        MathOp::ShiftRight => format!("shift {c} right by {x} bits, rounding down"),
+        MathOp::Power => format!("raise {c} to the power of {x}"),
     }
 }
 /// A direction in words: "right", "up and left", or degrees between.
@@ -1876,22 +2086,29 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
         TriggerAction::Hurt => format!("\u{2212}{}%", t.amount),
         TriggerAction::Award => format!("+{} pts", t.amount),
         TriggerAction::Calculate => {
-            let x = if t.operand > 0 {
-                format!("#{}", t.operand)
+            let c = counter_badge(t.group, t.target_offset);
+            let x = if t.operand > 0 || t.operand_offset > 0 {
+                counter_badge(t.operand, t.operand_offset)
             } else {
                 t.amount.to_string()
             };
             match t.math {
-                MathOp::Add => format!("#{} += {x}", t.group),
-                MathOp::Subtract => format!("#{} \u{2212}= {x}", t.group),
-                MathOp::Multiply => format!("#{} \u{d7}= {x}", t.group),
-                MathOp::Divide => format!("#{} \u{f7}= {x}", t.group),
-                MathOp::Remainder => format!("#{} %= {x}", t.group),
-                MathOp::Lowest => format!("#{} min {x}", t.group),
-                MathOp::Highest => format!("#{} max {x}", t.group),
-                MathOp::Copy => format!("#{} = {x}", t.group),
-                MathOp::Random => format!("#{} = rnd {x}", t.group),
-                MathOp::Flip => format!("#{} flip", t.group),
+                MathOp::Add => format!("{c} += {x}"),
+                MathOp::Subtract => format!("{c} \u{2212}= {x}"),
+                MathOp::Multiply => format!("{c} \u{d7}= {x}"),
+                MathOp::Divide => format!("{c} \u{f7}= {x}"),
+                MathOp::Remainder => format!("{c} %= {x}"),
+                MathOp::Lowest => format!("{c} min {x}"),
+                MathOp::Highest => format!("{c} max {x}"),
+                MathOp::Copy => format!("{c} = {x}"),
+                MathOp::Random => format!("{c} = rnd {x}"),
+                MathOp::Flip => format!("{c} flip"),
+                MathOp::And => format!("{c} &= {x}"),
+                MathOp::Or => format!("{c} |= {x}"),
+                MathOp::Xor => format!("{c} ^= {x}"),
+                MathOp::ShiftLeft => format!("{c} <<= {x}"),
+                MathOp::ShiftRight => format!("{c} >>= {x}"),
+                MathOp::Power => format!("{c} pow {x}"),
             }
         }
         TriggerAction::Script => format!("Script {}", t.text.trim()),
@@ -1921,6 +2138,7 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
         TriggerAction::Light => format!("Dark {}%", t.amount),
         TriggerAction::Path => format!("Path {} on {}", t.amount, t.group),
         TriggerAction::Ui => match t.ui.as_ref() {
+            Some(ui) if ui.widget.board.is_some() => format!("Board {}", t.group),
             Some(ui) if !ui.widget.choices.is_empty() => {
                 format!("Ask {} ({})", t.group, ui.widget.choices.len())
             }
@@ -2137,6 +2355,33 @@ mod tests {
             action: TriggerAction::Sequence,
             group: 1,
             amount: i32::from(MAP_GROUPS),
+            ..Default::default()
+        }));
+        assert_eq!(doc.next_free_channel(), Some(33), "past the groups");
+        doc.insert(Object::Trigger(MapTrigger {
+            action: TriggerAction::Ui,
+            group: 1,
+            ui: Some(Box::new(MapUi {
+                widget: HudWidget {
+                    board: Some(HudBoard {
+                        cells: vec![HudCell {
+                            kind: HudCellKind::Button,
+                            channel: 33,
+                            ..HudCell::default()
+                        }],
+                        ..HudBoard::default()
+                    }),
+                    ..MapUi::starter().widget
+                },
+                ..MapUi::starter()
+            })),
+            ..Default::default()
+        }));
+        assert_eq!(doc.next_free_channel(), Some(34), "board buttons send");
+        doc.insert(Object::Trigger(MapTrigger {
+            action: TriggerAction::Sequence,
+            group: 1,
+            amount: i32::from(MAP_CHANNELS),
             ..Default::default()
         }));
         assert_eq!(
@@ -2427,5 +2672,91 @@ mod tests {
             ..Default::default()
         };
         assert!(describe_trigger(&flash).contains("returning after"));
+    }
+
+    /// Triggers wired to each other every which way, small numbers so
+    /// they meet often.
+    fn tangle(count: usize, mut seed: u64) -> Vec<MapTrigger> {
+        let mut roll = |below: usize| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as usize % below
+        };
+        fn test(roll: &mut impl FnMut(usize) -> usize) -> TriggerTest {
+            TriggerTest {
+                kind: TestKind::ALL[roll(TestKind::ALL.len())],
+                index: roll(5) as u8,
+                against: roll(4) as u8,
+                ..TriggerTest::default()
+            }
+        }
+        (0..count)
+            .map(|_| {
+                let only_if = (roll(3) == 0).then(|| test(&mut roll));
+                let also_if = if only_if.is_some() && roll(2) == 0 {
+                    vec![test(&mut roll)]
+                } else {
+                    Vec::new()
+                };
+                MapTrigger {
+                    when: TriggerWhen::ALL[roll(TriggerWhen::ALL.len())],
+                    source: roll(5) as u8,
+                    action: TriggerAction::ALL[roll(TriggerAction::ALL.len())],
+                    group: roll(5) as u8,
+                    amount: roll(4) as i32,
+                    member: roll(4) as u8,
+                    otherwise: roll(4) as u8,
+                    only_if,
+                    also_if,
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_link_index_finds_exactly_the_links_a_full_search_finds() {
+        for seed in 1..40 {
+            let triggers = tangle(60, seed);
+            let index = LinkIndex::new(&triggers);
+            let mut found = Vec::new();
+            for (at, from) in triggers.iter().enumerate() {
+                index.affected(&triggers, at, &mut found);
+                let every: Vec<(usize, Link)> = triggers
+                    .iter()
+                    .enumerate()
+                    .filter(|&(other, _)| other != at)
+                    .filter_map(|(other, to)| Some((other, link(from, to)?)))
+                    .collect();
+                assert_eq!(found, every, "seed {seed}, trigger {at}: {from:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn loops_are_found_in_long_chains_without_deep_recursion() {
+        let relay = |listen: usize, send: usize| MapTrigger {
+            when: TriggerWhen::Signal,
+            source: (listen % 200 + 1) as u8,
+            action: TriggerAction::Signal,
+            group: (send % 200 + 1) as u8,
+            ..Default::default()
+        };
+        // 200 channels in a line: each relay passes its signal on to the
+        // next, and the last one stops.
+        let mut chain: Vec<MapTrigger> = (0..199).map(|i| relay(i, i + 1)).collect();
+        assert_eq!(signal_loop(&chain), None);
+        chain.push(relay(199, 0));
+        let ring = signal_loop(&chain).expect("the last one closes the ring");
+        assert_eq!(ring.len(), 200);
+        // A gate on any link stops it counting as a loop.
+        chain[57].only_if = Some(TriggerTest::default());
+        assert_eq!(signal_loop(&chain), None);
+        // Thousands of listeners on one channel are no trouble.
+        let mut crowd: Vec<MapTrigger> = (0..4000).map(|i| relay(i % 3, 3)).collect();
+        assert_eq!(signal_loop(&crowd), None);
+        crowd.push(relay(3, 0));
+        assert!(signal_loop(&crowd).is_some());
     }
 }

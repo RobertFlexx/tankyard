@@ -9,7 +9,7 @@ use crate::{
 use macroquad::prelude::*;
 use tankyard_client::map_model::WallStyle;
 use tankyard_content::{
-    BlockStyle, DecorKind, DecorReact, EmitArea, GroupPoses, MAP_COUNTERS, MapDecor, MapDef,
+    BlockStyle, DecorKind, DecorReact, EmitArea, GroupPoses, MapCounters, MapDecor, MapDef,
     MapZone, ParticleEffect, ParticleShape, ZoneKind,
 };
 use tankyard_core::{V2, WorldConfig};
@@ -18,7 +18,7 @@ use tankyard_core::{V2, WorldConfig};
 #[derive(Clone, Debug, Default)]
 pub struct Shown {
     pub hidden: u32,
-    pub counters: [i32; MAP_COUNTERS as usize],
+    pub counters: MapCounters,
     /// Where map logic has moved, turned and faded each group.
     pub poses: GroupPoses,
     /// The tank decor reacts to, in world units: the player's own.
@@ -628,14 +628,7 @@ fn straight_grid(r: Rect, step: f32, thickness: f32, c: Color) {
 }
 
 /// One piece of decor in `r`, as map logic and the nearby tank leave it.
-pub fn decoration(
-    item: &MapDecor,
-    r: Rect,
-    time: f32,
-    zoom: f32,
-    counters: &[i32; MAP_COUNTERS as usize],
-    look: Look,
-) {
+pub fn decoration(item: &MapDecor, r: Rect, time: f32, zoom: f32, counters: &[i32], look: Look) {
     let pulse = if item.pulse > 0. {
         0.8 + 0.2 * (time * item.pulse * std::f32::consts::TAU).cos()
     } else {

@@ -20,6 +20,7 @@ mod graphics;
 mod hardware;
 mod hosting;
 mod hud;
+mod hud_board;
 mod hud_skin;
 mod hud_widgets;
 mod lighting;
@@ -219,6 +220,9 @@ struct App {
     connecting_address: String,
     last_join: Option<(String, String)>,
     view: render::View,
+    /// The camera's zoom before a map's Zoom view scales it, eased as the
+    /// window or the tank's level changes it.
+    base_zoom: f32,
     effects: effects::Effects,
     paused: bool,
     menu_over_game: bool,
@@ -327,6 +331,7 @@ impl App {
             connecting_address: CENTRAL_SERVER.into(),
             last_join: None,
             view: render::View::new(),
+            base_zoom: 1.0,
             effects: effects::Effects::new(),
             paused: false,
             menu_over_game: false,
@@ -1767,6 +1772,17 @@ impl App {
                 .find(|t| Some(t.id) == session.spectating && t.alive && !self.hud.holding_camera())
                 .unwrap_or(tank);
             let position = session.position(followed.id, followed.pos, self.accumulator / DT);
+            if !tank.alive {
+                self.effects.end_map_view();
+            }
+            // A map's Zoom view may turn the camera toward a spot.
+            let position = if followed.id == tank.id {
+                self.effects
+                    .map_look()
+                    .camera(position, [snapshot.config.width, snapshot.config.height])
+            } else {
+                position
+            };
             self.view.follow(
                 position,
                 dt,
@@ -2840,16 +2856,17 @@ async fn run(cli: Cli) {
                     .find(|t| t.id == session.spectating.unwrap_or(session.player))
             })
             .map_or(1, |tank| tank.level);
-        // A map's Zoom view: below 1 the view widens, above it closes in.
         let target_zoom = (screen_height() / 900.0).clamp(0.7, 2.75)
-            / (1.0 + (f32::from(level.saturating_sub(1)) * 0.006))
-            * app.effects.map_zoom();
+            / (1.0 + (f32::from(level.saturating_sub(1)) * 0.006));
         let ease = 1.0 - (-dt * 9.0).exp();
-        app.view.zoom = if app.settings.reduced_motion {
+        app.base_zoom = if app.settings.reduced_motion {
             target_zoom
         } else {
-            app.view.zoom + (target_zoom - app.view.zoom) * ease
+            app.base_zoom + (target_zoom - app.base_zoom) * ease
         };
+        // A map's Zoom view follows its own curve: below 1 the view widens,
+        // above it closes in.
+        app.view.zoom = app.base_zoom * app.effects.map_look().scale;
         if is_key_pressed(KeyCode::F9) {
             app.settings.dark_arena = !app.settings.dark_arena;
             let _ = app.settings.save();

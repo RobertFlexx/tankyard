@@ -544,6 +544,31 @@ mod tests {
     }
 
     #[test]
+    fn the_owner_goes_through_again_and_again_on_a_map_without_pads() {
+        let (mut w, _) = world();
+        assert!(w.map.zones.is_empty());
+        open_pair(&mut w);
+        let entry = w
+            .rifts
+            .iter()
+            .find(|r| r.end == RiftEnd::Entry)
+            .unwrap()
+            .pos;
+        let exit = w.rifts.iter().find(|r| r.end == RiftEnd::Exit).unwrap().pos;
+        for trip in 0..4 {
+            w.tanks[0].pos = entry - V2::new(20., 0.);
+            w.tanks[0].vel = V2::ZERO;
+            w.step();
+            assert!(w.tanks[0].pos.distance(exit) < 60., "trip {trip}");
+            // Off the exit, then rested.
+            w.tanks[0].pos = V2::new(300., 300.);
+            for _ in 0..((TANK_REST + 0.1) / DT) as usize {
+                w.step();
+            }
+        }
+    }
+
+    #[test]
     fn opponents_drones_and_flag_carriers_stay_on_their_side() {
         let (mut w, _) = world();
         open_pair(&mut w);

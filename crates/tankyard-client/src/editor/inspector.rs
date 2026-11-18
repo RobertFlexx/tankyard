@@ -919,7 +919,8 @@ impl Editor {
         };
         let mut object = before.clone();
         let free = self.doc.next_free_group();
-        let free_channel = self.doc.next_free_channel();
+        let used_channels = self.doc.used_channels();
+        let free_channel = (1..=MAP_CHANNELS).find(|&c| !used_channels[usize::from(c)]);
         let (map_w, map_h) = (self.doc.map.width, self.doc.map.height);
         let mut hidden = self.doc.map.hidden_groups.clone();
         let mut locked = self.doc.locked;
@@ -1109,9 +1110,14 @@ impl Editor {
                     f.color(&mut d.color);
                 }
             }
-            Object::Trigger(t) => {
-                trigger_form(&mut f, t, live.as_ref(), free_channel, map_paths, &names)
-            }
+            Object::Trigger(t) => trigger_form(
+                &mut f,
+                t,
+                live.as_ref(),
+                (free_channel, &used_channels),
+                map_paths,
+                &names,
+            ),
             Object::Spawn(region) => {
                 f.heading("Spawn region");
                 f.stepper("Team (0 for any)", &mut region.team, [0, 4], None);
@@ -1318,6 +1324,14 @@ impl Editor {
         let map = &self.doc.map;
         // Groups worth showing: anything placed in one, switched or watched.
         let groups = self.doc.used_groups();
+        // Counters worth showing: the first eight, any the map uses and any
+        // not at 0.
+        let mut shown_counters: Vec<u8> = (1..=8).collect();
+        shown_counters.extend(self.doc.used_counters());
+        shown_counters
+            .extend((1..=MAP_COUNTERS).filter(|&counter| counters[usize::from(counter) - 1] != 0));
+        shown_counters.sort_unstable();
+        shown_counters.dedup();
         let watches_bosses = map.triggers.iter().any(|t| t.when == TriggerWhen::Defeated);
         // The boss Defeat pretends to beat: the one picked, else the first a
         // trigger watches for.
@@ -1407,7 +1421,8 @@ impl Editor {
         f.toggle("Test tank is a bot", &mut probe_bot);
         f.heading("Counters");
         let cell = (w - 3. * 6. * s) / 4.;
-        for (i, value) in counters.iter().enumerate() {
+        for (i, &counter) in shown_counters.iter().enumerate() {
+            let value = &counters[usize::from(counter) - 1];
             let r = Rect::new(
                 x + (i % 4) as f32 * (cell + 6. * s),
                 f.y + (i / 4) as f32 * 40. * s,
@@ -1427,7 +1442,7 @@ impl Editor {
                 },
             );
             label(
-                &format!("#{}", i + 1),
+                &format!("#{counter}"),
                 r.x + 5. * s,
                 r.y + 12. * s,
                 10. * s,
@@ -1444,7 +1459,6 @@ impl Editor {
                     text_color()
                 },
             );
-            let counter = i as u8 + 1;
             if over && is_mouse_button_pressed(MouseButton::Left) {
                 let add = if super::shift() { -1 } else { 1 };
                 send = Some(tankyard_core::LogicInput::AddCounter(counter, add));
@@ -1452,8 +1466,8 @@ impl Editor {
                 send = Some(tankyard_core::LogicInput::SetCounter(counter, 0));
             }
         }
-        f.y += 84. * s;
-        f.note("Click a counter to add 1, Shift-click to take 1 away, right-click to clear it. Triggers watching it hear the change.");
+        f.y += shown_counters.len().div_ceil(4) as f32 * 40. * s + 4. * s;
+        f.note("Counters 1 to 8 show here, with any other the map uses or that isn't 0. Click a counter to add 1, Shift-click to take 1 away, right-click to clear it. Triggers watching it hear the change.");
         if groups != 0 {
             f.heading("Groups");
             let size = 30. * s;
@@ -1515,7 +1529,7 @@ impl Editor {
             f.note("Lit groups are shown. Click one to show or hide it, as a script would; watchers and gates see it.");
         }
         f.heading("Send");
-        f.stepper("Signal channel", &mut channel, [1, MAP_GROUPS], None);
+        f.stepper("Signal channel", &mut channel, [1, MAP_CHANNELS], None);
         let mut labels = vec!["Send signal"];
         let defeat = format!("Defeat {}", boss.name());
         if watches_bosses {
@@ -2084,7 +2098,7 @@ fn trigger_form(
     f: &mut Form,
     t: &mut MapTrigger,
     live: Option<&GateView>,
-    free_channel: Option<u8>,
+    (free_channel, used_channels): (Option<u8>, &[bool]),
     map_paths: usize,
     names: &[GroupName],
 ) {
@@ -2135,8 +2149,8 @@ fn trigger_form(
             f.note("Acts as soon as enough tanks are inside, then again each period.");
         }
         TriggerWhen::Signal => {
-            t.source = t.source.clamp(1, MAP_GROUPS);
-            f.stepper("Listen on channel", &mut t.source, [1, MAP_GROUPS], None);
+            t.source = t.source.clamp(1, MAP_CHANNELS);
+            f.stepper("Listen on channel", &mut t.source, [1, MAP_CHANNELS], None);
         }
         TriggerWhen::Counter => {
             t.source = t.source.clamp(1, MAP_COUNTERS);
@@ -2218,8 +2232,8 @@ fn trigger_form(
             f.note("The boss arrives at the middle of this trigger's area.");
         }
         TriggerAction::Signal => {
-            t.group = t.group.clamp(1, MAP_GROUPS);
-            f.stepper("Send on channel", &mut t.group, [1, MAP_GROUPS], None);
+            t.group = t.group.clamp(1, MAP_CHANNELS);
+            f.stepper("Send on channel", &mut t.group, [1, MAP_CHANNELS], None);
         }
         TriggerAction::Count => {
             t.group = t.group.clamp(1, MAP_COUNTERS);
@@ -2243,9 +2257,9 @@ fn trigger_form(
             f.integer("Value", &mut t.amount, [-COUNTER_LIMIT, COUNTER_LIMIT]);
         }
         TriggerAction::Random | TriggerAction::Sequence => {
-            t.group = t.group.clamp(1, MAP_GROUPS - 1);
-            f.stepper("First channel", &mut t.group, [1, MAP_GROUPS - 1], None);
-            let most = i32::from(MAP_GROUPS - t.group) + 1;
+            t.group = t.group.clamp(1, MAP_CHANNELS - 1);
+            f.stepper("First channel", &mut t.group, [1, MAP_CHANNELS - 1], None);
+            let most = i32::from(MAP_CHANNELS - t.group) + 1;
             t.amount = t.amount.clamp(2, most);
             f.integer("Channels", &mut t.amount, [2, most]);
             f.note(if t.action == TriggerAction::Random {
@@ -2263,21 +2277,38 @@ fn trigger_form(
             f.integer("Points", &mut t.amount, [1, TRIGGER_AWARD]);
         }
         TriggerAction::Calculate => {
-            t.group = t.group.clamp(1, MAP_COUNTERS);
-            f.stepper("Counter", &mut t.group, [1, MAP_COUNTERS], None);
+            counter_pick(
+                f,
+                "Counter",
+                &mut t.group,
+                &mut t.target_offset,
+                0x0ca1_c001,
+            );
             f.pick("", &mut t.math, &MathOp::ALL, MathOp::name, 3);
             if t.math.uses_operand() {
-                let mut other = t.operand > 0;
+                let mut other = t.operand > 0 || t.operand_offset > 0;
                 f.toggle("With another counter", &mut other);
                 if other {
-                    t.operand = t.operand.clamp(1, MAP_COUNTERS);
-                    f.stepper("Other counter", &mut t.operand, [1, MAP_COUNTERS], None);
+                    if t.operand == 0 && t.operand_offset == 0 {
+                        t.operand = 1;
+                    }
+                    counter_pick(
+                        f,
+                        "Other counter",
+                        &mut t.operand,
+                        &mut t.operand_offset,
+                        0x0ca1_c002,
+                    );
                 } else {
                     t.operand = 0;
+                    t.operand_offset = 0;
                     f.integer("Number", &mut t.amount, [-COUNTER_LIMIT, COUNTER_LIMIT]);
                 }
             }
-            f.note("Results stay within \u{b1}99,999. Dividing by zero changes nothing.");
+            f.note(&format!(
+                "Results stay within \u{b1}{}. Dividing by zero changes nothing, and so does a power below 0. Bits count from the lowest; shifting left by 1 doubles.",
+                tankyard_content::counter_field("1:,", &[COUNTER_LIMIT]).unwrap_or_default()
+            ));
         }
         TriggerAction::Script => {
             // Picked just now: turn whatever text it had into a name.
@@ -2441,9 +2472,26 @@ fn trigger_form(
                 &mut t.amount,
                 [ZOOM_RANGE.0, ZOOM_RANGE.1],
             );
-            t.tween = t.tween.clamp(0.1, ZOOM_SECONDS);
-            f.number("For (s)", &mut t.tween, [0.1, ZOOM_SECONDS], 0.1);
-            f.note("Below 100 shows more of the arena; above 100 closes in. Only the noticed tanks inside see it, and the view eases back afterwards.");
+            f.toggle("Hold until the next zoom", &mut t.hold);
+            if !t.hold {
+                t.tween = t.tween.clamp(0.1, ZOOM_SECONDS);
+                f.number("For (s)", &mut t.tween, [0.1, ZOOM_SECONDS], 0.1);
+            }
+            let mut ease = if t.ease > 0. {
+                t.ease
+            } else {
+                tankyard_core::ZoomView::EASE
+            };
+            if f.number("Change over (s)", &mut ease, [0.1, ZOOM_EASE], 0.1) {
+                t.ease = ease;
+            }
+            f.pick("Curve", &mut t.easing.curve, &Curve::ALL, Curve::name, 4);
+            f.pick("", &mut t.easing.mode, &EaseMode::ALL, EaseMode::name, 2);
+            curve_graph(f, t.easing);
+            let mut focus = i32::from(t.focus);
+            f.integer("Turn toward the area (%)", &mut focus, [0, 100]);
+            t.focus = focus.clamp(0, 100) as u8;
+            f.note("Below 100 shows more of the arena; above 100 closes in. Only the noticed tanks inside see it. A new zoom changes the view from wherever it is; one that holds stays until the next, and a zoom of 100 that holds sets the view back. Turning moves the camera from the tank toward the middle of this trigger's area: 100% centers it there.");
         }
         TriggerAction::Light => {
             let most = (DARKNESS_LIMIT * 100.) as i32;
@@ -2470,7 +2518,7 @@ fn trigger_form(
             f.stepper("UI slot", &mut t.group, [1, MAP_UI_SLOTS], None);
             f.note("Each slot holds one widget per player; showing another in the same slot replaces it.");
             let ui = t.ui.get_or_insert_with(|| Box::new(MapUi::starter()));
-            ui_form(f, ui, &mut t.duration, free_channel);
+            ui_form(f, ui, &mut t.duration, free_channel, used_channels);
         }
         TriggerAction::HideUi => {
             t.group = t.group.min(MAP_UI_SLOTS);
@@ -2519,7 +2567,13 @@ thread_local! {
 
 /// A Show UI trigger's widget: words, look, place, bar, choices and who
 /// sees it, with a picture of the screen.
-fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Option<u8>) {
+fn ui_form(
+    f: &mut Form,
+    ui: &mut MapUi,
+    duration: &mut f32,
+    free_channel: Option<u8>,
+    used_channels: &[bool],
+) {
     let s = f.s;
     // The picture first, so every change below shows straight away.
     let frame = Rect::new(f.x, f.y + 4. * s, f.w, f.w * 9. / 16.);
@@ -2591,6 +2645,9 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
     }
     shown.text = fill_preview(&shown.text);
     shown.title = fill_preview(&shown.title);
+    if let Some(board) = &mut shown.board {
+        super::board_design::sample(board, &sample_counters(), fill_preview);
+    }
     let age = UI_PREVIEW.with(|cell| {
         let mut cell = cell.borrow_mut();
         let mut design = ui.widget.clone();
@@ -2616,7 +2673,7 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
         );
     } else {
         center_label(
-            "Give the widget a title, text, a bar or choices",
+            "Give the widget a title, text, a bar, choices or board cells",
             frame.center().x,
             frame.center().y + 20. * s,
             12. * s,
@@ -2629,11 +2686,34 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
         UI_PREVIEW.with(|cell| cell.borrow_mut().1 = get_time());
     }
 
+    f.heading("Board");
+    let mut boarded = ui.widget.board.is_some();
+    if f.toggle("Show a board of cells", &mut boarded) {
+        if boarded {
+            // A board takes the place of the text, bar and choices.
+            ui.widget.board = Some(HudBoard::default());
+            ui.widget.text.clear();
+            ui.widget.progress = None;
+            ui.widget.choices.clear();
+            ui.channels.clear();
+            (ui.bar, ui.bar_max, ui.timer) = (0, 0, false);
+        } else {
+            ui.widget.board = None;
+        }
+    }
+    if let Some(board) = &mut ui.widget.board {
+        super::board_design::board_form(f, board, used_channels);
+    } else {
+        f.note("A board is a grid of buttons, labels, screens, digits, lights and meters: a control panel, a keypad or the front of a computer.");
+    }
+    let boarded = ui.widget.board.is_some();
     let w = &mut ui.widget;
     f.heading("Words");
     f.text("Title", &mut w.title, HUD_TITLE);
-    f.text("Text", &mut w.text, HUD_TEXT);
-    f.note("{1} to {8} show counters, {left} the seconds before it goes, {time} the round's clock, {name} and {score} the player's own, and {cause} the tank that set it off.");
+    if !boarded {
+        f.text("Text", &mut w.text, HUD_TEXT);
+    }
+    f.note("{1} shows counter 1, up to {255}; {left} the seconds before it goes, {time} the round's clock, {name} and {score} the player's own, and {cause} the tank that set it off. {1:04} pads to 4 digits, {1:,} groups thousands, {1:b} and {1:x} show binary and hex, and {3|2|1:4} joins counters as 4-digit parts of one big number.");
     f.heading("Look");
     f.note("A look sets the colors, shape, border, fill, lettering, bar and buttons in one click. You can change any of them afterwards.");
     for row in HudLook::ALL.chunks(4) {
@@ -2756,6 +2836,43 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
     f.pick("Entrance", &mut w.enter, &HudEnter::ALL, HudEnter::name, 5);
     f.toggle("Pulse to draw the eye", &mut w.pulse);
 
+    if boarded {
+        // Board buttons and meters take the widget's button and bar looks.
+        let has = |kind: HudCellKind| {
+            w.board
+                .as_ref()
+                .is_some_and(|board| board.cells.iter().any(|cell| cell.kind == kind))
+        };
+        let (buttons, meters) = (has(HudCellKind::Button), has(HudCellKind::Meter));
+        if buttons || meters {
+            f.heading("Cell looks");
+        }
+        if buttons {
+            f.pick(
+                "Buttons",
+                &mut w.buttons,
+                &HudButtons::ALL,
+                HudButtons::name,
+                4,
+            );
+        }
+        if meters {
+            f.pick("Meters", &mut w.bar_style, &HudBar::ALL, HudBar::name, 3);
+            let mut segments = w.segments;
+            f.stepper(
+                "Meter pieces (0 for whole)",
+                &mut segments,
+                [0, HUD_SEGMENTS],
+                None,
+            );
+            w.segments = segments;
+        }
+        f.heading("Who and how long");
+        f.pick("Show to", &mut ui.to, &UiAudience::ALL, UiAudience::name, 1);
+        f.number("Hide after (s, 0 keeps)", duration, [0., 3600.], 0.5);
+        f.note("Boards stay up when a button is clicked. Hide them with a Hide UI trigger.");
+        return;
+    }
     f.heading("Bar");
     #[derive(Clone, Copy, PartialEq)]
     enum Bar {
@@ -2870,7 +2987,7 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
         f.stepper(
             "Signals channel",
             channel,
-            [0, MAP_GROUPS],
+            [0, MAP_CHANNELS],
             Some(free_channel),
         );
     }
@@ -2908,13 +3025,51 @@ fn ui_form(f: &mut Form, ui: &mut MapUi, duration: &mut f32, free_channel: Optio
     f.number("Hide after (s, 0 keeps)", duration, [0., 3600.], 0.5);
 }
 
+/// A Calculate counter: `base`, or with "Move along" on, the counter that
+/// many places past it, by counter `by`'s value: a list of counters read
+/// or written by position. `salt` keeps the two pickers' fields apart.
+fn counter_pick(f: &mut Form, title: &str, base: &mut u8, by: &mut u8, salt: u64) {
+    let previous = f.set_salt(salt);
+    let mut moved = *by > 0;
+    let lowest = if moved { 0 } else { 1 };
+    *base = (*base).clamp(lowest, MAP_COUNTERS);
+    f.stepper(title, base, [lowest, MAP_COUNTERS], None);
+    if f.toggle("Move along by a counter's value", &mut moved) {
+        *by = if moved { 1 } else { 0 };
+        *base = (*base).max(1);
+    }
+    if moved {
+        *by = (*by).clamp(1, MAP_COUNTERS);
+        f.stepper("Places past it: counter", by, [1, MAP_COUNTERS], None);
+        f.note(&format!(
+            "Uses counter {} plus the value of counter {}: with counter {} at 3, counter {}. Past the last counter it does nothing.",
+            base,
+            by,
+            by,
+            u16::from(*base) + 3
+        ));
+    }
+    f.set_salt(previous);
+}
+
+/// Sample counter values for the editor's picture of a widget.
+fn sample_counters() -> MapCounters {
+    const SAMPLES: [i32; 8] = [3, 7, 12, 1, 0, 25, 50, 99];
+    let mut counters = MapCounters::default();
+    for (counter, sample) in counters.iter_mut().zip(SAMPLES.iter().cycle()) {
+        *counter = *sample;
+    }
+    counters
+}
+
 /// Sample values for a widget's fields in the editor's picture.
 fn fill_preview(text: &str) -> String {
-    let counters = [3, 7, 12, 1, 0, 25, 50, 99];
+    let counters = sample_counters();
     tankyard_content::fill_ui_text(
         text,
         &tankyard_content::UiFill {
             counters: &counters,
+            hidden: 0,
             left: 12.,
             time: 95.,
             name: "Player",
@@ -3347,10 +3502,15 @@ fn gate_form(f: &mut Form, t: &mut MapTrigger, live: Option<&GateView>, free_cha
             }
         } else {
             f.buttons(&["Otherwise signal: channels full"], false);
-            f.note("All 32 signal channels are in use. Free a channel before adding an otherwise signal.");
+            f.note("All 255 signal channels are in use. Free a channel before adding an otherwise signal.");
         }
         if t.otherwise > 0 {
-            f.stepper("Otherwise channel", &mut t.otherwise, [1, MAP_GROUPS], None);
+            f.stepper(
+                "Otherwise channel",
+                &mut t.otherwise,
+                [1, MAP_CHANNELS],
+                None,
+            );
         }
         f.note(match t.gate {
             _ if count == 1 => "Checked when the trigger fires. While the gate is shut nothing happens, apart from the otherwise signal, and the trigger waits for its next chance.",

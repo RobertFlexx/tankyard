@@ -16,6 +16,12 @@ pub const HUD_CHOICE: usize = 32;
 pub const HUD_SEGMENTS: u8 = 20;
 /// How far from the arena's origin a widget may be pinned, in world units.
 pub const HUD_REACH: f32 = 100_000.;
+/// Most columns or rows in a board.
+pub const HUD_BOARD_SIDE: u8 = 32;
+/// Most cells in a board.
+pub const HUD_CELLS: usize = 128;
+/// Bytes in one cell's text.
+pub const HUD_CELL_TEXT: usize = 64;
 
 /// A line of text, a progress bar or both, drawn on players' screens,
 /// optionally on a panel and with choices a player can pick.
@@ -126,6 +132,10 @@ pub struct HudWidget {
     /// How choices are drawn.
     #[serde(default)]
     pub buttons: HudButtons,
+    /// A grid of buttons, labels, screens, lights and meters drawn under
+    /// the title instead of text, a bar and choices.
+    #[serde(default)]
+    pub board: Option<HudBoard>,
 }
 impl Default for HudWidget {
     fn default() -> Self {
@@ -163,6 +173,7 @@ impl Default for HudWidget {
             title_color: None,
             bar_style: HudBar::Capsule,
             buttons: HudButtons::Capsule,
+            board: None,
         }
     }
 }
@@ -182,14 +193,26 @@ impl HudWidget {
     fn default_opacity() -> f32 {
         0.85
     }
-    /// Whether every field is in range. A widget needs text, a title, a bar
-    /// or choices.
+    /// Whether every field is in range. A widget needs text, a title, a bar,
+    /// choices or a board with cells; a board leaves out the text, bar and
+    /// choices.
     pub fn valid(&self) -> bool {
         let shown = !self.text.trim().is_empty()
             || !self.title.trim().is_empty()
             || self.progress.is_some()
-            || !self.choices.is_empty();
+            || !self.choices.is_empty()
+            || self
+                .board
+                .as_ref()
+                .is_some_and(|board| !board.cells.is_empty());
+        let board = self.board.as_ref().is_none_or(|board| {
+            board.valid()
+                && self.text.is_empty()
+                && self.progress.is_none()
+                && self.choices.is_empty()
+        });
         shown
+            && board
             && plain_text(&self.text, HUD_TEXT)
             && plain_text(&self.title, HUD_TITLE)
             && range(self.x, 0., 1.)
@@ -209,6 +232,16 @@ impl HudWidget {
     /// Whether the widget floats over something in the arena.
     pub fn pinned(&self) -> bool {
         self.pin != HudPin::Screen
+    }
+    /// Whether a player can pick from it: it has choices or board buttons.
+    pub fn pickable(&self) -> bool {
+        !self.choices.is_empty()
+            || self.board.as_ref().is_some_and(|board| {
+                board
+                    .cells
+                    .iter()
+                    .any(|cell| cell.kind == HudCellKind::Button)
+            })
     }
 }
 fn plain_text(text: &str, max: usize) -> bool {
@@ -1063,6 +1096,283 @@ impl HudLayout {
             Self::Column => "column",
             Self::Grid => "grid",
         }
+    }
+}
+
+/// A widget's grid of cells: a control panel, keypad or computer front.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HudBoard {
+    /// Columns in the grid, from 1 to [`HUD_BOARD_SIDE`].
+    #[serde(default = "HudBoard::default_side")]
+    pub columns: u8,
+    /// Rows in the grid, from 1 to [`HUD_BOARD_SIDE`].
+    #[serde(default = "HudBoard::default_side")]
+    pub rows: u8,
+    /// Each grid square's side, in points at the default interface scale.
+    #[serde(default = "HudBoard::default_cell")]
+    pub cell: f32,
+    /// Points between neighboring squares.
+    #[serde(default = "HudBoard::default_gap")]
+    pub gap: f32,
+    /// What sits on the grid, drawn in order: later cells cover earlier
+    /// ones and take the click where they overlap.
+    #[serde(default)]
+    pub cells: Vec<HudCell>,
+}
+impl Default for HudBoard {
+    fn default() -> Self {
+        Self {
+            columns: Self::default_side(),
+            rows: Self::default_side(),
+            cell: Self::default_cell(),
+            gap: Self::default_gap(),
+            cells: Vec::new(),
+        }
+    }
+}
+impl HudBoard {
+    pub const CELL_RANGE: [f32; 2] = [12., 96.];
+    pub const GAP_RANGE: [f32; 2] = [0., 24.];
+    fn default_side() -> u8 {
+        4
+    }
+    fn default_cell() -> f32 {
+        40.
+    }
+    fn default_gap() -> f32 {
+        4.
+    }
+    /// Whether the grid's size is in range and every cell fits on it.
+    pub fn valid(&self) -> bool {
+        (1..=HUD_BOARD_SIDE).contains(&self.columns)
+            && (1..=HUD_BOARD_SIDE).contains(&self.rows)
+            && range(self.cell, Self::CELL_RANGE[0], Self::CELL_RANGE[1])
+            && range(self.gap, Self::GAP_RANGE[0], Self::GAP_RANGE[1])
+            && self.cells.len() <= HUD_CELLS
+            && self
+                .cells
+                .iter()
+                .all(|cell| cell.valid() && cell.fits(self.columns, self.rows))
+    }
+    /// The topmost cell covering grid square `column`, `row`.
+    pub fn cell_at(&self, column: u8, row: u8) -> Option<usize> {
+        self.cells.iter().rposition(|cell| cell.covers(column, row))
+    }
+    /// Squares from the board's top-left corner to `at`'s corner, and the
+    /// size of `span` squares, counting the gaps they cover: in grid units
+    /// where a square is `cell` and a gap `gap` wide.
+    pub fn place(&self, at: [u8; 2], span: [u8; 2]) -> [f32; 4] {
+        let step = self.cell + self.gap;
+        let size = |n: u8| f32::from(n) * step - self.gap;
+        [
+            f32::from(at[0]) * step,
+            f32::from(at[1]) * step,
+            size(span[0].max(1)),
+            size(span[1].max(1)),
+        ]
+    }
+    /// The grid's width and height, in the same units as [`HudBoard::place`].
+    pub fn extent(&self) -> [f32; 2] {
+        let [_, _, w, h] = self.place([0, 0], [self.columns, self.rows]);
+        [w, h]
+    }
+}
+
+/// What a board cell is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HudCellKind {
+    /// A line of text.
+    #[default]
+    Label,
+    /// A button that signals its channel when picked, lit while its
+    /// counter or group says so.
+    Button,
+    /// Text on a dark screen.
+    Screen,
+    /// Seven-segment digits on a dark screen, for numbers and short words.
+    Digits,
+    /// A lamp, lit while its counter or group says so, with a caption.
+    Light,
+    /// A bar that fills as its counter climbs toward `max`.
+    Meter,
+}
+impl HudCellKind {
+    pub const ALL: [Self; 6] = [
+        Self::Label,
+        Self::Button,
+        Self::Screen,
+        Self::Digits,
+        Self::Light,
+        Self::Meter,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Label => "Label",
+            Self::Button => "Button",
+            Self::Screen => "Screen",
+            Self::Digits => "Digits",
+            Self::Light => "Light",
+            Self::Meter => "Meter",
+        }
+    }
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Label => "label",
+            Self::Button => "button",
+            Self::Screen => "screen",
+            Self::Digits => "digits",
+            Self::Light => "light",
+            Self::Meter => "meter",
+        }
+    }
+    /// Whether a counter or group can light it.
+    pub fn lights(self) -> bool {
+        matches!(self, Self::Button | Self::Light)
+    }
+    /// Whether it sits on a dark screen.
+    pub fn screen(self) -> bool {
+        matches!(self, Self::Screen | Self::Digits)
+    }
+}
+
+/// One cell on a board.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HudCell {
+    #[serde(default)]
+    pub kind: HudCellKind,
+    /// The column and row of its top-left square, from 0.
+    #[serde(default)]
+    pub at: [u8; 2],
+    /// How many columns and rows it covers, from 1.
+    #[serde(default = "HudCell::one")]
+    pub span: [u8; 2],
+    /// What it shows: a label's, button's or screen's words, the digits,
+    /// a light's caption or a meter's. Fills `{…}` fields as widget text
+    /// does.
+    #[serde(default)]
+    pub text: String,
+    /// The channel a button signals when picked; 0 signals none.
+    #[serde(default)]
+    pub channel: u8,
+    /// The counter that lights a light or button, or fills a meter, from
+    /// 1; 0 for none.
+    #[serde(default)]
+    pub counter: u8,
+    /// Which bit of `counter` lights it, from 1 for the lowest; 0 lights it
+    /// whenever the counter isn't 0.
+    #[serde(default)]
+    pub bit: u8,
+    /// A group that lights it while shown, from 1; 0 for none. Used instead
+    /// of `counter` when both are set.
+    #[serde(default)]
+    pub group: u8,
+    /// The counter value that fills a meter.
+    #[serde(default = "HudCell::default_max")]
+    pub max: i32,
+    /// Its text, segments, lamp or bar color; the widget's when unset.
+    #[serde(default)]
+    pub color: Option<[u8; 3]>,
+    /// Its background color; the widget's look decides when unset.
+    #[serde(default)]
+    pub fill: Option<[u8; 3]>,
+    /// Text size against what fits the cell, from 0.25 to 2; 0 fits it.
+    #[serde(default)]
+    pub size: f32,
+    #[serde(default)]
+    pub align: HudAlign,
+    /// Whether a light or button is on. Servers work it out from `counter`
+    /// or `group` for map widgets; scripts set it.
+    #[serde(default)]
+    pub lit: bool,
+    /// How full a meter is, from 0 to 1. Servers work it out from `counter`
+    /// and `max` for map widgets; scripts set it.
+    #[serde(default)]
+    pub progress: f32,
+}
+impl Default for HudCell {
+    fn default() -> Self {
+        Self {
+            kind: HudCellKind::Label,
+            at: [0, 0],
+            span: Self::one(),
+            text: String::new(),
+            channel: 0,
+            counter: 0,
+            bit: 0,
+            group: 0,
+            max: Self::default_max(),
+            color: None,
+            fill: None,
+            size: 0.,
+            align: HudAlign::Center,
+            lit: false,
+            progress: 0.,
+        }
+    }
+}
+impl HudCell {
+    pub const SIZE_RANGE: [f32; 2] = [0.25, 2.];
+    /// The highest bit a cell can watch.
+    pub const BITS: u8 = 30;
+    fn one() -> [u8; 2] {
+        [1, 1]
+    }
+    fn default_max() -> i32 {
+        100
+    }
+    /// Whether its own fields are in range, wherever it sits.
+    pub fn valid(&self) -> bool {
+        self.span[0] >= 1
+            && self.span[1] >= 1
+            && plain_text(&self.text, HUD_CELL_TEXT)
+            && self.bit <= Self::BITS
+            && self.group <= crate::MAP_GROUPS
+            && (1..=crate::COUNTER_LIMIT).contains(&self.max)
+            && (self.size == 0. || range(self.size, Self::SIZE_RANGE[0], Self::SIZE_RANGE[1]))
+            && range(self.progress, 0., 1.)
+    }
+    /// Whether it lies within a grid of `columns` by `rows` squares.
+    pub fn fits(&self, columns: u8, rows: u8) -> bool {
+        u16::from(self.at[0]) + u16::from(self.span[0]) <= u16::from(columns)
+            && u16::from(self.at[1]) + u16::from(self.span[1]) <= u16::from(rows)
+    }
+    /// Whether it covers grid square `column`, `row`.
+    pub fn covers(&self, column: u8, row: u8) -> bool {
+        (self.at[0]..self.at[0].saturating_add(self.span[0])).contains(&column)
+            && (self.at[1]..self.at[1].saturating_add(self.span[1])).contains(&row)
+    }
+    /// Whether a counter or group decides if it is lit.
+    pub fn watches(&self) -> bool {
+        self.kind.lights() && (self.group > 0 || self.counter > 0)
+    }
+    /// Whether it is lit with `counters` (counter 1 first) and `hidden`
+    /// groups (group 1 is bit 0).
+    pub fn lit_by(&self, counters: &[i32], hidden: u32) -> bool {
+        if self.group > 0 {
+            return hidden & crate::MapDef::group_bit(self.group) == 0;
+        }
+        let Some(&value) = usize::from(self.counter)
+            .checked_sub(1)
+            .and_then(|slot| counters.get(slot))
+        else {
+            return false;
+        };
+        match self.bit {
+            0 => value != 0,
+            bit => (value >> (bit - 1)) & 1 == 1,
+        }
+    }
+    /// How full a meter is with `counters`, from 0 to 1.
+    pub fn fill_with(&self, counters: &[i32]) -> f32 {
+        let value = usize::from(self.counter)
+            .checked_sub(1)
+            .and_then(|slot| counters.get(slot))
+            .copied()
+            .unwrap_or(0);
+        (value as f32 / self.max.max(1) as f32).clamp(0., 1.)
     }
 }
 

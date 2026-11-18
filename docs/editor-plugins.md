@@ -223,8 +223,8 @@ local px, py = editor.world(map, point)
 Use `editor.free_group(map)`, `editor.free_channel(map)` and `editor.free_counter(map)` to find the lowest unused number. They return `nil` when exhausted.
 
 - Groups range from 1 to 32. The helper checks block, zone, decoration and trigger memberships, visibility, motion, effect and Reset triggers actions, On shown, On hidden and On arrive watchers, group conditions and starting hidden groups.
-- Signal channels range from 1 to 32. The helper checks signal listeners, signal actions, otherwise channels and the ranges used by Random signal and Sequence actions.
-- Counters range from 1 to 8. The helper checks On counter and On change listeners, Count, Set and Calculate actions, counter operands and every condition's counters.
+- Signal channels range from 1 to 255 (1 to 32 before 1.7). The helper checks signal listeners, signal actions, otherwise channels, the ranges used by Random signal and Sequence actions, and the channels of Show UI choices and board buttons.
+- Counters range from 1 to 255 (1 to 8 before 1.7). The helper checks On counter and On change listeners, Count, Set and Calculate actions, counter operands and offsets, every condition's counters, widget bars and board cells, and the counter fields in labels, announcements and widget words.
 
 `editor.conditions(trigger)` returns a trigger's conditions as one list, `only_if` first and then `also_if`, or an empty list when it has no gate. Use it to read gates without handling the two fields apart. When you build a gate, set `only_if` to the first condition and `also_if` to the rest, at most three, and `gate` to how they combine; the [trigger schema](modding.md#maps) lists every field. Gates of several conditions, otherwise signals and the newer When kinds and actions need Tank Yard 0.16.0; the bundled Logic Kit's Lever bank tool shows them in use.
 
@@ -270,7 +270,7 @@ The sandbox provides computation libraries, including `math`, `string`, `table`,
 - All checks in one pack share a 20,000,000-step budget for a Check operation.
 - Each pack's Luau state has a 64 MiB memory budget.
 - `print` output is bounded to 64 lines. **Last run** shows up to eight result and log lines.
-- Ordinary pack limits allow 256 files, 2 MiB per file and 8 MiB in total, with a 1 MiB manifest.
+- Ordinary pack limits allow 256 files, 4 MiB per file and 16 MiB in total, with a 4 MiB manifest.
 
 A plugin that exceeds its execution budget stops until **Reload plugins**. A runtime error is shown under Last run, and an invalid tool result is rejected before changing the current document. Plugin state can still retain work done before a callback failed, so initialize each run from its arguments and reserve persistent state for deliberate uses.
 

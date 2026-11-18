@@ -1,8 +1,8 @@
 //! Logic preview: the arena's triggers run in the editor with the same rule
 //! engine servers use, with a test tank at the pointer for area triggers.
 use tankyard_content::{
-    GroupPoses, HUD_TEXT, HUD_TITLE, HudPin, HudWidget, MAP_COUNTERS, MapDef, MapSound, MapTrigger,
-    UiFill, UiPin, fill_ui_text,
+    GroupPoses, HudCellKind, HudPin, HudWidget, MapCounters, MapDef, MapSound, MapTrigger, UiFill,
+    UiPin,
 };
 use tankyard_core::{DT, LogicEffect, LogicInput, MapLogic, Occupant, V2, WorldConfig};
 
@@ -38,7 +38,7 @@ pub struct Preview {
     pub time: f32,
     pub speed: f32,
     pub hidden: u32,
-    pub counters: [i32; MAP_COUNTERS as usize],
+    pub counters: MapCounters,
     /// Round time when each trigger last acted.
     pub flashes: Vec<f32>,
     pub events: Vec<Event>,
@@ -69,7 +69,7 @@ impl Preview {
             time: 0.,
             speed: 1.,
             hidden: 0,
-            counters: [0; MAP_COUNTERS as usize],
+            counters: MapCounters::default(),
             flashes: Vec::new(),
             events: Vec::new(),
             banner: None,
@@ -93,7 +93,7 @@ impl Preview {
         self.carry = 0.;
         self.logic = MapLogic::default();
         self.hidden = map.starting_mask();
-        self.counters = [0; MAP_COUNTERS as usize];
+        self.counters = MapCounters::default();
         self.flashes = vec![f32::NEG_INFINITY; map.triggers.len()];
         self.acted = vec![0; map.triggers.len()];
         self.events.clear();
@@ -386,13 +386,28 @@ impl Preview {
                     ),
                     Some(center),
                 ),
-                LogicEffect::Zoom { tanks, scale, .. } => (
+                LogicEffect::Zoom {
+                    tanks,
+                    view,
+                    at,
+                    focus,
+                } => (
                     format!(
-                        "Zooms the view to {}%{}",
-                        (scale * 100.).round(),
-                        tank_count(tanks.len()).replace(" to ", " of ")
+                        "Zooms the view to {}%{}{}{}",
+                        (view.scale * 100.).round(),
+                        tank_count(tanks.len()).replace(" to ", " of "),
+                        if focus > 0 {
+                            format!(", turning {focus}% toward the area")
+                        } else {
+                            String::new()
+                        },
+                        if view.seconds.is_none() {
+                            " until the next zoom"
+                        } else {
+                            ""
+                        }
                     ),
-                    None,
+                    (focus > 0).then_some(at),
                 ),
                 // Scripts run on servers; the preview only says it happened.
                 LogicEffect::Script {
@@ -445,26 +460,17 @@ impl Preview {
                 };
                 let fill = UiFill {
                     counters: &self.counters,
+                    hidden: self.hidden,
                     left: shown.until - self.time,
                     time: self.time,
                     name: "Test tank",
                     cause: if shown.by_test_tank { "Test tank" } else { "" },
                     score: 0,
                 };
-                let mut widget = ui.widget.clone();
-                widget.pin = pin;
-                widget.text = fill_ui_text(&widget.text, &fill, HUD_TEXT);
-                widget.title = fill_ui_text(&widget.title, &fill, HUD_TITLE);
-                if ui.bar > 0 {
-                    let value = self.counters.get(usize::from(ui.bar) - 1).copied();
-                    widget.progress =
-                        Some((value.unwrap_or(0) as f32 / ui.bar_max.max(1) as f32).clamp(0., 1.));
-                } else if ui.timer && trigger.duration > 0. {
-                    widget.progress = Some((fill.left / trigger.duration).clamp(0., 1.));
-                }
-                widget
-                    .valid()
-                    .then_some((index, widget, (self.time - shown.since).max(0.)))
+                // The same filling servers do, so the preview shows what
+                // players will see.
+                let widget = tankyard_core::fill_map_widget(ui, &fill, trigger.duration, 0, pin)?;
+                Some((index, widget, (self.time - shown.since).max(0.)))
             })
             .collect()
     }
@@ -481,9 +487,20 @@ impl Preview {
         else {
             return;
         };
-        let channel = ui.channels.get(usize::from(option)).copied().unwrap_or(0);
-        let choice = ui.widget.choices.get(usize::from(option)).cloned();
-        if !ui.keep {
+        // A board's buttons are its cells; boards stay up.
+        let (channel, choice) = match &ui.widget.board {
+            Some(board) => match board.cells.get(usize::from(option)) {
+                Some(cell) if cell.kind == HudCellKind::Button => {
+                    (cell.channel, Some(cell.text.clone()))
+                }
+                _ => return,
+            },
+            None => (
+                ui.channels.get(usize::from(option)).copied().unwrap_or(0),
+                ui.widget.choices.get(usize::from(option)).cloned(),
+            ),
+        };
+        if !ui.keep && ui.widget.board.is_none() {
             self.ui.remove(index);
         }
         self.events.push(Event {

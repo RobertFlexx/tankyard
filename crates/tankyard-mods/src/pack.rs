@@ -8,10 +8,10 @@ use std::{
 };
 
 pub const MAX_PACK_FILES: usize = 256;
-pub const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
-pub const MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 /// Compressed archive size accepted for import.
-pub const MAX_ARCHIVE_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_ARCHIVE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ENTRIES: usize = 1024;
 const MAX_DEPTH: usize = 8;
 const MAX_NAME_BYTES: usize = 200;
@@ -35,7 +35,7 @@ impl PackFiles {
             return Err("mod sources must be regular files or folders".into());
         }
         if metadata.len() > MAX_ARCHIVE_BYTES as u64 {
-            return Err("mod archive exceeds 8 MiB".into());
+            return Err("mod archive exceeds 16 MiB".into());
         }
         let bytes = crate::read_bounded_limit(path, MAX_ARCHIVE_BYTES)?;
         let mut pack = Self::from_zip(&bytes)?;
@@ -48,7 +48,7 @@ impl PackFiles {
     /// misreported contents are rejected before any byte is used.
     pub fn from_zip(bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() > MAX_ARCHIVE_BYTES {
-            return Err("mod archive exceeds 8 MiB".into());
+            return Err("mod archive exceeds 16 MiB".into());
         }
         if !bytes.starts_with(b"PK\x03\x04") && !bytes.starts_with(b"PK\x05\x06") {
             return Err("mod packs must be .zip archives or folders".into());
@@ -86,7 +86,7 @@ impl PackFiles {
             };
             let name = normalize(&path, &raw)?;
             if entry.size() > MAX_FILE_BYTES as u64 {
-                return Err(format!("{name}: file exceeds 2 MiB"));
+                return Err(format!("{name}: file exceeds {} MiB", MAX_FILE_BYTES >> 20));
             }
             let mut data = Vec::with_capacity(entry.size().min(MAX_FILE_BYTES as u64) as usize);
             (&mut entry)
@@ -98,7 +98,7 @@ impl PackFiles {
             }
             total += data.len();
             if total > MAX_TOTAL_BYTES {
-                return Err("mod pack contents exceed 8 MiB".into());
+                return Err("mod pack contents exceed 16 MiB".into());
             }
             pack.insert(name, data)?;
         }
@@ -156,7 +156,7 @@ impl PackFiles {
                 let data = crate::read_bounded_limit(&real, MAX_FILE_BYTES)?;
                 total += data.len();
                 if total > MAX_TOTAL_BYTES {
-                    return Err("mod folder contents exceed 8 MiB".into());
+                    return Err("mod folder contents exceed 16 MiB".into());
                 }
                 pack.insert(name, data)?;
             }
@@ -524,7 +524,7 @@ mod tests {
         let large = vec![b'a'; MAX_FILE_BYTES + 1];
         let bytes = zip_bytes(&[("mod.json", b"{}"), ("big.txt", &large)]);
         assert!(bytes.len() < 64 * 1024, "highly compressible bomb");
-        assert!(PackFiles::from_zip(&bytes).unwrap_err().contains("2 MiB"));
+        assert!(PackFiles::from_zip(&bytes).unwrap_err().contains("4 MiB"));
         let chunk = vec![b'b'; MAX_FILE_BYTES - 16];
         let names: Vec<String> = (0..5).map(|n| format!("part{n}.txt")).collect();
         let mut files: Vec<(&str, &[u8])> = vec![("mod.json", b"{}")];
@@ -532,6 +532,6 @@ mod tests {
             files.push((name, &chunk));
         }
         let bytes = zip_bytes(&files);
-        assert!(PackFiles::from_zip(&bytes).unwrap_err().contains("8 MiB"));
+        assert!(PackFiles::from_zip(&bytes).unwrap_err().contains("16 MiB"));
     }
 }

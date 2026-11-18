@@ -649,6 +649,127 @@ fn scripts_style_widgets_with_every_look_option() {
 }
 
 #[test]
+fn scripts_show_boards_of_cells() {
+    let (world, runtime) = run(
+        r##"
+        tankyard.on("tick", function()
+          tankyard.hud("panel", {
+            title = "Panel",
+            board = {
+              columns = 4, rows = 2, cell = 40,
+              cells = {
+                { kind = "digits", span = { 3, 1 }, text = "0042" },
+                { kind = "button", at = { 0, 1 }, text = "Go" },
+                { kind = "light", at = { 1, 1 }, lit = true, color = { 0, 255, 0 } },
+                { kind = "label", at = { 3, 0 }, text = "OK", color = "#ff8000", fill = { r = 1, g = 2, b = 3 } },
+                { kind = "meter", at = { 2, 1 }, progress = 0.5 },
+              },
+            },
+          })
+        end)
+        "##,
+        2,
+    );
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    let player = world.tanks.iter().find(|t| !t.bot).unwrap().id;
+    let panel = world
+        .hud_for(player)
+        .into_iter()
+        .find(|w| w.title == "Panel")
+        .unwrap();
+    let board = panel.board.expect("a board");
+    assert_eq!((board.columns, board.rows, board.cell), (4, 2, 40.));
+    assert_eq!(board.cells.len(), 5);
+    assert_eq!(board.cells[0].kind, tankyard_mods::HudCellKind::Digits);
+    assert_eq!(board.cells[1].at, [0, 1]);
+    assert!(board.cells[2].lit);
+    assert_eq!(board.cells[2].color, Some([0, 255, 0]));
+    assert_eq!(board.cells[3].color, Some([255, 128, 0]));
+    assert_eq!(board.cells[3].fill, Some([1, 2, 3]));
+    assert_eq!(board.cells[4].progress, 0.5);
+    assert_ne!(panel.menu, 0, "its buttons can be picked");
+
+    for (board, error) in [
+        (
+            "{ columns = 2, cells = { { at = { 2, 0 } } } }",
+            "columns and rows",
+        ),
+        ("{ cells = { { kind = \"lever\" } } }", "board"),
+        ("{ rows = 2, colour = 3 }", "board"),
+    ] {
+        let (_, runtime) = run(
+            &format!(
+                "tankyard.on('tick', function() tankyard.hud('x', {{ title = 'T', board = {board} }}) end)"
+            ),
+            1,
+        );
+        let errors = runtime.errors.join(" | ");
+        assert!(errors.contains(error), "{board}: {errors}");
+    }
+    let (_, runtime) = run(
+        "tankyard.on('tick', function() tankyard.hud('x', { text = 'T', board = {} }) end)",
+        1,
+    );
+    assert!(
+        runtime.errors.iter().any(|e| e.contains("leave out text")),
+        "{:?}",
+        runtime.errors
+    );
+}
+
+#[test]
+fn the_boards_tutorial_script_flips_its_switches() {
+    // The script from docs/boards-tutorial.md.
+    let source = r#"
+local switches = 0
+local function panel()
+  local cells = { { kind = "digits", span = { 4, 1 }, text = string.format("%d", switches) } }
+  for place, value in ipairs({ 8, 4, 2, 1 }) do
+    cells[#cells + 1] = {
+      kind = "button", at = { place - 1, 1 }, text = tostring(value),
+      lit = bit32.band(switches, value) ~= 0,
+    }
+  end
+  tankyard.hud("panel", { title = "Vault", style = "panel", x = 0.85, board = { columns = 4, rows = 2, cells = cells } })
+end
+tankyard.on("round_start", function() switches = 0; panel() end)
+tankyard.on("choice", function(event)
+  if event.name ~= "panel" or event.value < 2 then return end
+  switches = bit32.bxor(switches, ({ 8, 4, 2, 1 })[event.value - 1])
+  panel()
+end)
+"#;
+    let (mut world, mut runtime) = run(source, 2);
+    assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    let player = world.tanks.iter().find(|t| !t.bot).unwrap().id;
+    let panel = |world: &World| {
+        let widget = world
+            .hud_for(player)
+            .into_iter()
+            .find(|w| w.title == "Vault")
+            .unwrap();
+        (widget.menu, widget.board.unwrap().cells)
+    };
+    let (menu, cells) = panel(&world);
+    assert_eq!(cells.len(), 5);
+    assert_eq!(cells[0].text, "0");
+    // Buttons are cells 1 to 4: switches 8, 4, 2 and 1.
+    for (option, expected) in [(1, "8"), (3, "10"), (1, "2")] {
+        assert!(world.choose(player, menu, option));
+        for _ in 0..4 {
+            world.step_with(|w| runtime.before_step(w));
+            runtime.after_step(&mut world);
+        }
+        let (_, cells) = panel(&world);
+        assert_eq!(cells[0].text, expected);
+        assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
+    }
+    let (_, cells) = panel(&world);
+    let lit: Vec<bool> = cells[1..].iter().map(|cell| cell.lit).collect();
+    assert_eq!(lit, [false, false, true, false]);
+}
+
+#[test]
 fn scripts_pin_widgets_over_spots_and_tanks() {
     let (world, runtime) = run(
         r##"
@@ -937,8 +1058,8 @@ fn map_events_reach_scripts_and_scripts_drive_map_logic() {
 
     for (call, error) in [
         (
-            "tankyard.map_signal(33)",
-            "channel must be a whole number from 1 to 32",
+            "tankyard.map_signal(256)",
+            "channel must be a whole number from 1 to 255",
         ),
         (
             "tankyard.set_map_counter(0, 1)",
@@ -952,7 +1073,10 @@ fn map_events_reach_scripts_and_scripts_drive_map_logic() {
             "tankyard.show_map_group(2, 'yes')",
             "shown must be true or false",
         ),
-        ("tankyard.map_counter(9)", "counter must be a whole number"),
+        (
+            "tankyard.map_counter(256)",
+            "counter must be a whole number from 1 to 255",
+        ),
         (
             "tankyard.reset_map_triggers(33)",
             "group must be a whole number from 0 to 32",

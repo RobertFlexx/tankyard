@@ -672,7 +672,7 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
         "map_signal" => (
             0,
             Effect::MapSignal {
-                channel: whole(arg(0), "channel", 1, tankyard_content::MAP_GROUPS.into())? as u8,
+                channel: whole(arg(0), "channel", 1, tankyard_content::MAP_CHANNELS.into())? as u8,
             },
         ),
         "set_map_counter" | "add_map_counter" => (
@@ -1050,9 +1050,40 @@ fn hud(args: &[Value]) -> mlua::Result<Effect> {
             tankyard_mods::HUD_CHOICE
         )));
     }
-    if clipped.is_empty() && title.is_empty() && progress.is_none() && choices.is_empty() {
+    // A board is a table of the fields maps write: columns, rows, cell,
+    // gap and cells.
+    let board = match arg(37) {
+        Some(table @ Value::Table(_)) => {
+            let board = <tankyard_mods::HudBoard as serde::Deserialize>::deserialize(
+                mlua::serde::Deserializer::new(table.clone()),
+            )
+            .map_err(|error| rt(format!("tankyard.hud: board: {error}")))?;
+            if !board.valid() {
+                return Err(rt(format!(
+                    "tankyard.hud: a board has 1 to {side} columns and rows and up to {cells} \
+                     cells, each inside it with text of up to {text} bytes",
+                    side = tankyard_mods::HUD_BOARD_SIDE,
+                    cells = tankyard_mods::HUD_CELLS,
+                    text = tankyard_mods::HUD_CELL_TEXT,
+                )));
+            }
+            if !clipped.is_empty() || progress.is_some() || !choices.is_empty() {
+                return Err(rt(
+                    "tankyard.hud: a board shows its title and cells: leave out text, progress and choices",
+                ));
+            }
+            Some(board)
+        }
+        _ => None,
+    };
+    if clipped.is_empty()
+        && title.is_empty()
+        && progress.is_none()
+        && choices.is_empty()
+        && board.is_none()
+    {
         return Err(rt(
-            "tankyard.hud: a widget needs text, a title, progress or choices",
+            "tankyard.hud: a widget needs text, a title, progress, choices or a board",
         ));
     }
     let segments = field(
@@ -1186,6 +1217,7 @@ fn hud(args: &[Value]) -> mlua::Result<Effect> {
                 &tankyard_mods::HudButtons::ALL,
                 tankyard_mods::HudButtons::id,
             )?,
+            board,
         }),
     })
 }

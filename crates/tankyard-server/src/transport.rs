@@ -1641,11 +1641,6 @@ impl UdpServer {
 
     fn replicate_snapshots(&mut self) {
         let started = std::time::Instant::now();
-        let effect_radius = (self.settings.interest_radius + 300.).powi(2);
-        // Hostile tanks this far from the viewer are sent without aim,
-        // motion, cursor or weapon state: enough for the leaderboard and the
-        // minimap, too coarse for a radar or aim overlay.
-        let detail_radius = (self.settings.interest_radius + 400.).powi(2);
         // Changed walls ride in the next few snapshots, so one lost packet
         // costs nothing; the two-second resend covers worse links. Doors that
         // map logic opens and shuts no longer resend every wall for a second.
@@ -1679,8 +1674,15 @@ impl UdpServer {
             );
             let center = focus.map_or(tank.pos, |target| target.pos);
             let focus_id = focus.map_or(entity, |target| target.id);
+            // A map's Zoom view on the player widens or moves what they see.
+            let (center, reach) = world.view_reach(entity, center, self.settings.interest_radius);
+            let effect_radius = (reach + 300.).powi(2);
+            // Hostile tanks this far from the viewer are sent without aim,
+            // motion, cursor or weapon state: enough for the leaderboard and
+            // the minimap, too coarse for a radar or aim overlay.
+            let detail_radius = (reach + 400.).powi(2);
             let snapshot = &mut self.snapshot_buffer;
-            world.snapshot_for_into(snapshot, center, self.settings.interest_radius);
+            world.snapshot_for_into(snapshot, center, reach);
             snapshot.events.clear();
             snapshot.events.extend(
                 arena

@@ -105,7 +105,7 @@ With several objects selected, a change applies to every object that has that se
 
 - **Map:** name, id, description, size, recommended players, wall style, floor, [lighting](#darkness-and-light), [paths](#paths) and the group list. Objects keep their relative place when the size changes. The group list shows every group in use with its name and what it holds (blocks, pads, decor, triggers, and whether tanks can push it). **Hidden** makes a group start the round out of sight, **Lock** stops it being selected on the canvas while you work around it, and **Select** selects the whole group and centers the view on it.
 - **Object:** position, size, group and the settings for the selected kind. A group's *starts hidden* switch is available here, so a gate needs no trip to Map.
-- **Logic:** preview controls, the test tank's team, the eight counters, the groups the logic uses, a panel to send signals and defeat bosses by hand, a log of what happened, and every trigger with its summary and live state. Click a trigger to find it, or press its **Fire** button to make it act once right now, as if its moment had come. See [Logic preview](#logic-preview).
+- **Logic:** preview controls, the test tank's team, the counters, the groups the logic uses, a panel to send signals and defeat bosses by hand, a log of what happened, and every trigger with its summary and live state. Click a trigger to find it, or press its **Fire** button to make it act once right now, as if its moment had come. See [Logic preview](#logic-preview).
 - **Check:** runs the map checks. Red items stop playtests and exports; amber items are advice, such as a signal nobody listens to, a group with no objects, or a note from a plugin. Click an item to select it. **Room left** shows how much of each object budget the map uses.
 - **Rules:** the movement, damage, health and score multipliers used by the playtest and the exported pack.
 - **Files:** saved projects, pack import, the workshop folder, and built-in arenas to copy as templates.
@@ -130,7 +130,7 @@ With several objects selected, a change applies to every object that has that se
 
 Overlapping speed and mud pads multiply, and the final factor is clamped to 0.3–2.5. Overlapping conveyors add up to 600 units a second, and overlapping launch pads up to 1,800. Repair and hazard rates add; shelter pads multiply. Speed, conveyor and launch effects run in shared code, so movement predicts smoothly online.
 
-**Decor** includes tiles, stripes, lights, spotlights, beams, grids, rings, discs, triangles, hexagons, arrows, labels and particle emitters. It has color, opacity, rotation, spin, pulse and an *Above tanks* switch. It never changes collision. A label can show a counter: `{1}` to `{8}` are replaced with that counter's value.
+**Decor** includes tiles, stripes, lights, spotlights, beams, grids, rings, discs, triangles, hexagons, arrows, labels and particle emitters. It has color, opacity, rotation, spin, pulse and an *Above tanks* switch. It never changes collision. A label can show counters: `{1}` to `{255}` are replaced with that counter's value, in any of the [counter formats](#counters).
 
 **Near a tank** makes decor respond to the player's own tank within a distance (220 units unless you set **Within**): **Fade away** clears it, for roofs and canopies that hide what is under them until you drive in; **Appear** shows it, for hidden signs; **Grow** swells it; and **Glow** brightens it. Each player sees their own tank's effect, so a roof one player has driven under stays shut for everyone else. The Decor tab's **Roof** piece is a tile that is already above tanks and fades.
 
@@ -158,8 +158,8 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **On empty:** the last noticed tank leaves the area or is destroyed.
 - **On destroy:** a noticed tank is destroyed inside the area.
 - **At start:** once, *Seconds into the round* after it starts.
-- **On signal:** another trigger sent a signal on its channel (1–32).
-- **On counter:** its counter (1–8) reaches the threshold, from either direction.
+- **On signal:** another trigger sent a signal on its channel (1–255).
+- **On counter:** its counter (1–255) reaches the threshold, from either direction.
 - **On change:** its counter changes value at all, by any trigger or script. Setting a counter to the value it already has is not a change.
 - **On shown / On hidden:** its group is shown or hidden, however that happened: a trigger, an *Undo after* timer or a script. The groups a round starts with don't count, so a group hidden from the start doesn't fire On hidden.
 - **On boss down:** a boss is defeated anywhere in the arena. Pick one boss, or *Any boss*.
@@ -169,14 +169,14 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 ### Actions
 
 - **Toggle, Show, Hide:** change a group. *Undo after* puts the group back after that many seconds; 0 keeps the change.
-- **Announce:** shows text to everyone, up to 96 characters. `{1}`–`{8}` insert counters; `{cause}` names the tank that set it off, or is empty when there is none.
+- **Announce:** shows text to everyone, up to 96 characters. `{1}`–`{255}` insert counters (see [Counters](#counters)); `{cause}` names the tank that set it off, or is empty when there is none.
 - **Boss:** brings the chosen boss to the trigger. A crowded map or the 16-boss limit can prevent it.
 - **Signal:** fires every *On signal* trigger on that channel.
 - **Random signal:** sends on one channel picked at random from a run of 2 or more, starting at *First channel*.
 - **Sequence:** sends on the next channel of a run each time it acts, then starts over: with *First channel* 5 and 3 channels it sends 5, 6, 7, 5, 6…
-- **Count:** adds an amount (negative subtracts) to a counter. Counters stay within ±99,999 and reset each round.
+- **Count:** adds an amount (negative subtracts) to a counter. Counters stay within ±1,073,741,823 and reset each round.
 - **Set counter:** puts a counter at an exact value. Goals watching that value act as if it had been counted to.
-- **Calculate:** changes a counter with a number or with another counter: add, subtract, multiply, divide (rounding down), remainder, lowest, highest, copy, a random number below the other value, or flip between 0 and 1. Dividing by zero changes nothing.
+- **Calculate:** changes a counter with a number or with another counter: add, subtract, multiply, divide (rounding down), remainder, lowest, highest, copy, a random number below the other value, flip between 0 and 1, and (1.7) the bit math AND, OR, XOR, shift left and shift right, and power. Dividing by zero changes nothing, and so does a negative power. Either counter can be **moved along by another counter** for lists of counters; see [Counters](#counters).
 - **Shapes:** drops 1–24 shapes inside the trigger's area.
 - **Repair tanks, Damage tanks:** restore or take 1–100% of maximum health from every noticed tank inside the area. Damage goes through normal damage protection.
 - **Award points:** gives 1–100,000 points to every noticed tank inside the area.
@@ -193,6 +193,29 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 The tank actions and Shake screen act on tanks inside the trigger's own area. On a timer, signal, counter, group or boss trigger, *Who* and *Team* appear under the action to choose those tanks.
 
 *Who* can also be **Tank that set it off**: only the tank behind what happened, wherever it is. That's the tank that crossed an On enter, On exit, On empty or On destroy area, the first tank inside a While inside area, or the player who picked a choice. It carries through signals, delays, counters and group watchers, so a plate can send a signal to a trigger far away that rewards just the tank that stepped on it. A timer, an At start trigger or a script's signal has no tank behind it, so such a trigger reaches nobody. Area triggers with this setting watch for any tank.
+
+### Counters
+
+A map has 255 counters, numbered from 1. Each starts the round at 0 and stays within ±1,073,741,823; a result past that stops at the limit. Count, Set counter and Calculate change them, On counter and On change watch them, and gates compare them.
+
+**Counter text.** Announcements, decor labels, widget words and board cells fill in counter fields, and keep them up to date while they show:
+
+| Field | Shows |
+| --- | --- |
+| `{3}` | counter 3 |
+| `{3:,}` | commas between thousands: 1,234,567 |
+| `{3:04}` | at least 4 digits, with zeros in front: 0042 |
+| `{3:b}`, `{3:b8}` | binary, with at least 8 digits in the second form: 00000101 |
+| `{3:x}`, `{3:x4}` | hexadecimal, with at least 4 digits in the second form: 00FF |
+| `{3\|2\|1:4}` | counters 3, 2 and 1 as 4-digit parts of one number, the most significant first. With 12, 0 and 345 in them it shows 120000345, and `{3\|2\|1:4,}` shows 120,000,345 |
+
+A joined field takes two to eight counters with one to nine digits each, and the first part that isn't 0 gives the sign. Anything in braces that isn't one of these, such as `{name}` outside a widget, stays as written.
+
+**Big numbers.** One counter holds just over a billion. For more, keep a number in parts of, say, four digits a counter: carry between them with Divide and Remainder by 10,000, and show them with `{3|2|1:4}`.
+
+**Lists of counters.** Calculate's **Move along by a counter's value** adds another counter's value to the counter's number, so one trigger can work through a list: with counter 10 at 2, counter 20 moved along by counter 10 is counter 22. The other counter can move along the same way. A number that lands outside 1 to 255 does nothing.
+
+**Bits.** AND, OR and XOR work on the bits of the two values, shift left and shift right double or halve the counter that many times, and power raises it to the other value. With them one counter holds 30 on/off switches: OR 4 turns on bit 3, AND −5 turns it off, XOR 4 flips it, shift right by 2 and Remainder 2 read it, and a board light set to *One bit of a counter* shows it.
 
 ### Motions
 
@@ -295,7 +318,7 @@ A body stops at other cover and never crushes a tank against a wall: it halts in
 - **Shove body** gives a body a push at a direction and speed, as if a tank had rammed it. Heavier bodies move less. The Check tab notes a Shove whose group isn't pushable.
 - **Fling tanks** throws the noticed tanks inside the area at a direction and speed, up to 3,000 units a second. They coast for a moment, like off a launch pad.
 - **Blast** throws tanks inside the area away from its middle, or with a negative speed pulls them in.
-- **Zoom view** widens (below 100%) or narrows (above 100%) the view of the noticed tanks inside for up to 60 seconds, then eases back.
+- **Zoom view** widens (below 100%) or narrows (above 100%) the view of the noticed tanks inside for up to 60 seconds, then eases back. **Hold until the next zoom** keeps it until another Zoom view changes it, so a pair of triggers can zoom out when tanks enter a hall and back in at its door. **Change over** sets how long the view takes to change, from 0.1 to 10 seconds (half a second unless you change it), along a curve such as *Sine* or *Back*. **Turn toward the area** moves the camera that far toward the middle of the trigger's area, from 0% (stay on the tank) to 100% (center on the area), to show a vault opening or a boss arriving. A new zoom takes over from wherever the view is, without a jump. A tank that is destroyed gets its usual view back, and servers send everything a zoomed-out or turned view can see.
 - **Lighting** changes the arena's darkness and its color. See [Darkness and light](#darkness-and-light).
 - **Play path** sends a group along one of the map's paths.
 
@@ -331,10 +354,10 @@ Scripts can do the same with `shove_map_body`, `fling_tank`, `play_map_path`, `s
 
 ### UI
 
-A **Show UI** trigger puts a widget on players' screens or floats it over the arena. A widget can have a title, a line of text with an icon, a bar and up to six choices, and each part is optional. The inspector draws a picture of the screen above the settings, with a tank in the middle for scale, and replays the entrance whenever you change something. **Replay entrance** plays it again.
+A **Show UI** trigger puts a widget on players' screens or floats it over the arena. A widget can have a title, a line of text with an icon, a bar and up to six choices, or (1.7) a [board](#boards) of buttons, screens, digits, lights and meters, and each part is optional. The inspector draws a picture of the screen above the settings, with a tank in the middle for scale, and replays the entrance whenever you change something. **Replay entrance** plays it again.
 
 - **Slot:** 1 to 32. Each slot holds one widget per player, and showing another widget in the same slot replaces it. Give a running score its own slot so a message in another slot never covers it.
-- **Words:** a title of up to 48 bytes and text of up to 120. `{1}`–`{8}` show counters, `{left}` the seconds before the widget goes, `{time}` the round's clock, and `{name}` and `{score}` the player's own. `{cause}` names the tank that set it off, including through signals and delays. They update by themselves while the widget shows.
+- **Words:** a title of up to 48 bytes and text of up to 120. `{1}`–`{255}` show counters in any of the [counter formats](#counters), `{left}` the seconds before the widget goes, `{time}` the round's clock, and `{name}` and `{score}` the player's own. `{cause}` names the tank that set it off, including through signals and delays. They update by themselves while the widget shows.
 - **Looks:** twelve preset looks: **Theme** (the player's own colors), **Neon**, **Arcade**, **Parchment**, **Terminal**, **Royal**, **Glass**, **Hazard**, **Sticker**, **Frost**, **Ember** and **Jungle**. A look sets the colors, shape, border, fill, lettering, bar and buttons in one click and keeps the words, place and choices. You can change any of them afterwards.
 - **Shape, border and fill:** panels and cards can be **Rounded**, **Square**, have **Cut corners**, lean (**Slanted**), end in a point (**Tag**) or have notched ends (**Ribbon**). The border is a **Line**, **None**, **Thick**, **Double**, **Dashed** or **Corners** (brackets). The fill is **Solid**, a **Gradient**, see-through **Glass**, or **Stripes**, a **Grid** or **Dots** in an optional fill color.
 - **Lettering:** **Auto**, **Clean**, **Shadow**, **Block** (a painted shadow in the accent), **Outline** or **Glow**, with **Capital letters** and an optional title color. Bars can be a **Capsule**, **Flat**, **Thin**, **Striped**, **Glow** or a row of **Pips**, and choices a **Capsule**, **Box**, **Outline** or **Underline**.
@@ -362,6 +385,30 @@ For a shop, put an On enter trigger at the counter that shows a menu to the play
 | Tank marker | Marks the tank that drives in for everyone, with an arrow while it's off screen |
 | Hide UI | On signal 1, takes every map widget away |
 
+### Boards
+
+A board is a grid of up to 32 by 32 squares holding up to 128 cells: a control panel, a keypad or the front of a computer. The [boards tutorial](boards-tutorial.md) builds a switch panel that opens a vault. Turn on **Show a board of cells** in a Show UI trigger and the board takes the place of the widget's text, bar and choices. The designer appears under it:
+
+- **Columns** and **Rows** size the grid, and **Square size** and **Gap** set how big it draws. Shrinking the grid keeps every cell inside it.
+- **Click adds** picks what a click on an empty square adds. Click a cell to pick it, drag it to move it, and drag the small square in its corner to make it wider or taller. Where cells overlap, the later one draws on top and takes the click.
+- **Copy cell** puts a copy of the picked cell in the first free place; a numbered button counts on and takes the next free channel. **Remove cell** and **Clear all** take cells away.
+- **Add number keys** lays out keys 0 to 9 in the usual three columns, each on its own free channel: key 0 signals the first one and each key after it the next. **Add 8 bit lights** adds a row of lights for bits 8 down to 1 of counter 1.
+
+The picked cell's settings follow the grid: its kind, words, place and size, and what makes it light up.
+
+| Cell | What it is |
+| --- | --- |
+| Label | words on the panel |
+| Button | sends its channel's signal when clicked, with the player who clicked as the tank that set it off |
+| Screen | dark glass with words on it, for messages and readouts |
+| Digits | glowing seven-segment digits, like a calculator or a clock: 0 to 9, a minus sign, dots, colons and the letters segments can draw, such as A, b, C, d, E, F, H, L, P and U |
+| Light | a lamp, lit or dark, with an optional caption |
+| Meter | a bar filled from a counter, full at the value you choose. A tall meter fills from the bottom up |
+
+Every cell's words fill in [counter fields](#counters), so a Digits cell with `{3|2|1:4}` shows a twelve-digit number and a Screen with `{5:b8}` shows a byte. Buttons and lights can be **Lit by** a counter that isn't 0, one bit of a counter, or a group while it's shown, or stay lit always. **Text size** 0 fits the words to the cell, and **Own color** and **Own background** set a cell apart from the widget's look.
+
+A board stays up when a button is clicked, and each player can click up to 20 times a second. Its looks, place, motion, audience and *Hide after* work as for any widget; take it away with Hide UI. The logic preview shows boards over the canvas, and clicking a button there sends its signal as the test tank.
+
 ### Conditions and gates
 
 **Only if** gives a trigger a gate. When the trigger fires, it checks its conditions and acts only if the gate is open. Press **Add a condition** to start one, and **Add another condition** for up to four. Each condition is a card with its own kind:
@@ -385,7 +432,7 @@ With two or more conditions, **Combine** chooses how they make the gate:
 
 With one condition, *Not all* and *None* both open when it fails, which makes a NOT gate.
 
-A shut gate does nothing by default, and doesn't use up *Once per round*, the rest time or *Chance*. Switch on **Otherwise send a signal** to send on the *Otherwise channel* instead (it starts at the lowest channel nothing uses), which makes an if/else: the trigger acts when the gate is open and signals when it's shut. If all 32 channels are in use, free one before adding an otherwise signal. Otherwise signals count toward the 256 chained actions a tick, so they can't loop forever.
+A shut gate does nothing by default, and doesn't use up *Once per round*, the rest time or *Chance*. Switch on **Otherwise send a signal** to send on the *Otherwise channel* instead (it starts at the lowest channel nothing uses), which makes an if/else: the trigger acts when the gate is open and signals when it's shut. If all 255 channels are in use, free one before adding an otherwise signal. Otherwise signals count toward the 4,096 chained actions a tick, so they can't loop forever.
 
 While the preview runs, every card shows **holds** or **fails**, and the gate shows how many hold and whether it is **open** or **shut**, updated live. Gated triggers show a small diamond on their canvas badge, and their tag reads like `AND of 2 → Hide` or `#1≥3 → Signal 4`. The Logic tab's trigger list spells each gate out in full.
 
@@ -397,9 +444,9 @@ For every trigger:
 - *Delay before acting* waits that long after the trigger fires.
 - *Once per round* stops it after its first action, until a Reset triggers action rearms it.
 
-Signals, counters and group changes can chain: a Show action can set off an On shown watcher, which counts, which sets off a Goal. Each tick allows 256 chained actions, so a loop stops instead of freezing the server. Map changes and new rounds reset the logic.
+Signals, counters and group changes can chain: a Show action can set off an On shown watcher, which counts, which sets off a Goal. Each tick allows 4,096 chained actions and 65,536 checks of triggers that heard something, acting or not, so a loop stops instead of freezing the server. Up to 4,096 delayed actions can wait at once. Map changes and new rounds reset the logic.
 
-Triggers keep their listeners in lookup tables built when a round starts, so a signal or counter change only visits the triggers listening for it. A map with all 512 triggers costs no more per tick than the triggers that actually fire.
+Triggers keep their listeners in lookup tables built when a round starts, so a signal or counter change only visits the triggers listening for it. A map with all 4,096 triggers costs no more per tick than the triggers that actually fire.
 
 ### Links
 
@@ -416,11 +463,11 @@ Press **P** to run the map's triggers in the editor with the same engine servers
 
 - **Play/Pause**, **Step** (one tick, 1/60 s, while paused), **Restart** and a speed of ×0.25 to ×4. Slow motion helps to follow a fast chain.
 - How many delayed actions are waiting.
-- **Counters:** click one to add 1, Shift-click to take 1 away and right-click to clear it. Watchers and goals hear the change as if a trigger made it.
+- **Counters:** counters 1 to 8, with any other the map uses or that isn't 0. Click one to add 1, Shift-click to take 1 away and right-click to clear it. Watchers and goals hear the change as if a trigger made it.
 - **Groups:** every group the logic uses. Lit groups are shown; click one to show or hide it, as a script would. Watchers and gates see the change.
 - **Send:** pick a *Signal channel* and press **Send signal**. If any trigger waits for a boss, **Defeat** pretends the chosen boss was just defeated.
 - **What happened:** counters, announcements, widgets, picks, bosses, shapes, repairs, damage, points and script events.
-- **Widgets:** Show UI widgets that reach the test tank appear over the canvas. Click a choice to pick it.
+- **Widgets:** Show UI widgets that reach the test tank appear over the canvas. Click a choice or a board's button to pick it.
 - **Triggers:** each trigger's summary with live chips: *spent* for a once-per-round trigger that acted, *next 4.2 s* for a timer, *next sends 7* for a sequence, *open* or *shut* for a gate. **Fire** makes a trigger act once right now, starting the preview if needed.
 
 **Hold T** to drive a test tank at the pointer through plates and exits; the Logic tab sets its team and whether it counts as a bot. **Shift+P** restarts. Editing a trigger restarts the preview by itself.
@@ -546,7 +593,7 @@ The workshop folder is `workshop/` inside Tank Yard's data directory. **Files �
 - `exports/<map-id>-<timestamp>.zip`: portable exports.
 - `prefs.json`: panel sizes, canvas switches, navigation settings, the palette tab and item, the inspector tab, the logic preview's speed, and where you were looking in the map you had open.
 
-Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings, and maps that use them need 1.0. Tank Yard 1.1.0 adds launch pads, Tint, Scale, Animate, Stop, Shake screen and Play sound; it uses protocol 28, so 1.1.0 and 1.2.0 servers and players play together, and maps that use the new pieces need 1.1.0 to open. Tank Yard 1.3.0 adds pushable bodies, paths, ice, gravity wells, darkness and lighting, decor that responds to tanks, the new decor shapes, group names and the Physics triggers; it uses protocol 29, so 1.3.0 servers and players play only with each other, and maps that use the new pieces need 1.3.0 to open. Tank Yard 1.4.0 adds Show UI, Hide UI and the *Tank that set it off* filter; it uses protocol 30, so 1.4.0 servers and players play only with each other, and maps that use the new pieces need 1.4.0 to open. Tank Yard 1.5.0 adds widgets that float over an area or a tank, choice arrangements, glow and the new icons; it uses protocol 31, so 1.5.0, 1.5.1 and 1.5.2 servers and players play only with each other, and maps that use the new pieces need 1.5.0 to open. Tank Yard 1.6.0 adds widget shapes, borders, fills, lettering, title colors, bar looks, button looks and the one-click looks; it uses protocol 32, so 1.6.0 servers and players play only with each other, and maps that use the new looks need 1.6.0 to open. Maps from earlier versions open unchanged.
+Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings, and maps that use them need 1.0. Tank Yard 1.1.0 adds launch pads, Tint, Scale, Animate, Stop, Shake screen and Play sound; it uses protocol 28, so 1.1.0 and 1.2.0 servers and players play together, and maps that use the new pieces need 1.1.0 to open. Tank Yard 1.3.0 adds pushable bodies, paths, ice, gravity wells, darkness and lighting, decor that responds to tanks, the new decor shapes, group names and the Physics triggers; it uses protocol 29, so 1.3.0 servers and players play only with each other, and maps that use the new pieces need 1.3.0 to open. Tank Yard 1.4.0 adds Show UI, Hide UI and the *Tank that set it off* filter; it uses protocol 30, so 1.4.0 servers and players play only with each other, and maps that use the new pieces need 1.4.0 to open. Tank Yard 1.5.0 adds widgets that float over an area or a tank, choice arrangements, glow and the new icons; it uses protocol 31, so 1.5.0, 1.5.1 and 1.5.2 servers and players play only with each other, and maps that use the new pieces need 1.5.0 to open. Tank Yard 1.6.0 adds widget shapes, borders, fills, lettering, title colors, bar looks, button looks and the one-click looks; it uses protocol 32, so 1.6.0 servers and players play only with each other, and maps that use the new looks need 1.6.0 to open. Tank Yard 1.7.0 adds boards, 255 counters and signal channels, larger counters, the bit and power math, counters moved along by other counters, the new counter formats and the new Zoom view settings, and allows 4,096 triggers and 4,096 decor items a map; it uses protocol 33, so 1.7.0 servers and players play only with each other, and maps that use any of these need 1.7.0 to open. Maps from earlier versions open unchanged.
 
 For a dedicated server, put the ZIP in persistent storage, add its path to the top-level `mods` list, and run `reload-mods`. Then `maps` lists it and `map my_arena` selects it. Joining clients receive the checked map data automatically. See [Hosting](hosting.md) and [domain setup](hosting-domain.md).
 

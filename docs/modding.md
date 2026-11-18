@@ -374,8 +374,8 @@ All commands need a tank ID where they act on a tank. Values outside the bounds 
 | `announce(text)` | a message to everyone, up to 160 characters |
 | `finish_round(team, reason)` | ends the round; team 0–4 (0 or `nil` for no winner) |
 | `hud(widget_id, widget, id)` | see [HUD widgets](#hud-widgets) |
-| `map_signal(channel)` | fires the map's On signal triggers on channel 1–32 |
-| `set_map_counter(n, value)`, `add_map_counter(n, value)` | sets or adds to map counter 1–8; whole numbers, results within ±99,999 |
+| `map_signal(channel)` | fires the map's On signal triggers on channel 1–255 (1–32 before 1.7) |
+| `set_map_counter(n, value)`, `add_map_counter(n, value)` | sets or adds to map counter 1–255 (1–8 before 1.7); whole numbers, results within ±1,073,741,823 (±99,999 before 1.7) |
 | `show_map_group(group, shown)` | shows (`true`, the default) or hides map group 1–32 |
 | `reset_map_triggers(group)` | (0.16) makes map group 1–32's triggers start afresh, or every trigger with 0 or `nil`: once-per-round triggers can act again, rest times end, waiting delays are dropped, timers restart from now and sequences go back to their first channel |
 | `move_map_group(group, x, y, seconds, curve, mode)` | (1.0) glides map group 1–32 to `x`, `y` from where the map places it, as fractions of the arena's width and height (±2; `0, 0` brings it home), over `seconds` (0–600; 0 or `nil` moves it at once). A glide faster than one arena a second is slowed to that speed. `curve` and `mode` are [easing](#motions) names; leave them out for `"sine"`, `"in_out"` |
@@ -441,7 +441,7 @@ end)
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `text` | none | up to 120 bytes; a widget needs `text`, a `title`, `progress` or `choices` |
+| `text` | none | up to 120 bytes; a widget needs `text`, a `title`, `progress`, `choices` or a `board` |
 | `x`, `y` | `0.5`, `0.2` | position as a fraction of the screen (`y` is the middle of a plain widget's text, or of a panel) |
 | `align` | `"center"` | `"left"`, `"center"` or `"right"` of `x` |
 | `size` | `18` | text size, 10 to 48, scaled with the interface |
@@ -470,6 +470,7 @@ end)
 | (1.6) `title_color` | a blend of accent and text | the title's color |
 | (1.6) `bar_style` | `"capsule"` | `"capsule"`, `"flat"`, `"thin"`, `"striped"` (moving stripes), `"glow"` or `"pips"` (a row of dots: `segments` of them, or 10) |
 | (1.6) `buttons` | `"capsule"` | how choices look: `"capsule"`, `"box"`, `"outline"` or `"underline"` |
+| (1.7) `board` | none | a grid of cells in place of `text`, `progress` and `choices`; see below |
 
 ```lua
 tankyard.on("spawn", function(event)
@@ -501,11 +502,53 @@ tankyard.on("choice", function(event)
 end)
 ```
 
-A menu shown to one player closes when they pick; one shown to everyone stays until the script changes it. A player picks at most ten times a second. Widgets appear with their entrance, fade out when removed, and keep their place while their text changes. With **Reduced motion** on, players see them without movement.
+A menu shown to one player closes when they pick; one shown to everyone stays until the script changes it. A player picks at most twenty times a second. Widgets appear with their entrance, fade out when removed, and keep their place while their text changes. With **Reduced motion** on, players see them without movement.
 
 Widget IDs use lowercase letters, digits and `_`. A pack may show 16 widgets to everyone and 16 to each player, and a player receives at most 64 from all packs. Bots have no screen, so widgets for bots are dropped. Widgets end with the round, with their player, or when the pack is disabled.
 
-The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. A pinned widget follows its tank or group on each player's screen by itself, so it needs no updates as the tank moves. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, styles, icons and choices in 1.4, pins, choice layouts and glow in 1.5, and shapes, borders, fills, lettering, title colors, bar looks and button looks in 1.6. Tank Yard 1.6.0 uses protocol 32; players and servers must use matching protocols.
+The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. A pinned widget follows its tank or group on each player's screen by itself, so it needs no updates as the tank moves. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, styles, icons and choices in 1.4, pins, choice layouts and glow in 1.5, shapes, borders, fills, lettering, title colors, bar looks and button looks in 1.6, and boards in 1.7. Tank Yard 1.7.0 uses protocol 33; players and servers must use matching protocols.
+
+#### Boards
+
+(1.7) `board` turns a widget into a grid of cells: a control panel, a keypad, the front of a computer. The widget keeps its `title` and looks, and leaves out `text`, `progress` and `choices`.
+
+```lua
+tankyard.hud("panel", {
+  title = "Reactor", style = "panel", x = 0.85, y = 0.5,
+  board = {
+    columns = 4, rows = 3, cell = 44, gap = 4,
+    cells = {
+      { kind = "digits", span = { 4, 1 }, text = string.format("%04d", heat) },
+      { kind = "button", at = { 0, 1 }, text = "Vent" },
+      { kind = "button", at = { 1, 1 }, text = "Boost", lit = boosting },
+      { kind = "light", at = { 2, 1 }, text = "Hot", lit = heat > 900, color = "#ff3c28" },
+      { kind = "meter", at = { 3, 1 }, span = { 1, 2 }, progress = heat / 1000 },
+      { kind = "screen", at = { 0, 2 }, span = { 3, 1 }, text = "All systems normal" },
+    },
+  },
+}, player)
+```
+
+| Board field | Default | Meaning |
+| --- | --- | --- |
+| `columns`, `rows` | `4`, `4` | the grid, 1 to 32 squares each way |
+| `cell` | `40` | each square's side, 12 to 96, scaled with the interface |
+| `gap` | `4` | space between squares, 0 to 24 |
+| `cells` | none | up to 128 cells, drawn in order: where cells overlap, the later one draws on top and takes the click |
+
+| Cell field | Default | Meaning |
+| --- | --- | --- |
+| `kind` | `"label"` | `"label"`, `"button"`, `"screen"` (dark glass with words), `"digits"` (seven-segment digits: 0 to 9, a minus sign, dots, colons and the letters segments can draw), `"light"` (a lamp with an optional caption) or `"meter"` (a bar; a tall one fills from the bottom up) |
+| `at` | `{ 0, 0 }` | the column and row of its top-left square, from 0 |
+| `span` | `{ 1, 1 }` | how many columns and rows it covers; it must stay inside the grid |
+| `text` | none | up to 48 bytes: a label's, button's or screen's words, the digits, or a light's or meter's caption |
+| `lit` | `false` | whether a button or light is lit |
+| `progress` | `0` | how full a meter is, 0 to 1 |
+| `color`, `fill` | the widget's | the cell's own color, and its background, as `"#rrggbb"` or `{ r, g, b }` |
+| `size` | `0` | text size against what fits the cell, 0.25 to 2; 0 fits it |
+| `align` | `"center"` | `"left"`, `"center"` or `"right"` |
+
+A click on a button raises the pack's `choice` event with `value` set to the button's place in `cells`, counting from 1, and the board stays up. Labels, screens, digits, lights and meters can't be clicked. Set the board again to change what it shows: like any widget, it costs network only when it changes.
 
 A coordinate pin can follow a moving map group:
 
@@ -607,8 +650,8 @@ Packs as a whole:
 | Limit | Value |
 | --- | --- |
 | Enabled packs | 16 |
-| Archive | 8 MiB, 256 files, 2 MiB per file; no links, encryption or size-header mismatches |
-| `mod.json` and the combined data sent to players | 1 MiB each |
+| Archive | 16 MiB, 256 files, 4 MiB per file; no links, encryption or size-header mismatches |
+| `mod.json` and the combined data sent to players | 4 MiB each |
 | Tanks / maps / textures | 1,024 / 256 / 16 |
 
 ## Workshop plugins
@@ -880,18 +923,18 @@ The [Arena Workshop](map-editor.md) creates these definitions without writing co
 - `blocks`: `{ "rect": [x,y,w,h], "style": "slate", "color": [r,g,b], "group": 0 }`. Color is optional; these are solid, axis-aligned rectangles.
 - `zones`: `{ "kind": "speed", "rect": [x,y,w,h], "strength": 1, "group": 0, "angle": 0, "exit": [x,y] }`. Kinds are `speed`, `mud`, `repair`, `hazard`, `shelter`, (protocol 25) `conveyor` and `portal`, (1.1) `launch`, and (1.3) `ice` and `pull` (a gravity well); strength is 0.25–2. A conveyor pushes along `angle` in degrees (0 right, 90 down) at `150 × strength` units a second, and a launch pad flings tanks along `angle` at `900 × strength`. A portal sends tanks to `exit`, a map-relative point that must be open floor. See the [pad formulas](map-editor.md#objects).
 - `decor`: `{ "kind": "tile", "rect": [x,y,w,h], "color": [120,160,190], "alpha": 255, "rotation": 0, "pulse": 0, "spin": 0, "flicker": 0, "above": false, "text": "", "effect": null, "group": 0 }`. Kinds: `tile`, `stripes`, `light`, `ring`, `arrow`, `label`, `emitter`, and (1.3) `spotlight`, `beam`, `grid`, `disc`, `triangle` and `hexagon`. Rotation/spin are degrees; pulse is cycles/second. (1.0) `flicker`, 0–1, makes a `light`, `spotlight` or `beam` waver like a flame or a failing lamp. (1.3) `react` makes decor respond to the player's own tank: `fade` (clears as it comes near, for roofs), `appear`, `grow` or `glow`, within `reach` world units (10–2,000; 220 when left out). Text has at most 64 characters.
-- `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`, (protocol 25) `exit`, `signal`, `counter`, (0.15.1) `occupied` (every `seconds`, at least 0.25, while `threshold` tanks, 1–64, are inside), `cleared` (the last noticed tank leaves or dies) and `destroyed` (a noticed tank dies inside), and (0.16) `changed` (counter `source`, 1–8, changes value), `shown` and `hidden` (group `source`, 1–32, is shown or hidden during the round, by anything) and `defeated` (a boss is defeated; `source` 0 for any boss, or a boss's place in the list under `spawn_boss` counting from 1), and (1.0) `arrived` (a motion of group `source`, 1–32, ends). Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`), (protocol 25) `signal` (channel `group`), `count` (adds `amount` to counter `group`) and `shapes` (`amount` shapes, 1–24, inside `rect`), and (0.15.1) `set` (puts counter `group` at `amount`), `random` (signals one of `amount` channels, at least 2, starting at `group`), `heal` and `hurt` (`amount` percent of health, 1–100) and `award` (`amount` points, 1–100,000) for the noticed tanks inside `rect`, `calculate` (changes counter `group` with `math` and `amount`, or with counter `operand`) and `script` (raises the [`map_event`](#map-logic) script event named `text`: lowercase letters, digits and `_`, starting with a letter, up to 32), and (0.16) `sequence` (signals the next of `amount` channels starting at `group` each time, then starts over) and `reset` (makes group `group`'s triggers start afresh, or every trigger for 0, like `reset_map_triggers`), (1.0) the [motions](#motions) `move`, `place`, `turn` and `fade`, (1.1) the [effects](#effects) `tint`, `scale`, `animate`, `stop`, `shake` and `sound`, and (1.3) the [physics and lighting](#physics-and-lighting) actions `shove`, `fling`, `blast`, `zoom`, `light` and `path`. (1.3) `touch` and `release` act when a block of group `source` starts to overlap `rect`, or the last one stops. Protocol 25 fields, all optional:
+- `triggers`: `{ "when": "every", "action": "toggle", "rect": [x,y,w,h], "group": 1, "seconds": 10, "offset": 0, "duration": 4, "once": false }`. Timing kinds: `every`, `enter`, `start`, (protocol 25) `exit`, `signal`, `counter`, (0.15.1) `occupied` (every `seconds`, at least 0.25, while `threshold` tanks, 1–64, are inside), `cleared` (the last noticed tank leaves or dies) and `destroyed` (a noticed tank dies inside), and (0.16) `changed` (counter `source`, 1–255, changes value), `shown` and `hidden` (group `source`, 1–32, is shown or hidden during the round, by anything) and `defeated` (a boss is defeated; `source` 0 for any boss, or a boss's place in the list under `spawn_boss` counting from 1), and (1.0) `arrived` (a motion of group `source`, 1–32, ends). Actions: `toggle`, `show`, `hide`, `announce` (add `text`), `boss` (add `boss`), (protocol 25) `signal` (channel `group`), `count` (adds `amount` to counter `group`) and `shapes` (`amount` shapes, 1–24, inside `rect`), and (0.15.1) `set` (puts counter `group` at `amount`), `random` (signals one of `amount` channels, at least 2, starting at `group`), `heal` and `hurt` (`amount` percent of health, 1–100) and `award` (`amount` points, 1–100,000) for the noticed tanks inside `rect`, `calculate` (changes counter `group` with `math` and `amount`, or with counter `operand`) and `script` (raises the [`map_event`](#map-logic) script event named `text`: lowercase letters, digits and `_`, starting with a letter, up to 32), and (0.16) `sequence` (signals the next of `amount` channels starting at `group` each time, then starts over) and `reset` (makes group `group`'s triggers start afresh, or every trigger for 0, like `reset_map_triggers`), (1.0) the [motions](#motions) `move`, `place`, `turn` and `fade`, (1.1) the [effects](#effects) `tint`, `scale`, `animate`, `stop`, `shake` and `sound`, and (1.3) the [physics and lighting](#physics-and-lighting) actions `shove`, `fling`, `blast`, `zoom`, `light` and `path`. (1.3) `touch` and `release` act when a block of group `source` starts to overlap `rect`, or the last one stops. Protocol 25 fields, all optional:
   - `member`: the trigger's own group; it is off while that group is hidden.
   - `who` (`anyone`, `players`, `bots`, and in 1.4 `cause`) and `team` (0–4): which tanks an area trigger notices, or which tanks a `heal`, `hurt` or `award` action reaches. `cause` reaches only the tank that set the trigger off: the one that crossed an area, or picked a choice, behind the signal it heard; area triggers with it watch for any tank.
-  - `source`: the signal channel (1–32) or counter (1–8) a trigger waits for. `threshold`: the counter value it waits for.
+  - `source`: the signal channel or counter a trigger waits for, 1–255 each (1.7; channels 1–32 and counters 1–8 before). `threshold`: the counter value it waits for.
   - `chance`: 1–100 percent, default 100. `delay`: seconds between firing and acting, 0–3600.
-  - (0.15.1) `only_if`: a gate checked when the trigger fires; it acts only if the gate holds. `{ "kind": "counter", "index": 1, "compare": "at_least", "value": 3, "against": 0 }` compares counter `index` with `value`, or with counter `against` when that is 1–8. `compare` is `equal`, `not_equal`, `below`, `above`, `at_most` or `at_least`. `{ "kind": "shown", "index": 4 }` and `{ "kind": "hidden", "index": 4 }` test a group. (0.16) `{ "kind": "inside", "compare": "at_least", "value": 2 }` counts the noticed tanks inside the trigger's `rect` (with its `who` and `team`), and `{ "kind": "time", "compare": "at_least", "value": 300 }` reads whole seconds since the round started; both compare like a counter, with `value` or counter `against`. (1.5.1) Neither needs `index`; Tank Yard 1.5.0 and earlier want `"index": 0` on them.
-  - (0.16) `also_if`: up to three more conditions, shaped like `only_if`, which they need. `gate` says how all of them combine: `all` (AND, the default), `any` (OR), `not_all` (NAND), `none_of` (NOR) or `one` (XOR, exactly one holds). `otherwise`: a signal channel, 1–32, sent instead when the gate is shut; 0 or left out sends nothing.
-  - (0.15.1) `math`: how `calculate` changes its counter: `add`, `subtract`, `multiply`, `divide` (rounds down), `remainder` (never negative), `lowest`, `highest`, `copy`, `random` (0 up to one less than the other value) or `flip` (0 becomes 1, anything else 0). Dividing by zero changes nothing. `operand`: use counter 1–8 instead of `amount`.
+  - (0.15.1) `only_if`: a gate checked when the trigger fires; it acts only if the gate holds. `{ "kind": "counter", "index": 1, "compare": "at_least", "value": 3, "against": 0 }` compares counter `index` with `value`, or with counter `against` when that is 1–255. `compare` is `equal`, `not_equal`, `below`, `above`, `at_most` or `at_least`. `{ "kind": "shown", "index": 4 }` and `{ "kind": "hidden", "index": 4 }` test a group. (0.16) `{ "kind": "inside", "compare": "at_least", "value": 2 }` counts the noticed tanks inside the trigger's `rect` (with its `who` and `team`), and `{ "kind": "time", "compare": "at_least", "value": 300 }` reads whole seconds since the round started; both compare like a counter, with `value` or counter `against`. (1.5.1) Neither needs `index`; Tank Yard 1.5.0 and earlier want `"index": 0` on them.
+  - (0.16) `also_if`: up to three more conditions, shaped like `only_if`, which they need. `gate` says how all of them combine: `all` (AND, the default), `any` (OR), `not_all` (NAND), `none_of` (NOR) or `one` (XOR, exactly one holds). `otherwise`: a signal channel, 1–255, sent instead when the gate is shut; 0 or left out sends nothing.
+  - (0.15.1) `math`: how `calculate` changes its counter: `add`, `subtract`, `multiply`, `divide` (rounds down), `remainder` (never negative), `lowest`, `highest`, `copy`, `random` (0 up to one less than the other value) or `flip` (0 becomes 1, anything else 0), and (1.7) `and`, `or` and `xor` (bit by bit), `shift_left` and `shift_right` (doubling or halving, rounding down, that many times) and `power`. Dividing by zero changes nothing, and so does a negative power. `operand`: use counter 1–255 instead of `amount`. (1.7) `target_offset` and `operand_offset`: add that counter's value to the number of counter `group` or counter `operand`, for lists of counters; a number outside 1–255 does nothing.
 
   Trigger fields added in 0.15.1, 0.16, 1.0 and 1.1 are left out of exported maps when unused. A map that uses them needs a server (or offline game) from that version; older ones refuse the map rather than run it wrongly. Decor and particles in 1.0 always carry their new fields, so maps from 1.0 need 1.0.
 
-  Counters 1–8 start at 0 each round and stay within ±99,999. Announcements and decor labels replace `{1}`–`{8}` with counter values. The [logic guide](map-editor.md#groups-and-logic) explains schedules, entry edges, chains and restoration.
+  Counters 1–255 start at 0 each round and stay within ±1,073,741,823 (8 counters within ±99,999 before 1.7). Announcements and decor labels replace `{1}`–`{255}` with counter values, in the [counter formats](map-editor.md#counters): `{3:,}` with commas, `{3:04}` padded, `{3:b}` and `{3:x}` in binary and hex, and `{3|2|1:4}` as parts of one long number. The [logic guide](map-editor.md#groups-and-logic) explains schedules, entry edges, chains and restoration.
 - `hidden_groups`: groups 1–32 hidden at round start. Group 0 is always visible. Blocks, zones and decor sharing a group change together.
 - (1.3) `group_names`: `{ "group": 3, "name": "Crate" }`, up to 24 characters, shown in the workshop.
 - (1.3) `bodies`, `paths` and `ambient`: see [Physics and lighting](#physics-and-lighting).
@@ -969,7 +1012,7 @@ The 1.3 trigger actions:
 - `shove` pushes body `group` along `angle` (degrees, 0 right, 90 down) at `amount` world units a second (1–2,000).
 - `fling` throws the noticed tanks inside `rect` along `angle` at `amount` (1–3,000); they coast like off a launch pad.
 - `blast` throws tanks inside `rect` away from its middle at `amount`, or pulls them in with a negative `amount` (±3,000).
-- `zoom` sets the view of the noticed tanks inside to `amount` percent (40–250) for `tween` seconds (0.1–60), then eases back.
+- `zoom` sets the view of the noticed tanks inside to `amount` percent (40–250) for `tween` seconds (0.1–60), then eases back. (1.7) `hold: true` keeps it until the next zoom instead, `ease` sets the seconds the view takes to change (0.1–10; 0 or left out takes half a second) along `easing`, and `focus` turns the camera that many percent (0–100) toward the middle of `rect`.
 - `light` changes the darkness to `amount` percent (0–95) tinted `color`, over `tween` along `easing`; `duration` returns it to what it was that many seconds later.
 - `path` sends group `group` along path `amount` (1–32).
 
@@ -997,7 +1040,7 @@ Emitters' `effect` is an optional particle profile. Defaults are:
 
 Particle shapes are `dot`, `square`, `spark`, `ring`, `triangle`, and (1.0) `soft` (a dot with a soft edge, for smoke, mist and glows) and `star`. (1.0) `glow` adds particles' light to what lies beneath them, like embers; `wobble` drifts them sideways by up to that many world units (0–200), for smoke and fireflies; `twinkle` (0–1) makes each one flicker; and `area` says where they start: anywhere in the rectangle (`fill`), in the ellipse inside it (`round`), along its outline (`edge`) or at its center (`point`). Rate is 0.2–60/s, lifetime 0.1–8 s, speed 0–800, spread 0–360°, gravity ±800, drag 0–8, initial size 1–120, final size 0–120, and spin ±1080°/s. `rate × lifetime` must not exceed 240. Colors are three bytes; direction 0° points right and 90° down.
 
-Maps allow 2,048 walls/blocks combined, 512 zones, 2,048 decor items (48 emitters), 512 triggers, 32 paths, 32 bodies, 32 spawn regions, 4 team bases and 32 objectives. Geometry validation also has a catalog-wide work budget. Dimensions are 900–16,000 by 700–16,000 world units. Every rectangle must fit inside `[0,1]²`. Validation checks starting collision/connectivity, finite values and count limits before accepting a pack.
+Maps allow 2,048 walls/blocks combined, 512 zones, 4,096 decor items (48 emitters), 4,096 triggers (2,048 decor items and 512 triggers before 1.7), 32 paths, 32 bodies, 32 spawn regions, 4 team bases and 32 objectives. Geometry validation also has a catalog-wide work budget. Dimensions are 900–16,000 by 700–16,000 world units. Every rectangle must fit inside `[0,1]²`. Validation checks starting collision/connectivity, finite values and count limits before accepting a pack.
 
 #### UI
 
@@ -1013,7 +1056,7 @@ Tank Yard 1.4.0 (protocol 30) adds `ui` and `hide_ui` actions. A `ui` trigger sh
     "to": "cause", "channels": [1, 2, 0] } }
 ```
 
-`widget` takes the [HUD widget](#hud-widgets) fields; its `text` and `title` fill in `{1}`–`{8}` (counters), `{left}` (seconds before it goes), `{time}` (the round's clock), `{name}` and `{score}` (the viewer's), and `{cause}` (the tank that set it off; empty when there is none). `to` is `everyone` (the default; later arrivals see it too), `inside` (players the trigger notices in its `rect`) or `cause` (the player that set it off). `bar` (1–8) fills the bar from that counter out of `bar_max` (1–99,999); `timer: true` empties it as `duration` runs out instead. Each choice signals its channel in `channels` (0 for none) with the picker as the tank that set it off, and the menu closes for them unless `keep` is true. `duration` above 0 takes the widget away after that many seconds. Bots never see widgets.
+`widget` takes the [HUD widget](#hud-widgets) fields; its `text` and `title` fill in `{1}`–`{255}` (counters, in any [counter format](map-editor.md#counters)), `{left}` (seconds before it goes), `{time}` (the round's clock), `{name}` and `{score}` (the viewer's), and `{cause}` (the tank that set it off; empty when there is none). `to` is `everyone` (the default; later arrivals see it too), `inside` (players the trigger notices in its `rect`) or `cause` (the player that set it off). `bar` (1–255) fills the bar from that counter out of `bar_max` (1–1,073,741,823); `timer: true` empties it as `duration` runs out instead. Each choice signals its channel in `channels` (0 for none) with the picker as the tank that set it off, and the menu closes for them unless `keep` is true. `duration` above 0 takes the widget away after that many seconds. Bots never see widgets.
 
 (1.5) `pin` floats the widget over the arena: `area` centers it over the middle of the trigger's `rect`, like a sign, following the trigger's group motion, and `cause` floats it just above the tank that set the trigger off and follows it, like a name tag, for everyone it shows to. A `cause` widget shows nothing when no tank set the trigger off (timers have none) and goes when that tank leaves the game. Set the widget's `point: true` to keep it near the edge of the screen with an arrow while what it floats over is out of view. Map widgets pin with the trigger's `pin`, never the widget's own. Maps save `pin`, `point`, `layout` and `glow` only when they're used, so maps that don't use them still open in 1.4.0:
 
@@ -1024,6 +1067,18 @@ Tank Yard 1.4.0 (protocol 30) adds `ui` and `hide_ui` actions. A `ui` trigger sh
                 "glow": true, "layout": "grid",
                 "choices": ["Twin", "Sniper", "Machine", "Flank", "Smash", "Trap"] },
     "pin": "area", "channels": [1, 2, 3, 4, 5, 6], "keep": true } }
+```
+
+(1.7) A map widget's `board` takes the [board](#boards) fields, and its cells three more: a button's `channel` (1–255, 0 for none) is the signal a click sends, with the player who clicked as the tank that set it off; `counter` (1–255) with `bit` (1–30, or 0 for the whole counter) or `group` (1–32, lit while shown) lights a button or light; and a meter fills from `counter` out of `max` (1–1,073,741,823, default 100). The server works out `lit` and `progress` from these, and cells fill in [counter fields](map-editor.md#counters) like widget text. A board stays up when a button is clicked. Maps save cell fields only when they're used:
+
+```json
+{ "when": "start", "action": "ui", "rect": [0.45, 0.45, 0.1, 0.1], "group": 2,
+  "ui": { "widget": { "title": "Vault", "style": "panel", "x": 0.85, "y": 0.5,
+    "board": { "columns": 3, "rows": 2, "cells": [
+      { "kind": "digits", "span": [3, 1], "text": "{1:04}" },
+      { "kind": "button", "at": [0, 1], "text": "+1", "channel": 5 },
+      { "kind": "button", "at": [1, 1], "text": "Open", "channel": 6 },
+      { "kind": "light", "at": [2, 1], "counter": 2, "bit": 1 } ] } } } }
 ```
 
 Boss IDs are `sentinel`, `prism`, `foundry`, `tempest`, `bastion`, `eclipse`, `guardian`, `summoner`, `defender`, `fallen_overlord`, `fallen_booster`, `siege_engine`, `skirmisher`, `trapper`. Boss triggers use these IDs. Scripts' `spawn_boss` also accepts the existing display names.

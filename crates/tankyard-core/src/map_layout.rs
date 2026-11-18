@@ -153,6 +153,8 @@ impl World {
         self.map_ui.clear();
         self.map_ui_dirty = true;
         self.match_state.counters = Default::default();
+        self.match_state.shown_counters.clear();
+        self.map_views.clear();
         self.match_state.tweens.clear();
         self.bodies.clear();
         self.body_hits.clear();
