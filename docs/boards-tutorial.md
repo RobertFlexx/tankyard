@@ -20,7 +20,7 @@ Build a control panel: four switches on a board, a readout that shows them as bi
 
 1. From **Logic**, place a **Receiver**. Set *Listen on channel* to **1**, *Do* to **Calculate**, the counter to **1**, the math to **Bits XOR** and the number to **8**. Each click flips that switch's bit.
 2. Place three more the same way: channel **2** with **4**, channel **3** with **2**, and channel **4** with **1**.
-3. Place one more Receiver. Set *When* to **On counter**, *Watch counter* to **1**, *Reaches* to **11** and *Do* to **Hide**, group **1**. 11 is 1011 in binary: switches 8, 2 and 1 on, 4 off.
+3. Place one more Receiver. Set *When* to **On change**, *Watch counter* to **1** and *Do* to **Hide**, group **1**. Under **Only if**, press **Add a condition** and make it **Counter 1 = 11**. 11 is 1011 in binary: switches 8, 2 and 1 on, 4 off. On counter wouldn't do here: it also fires when the counter jumps past 11, such as from 8 to 12.
 
 ## Play it
 
