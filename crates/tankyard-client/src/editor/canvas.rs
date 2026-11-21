@@ -10,8 +10,9 @@ use crate::{
 use macroquad::prelude::*;
 use std::collections::{HashMap, HashSet};
 use tankyard_client::editor_document::{
-    Key, Link, LinkIndex, Object, describe_trigger_named, link, trigger_badge_tag,
+    Key, Link, Object, describe_trigger_named, trigger_badge_tag,
 };
+use tankyard_client::editor_wiring::{Carrier, Net};
 use tankyard_content::*;
 use tankyard_core::{V2, WorldConfig};
 
@@ -27,12 +28,15 @@ pub enum Gesture {
         last: Vec2,
     },
     /// Moving the selection; nothing moves until the pointer travels a little.
+    /// A click that started on the one selected object, over others, goes
+    /// down to the next of them when it ends without moving (`cycle`).
     Move {
         press: Vec2,
         start: Vec2,
         objects: Vec<(Key, Object)>,
         clicked: Key,
         moved: bool,
+        cycle: bool,
     },
     /// Dragging one edge or corner of an object or of a selection's bounds.
     Resize {
@@ -53,8 +57,13 @@ pub enum Gesture {
 
 /// How near, in pixels, the pointer must be to grab a handle.
 const HANDLE_REACH: f32 = 11.;
-/// The most link arrows drawn in one frame.
-const LINK_ARROWS: usize = 3000;
+/// The most watched triggers whose links are drawn one by one; past it the
+/// nets they touch are drawn whole, through hubs where busy.
+const LINK_FOCUS: usize = 48;
+/// The least distance, in pixels, between two hubs' middles.
+const HUB_GAP: f32 = 24.;
+/// How strongly objects on layers other than the one being edited show.
+const FADED: f32 = 0.3;
 /// A selection side shorter than this on screen has the handles across it
 /// stand outside the edge, so pressing in a thin selection still moves it.
 const HANDLE_ROOM: f32 = 40.;
@@ -169,6 +178,122 @@ fn dashed_line(a: Vec2, b: Vec2, thickness: f32, dash: f32, color: Color) {
         draw_line(p.x, p.y, q.x, q.y, thickness, color);
     }
 }
+/// Something a trigger tag must keep clear of.
+#[derive(Clone, Copy)]
+enum Mark {
+    /// A trigger's badge, by trigger index.
+    Badge(usize),
+    /// A tag placed already, by its place in the placed list.
+    Tag(usize),
+}
+/// Marks by screen cell, for finding what is near a spot.
+#[derive(Default)]
+struct Cells(HashMap<(i32, i32), Vec<Mark>>);
+impl Cells {
+    const SIZE: f32 = 96.;
+    fn span(r: Rect) -> impl Iterator<Item = (i32, i32)> {
+        let cell = |v: f32| (v / Self::SIZE).floor() as i32;
+        let (x0, x1, y0, y1) = (cell(r.x), cell(r.right()), cell(r.y), cell(r.bottom()));
+        (x0..=x1).flat_map(move |x| (y0..=y1).map(move |y| (x, y)))
+    }
+    fn add(&mut self, r: Rect, mark: Mark) {
+        for cell in Self::span(r) {
+            self.0.entry(cell).or_default().push(mark);
+        }
+    }
+    /// Whether `test` holds for any mark in a cell `r` touches.
+    fn any(&self, r: Rect, mut test: impl FnMut(Mark) -> bool) -> bool {
+        Self::span(r).any(|cell| {
+            self.0
+                .get(&cell)
+                .is_some_and(|marks| marks.iter().any(|&mark| test(mark)))
+        })
+    }
+}
+/// Whether a line from `a` to `b` can cross the screen.
+fn on_screen_line(a: Vec2, b: Vec2) -> bool {
+    a.x.max(b.x) >= 0.
+        && a.y.max(b.y) >= 0.
+        && a.x.min(b.x) <= screen_width()
+        && a.y.min(b.y) <= screen_height()
+}
+/// A link's arrow, unless it is off screen.
+fn link_arrow(from: Vec2, to: Vec2, thickness: f32, color: Color) {
+    if on_screen_line(from, to) {
+        arrow(from, to, thickness, color);
+    }
+}
+/// A link's line into a hub, unless it is off screen.
+fn link_line(from: Vec2, to: Vec2, thickness: f32, color: Color) {
+    if on_screen_line(from, to) && from.distance_squared(to) > 1. {
+        draw_line(from.x, from.y, to.x, to.y, thickness, color);
+    }
+}
+/// The Links view's hubs, kept apart and drawn over the lines.
+#[derive(Default)]
+struct Hubs {
+    placed: Vec<(Vec2, String, Color, f32)>,
+    /// Placed hubs by `HUB_GAP` cell, as indexes into `placed`.
+    cells: HashMap<(i32, i32), Vec<usize>>,
+}
+impl Hubs {
+    /// Puts a hub as near `want` as it can without crowding another, and
+    /// returns where.
+    fn place(&mut self, want: Vec2, label: String, color: Color, fade: f32) -> Vec2 {
+        let cell = |p: Vec2| {
+            (
+                (p.x / HUB_GAP).floor() as i32,
+                (p.y / HUB_GAP).floor() as i32,
+            )
+        };
+        let crowded = |cells: &HashMap<(i32, i32), Vec<usize>>, p: Vec2| {
+            let (cx, cy) = cell(p);
+            (cx - 1..=cx + 1).any(|x| {
+                (cy - 1..=cy + 1).any(|y| {
+                    cells.get(&(x, y)).is_some_and(|list| {
+                        list.iter().any(|&i| self.placed[i].0.distance(p) < HUB_GAP)
+                    })
+                })
+            })
+        };
+        // Out along a spiral, which fills the space around the middle
+        // evenly; past its last turn the hub stays crowded rather than wander.
+        let spot = (0..48)
+            .map(|step| {
+                let turn = step as f32 * 2.399_963;
+                want + vec2(turn.cos(), turn.sin()) * HUB_GAP * 0.75 * (step as f32).sqrt()
+            })
+            .find(|&p| !crowded(&self.cells, p))
+            .unwrap_or(want);
+        self.cells
+            .entry(cell(spot))
+            .or_default()
+            .push(self.placed.len());
+        self.placed.push((spot, label, color, fade));
+        spot
+    }
+    /// Every hub: the dots first and then the numbers, so each kind draws
+    /// in one batch.
+    fn draw(&self) {
+        let screen = Rect::new(-40., -40., screen_width() + 80., screen_height() + 80.);
+        let shown = || self.placed.iter().filter(|(p, ..)| screen.contains(*p));
+        for &(p, _, color, fade) in shown() {
+            draw_poly(
+                p.x,
+                p.y,
+                12,
+                9.5,
+                0.,
+                alpha(Color::new(0.1, 0.09, 0.08, 1.), 0.9 * fade),
+            );
+            draw_poly_lines(p.x, p.y, 12, 9.5, 0., 2., alpha(color, fade));
+        }
+        for (p, text, color, fade) in shown() {
+            let size = if text.len() > 3 { 9. } else { 11. };
+            center_label(text, p.x, p.y + size * 0.36, size, alpha(*color, *fade));
+        }
+    }
+}
 fn arrow(from: Vec2, to: Vec2, thickness: f32, color: Color) {
     let d = to - from;
     let length = d.length();
@@ -245,30 +370,66 @@ impl Editor {
             self.doc.map.starting_mask()
         }
     }
-    pub(super) fn pickable(&self, group: u8) -> bool {
+    /// Whether clicks and boxes can select the object at `key`, in `group`:
+    /// it is in the group being worked on, unlocked, showing, and on the
+    /// layer being edited.
+    pub(super) fn pickable(&self, key: Key, group: u8) -> bool {
         let bit = MapDef::group_bit(group);
         self.focus.is_none_or(|focus| focus == group)
             && bit & self.doc.locked == 0
             && (self.show_hidden || bit & self.ghost_mask() == 0)
+            && self.on_layer(key)
+    }
+    /// Whether `key` is on the layer being edited, or every layer is.
+    pub(super) fn on_layer(&self, key: Key) -> bool {
+        self.layer
+            .is_none_or(|layer| self.doc.layers.get(key) == layer)
     }
     pub(super) fn pick(&self, p: Vec2) -> Option<Key> {
         self.doc
-            .items()
-            .rev()
-            .find(|&(key, r, group)| self.pickable(group) && self.hit_area(key, r).contains(p))
+            .items_from_top()
+            .find(|&(key, r, group)| self.pickable(key, group) && self.hit_area(key, r).contains(p))
             .map(|(key, _, _)| key)
+    }
+    /// Every object a click at `p` could select, from the top down.
+    pub(super) fn stack(&self, p: Vec2) -> Vec<Key> {
+        self.doc
+            .items_from_top()
+            .filter(|&(key, r, group)| {
+                self.pickable(key, group) && self.hit_area(key, r).contains(p)
+            })
+            .map(|(key, _, _)| key)
+            .collect()
+    }
+
+    /// A click that ended where it began, on `clicked` in the selection:
+    /// several selected narrow to it; with `cycle`, one selected over
+    /// others gives way to the next one down, and past the bottom, the top.
+    fn click_selection(&mut self, clicked: Key, pointer: Vec2, cycle: bool) {
+        if self.selection.len() > 1 {
+            self.set_selection(vec![clicked]);
+            return;
+        }
+        if !cycle {
+            return;
+        }
+        let stack = self.stack(pointer);
+        let Some(at) = stack.iter().position(|&key| key == clicked) else {
+            return;
+        };
+        let next = (at + 1) % stack.len();
+        self.set_selection(vec![stack[next]]);
+        self.last_click = None;
+        let name = self.doc.object(stack[next]).map_or("Object", |o| o.name());
+        self.say(format!(
+            "{name}: {} of {} under the pointer. Click again for the next.",
+            next + 1,
+            stack.len()
+        ));
     }
 
     pub(super) fn cycle_pick(&mut self, pointer: Vec2, backwards: bool) {
-        let hits: Vec<Key> = self
-            .doc
-            .items()
-            .rev()
-            .filter(|&(key, r, group)| {
-                self.pickable(group) && self.hit_area(key, r).contains(pointer)
-            })
-            .map(|(key, _, _)| key)
-            .collect();
+        let hits = self.stack(pointer);
         if hits.is_empty() {
             return;
         }
@@ -376,6 +537,7 @@ impl Editor {
         let name = object.name();
         self.apply(|editor| match editor.doc.insert(object) {
             Some(key) => {
+                editor.doc.layers.set(key, editor.layer.unwrap_or(0));
                 editor.set_selection(vec![key]);
                 if !matches!(editor.tab, Tab::Rules | Tab::Files | Tab::Tools) {
                     editor.tab = Tab::Object;
@@ -420,10 +582,14 @@ impl Editor {
                 size[1] / h,
             ];
             let object = self.brush_object(r);
-            if !self.occupied(&object, object.rect()) && self.doc.insert(object).is_none() {
+            if self.occupied(&object, object.rect()) {
+                continue;
+            }
+            let Some(key) = self.doc.insert(object) else {
                 self.say("The map is at its object limit.");
                 break;
-            }
+            };
+            self.doc.layers.set(key, self.layer.unwrap_or(0));
         }
     }
     fn erase(&mut self, from: Vec2, to: Vec2) {
@@ -536,7 +702,9 @@ impl Editor {
     pub(super) fn canvas_input(&mut self, layout: &Layout) {
         let pointer = ui_layout::pointer();
         let canvas = layout.canvas;
-        let inside = canvas.contains(pointer) && !self.help;
+        let inside = canvas.contains(pointer)
+            && !self.help
+            && !self.layer_bar_rect(layout).contains(pointer);
         // The preview's widgets sit over the arena: a click on one of their
         // choices or board buttons picks it, and a click elsewhere on them
         // does nothing.
@@ -635,6 +803,7 @@ impl Editor {
         self.view.center += before - after;
     }
     fn press(&mut self, pointer: Vec2) {
+        self.handle_press = None;
         let at = self.snapped(pointer);
         match self.mode {
             Mode::Pan => {}
@@ -657,10 +826,19 @@ impl Editor {
                 if let Some(gesture) = self.handle_at(pointer) {
                     self.begin();
                     self.gesture = Some(gesture);
+                    self.handle_press = Some(pointer);
                     return;
                 }
                 let hit = if self.swipe { None } else { self.hover };
-                let Some(key) = hit else {
+                // A press on a selected object holds it even under others,
+                // so one reached by clicking down through a pile can move.
+                let stack = if hit.is_some() {
+                    self.stack(pointer)
+                } else {
+                    Vec::new()
+                };
+                let held = stack.iter().copied().find(|&key| self.selected(key));
+                let Some(hit) = hit else {
                     if !shift() {
                         self.selection.clear();
                     }
@@ -671,9 +849,11 @@ impl Editor {
                     return;
                 };
                 if shift() {
-                    self.toggle_selected(key);
+                    self.toggle_selected(hit);
                     return;
                 }
+                let key = held.unwrap_or(hit);
+                let cycle = held.is_some() && stack.len() > 1;
                 let now = get_time();
                 let double = self
                     .last_click
@@ -683,7 +863,12 @@ impl Editor {
                     && let Some(group) = self.doc.object(key).map(|o| o.group())
                     && group > 0
                 {
-                    let keys = self.doc.in_group(group);
+                    let keys: Vec<Key> = self
+                        .doc
+                        .in_group(group)
+                        .into_iter()
+                        .filter(|&key| self.pickable(key, group))
+                        .collect();
                     let count = keys.len();
                     self.set_selection(keys);
                     self.say(format!(
@@ -699,13 +884,9 @@ impl Editor {
                 self.begin();
                 if alt() {
                     // Alt-drag leaves the originals and carries copies.
-                    let copies: Vec<Object> = self
-                        .selection
-                        .iter()
-                        .filter_map(|&key| self.doc.object(key))
-                        .collect();
+                    let (copies, layers) = self.copies(&self.selection);
                     if let Some(b) = self.doc.bounds(&self.selection) {
-                        let added = self.doc.place(&copies, [b[0], b[1]]);
+                        let added = self.doc.place(&copies, &layers, [b[0], b[1]]);
                         self.set_selection(added);
                     }
                 }
@@ -720,6 +901,7 @@ impl Editor {
                     objects,
                     clicked: key,
                     moved: false,
+                    cycle: cycle && !alt(),
                 });
             }
             Mode::Delete if self.swipe => {
@@ -742,6 +924,14 @@ impl Editor {
         }
     }
     fn drag(&mut self, gesture: &mut Gesture, pointer: Vec2) {
+        // A handle stays put until the pointer travels a little, as the
+        // selection does, so a click on one changes nothing.
+        if let Some(press) = self.handle_press {
+            if press.distance(pointer) < 4. {
+                return;
+            }
+            self.handle_press = None;
+        }
         match gesture {
             Gesture::Draw { last, .. } => *last = self.snapped(pointer),
             Gesture::Paint { cells, last } => {
@@ -821,11 +1011,27 @@ impl Editor {
                     .unwrap_or_else(|| self.brush_cell(pointer));
                 self.place(r);
             }
-            Gesture::Move { clicked, moved, .. } => {
-                if !moved && self.selection.len() > 1 {
-                    self.set_selection(vec![clicked]);
-                }
+            Gesture::Move {
+                clicked,
+                moved,
+                cycle,
+                ..
+            } => {
                 self.commit();
+                if !moved {
+                    self.click_selection(clicked, pointer, cycle);
+                }
+            }
+            // A click on a handle that lies over the selection is a click on
+            // the selection.
+            Gesture::Resize { .. } | Gesture::Exit { .. } | Gesture::Travel { .. }
+                if self.handle_press.take().is_some() =>
+            {
+                self.commit();
+                let stack = self.stack(pointer);
+                if let Some(&clicked) = stack.iter().find(|&&key| self.selected(key)) {
+                    self.click_selection(clicked, pointer, stack.len() > 1);
+                }
             }
             Gesture::Marquee { start, additive } => {
                 let area = screen_area(start, pointer);
@@ -836,7 +1042,7 @@ impl Editor {
                     .doc
                     .items()
                     .filter(|&(key, r, group)| {
-                        self.pickable(group) && overlaps(area, self.hit_area(key, r))
+                        self.pickable(key, group) && overlaps(area, self.hit_area(key, r))
                     })
                     .map(|(key, _, _)| key)
                     .collect();
@@ -885,13 +1091,14 @@ impl Editor {
             arena.h,
             mix(bg_color(), scenery::color([140, 165, 174]), 0.1),
         );
-        self.draw_grid(canvas, arena);
+        profile::phase("editor grid", || self.draw_grid(canvas, arena));
         let ghost = self.ghost_mask();
         let shown = scenery::Shown {
             hidden: if self.show_hidden { 0 } else { ghost },
             counters: self.preview.counters,
             poses: self.preview.poses(),
             focus: self.preview.probe(),
+            fades: self.layer_fades(),
         };
         profile::phase("editor decor", || {
             scenery::floor(map, config, &shown, &self.view, self.time);
@@ -918,6 +1125,7 @@ impl Editor {
             .iter()
             .fold(0, |mask, body| mask | MapDef::group_bit(body.group));
         profile::phase("editor items", || {
+            let mut badges = brushes::Badges::default();
             for (key, r, group) in self.doc.items() {
                 // The logic preview glides groups; their homes stay outlined,
                 // since that is where editing moves them.
@@ -932,6 +1140,11 @@ impl Editor {
                 let hidden = MapDef::group_bit(group) & ghost != 0;
                 if hidden && !self.show_hidden {
                     continue;
+                }
+                let fade = if self.on_layer(key) { 1. } else { FADED };
+                // Markers come after the triggers and stand over their badges.
+                if matches!(key, Key::Spawn(_) | Key::Base(_) | Key::Objective(_)) {
+                    badges.draw();
                 }
                 let point = |least: f32| {
                     let c = rect.center();
@@ -959,29 +1172,35 @@ impl Editor {
                             scenery::body_marks(rect, settings.dark_arena);
                         }
                     }
-                    Key::Trigger(i) => self.draw_trigger(i, rect),
-                    Key::Spawn(i) => brushes::spawn_mark(map.spawn_regions[i].team, rect, s),
-                    Key::Base(i) => brushes::base_mark(map.team_bases[i].team, point(20.)),
-                    Key::Objective(_) => brushes::objective_mark(point(20.)),
+                    Key::Trigger(i) => self.draw_trigger(i, rect, hidden, fade, &mut badges),
+                    Key::Spawn(i) => brushes::spawn_mark(map.spawn_regions[i].team, rect, s, fade),
+                    Key::Base(i) => brushes::base_mark(map.team_bases[i].team, point(20.), fade),
+                    Key::Objective(_) => brushes::objective_mark(point(20.), fade),
                     Key::Decor(i) if map.decor[i].kind == DecorKind::Emitter => {
-                        dashed_rect(rect, 1., 5., alpha(line_color(), 0.7));
-                        if !self.animate && rect.w > 24. {
-                            center_label(
-                                "FX",
-                                rect.center().x,
-                                rect.center().y + 4.,
-                                11.,
-                                muted_color(),
-                            );
+                        dashed_rect(rect, 1., 5., alpha(line_color(), 0.7 * fade));
+                        if !self.animate && rect.w > 24. && fade == 1. {
+                            badges.words.push(Word {
+                                text: "FX".into(),
+                                x: rect.center().x,
+                                y: rect.center().y + 4.,
+                                size: 11.,
+                                color: muted_color(),
+                            });
                         }
                     }
                     Key::Zone(_) | Key::Decor(_) => {}
+                }
+                // Blocks are solid, so fading toward the floor matches
+                // drawing them see-through.
+                if fade < 1. && matches!(key, Key::Wall(_) | Key::Block(_)) {
+                    draw_rectangle(rect.x, rect.y, rect.w, rect.h, alpha(bg_color(), 1. - fade));
                 }
                 if hidden {
                     draw_rectangle(rect.x, rect.y, rect.w, rect.h, alpha(bg_color(), 0.5));
                     dashed_rect(rect, 1.5, 6., alpha(text_color(), 0.55));
                 }
             }
+            badges.draw();
         });
         profile::phase("editor decor above", || {
             scenery::decorations(map, config, &shown, &self.view, self.time, true, settings)
@@ -1091,20 +1310,27 @@ impl Editor {
             Rect::new(c.x - size * 0.5, c.y - size * 0.5, size, size)
         }
     }
-    fn draw_trigger(&self, index: usize, rect: Rect) {
+    fn draw_trigger(
+        &self,
+        index: usize,
+        rect: Rect,
+        hidden: bool,
+        fade: f32,
+        badges: &mut brushes::Badges,
+    ) {
         let trigger = &self.doc.map.triggers[index];
         let lit = self.preview.flashes.get(index).map_or(0., |&at| {
             (1. - (self.preview.time - at) / 0.7).clamp(0., 1.)
-        });
+        }) * fade;
         if brushes::trigger_area(trigger) {
             draw_rectangle(
                 rect.x,
                 rect.y,
                 rect.w,
                 rect.h,
-                alpha(brushes::LOGIC, 0.06 + lit * 0.18),
+                alpha(brushes::LOGIC, 0.06 * fade + lit * 0.18),
             );
-            dashed_rect(rect, 2., 7., alpha(brushes::LOGIC, 0.85));
+            dashed_rect(rect, 2., 7., alpha(brushes::LOGIC, 0.85 * fade));
         }
         let badge = Self::badge_rect(trigger, rect);
         if lit > 0. {
@@ -1116,9 +1342,65 @@ impl Editor {
                 alpha(brushes::LOGIC, lit * 0.35),
             );
         }
-        brushes::trigger_badge(trigger.action, badge, lit);
-        if trigger.only_if.is_some() {
-            brushes::gate_mark(trigger, badge, lit);
+        badges.add(trigger, badge, lit, if hidden { 0.5 } else { 1. } * fade);
+    }
+    /// The pads and decor to fade while one layer is being edited.
+    fn layer_fades(&self) -> scenery::Fades {
+        let Some(layer) = self.layer else {
+            return scenery::Fades::default();
+        };
+        let (zones, decor) = self.doc.layers.floor();
+        let fades = |layers: &[u8], count: usize| -> Vec<f32> {
+            (0..count)
+                .map(|i| {
+                    if layers.get(i).copied().unwrap_or(0) == layer {
+                        1.
+                    } else {
+                        FADED
+                    }
+                })
+                .collect()
+        };
+        scenery::Fades {
+            zones: fades(zones, self.doc.map.zones.len()),
+            decor: fades(decor, self.doc.map.decor.len()),
+        }
+    }
+    /// Where the layer bar sits: the canvas's lower left corner.
+    pub(super) fn layer_bar_rect(&self, layout: &Layout) -> Rect {
+        let s = layout.s;
+        let h = 26. * s;
+        Rect::new(
+            layout.canvas.x + 10. * s,
+            layout.canvas.bottom() - h - 10. * s,
+            204. * s,
+            h,
+        )
+    }
+    /// The layer bar: the layer being edited, or every layer, between
+    /// arrows that step through them; Shift skips empty layers. Clicking
+    /// the name switches between every layer and the last one edited.
+    pub(super) fn layer_bar(&mut self, layout: &Layout) {
+        let r = self.layer_bar_rect(layout);
+        let s = layout.s;
+        let arrow = r.h + 2. * s;
+        draw_rectangle(r.x, r.y, r.w, r.h, alpha(surface_color(), 0.88));
+        if small_button(Rect::new(r.x, r.y, arrow, r.h), "‹", s * 0.8) {
+            self.step_layer(false, shift());
+        }
+        let name = match self.layer {
+            None => "All layers".to_owned(),
+            Some(layer) => format!("Layer {layer} · {}", self.layer_counts[usize::from(layer)]),
+        };
+        let middle = Rect::new(r.x + arrow + 4. * s, r.y, r.w - arrow * 2. - 8. * s, r.h);
+        if small_button(middle, &name, s * 0.72) {
+            self.set_layer(match self.layer {
+                None => Some(self.last_layer),
+                Some(_) => None,
+            });
+        }
+        if small_button(Rect::new(r.right() - arrow, r.y, arrow, r.h), "›", s * 0.8) {
+            self.step_layer(true, shift());
         }
     }
     /// Each trigger's tag under its badge, or above it when that spot is
@@ -1134,9 +1416,11 @@ impl Editor {
         let badges: Vec<Option<Rect>> = map
             .triggers
             .iter()
-            .map(|t| {
+            .enumerate()
+            .map(|(index, t)| {
                 let rect = self.on_screen(t.rect);
-                let shown = self.show_hidden || MapDef::group_bit(t.member) & ghost == 0;
+                let shown = (self.show_hidden || MapDef::group_bit(t.member) & ghost == 0)
+                    && self.on_layer(Key::Trigger(index));
                 (shown && overlaps(view, rect)).then(|| Self::badge_rect(t, rect))
             })
             .collect();
@@ -1148,7 +1432,17 @@ impl Editor {
         order.sort_by_key(first);
         let size = 11. * s.max(0.8);
         let height = size + 5.;
+        // Badges and placed tags by cell, so each tag checks only its
+        // neighbors: a map of thousands of triggers would otherwise check
+        // every pair each frame.
+        let mut cells = Cells::default();
+        for (index, badge) in badges.iter().enumerate() {
+            if let Some(badge) = badge {
+                cells.add(*badge, Mark::Badge(index));
+            }
+        }
         let mut placed: Vec<Rect> = Vec::new();
+        let mut tags: Vec<(Rect, String, Vec2)> = Vec::new();
         for index in order {
             let Some(badge) = badges[index] else {
                 continue;
@@ -1162,11 +1456,12 @@ impl Editor {
             let below = Rect::new(c.x - width * 0.5, badge.bottom() + 3., width, height);
             let above = Rect::new(c.x - width * 0.5, badge.y - 3. - height, width, height);
             let free = |spot: &Rect| {
-                !placed.iter().any(|r| overlaps(*r, *spot))
-                    && !badges
-                        .iter()
-                        .enumerate()
-                        .any(|(i, b)| i != index && b.is_some_and(|b| overlaps(b, *spot)))
+                !cells.any(*spot, |mark| match mark {
+                    Mark::Badge(other) => {
+                        other != index && badges[other].is_some_and(|b| overlaps(b, *spot))
+                    }
+                    Mark::Tag(at) => overlaps(placed[at], *spot),
+                })
             };
             let spot = if free(&below) {
                 below
@@ -1177,6 +1472,11 @@ impl Editor {
             } else {
                 continue;
             };
+            cells.add(spot, Mark::Tag(placed.len()));
+            placed.push(spot);
+            tags.push((spot, tag, c));
+        }
+        for (spot, ..) in &tags {
             draw_rectangle(
                 spot.x,
                 spot.y,
@@ -1184,8 +1484,9 @@ impl Editor {
                 spot.h,
                 Color::new(0.13, 0.12, 0.10, 0.82),
             );
-            center_label(&tag, c.x, spot.y + size, size, brushes::LOGIC);
-            placed.push(spot);
+        }
+        for (spot, tag, c) in &tags {
+            center_label(tag, c.x, spot.y + size, size, brushes::LOGIC);
         }
         placed
     }
@@ -1193,17 +1494,46 @@ impl Editor {
         let trigger = &self.doc.map.triggers[index];
         Self::badge_rect(trigger, self.on_screen(trigger.rect)).center()
     }
+    /// Where a link meets `key`: a trigger's badge or the middle of
+    /// anything else, or `None` for a key a gesture just removed.
+    fn link_point(&self, key: Key) -> Option<Vec2> {
+        match key {
+            Key::Trigger(index) if index < self.doc.map.triggers.len() => {
+                Some(self.trigger_point(index))
+            }
+            Key::Trigger(_) => None,
+            _ => self.doc.rect(key).map(|r| self.on_screen(r).center()),
+        }
+    }
+    fn link_color(link: Link) -> Color {
+        match link {
+            Link::Signal | Link::Otherwise => VIOLET,
+            Link::Counter => AMBER,
+            Link::Group => mix(accent_color(), CYAN, 0.4),
+            Link::Reset => RED,
+        }
+    }
+    /// Links between triggers and what they act on. With Links on, every
+    /// net, busy ones through a hub; otherwise, and on top of that, the
+    /// links of the selected or hovered triggers, and the triggers that act
+    /// on a selected or hovered object's group.
     fn draw_links(&self) {
-        let map = &self.doc.map;
-        if map.triggers.is_empty() {
+        let wiring = &self.wiring;
+        if wiring.nets.is_empty() {
             return;
         }
-        let watched = |index: usize| {
-            self.show_links
-                || self.selected(Key::Trigger(index))
-                || self.hover == Some(Key::Trigger(index))
-        };
-        // Objects of a watched group show which triggers act on them.
+        let triggers = self.doc.map.triggers.len();
+        let mut watched: Vec<usize> = self
+            .selection
+            .iter()
+            .chain(self.hover.iter())
+            .filter_map(|&key| match key {
+                Key::Trigger(index) if index < triggers => Some(index),
+                _ => None,
+            })
+            .collect();
+        watched.sort_unstable();
+        watched.dedup();
         let mut watched_groups = 0u32;
         for &key in self.selection.iter().chain(self.hover.iter()) {
             if !matches!(key, Key::Trigger(_))
@@ -1212,84 +1542,124 @@ impl Editor {
                 watched_groups |= MapDef::group_bit(object.group());
             }
         }
-        let group_color = mix(accent_color(), CYAN, 0.4);
-        let color = |kind: Link| match kind {
-            Link::Signal | Link::Otherwise => VIOLET,
-            Link::Counter => AMBER,
-            Link::Group => group_color,
-            Link::Reset => RED,
-        };
-        // Big maps can link thousands of triggers: arrows off screen are
-        // skipped, and past a frame's worth the rest wait for a closer look.
-        let screen = Rect::new(0., 0., screen_width(), screen_height());
-        let mut budget = LINK_ARROWS;
-        let mut draw = |from: Vec2, to: Vec2, width: f32, tint: Color| {
-            let bounds = Rect::new(
-                from.x.min(to.x),
-                from.y.min(to.y),
-                (from.x - to.x).abs().max(1.),
-                (from.y - to.y).abs().max(1.),
-            );
-            if budget > 0 && bounds.overlaps(&screen) {
-                budget -= 1;
-                arrow(from, to, width, tint);
+        let mut hubs = Hubs::default();
+        let focused = watched.len() <= LINK_FOCUS;
+        if self.show_links {
+            // A selection dims the rest, so its own links stand out.
+            let selected = self
+                .selection
+                .iter()
+                .any(|key| matches!(key, Key::Trigger(_)));
+            let fade = if selected && focused { 0.3 } else { 1. };
+            for net in &wiring.nets {
+                self.draw_net(net, fade, &mut hubs);
             }
-        };
-        let links = LinkIndex::new(&map.triggers);
-        let mut affected = Vec::new();
-        for (index, trigger) in map.triggers.iter().enumerate() {
-            let outgoing = watched(index);
-            let incoming = trigger.action.targets_group()
-                && MapDef::group_bit(trigger.group) & watched_groups != 0;
-            if !outgoing && !incoming {
-                continue;
+        } else {
+            let mut nets: Vec<u32> = Vec::new();
+            if !focused {
+                for &at in &watched {
+                    nets.extend_from_slice(wiring.acts(at));
+                    nets.extend_from_slice(wiring.reached(at));
+                }
             }
-            let from = self.trigger_point(index);
-            if trigger.action.targets_group() {
-                let mut drawn = 0;
-                for (key, r, group) in self.doc.items() {
-                    if group != trigger.group || key == Key::Trigger(index) {
-                        continue;
-                    }
-                    let to = match key {
-                        Key::Trigger(other) => self.trigger_point(other),
-                        _ => self.on_screen(r).center(),
-                    };
-                    draw(from, to, 2., alpha(group_color, 0.8));
-                    drawn += 1;
-                    if drawn >= 64 {
-                        break;
+            for group in 1..=MAP_GROUPS {
+                if MapDef::group_bit(group) & watched_groups != 0
+                    && let Some(net) = wiring.members(group)
+                {
+                    self.draw_net(net, 1., &mut hubs);
+                }
+            }
+            nets.sort_unstable();
+            nets.dedup();
+            for index in nets {
+                self.draw_net(&wiring.nets[index as usize], 1., &mut hubs);
+            }
+        }
+        if focused {
+            let mut found = Vec::new();
+            for &at in &watched {
+                self.draw_trigger_links(at, &mut found);
+            }
+        }
+        hubs.draw();
+    }
+    /// One net: a line from each trigger acting on it to each thing it
+    /// reaches, or through a hub when that draws fewer lines.
+    fn draw_net(&self, net: &Net, fade: f32, hubs: &mut Hubs) {
+        let color = Self::link_color(net.carrier.link());
+        let width = if net.carrier == Carrier::Otherwise {
+            1.3
+        } else {
+            2.
+        };
+        let from: Vec<(usize, Vec2)> = net
+            .from
+            .iter()
+            .filter_map(|&at| Some((at, self.link_point(Key::Trigger(at))?)))
+            .collect();
+        let to: Vec<(Key, Vec2)> = net
+            .to
+            .iter()
+            .filter_map(|&key| Some((key, self.link_point(key)?)))
+            .collect();
+        if from.is_empty() || to.is_empty() {
+            return;
+        }
+        if !net.hub() {
+            for &(at, a) in &from {
+                for &(key, b) in &to {
+                    if key != Key::Trigger(at) {
+                        link_arrow(a, b, width, alpha(color, 0.85 * fade));
                     }
                 }
             }
-            if !outgoing {
+            return;
+        }
+        let count = (from.len() + to.len()) as f32;
+        let middle = from
+            .iter()
+            .map(|&(_, p)| p)
+            .chain(to.iter().map(|&(_, p)| p))
+            .fold(Vec2::ZERO, |sum, p| sum + p)
+            / count;
+        let hub = hubs.place(middle, net.carrier.label(net.slot), color, fade);
+        for &(_, a) in &from {
+            link_line(a, hub, 1.5, alpha(color, 0.6 * fade));
+        }
+        for &(_, b) in &to {
+            link_arrow(hub, b, 1.5, alpha(color, 0.8 * fade));
+        }
+    }
+    /// Trigger `at`'s own links, both ways, each once: what it sets off and
+    /// acts on, and, fainter, what sets it off.
+    fn draw_trigger_links(&self, at: usize, found: &mut Vec<(usize, Link)>) {
+        let wiring = &self.wiring;
+        let from = self.trigger_point(at);
+        let group_color = Self::link_color(Link::Group);
+        for &index in wiring.acts(at) {
+            let net = &wiring.nets[index as usize];
+            if net.carrier != Carrier::Members {
                 continue;
             }
-            // What it sets off.
-            links.affected(&map.triggers, index, &mut affected);
-            for &(other, kind) in &affected {
-                let width = if kind == Link::Otherwise { 1.3 } else { 2. };
-                draw(
-                    from,
-                    self.trigger_point(other),
-                    width,
-                    alpha(color(kind), 0.85),
-                );
-            }
-            // And, when only it is watched, what sets it off.
-            if !self.show_links {
-                for (other, source) in map.triggers.iter().enumerate() {
-                    if other != index
-                        && let Some(kind) = link(source, trigger)
-                    {
-                        draw(
-                            self.trigger_point(other),
-                            from,
-                            1.5,
-                            alpha(color(kind), 0.5),
-                        );
-                    }
+            for &key in &net.to {
+                if key != Key::Trigger(at)
+                    && let Some(to) = self.link_point(key)
+                {
+                    link_arrow(from, to, 2., alpha(group_color, 0.8));
                 }
+            }
+        }
+        wiring.links_from(at, found);
+        for &(other, kind) in found.iter() {
+            let width = if kind == Link::Otherwise { 1.3 } else { 2. };
+            if let Some(to) = self.link_point(Key::Trigger(other)) {
+                link_arrow(from, to, width, alpha(Self::link_color(kind), 0.9));
+            }
+        }
+        wiring.links_into(at, found);
+        for &(other, kind) in found.iter() {
+            if let Some(source) = self.link_point(Key::Trigger(other)) {
+                link_arrow(source, from, 1.5, alpha(Self::link_color(kind), 0.55));
             }
         }
     }
@@ -1306,7 +1676,7 @@ impl Editor {
         let mut wanted: Vec<(bool, Rect, u8)> = self
             .doc
             .items()
-            .filter(|&(_, _, group)| group != 0)
+            .filter(|&(key, _, group)| group != 0 && self.on_layer(key))
             .filter_map(|(key, r, group)| {
                 let a = self.hit_area(key, r);
                 (overlaps(view, a) && a.w >= 14.).then_some((!first(key), a, group))
@@ -1722,6 +2092,7 @@ impl Editor {
         }
         let world = self.view.world(pointer);
         if canvas.contains(pointer) {
+            let bar = self.layer_bar_rect(layout);
             chip(
                 &format!(
                     "{:.0}, {:.0}   {:.0}%",
@@ -1729,8 +2100,8 @@ impl Editor {
                     world.y,
                     self.view.zoom * 100.
                 ),
-                canvas.x + 10. * s,
-                canvas.bottom() - size - 20. * s,
+                bar.right() + 6. * s,
+                bar.bottom() - size - 10. * s,
             );
         }
         let preview = &self.preview;

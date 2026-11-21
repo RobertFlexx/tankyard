@@ -2,10 +2,35 @@
 mod number;
 use macroquad::prelude::*;
 pub use number::{
-    begin_frame, cancel_numeric, end_frame, numeric_active, numeric_committed, numeric_focus_rect,
-    numeric_scope,
+    cancel_numeric, end_frame, numeric_active, numeric_committed, numeric_focus_rect, numeric_scope,
 };
 use std::{borrow::Cow, cell::Cell};
+
+thread_local! {
+    /// Whether a control has acted on this frame's click.
+    static CLICK_TAKEN: Cell<bool> = const { Cell::new(false) };
+}
+/// Starts a frame of interface. The main loop calls it before drawing.
+pub fn begin_frame() {
+    number::begin_frame();
+    CLICK_TAKEN.with(|taken| taken.set(false));
+    crate::ui_layout::begin_covers();
+}
+/// Whether the left button went down this frame and no control has acted
+/// on it yet.
+pub fn clicked() -> bool {
+    is_mouse_button_pressed(MouseButton::Left) && !CLICK_TAKEN.with(Cell::get)
+}
+/// Takes this frame's click for the caller, if it is still free. One click
+/// acts on one control, even when a control moves under the pointer
+/// during the frame, as the party rail does when the tank cards close.
+pub fn take_click() -> bool {
+    let free = clicked();
+    if free {
+        CLICK_TAKEN.with(|taken| taken.set(true));
+    }
+    free
+}
 
 // Translate vertices and hit testing in the same logical space. Keeping this
 // out of the GPU model stack preserves fixed navigation and font batching.
@@ -502,15 +527,38 @@ pub fn center_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
     let width = label_width(value, size);
     label(value, x - width * 0.5, y, size, color);
 }
+/// A centered label kept back until the shapes around it are drawn. Text
+/// draws from the font's texture and shapes from none, so drawing a busy
+/// canvas object by object switches texture, and so batch, at every object;
+/// all the shapes and then all the words draw in two batches.
+pub struct Word {
+    pub text: Cow<'static, str>,
+    pub x: f32,
+    pub y: f32,
+    pub size: f32,
+    pub color: Color,
+}
+impl Word {
+    pub fn draw(&self) {
+        center_label(&self.text, self.x, self.y, self.size, self.color);
+    }
+}
+/// A panel's background. It covers what was drawn before it, so the
+/// pointer over it reaches only the panel and what is drawn on it.
 pub fn panel(rect: Rect) {
+    crate::ui_layout::cover(rect);
     draw_rectangle(rect.x, rect.y, rect.w, rect.h, alpha(surface_color(), 0.92));
     draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.5, line_color());
 }
+/// Whether the pointer is over `rect` and free to act on it: input is on,
+/// and nothing drawn later covers that spot.
 pub fn contains(rect: Rect) -> bool {
     if !INTERACTIVE.with(|state| state.get()) {
         return false;
     }
-    crate::ui_layout::pointer_visible() && rect.contains(crate::ui_layout::pointer())
+    crate::ui_layout::pointer_visible()
+        && rect.contains(crate::ui_layout::pointer())
+        && !crate::ui_layout::covered(rect)
 }
 pub fn button(rect: Rect, text: &str, selected: bool, enabled: bool, s: f32) -> bool {
     let hovered = enabled && contains(rect);
@@ -560,7 +608,7 @@ pub fn button(rect: Rect, text: &str, selected: bool, enabled: bool, s: f32) -> 
         size,
         text_color,
     );
-    hovered && is_mouse_button_pressed(MouseButton::Left)
+    hovered && take_click()
 }
 pub fn small_button(rect: Rect, text: &str, s: f32) -> bool {
     let hovered = contains(rect);
@@ -587,10 +635,10 @@ pub fn small_button(rect: Rect, text: &str, s: f32) -> bool {
         16.0 * s,
         text_color(),
     );
-    hovered && is_mouse_button_pressed(MouseButton::Left)
+    hovered && take_click()
 }
 pub fn toggle(rect: Rect, text: &str, value: &mut bool, s: f32) -> bool {
-    let click = contains(rect) && is_mouse_button_pressed(MouseButton::Left);
+    let click = contains(rect) && take_click();
     if click {
         *value = !*value;
     }
@@ -813,7 +861,7 @@ fn slider_control(
         if !down && !pressed && !released {
             *active = None;
         }
-        if interactive && contains(hit) && pressed {
+        if interactive && contains(hit) && pressed && take_click() {
             *active = Some(SliderDrag {
                 id,
                 name: text.to_owned(),
@@ -990,7 +1038,7 @@ pub fn text_field(
 ) {
     use tankyard_client::text_edit::{Edit, KeyRepeat, shortcut_character, text_character};
     let interactive = INTERACTIVE.with(|state| state.get());
-    let clicked = interactive && is_mouse_button_pressed(MouseButton::Left) && contains(rect);
+    let clicked = interactive && contains(rect) && take_click();
     if is_mouse_button_pressed(MouseButton::Left) && interactive {
         *active = clicked;
     }

@@ -1235,7 +1235,7 @@ fn paint(
             },
             scale,
         );
-        if hovered && is_mouse_button_pressed(MouseButton::Left) {
+        if hovered && crate::ui::take_click() {
             picked = Some(index as u8);
         }
     }

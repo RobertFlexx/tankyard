@@ -791,20 +791,27 @@ fn later_boss_rush_rounds_still_have_six_waves() {
         assert_eq!(world.match_state.boss_wave, 1);
         for wave in 1..=6 {
             assert_eq!(world.match_state.boss_wave, wave);
+            // The first boss arrives before anyone has joined; its health
+            // follows the arena from its first update.
+            world.update_bosses();
+            let kind = world
+                .bosses
+                .iter()
+                .find(|boss| boss.health > 0.0)
+                .unwrap()
+                .kind;
+            let full = world.boss_health(kind);
+            let strength = world.arena_strength();
             let boss = world
                 .bosses
                 .iter_mut()
                 .find(|boss| boss.health > 0.0)
                 .unwrap();
-            assert_eq!(
-                boss.max_health,
-                (4400.0 + f32::from(wave) * 700.0)
-                    * match boss.kind {
-                        BossKind::Bastion | BossKind::Defender => 1.35,
-                        BossKind::Guardian | BossKind::Summoner => 1.15,
-                        BossKind::Tempest | BossKind::FallenBooster => 0.9,
-                        _ => 1.,
-                    }
+            assert!((boss.max_health - full).abs() <= full * 0.02);
+            // Later waves are tougher than the first would be.
+            let scale = 1. + f32::from(wave - 1) * 0.14;
+            assert!(
+                (full - 11_000. * kind.toughness() * (0.3 + 0.7 * strength) * scale).abs() < 1.
             );
             boss.health = 0.0;
             for _ in 0..250 {
@@ -1025,7 +1032,12 @@ fn automatic_cannons_track_moving_targets_while_reloading() {
         world.tick = tick;
         world.fire_weapons();
     }
-    assert!((world.tanks[0].barrel_aims[0] - std::f32::consts::FRAC_PI_2).abs() < 0.001);
+    // Each turret sits on the hull and aims from where it is mounted.
+    let tank = &world.tanks[0];
+    let [x, y] = world.content.class(&tank.class).unwrap().barrels[0].offset;
+    let mount = tank.pos + V2::new(x, y).rotate(tank.aim);
+    let expected = (world.tanks[1].pos - mount).angle();
+    assert!((tank.barrel_aims[0] - expected).abs() < 0.001);
     assert_eq!(world.tanks[0].shot_count, fired);
     assert!(world.projectiles.is_empty(), "tracking must respect reload");
 }
@@ -1063,10 +1075,11 @@ fn automatic_cannons_choose_visible_enemies() {
         .filter(|p| p.owner == player)
         .collect();
     assert_eq!(shots.len(), 3);
+    let visible = world.tanks[2].pos;
     assert!(
         shots
             .iter()
-            .all(|shot| shot.vel.y > 0.0 && shot.vel.x.abs() < 0.01)
+            .all(|shot| (visible - shot.pos).normalized().dot(shot.vel.normalized()) > 0.999)
     );
 
     world.projectiles.clear();

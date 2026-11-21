@@ -89,6 +89,64 @@ pub fn scroll_steps(remainder: &mut f32, delta: f32) -> i32 {
 }
 /// A list that scrolls itself keeps the wheel from also scrolling the page
 /// while the pointer is over it. The claim holds for the next frame.
+/// Regions drawn over what came before them in a frame, in screen space and
+/// in the order they came. The pointer over one belongs to it and to what
+/// is drawn after it, never to what lies beneath. Drawing order is only
+/// known once a frame is drawn, so each frame checks the last frame's
+/// covers, matched by how many came before.
+#[derive(Default)]
+struct Covers {
+    last: Vec<Rect>,
+    now: Vec<Rect>,
+}
+thread_local! {
+    static COVERS: std::cell::RefCell<Covers> = std::cell::RefCell::new(Covers::default());
+}
+/// Starts a frame's covers. The main loop calls it before drawing.
+pub fn begin_covers() {
+    COVERS.with(|covers| {
+        let mut covers = covers.borrow_mut();
+        covers.last = std::mem::take(&mut covers.now);
+    });
+}
+/// Declares that `rect`, in the current page's units, is drawn from here on
+/// over everything before it this frame. Call it before drawing what the
+/// region holds, so its own buttons come after it.
+pub fn cover(rect: Rect) {
+    let top = position(rect.point());
+    let mut screen = Rect::new(top.x, top.y, rect.w, rect.h);
+    // Inside a scrolled region only the part showing covers anything; one
+    // scrolled out of sight still keeps its place in the order.
+    if let Some(canvas) = CANVAS.with(Cell::get) {
+        screen = screen.intersect(canvas.clip).unwrap_or_default();
+    }
+    COVERS.with(|covers| covers.borrow_mut().now.push(screen));
+}
+/// Whether a region declared later than this point in the last frame lies
+/// under the pointer and reaches beyond `rect`, so `rect` is beneath it. A
+/// region wholly inside `rect` is taken for `rect`'s own content, such as a
+/// card in a list, and leaves it be.
+pub fn covered(rect: Rect) -> bool {
+    let top = position(rect.point());
+    let own = Rect::new(top.x, top.y, rect.w, rect.h);
+    let (x, y) = mouse_position();
+    let point = vec2(x, y);
+    let inside = |cover: &Rect| {
+        cover.x >= own.x - 0.5
+            && cover.y >= own.y - 0.5
+            && cover.right() <= own.right() + 0.5
+            && cover.bottom() <= own.bottom() + 0.5
+    };
+    COVERS.with(|covers| {
+        let covers = covers.borrow();
+        let drawn = covers.now.len();
+        covers.last.get(drawn..).is_some_and(|later| {
+            later
+                .iter()
+                .any(|cover| cover.contains(point) && !inside(cover))
+        })
+    })
+}
 pub fn claim_wheel(rect: Rect) {
     let top = position(rect.point());
     WHEEL_CLAIM.with(|c| c.set(Some(Rect::new(top.x, top.y, rect.w, rect.h))));

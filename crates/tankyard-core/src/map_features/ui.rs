@@ -12,6 +12,9 @@ use tankyard_content::{
 pub const MAP_HUD: &str = "";
 /// Ticks between refreshes of widgets whose text or bar changes.
 const REFRESH_TICKS: u64 = 6;
+/// The fewest ticks between refreshes when counters or groups change, so a
+/// board answers a click within a tick or two.
+const QUICK_TICKS: u64 = 2;
 /// Ticks a player waits between picks: quick enough to type on a keypad.
 const PICK_TICKS: u64 = 3;
 
@@ -151,7 +154,13 @@ impl World {
         let triggers = self.map.triggers.len();
         self.map_ui
             .retain(|ui| ui.until > now && ui.trigger < triggers);
-        let refresh = self.tick.is_multiple_of(REFRESH_TICKS);
+        // Counters and groups refresh widgets as they change; the clock
+        // and timers move on every few ticks.
+        let (counters, hidden, filled) = &self.map_ui_filled;
+        let changed =
+            *counters != self.match_state.counters || *hidden != self.match_state.hidden_groups;
+        let refresh = self.tick.is_multiple_of(REFRESH_TICKS)
+            || (changed && self.tick >= filled + QUICK_TICKS);
         if refresh {
             // Players who left take their widgets, and their places in
             // everyone widgets' exceptions, with them.
@@ -173,6 +182,11 @@ impl World {
             return;
         }
         self.map_ui_dirty = false;
+        self.map_ui_filled = (
+            self.match_state.counters,
+            self.match_state.hidden_groups,
+            self.tick,
+        );
         let mut wanted: BTreeMap<(String, EntityId, String), HudWidget> = BTreeMap::new();
         for shown in &self.map_ui {
             let trigger = &self.map.triggers[shown.trigger];

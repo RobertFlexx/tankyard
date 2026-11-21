@@ -21,7 +21,8 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
-use tankyard_client::editor_document::{Document, Key, Object, Problem, Transform};
+use tankyard_client::editor_document::{Document, Key, LAYERS, Object, Problem, Transform};
+use tankyard_client::editor_wiring::Wiring;
 use tankyard_content::*;
 use tankyard_core::{V2, WorldConfig};
 
@@ -126,6 +127,8 @@ pub struct Editor {
     selection: Vec<Key>,
     hover: Option<Key>,
     clipboard: Vec<Object>,
+    /// The layer of each object in the clipboard.
+    clipboard_layers: Vec<u8>,
     style_clipboard: Option<Object>,
     mode: Mode,
     category: usize,
@@ -142,6 +145,13 @@ pub struct Editor {
     show_groups: bool,
     show_links: bool,
     focus: Option<u8>,
+    /// The layer being edited, or None for every layer. Other layers fade
+    /// and can't be selected, and new objects go on this one.
+    layer: Option<u8>,
+    /// The layer a click on the layer name goes back to from every layer.
+    last_layer: u8,
+    /// How many objects each layer holds, counted again with the wiring.
+    layer_counts: Vec<u32>,
     preview: preview::Preview,
     probe: Option<V2>,
     /// The Logic tab's signal channel and boss to send into the preview.
@@ -154,6 +164,9 @@ pub struct Editor {
     gesture: Option<canvas::Gesture>,
     panning: Option<Vec2>,
     last_click: Option<(Key, f64)>,
+    /// Where a press on a handle began, until the pointer travels far
+    /// enough to drag it. Released before then, it was a click.
+    handle_press: Option<Vec2>,
     nudge_since: f64,
     nudge_last: f64,
     tab: Tab,
@@ -195,6 +208,10 @@ pub struct Editor {
     canvas_area: Rect,
     /// The path and point the Map tab is editing, from 0.
     path_pick: (usize, usize),
+    /// What the map's logic connects, for the link arrows.
+    wiring: Wiring,
+    /// The revision and object count `wiring` was found for.
+    wiring_stamp: Option<(u64, usize)>,
 }
 
 impl Editor {
@@ -239,6 +256,7 @@ impl Editor {
             selection: vec![],
             hover: None,
             clipboard: vec![],
+            clipboard_layers: vec![],
             style_clipboard: None,
             mode: Mode::Build,
             category,
@@ -254,6 +272,9 @@ impl Editor {
             show_groups: prefs.show_groups,
             show_links: prefs.show_links,
             focus: None,
+            layer: None,
+            last_layer: 1,
+            layer_counts: vec![0; usize::from(LAYERS)],
             preview,
             probe: None,
             send_channel: 1,
@@ -265,6 +286,7 @@ impl Editor {
             gesture: None,
             panning: None,
             last_click: None,
+            handle_press: None,
             nudge_since: 0.,
             nudge_last: 0.,
             tab: Tab::ALL
@@ -302,6 +324,8 @@ impl Editor {
             last_pointer: None,
             canvas_area: Rect::default(),
             path_pick: (0, 0),
+            wiring: Wiring::default(),
+            wiring_stamp: None,
         };
         editor.say(if restored {
             "Recovered your last draft. Press F1 for shortcuts."
@@ -386,6 +410,76 @@ impl Editor {
         self.touch();
     }
 
+    /// Finds the map's nets and counts its layers again after an edit. A
+    /// gesture can add or remove objects before it counts as one, so the
+    /// object count is checked too.
+    fn refresh_wiring(&mut self) {
+        let stamp = Some((self.revision, self.doc.len()));
+        if self.wiring_stamp != stamp {
+            self.wiring = Wiring::new(&self.doc);
+            self.layer_counts.fill(0);
+            for (key, _, _) in self.doc.items() {
+                self.layer_counts[usize::from(self.doc.layers.get(key))] += 1;
+            }
+            self.wiring_stamp = stamp;
+        }
+    }
+
+    /// Edits `layer` alone, or every layer for None. The selection keeps
+    /// only what can still be selected.
+    fn set_layer(&mut self, layer: Option<u8>) {
+        self.refresh_wiring();
+        self.layer = layer;
+        let doc = &self.doc;
+        self.selection
+            .retain(|&key| layer.is_none_or(|layer| doc.layers.get(key) == layer));
+        let Some(layer) = layer else {
+            self.say("Every layer: all objects can be selected.");
+            return;
+        };
+        self.last_layer = layer;
+        let count = self.layer_counts[usize::from(layer)] as usize;
+        self.say(format!(
+            "Layer {layer}: {}. Other layers are faded and can't be selected.",
+            objects(count)
+        ));
+    }
+    /// Goes to the next layer up or down, from every layer to layer 0 and
+    /// back. With `used`, it skips layers that hold nothing.
+    fn step_layer(&mut self, up: bool, used: bool) {
+        self.refresh_wiring();
+        let mut at = self.layer.map_or(-1, i32::from);
+        loop {
+            at += if up { 1 } else { -1 };
+            if at < 0 {
+                if self.layer.is_some() {
+                    self.set_layer(None);
+                }
+                return;
+            }
+            if at >= i32::from(LAYERS) {
+                if used {
+                    self.say("No layer above this one holds anything.");
+                }
+                return;
+            }
+            if !used || self.layer_counts[at as usize] > 0 {
+                self.set_layer(Some(at as u8));
+                return;
+            }
+        }
+    }
+    /// The objects at `keys` with their layers, for copies: each keeps its
+    /// own layer, unless one layer is being edited, which takes them all.
+    fn copies(&self, keys: &[Key]) -> (Vec<Object>, Vec<u8>) {
+        keys.iter()
+            .filter_map(|&key| {
+                let layer = self.layer.unwrap_or_else(|| self.doc.layers.get(key));
+                Some((self.doc.object(key)?, layer))
+            })
+            .unzip()
+    }
+
     fn say(&mut self, text: impl Into<String>) {
         self.notice = text.into();
         self.notice_at = get_time();
@@ -443,11 +537,7 @@ impl Editor {
         });
     }
     fn copy(&mut self) {
-        self.clipboard = self
-            .selection
-            .iter()
-            .filter_map(|&key| self.doc.object(key))
-            .collect();
+        (self.clipboard, self.clipboard_layers) = self.copies(&self.selection);
         if !self.clipboard.is_empty() {
             self.say(format!("Copied {}.", objects(self.clipboard.len())));
         }
@@ -470,8 +560,12 @@ impl Editor {
             ]
         });
         let objects = std::mem::take(&mut self.clipboard);
+        let layers = match self.layer {
+            Some(layer) => vec![layer; objects.len()],
+            None => self.clipboard_layers.clone(),
+        };
         self.apply(|editor| {
-            let added = editor.doc.place(&objects, at);
+            let added = editor.doc.place(&objects, &layers, at);
             if added.len() < objects.len() {
                 editor.say("Some objects did not fit within the map's limits.");
             }
@@ -483,11 +577,7 @@ impl Editor {
     /// Copy the selection one cell over; once a copy has been moved, the
     /// next duplicate repeats that move, so rows build themselves.
     fn duplicate(&mut self) {
-        let objects: Vec<Object> = self
-            .selection
-            .iter()
-            .filter_map(|&key| self.doc.object(key))
-            .collect();
+        let (objects, layers) = self.copies(&self.selection);
         let Some(b) = self.doc.bounds(&self.selection) else {
             return;
         };
@@ -508,7 +598,7 @@ impl Editor {
         };
         let at = [b[0] + offset[0], b[1] + offset[1]];
         self.apply(|editor| {
-            let added = editor.doc.place(&objects, at);
+            let added = editor.doc.place(&objects, &layers, at);
             editor.set_selection(added);
         });
         self.repeat = Some((self.selection.clone(), [b[0], b[1]]));
@@ -612,6 +702,7 @@ impl Editor {
         for group in groups {
             keys.extend(self.doc.in_group(group));
         }
+        keys.retain(|&key| self.on_layer(key));
         if keys.is_empty() {
             self.say("The selection is not in any group.");
         } else {
@@ -623,6 +714,11 @@ impl Editor {
         for &key in &self.selection {
             keys.extend(self.doc.like(key));
         }
+        keys.retain(|&key| {
+            self.doc
+                .object(key)
+                .is_some_and(|object| self.pickable(key, object.group()))
+        });
         self.set_selection(keys);
     }
     fn new_group(&mut self) {
@@ -766,6 +862,7 @@ impl Editor {
         let layout = self.layout(s);
         self.canvas_area = layout.canvas;
         profile::phase("editor preview", || self.run_preview(&layout, dt));
+        self.refresh_wiring();
         let config = self.config();
         clear_background(bg_color());
         profile::phase("editor canvas", || {
@@ -774,6 +871,7 @@ impl Editor {
         if self.help || on_edge {
             set_interactive(false);
         }
+        self.layer_bar(&layout);
         if let Some(chosen) = profile::phase("editor bar", || self.top_bar(&layout)) {
             action = chosen;
         }
@@ -920,7 +1018,7 @@ impl Editor {
                 let keys = self
                     .doc
                     .items()
-                    .filter(|&(_, _, group)| self.pickable(group))
+                    .filter(|&(key, _, group)| self.pickable(key, group))
                     .map(|(key, _, _)| key)
                     .collect();
                 self.set_selection(keys);
@@ -953,6 +1051,12 @@ impl Editor {
         }
         if over_canvas && pressed(KeyCode::Tab) {
             self.cycle_pick(pointer, shift());
+        }
+        if pressed(KeyCode::Period) {
+            self.step_layer(true, shift());
+        }
+        if pressed(KeyCode::Comma) {
+            self.step_layer(false, shift());
         }
         let any = !self.selection.is_empty();
         if any && pressed(KeyCode::Q) {
@@ -1207,8 +1311,10 @@ impl Editor {
                 ("Swipe", "Paint or erase as you drag"),
                 ("Right-click", "Build copies of that object"),
                 ("Shift-click", "Add to or remove from the selection"),
+                ("Click it again", "Select the object beneath"),
                 ("Double-click", "Select the object's whole group"),
                 ("Tab / Shift Tab", "Cycle objects under the pointer"),
+                (",  .", "Layer down, up; Shift skips empty ones"),
                 ("Alt-drag", "Copy the selection as you move it"),
                 ("Shift / Alt handle", "Resize: keep shape, or from center"),
                 ("WASD, arrows", "Nudge; Shift for one unit"),

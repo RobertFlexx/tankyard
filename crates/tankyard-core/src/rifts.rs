@@ -225,7 +225,15 @@ impl World {
             self.rifts[index].life = RIFT_SECONDS;
         }
         self.rifts.push(rift);
-        self.event(EventKind::RiftOpen, pos, id, shot.end as u32, shot.team);
+        // Events name the owner, so each player can tell their side's rifts
+        // from an opponent's.
+        self.event(
+            EventKind::RiftOpen,
+            pos,
+            shot.owner,
+            shot.end as u32,
+            shot.team,
+        );
     }
 
     /// Fly rift shots, age and collapse rifts, and carry what reaches an
@@ -350,12 +358,12 @@ impl World {
         self.rifts.retain(|rift| {
             let open = rift.life > -RIFT_CLOSING;
             if !open {
-                popped.push((rift.pos, rift.id, rift.end as u32, rift.team));
+                popped.push((rift.pos, rift.owner, rift.end as u32, rift.team));
             }
             open
         });
-        for (pos, id, end, team) in popped {
-            self.event(EventKind::RiftClose, pos, id, end, team);
+        for (pos, owner, end, team) in popped {
+            self.event(EventKind::RiftClose, pos, owner, end, team);
         }
     }
 
@@ -415,11 +423,14 @@ impl World {
                     continue;
                 }
                 // It leaves the exit as far past the heart as it had flown
-                // past the entry's, heading the same way.
+                // past the entry's, heading the same way. Its last position
+                // moves with it, a whole step back inside the exit, so it is
+                // drawn coming out at its speed rather than standing still.
                 let dir = shot.vel / speed;
+                let step = shot.pos.distance(shot.previous);
                 let beyond = (shot.pos - from).dot(dir).clamp(0., RIFT_RADIUS * 0.5);
                 shot.pos = to + dir * beyond;
-                shot.previous = shot.pos;
+                shot.previous = shot.pos - dir * step.min(RIFT_RADIUS);
                 carried_any = true;
             }
             if carried_any {
@@ -544,6 +555,45 @@ mod tests {
     }
 
     #[test]
+    fn a_round_comes_out_of_the_exit_at_its_pace() {
+        let (mut w, _) = world();
+        open_pair(&mut w);
+        let entry = w
+            .rifts
+            .iter()
+            .find(|r| r.end == RiftEnd::Entry)
+            .unwrap()
+            .pos;
+        let exit = w.rifts.iter().find(|r| r.end == RiftEnd::Exit).unwrap().pos;
+        let other = w.add_player("Shooter", false);
+        let p = w.simple_projectile(
+            other,
+            0,
+            entry - V2::new(60., 0.),
+            V2::new(900., 0.),
+            ProjectileKind::Bullet,
+            10.,
+            6.,
+            2.,
+            1.,
+        );
+        let shot = p.id;
+        w.projectiles.push(p);
+        for _ in 0..12 {
+            w.step();
+            let p = w.projectiles.iter().find(|p| p.id == shot).unwrap();
+            if p.pos.distance(exit) < RIFT_RADIUS {
+                // Drawn from a step back inside the exit, it keeps its pace.
+                assert!((p.pos.distance(p.previous) - 900. * DT).abs() < 0.5);
+                assert!((p.pos - p.previous).x > 0.);
+                assert!(p.previous.distance(exit) < RIFT_RADIUS);
+                return;
+            }
+        }
+        panic!("the round never came out of the exit");
+    }
+
+    #[test]
     fn the_owner_goes_through_again_and_again_on_a_map_without_pads() {
         let (mut w, _) = world();
         assert!(w.map.zones.is_empty());
@@ -612,15 +662,16 @@ mod tests {
 
     #[test]
     fn a_pair_collapses_after_fifteen_seconds_and_pops() {
-        let (mut w, _) = world();
+        let (mut w, id) = world();
         open_pair(&mut w);
         let mut popped = 0;
         for _ in 0..((RIFT_SECONDS + RIFT_CLOSING + 0.2) / DT) as usize {
             w.step();
+            // Each pop names the owner, so players can tell whose it was.
             popped += w
                 .events
                 .iter()
-                .filter(|e| matches!(e.kind, EventKind::RiftClose))
+                .filter(|e| matches!(e.kind, EventKind::RiftClose) && e.subject == id)
                 .count();
         }
         assert!(w.rifts.is_empty());

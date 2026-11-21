@@ -762,7 +762,7 @@ impl Menu {
                 let row = Rect::new(r.x + 14.0 * s, ly - 2.0 * s, r.w - 28.0 * s, 20.0 * s);
                 if contains(row) {
                     draw_rectangle(row.x, row.y, row.w, row.h, alpha(hover_color(), 0.6));
-                    if is_mouse_button_pressed(MouseButton::Left) {
+                    if take_click() {
                         open_finding = Some((finding.file.clone(), finding.line));
                     }
                 }

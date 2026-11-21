@@ -19,6 +19,7 @@ mod parry;
 mod pocket;
 mod pocket_layout;
 mod rifts;
+pub use bosses::{BossRound, SIEGE_ROUND_RADIUS, SIEGE_ROUND_SPEED, special_volley};
 pub use pocket::{
     POCKET_ECHO_LIMIT, POCKET_ECHO_WAKE, POCKET_HEAL_RATE, POCKET_SECONDS, walls as pocket_walls,
 };

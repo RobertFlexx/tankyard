@@ -845,7 +845,7 @@ impl Hud {
                     r.y + 16.0 * s,
                     15.0 * s,
                 );
-                if hovered && can_upgrade && is_mouse_button_pressed(MouseButton::Left) {
+                if hovered && can_upgrade && take_click() {
                     actions.push(HudAction::Stat(index));
                 }
             }
@@ -993,7 +993,7 @@ impl Hud {
                         if parrying {
                             AMBER
                         } else if rift_armed {
-                            crate::rifts::color(crate::rifts::next_end(snapshot, tank.id))
+                            crate::rifts::color(crate::rifts::next_end(snapshot, tank.id), false)
                         } else if ready {
                             accent()
                         } else {
@@ -1432,7 +1432,7 @@ impl Hud {
                     11.0 * s,
                 );
             }
-            if hovered && is_mouse_button_pressed(MouseButton::Left) {
+            if hovered && take_click() {
                 actions.push(HudAction::Evolve(class.id.clone()));
                 self.evolution = false;
             }

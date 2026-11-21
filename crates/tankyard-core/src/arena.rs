@@ -188,8 +188,8 @@ impl World {
             if let Some(boss) = self.bosses.iter_mut().find(|boss| boss.id == id) {
                 boss.team = 2;
                 boss.pos = pos;
-                boss.max_health = (800.0 + f32::from(wave) * 120.0)
-                    * (1.0 + allies.saturating_sub(1).min(7) as f32 * 0.18);
+                boss.max_health = (1400.0 + f32::from(wave) * 260.0)
+                    * (1.0 + allies.saturating_sub(1).min(7) as f32 * 0.35);
                 boss.health = boss.max_health;
             }
         }

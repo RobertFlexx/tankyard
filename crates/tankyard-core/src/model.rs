@@ -722,7 +722,48 @@ impl BossKind {
             _ => 0,
         }
     }
+    /// Its health against other bosses. Those whose swarms soak up shots
+    /// need less of it to last as long.
+    pub fn toughness(self) -> f32 {
+        match self {
+            Self::Bastion | Self::Defender | Self::SiegeEngine => 1.2,
+            Self::Sentinel | Self::Prism | Self::Eclipse => 1.1,
+            Self::FallenBooster | Self::Trapper => 1.,
+            Self::Tempest | Self::Skirmisher => 0.9,
+            Self::Foundry | Self::Guardian => 0.8,
+            Self::Summoner => 0.75,
+            Self::FallenOverlord => 0.65,
+        }
+    }
+    /// How fast its turning launchers spin, in radians a second.
+    pub fn spin(self) -> f32 {
+        match self {
+            Self::Prism => 0.6,
+            Self::Defender => 0.35,
+            Self::Bastion => 0.3,
+            _ => 0.,
+        }
+    }
+    /// The angle its turning launchers are at on `tick`. Its rounds leave
+    /// from them, so the game draws them there too.
+    pub fn turn(self, tick: u64) -> f32 {
+        (tick as f64 * f64::from(DT) * f64::from(self.spin())).rem_euclid(std::f64::consts::TAU)
+            as f32
+    }
+    /// Seconds of warning before its special attack, with its aim locked.
+    pub fn windup(self) -> f32 {
+        match self {
+            // Its cannon destroys whatever it hits, so it gives longer.
+            Self::SiegeEngine => 1.5,
+            _ => 0.9,
+        }
+    }
 }
+/// Damage that destroys any tank outright, as the Siege Engine's cannon
+/// deals. Other bosses and the staff's own boss take [`LETHAL_CAP`].
+pub const LETHAL_DAMAGE: f32 = 1.0e6;
+/// What a lethal round deals to a boss.
+pub const LETHAL_CAP: f32 = 1500.;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BossTactic {
     #[default]

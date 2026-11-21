@@ -20,7 +20,9 @@ pub struct Presentation {
 impl Presentation {
     pub fn begin(&mut self, settings: &Settings) {
         let physical = miniquad::window::screen_size();
-        let requested = if settings.native_resolution {
+        // A window draws at its own size, sharp however it's resized. The
+        // chosen resolution is how big it opens and what fullscreen renders.
+        let requested = if settings.native_resolution || !settings.fullscreen {
             (physical.0 as u32, physical.1 as u32)
         } else {
             bounded_size((settings.width, settings.height))

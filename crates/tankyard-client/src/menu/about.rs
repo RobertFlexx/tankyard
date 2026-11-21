@@ -75,9 +75,11 @@ impl Menu {
             tankyard_core::BossKind::Bastion,
             crate::ui_layout::position(vec2(x + 28. * s, y + 488. * s)),
             22. * s,
-            -0.2,
-            crate::accessibility::motion_time(get_time() as f32),
-            0,
+            tankyard_client::boss_model::Pose {
+                aim: -0.2,
+                time: crate::accessibility::motion_time(get_time() as f32),
+                ..Default::default()
+            },
             None,
             &mut render::draw_model_primitive,
         );

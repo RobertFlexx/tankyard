@@ -122,6 +122,36 @@ enum Command {
         #[arg(long)]
         resume: bool,
     },
+    /// Pit expert bots at the top level against each boss in turn and
+    /// report how long it lasts and what it costs them.
+    BossFight {
+        #[arg(long, default_value_t = 4)]
+        bots: usize,
+        /// The longest a fight runs, in seconds.
+        #[arg(long, default_value_t = 180.)]
+        seconds: f32,
+        /// Fights per boss, each with its own seed.
+        #[arg(long, default_value_t = 4)]
+        rounds: u64,
+        /// Bosses by id, such as siege_engine; every boss if none.
+        #[arg(long, value_delimiter = ',')]
+        bosses: Vec<String>,
+    },
+    /// Duel expert bots of every class in a tier against each other, both
+    /// at the level the tier opens, and report each class's wins.
+    Duels {
+        #[arg(long, default_value_t = 4)]
+        tier: u8,
+        /// Duels per pair of classes, each with its own seed.
+        #[arg(long, default_value_t = 6)]
+        rounds: u64,
+        /// The longest a duel runs, in seconds; then it is a draw.
+        #[arg(long, default_value_t = 60.)]
+        seconds: f32,
+        /// Only these classes, by id.
+        #[arg(long, value_delimiter = ',')]
+        classes: Vec<String>,
+    },
     /// Run a bot arena and report real class usage, kills and scores.
     Tournament {
         #[arg(long, default_value_t = 24)]
@@ -642,6 +672,190 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 out,
                 start: resume.then(|| tankyard_ai::driver::trained().weights()),
             })?;
+        }
+        Command::BossFight {
+            bots,
+            seconds,
+            rounds,
+            bosses,
+        } => {
+            if !(1..=32).contains(&bots) || !(1. ..=1200.).contains(&seconds) || rounds > 64 {
+                return Err(
+                    "boss-fight takes 1 to 32 bots, up to 1200 seconds and 64 rounds".into(),
+                );
+            }
+            let kinds = if bosses.is_empty() {
+                BossKind::ALL.to_vec()
+            } else {
+                bosses
+                    .iter()
+                    .map(|id| BossKind::from_id(id).ok_or(format!("Unknown boss: {id}")))
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            println!("boss,health,defeated,average_seconds,bot_deaths_per_fight,health_left");
+            for kind in kinds {
+                let (mut defeated, mut time, mut deaths, mut health, mut left) = (0, 0., 0, 0., 0.);
+                for round in 0..rounds {
+                    let mut world = World::new(
+                        WorldConfig {
+                            seed: 1000 + round,
+                            mode: Mode::Sandbox,
+                            target_count: 0,
+                            ..Default::default()
+                        },
+                        Content::builtin(),
+                    );
+                    for i in 0..bots {
+                        let id = world.add_player(&format!("Bot{i}"), true);
+                        world.sandbox_level(id, MAX_LEVEL);
+                    }
+                    // One side against the boss, as a party is.
+                    for tank in &mut world.tanks {
+                        tank.team = 1;
+                    }
+                    let mut ai = BotController::new(Difficulty::Expert);
+                    ai.adaptive = false;
+                    // Let the bots spend their points and pick their tanks.
+                    for _ in 0..600 {
+                        ai.update(&mut world);
+                        world.step();
+                    }
+                    let center = world.config.bounds().center();
+                    let boss = world.spawn_boss_near(kind, center);
+                    if boss == 0 {
+                        return Err(format!("{} found no room", kind.id()).into());
+                    }
+                    health += world.bosses[0].max_health;
+                    let before: u32 = world.tanks.iter().map(|tank| tank.deaths).sum();
+                    let ticks = (seconds / DT) as usize;
+                    let mut lasted = ticks;
+                    for tick in 0..ticks {
+                        ai.update(&mut world);
+                        world.step();
+                        if !world.bosses.iter().any(|b| b.id == boss) {
+                            lasted = tick;
+                            defeated += 1;
+                            break;
+                        }
+                    }
+                    time += lasted as f32 * DT;
+                    left += world
+                        .bosses
+                        .iter()
+                        .find(|b| b.id == boss)
+                        .map_or(0., |b| b.health / b.max_health);
+                    deaths += world.tanks.iter().map(|tank| tank.deaths).sum::<u32>() - before;
+                }
+                let rounds = rounds.max(1) as f32;
+                println!(
+                    "{},{:.0},{defeated}/{rounds},{:.1},{:.2},{:.0}%",
+                    kind.id(),
+                    health / rounds,
+                    time / rounds,
+                    deaths as f32 / rounds,
+                    left / rounds * 100.,
+                );
+            }
+        }
+        Command::Duels {
+            tier,
+            rounds,
+            seconds,
+            classes: only,
+        } => {
+            let content = Content::builtin();
+            let classes: Vec<_> = content
+                .classes
+                .iter()
+                .filter(|class| class.tier == tier)
+                .filter(|class| only.is_empty() || only.contains(&class.id))
+                .map(|class| (class.id.clone(), class.min_level.max(1)))
+                .collect();
+            if classes.len() < 2 || rounds > 64 || !(5. ..=600.).contains(&seconds) {
+                return Err("duels needs a tier of two or more classes, up to 64 rounds and 5 to 600 seconds".into());
+            }
+            // wins, losses, draws
+            let mut record = vec![[0u32; 3]; classes.len()];
+            let mut rows = Vec::new();
+            for a in 0..classes.len() {
+                for b in a + 1..classes.len() {
+                    let mut score = [0u32; 3];
+                    for round in 0..rounds {
+                        let mut world = World::new(
+                            WorldConfig {
+                                seed: 77 + round * 131 + (a * 31 + b) as u64,
+                                mode: Mode::Sandbox,
+                                target_count: 0,
+                                ..Default::default()
+                            },
+                            content.clone(),
+                        );
+                        // Alternate sides so neither spawn favors a class.
+                        let (first, second) = if round % 2 == 0 { (a, b) } else { (b, a) };
+                        let center = world.config.bounds().center();
+                        let mut ids = [0; 2];
+                        for (slot, &which) in [first, second].iter().enumerate() {
+                            let id = world.add_player(&format!("Bot{slot}"), true);
+                            // The class first, at the top level, then back
+                            // to the level it opens at, so the bot can't
+                            // upgrade past it.
+                            world.sandbox_class(id, &classes[which].0);
+                            world.sandbox_level(id, classes[which].1);
+                            if let Some(tank) = world.tanks.iter_mut().find(|t| t.id == id) {
+                                tank.pos =
+                                    center + V2::new(if slot == 0 { -450. } else { 450. }, 0.);
+                                tank.protection = 0.;
+                            }
+                            ids[slot] = id;
+                        }
+                        let mut ai = BotController::new(Difficulty::Expert);
+                        ai.adaptive = false;
+                        let mut winner = None;
+                        for _ in 0..(seconds / DT) as usize {
+                            ai.update(&mut world);
+                            world.step();
+                            let dead = |id| world.tanks.iter().any(|t| t.id == id && t.deaths > 0);
+                            match (dead(ids[0]), dead(ids[1])) {
+                                (false, false) => continue,
+                                (true, false) => winner = Some(second),
+                                (false, true) => winner = Some(first),
+                                (true, true) => {}
+                            }
+                            break;
+                        }
+                        match winner {
+                            Some(w) if w == a => score[0] += 1,
+                            Some(_) => score[1] += 1,
+                            None => score[2] += 1,
+                        }
+                    }
+                    record[a][0] += score[0];
+                    record[a][1] += score[1];
+                    record[b][0] += score[1];
+                    record[b][1] += score[0];
+                    record[a][2] += score[2];
+                    record[b][2] += score[2];
+                    rows.push(format!(
+                        "{},{},{},{},{}",
+                        classes[a].0, classes[b].0, score[0], score[1], score[2]
+                    ));
+                }
+            }
+            println!("class,wins,losses,draws,win_rate");
+            let mut order: Vec<_> = (0..classes.len()).collect();
+            order.sort_by(|&x, &y| record[y][0].cmp(&record[x][0]));
+            for index in order {
+                let [wins, losses, draws] = record[index];
+                println!(
+                    "{},{wins},{losses},{draws},{:.2}",
+                    classes[index].0,
+                    f64::from(wins) / f64::from((wins + losses).max(1))
+                );
+            }
+            println!("\nclass,opponent,wins,losses,draws");
+            for row in rows {
+                println!("{row}");
+            }
         }
         Command::Tournament { bots, ticks, seed } => {
             if !(2..=128).contains(&bots) || ticks > 1_000_000 {

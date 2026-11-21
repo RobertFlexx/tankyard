@@ -68,6 +68,9 @@ pub struct World {
     /// Map widgets on screen.
     pub(crate) map_ui: Vec<crate::map_features::ShownUi>,
     pub(crate) map_ui_dirty: bool,
+    /// The counters, hidden groups and tick map widgets were last filled
+    /// in with.
+    pub(crate) map_ui_filled: (tankyard_content::MapCounters, u32, u64),
     pub(crate) next_menu: u32,
     pub(crate) zone_areas: Vec<(usize, Rect)>,
     /// Seconds before each tank may use a portal again; never replicated.
@@ -104,6 +107,9 @@ pub(crate) fn next_random(state: &mut u64) -> f32 {
     z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
     ((z ^ (z >> 31)) >> 40) as f32 / (1u32 << 24) as f32
 }
+
+/// How long a hit on a boss still earns a share of its reward.
+pub(crate) const BOSS_CREDIT_TICKS: u64 = 3600;
 
 impl World {
     /// The HUD widgets one player sees, in a stable order.
@@ -224,6 +230,7 @@ impl World {
             pick_ticks: BTreeMap::new(),
             map_ui: Vec::new(),
             map_ui_dirty: false,
+            map_ui_filled: Default::default(),
             next_menu: 0,
             zone_areas: Vec::new(),
             portal_rest: BTreeMap::new(),
@@ -790,8 +797,14 @@ impl World {
             }
         }
         if self.tick.is_multiple_of(300) {
-            self.contributions.retain(|_, v| {
-                v.retain(|(_, _, tick)| self.tick.saturating_sub(*tick) < 600);
+            self.contributions.retain(|victim, v| {
+                // A boss fight runs long; see `resolve_deaths`.
+                let window = if self.bosses.iter().any(|boss| boss.id == *victim) {
+                    BOSS_CREDIT_TICKS
+                } else {
+                    600
+                };
+                v.retain(|(_, _, tick)| self.tick.saturating_sub(*tick) < window);
                 !v.is_empty()
             });
         }
@@ -1296,6 +1309,9 @@ impl World {
         let id = t.id;
         let pos = t.pos;
         let team = t.team;
+        // A lethal round counts for no more than a heavy hit, so it doesn't
+        // erase the credit of everyone who hurt this tank before it.
+        let amount = amount.min(LETHAL_CAP);
         self.record_damage(id, owner, amount);
         if self.damage_log.len() < 4096 {
             self.damage_log.push(DamageRecord {
@@ -1464,7 +1480,9 @@ impl World {
                 .get(&id)
                 .and_then(|c| c.iter().max_by(|a, b| a.2.cmp(&b.2)))
                 .map_or(0, |c| c.0);
-            self.reward_contributors(id, killer, 12000, 12000);
+            // A boss fight runs for a minute or more, so everyone who helped
+            // in the last one counts, not only the last few seconds.
+            self.reward_within(id, killer, 12000, 12000, BOSS_CREDIT_TICKS);
             if self.config.mode == Mode::BossRush {
                 let allies: Vec<_> = self.tanks.iter().map(|t| t.id).collect();
                 for ally in allies {
@@ -1504,10 +1522,21 @@ impl World {
         xp: u32,
         score: u32,
     ) {
+        self.reward_within(victim, killer, xp, score, 600);
+    }
+    /// Shares a reward among those who hurt `victim` within `ticks`.
+    pub(crate) fn reward_within(
+        &mut self,
+        victim: EntityId,
+        killer: EntityId,
+        xp: u32,
+        score: u32,
+        ticks: u64,
+    ) {
         let entries = self.contributions.remove(&victim).unwrap_or_default();
         let valid: Vec<_> = entries
             .into_iter()
-            .filter(|c| self.tick.saturating_sub(c.2) < 600)
+            .filter(|c| self.tick.saturating_sub(c.2) < ticks)
             .collect();
         let total: f32 = valid.iter().map(|c| c.1).sum();
         for (id, damage, _) in valid {
@@ -1884,8 +1913,16 @@ impl World {
                 if self.projectiles[i].hit.len() < 24 {
                     self.projectiles[i].hit.push(id);
                 }
-                let knock = velocity.normalized() * (damage * 0.9);
+                let knock = velocity.normalized() * (damage.min(LETHAL_CAP) * 0.9);
                 let age = self.projectiles[i].age;
+                // A lethal round destroys tanks outright, but not a boss or
+                // the staff's own.
+                let lethal = damage >= LETHAL_DAMAGE;
+                let damage = match body {
+                    Body::Boss(_) if lethal => LETHAL_CAP,
+                    Body::Tank(j) if lethal && self.tanks[j].creator_boss => LETHAL_CAP,
+                    _ => damage,
+                };
                 let applied = damage
                     * (if matches!(kind, ProjectileKind::Bullet | ProjectileKind::Scatter)
                         && age > 1.
@@ -1904,12 +1941,13 @@ impl World {
                     Body::Target(j) => {
                         self.targets[j].health -= applied;
                         self.targets[j].vel += knock * 0.08;
-                        self.record_damage(id, owner, applied);
+                        let credited = applied.min(LETHAL_CAP);
+                        self.record_damage(id, owner, credited);
                         self.event(
                             EventKind::Impact,
                             self.targets[j].pos,
                             id,
-                            applied as u32,
+                            credited as u32,
                             0,
                         );
                     }

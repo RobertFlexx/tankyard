@@ -139,13 +139,16 @@ pub struct Popup {
     pub life: f32,
     pub color: Color,
 }
-/// The color of a rift event's end: 0 for an entry, 1 for an exit.
-fn rift_color(end: u32) -> Color {
-    if end == 0 {
-        crate::rifts::ENTRY
+/// The color of a rift event's end, 0 for an entry and 1 for an exit, as
+/// the viewer sees the rifts of the player behind it.
+fn rift_color(event: &GameEvent, viewer: (EntityId, u8)) -> Color {
+    let end = if event.value == 0 {
+        tankyard_core::RiftEnd::Entry
     } else {
-        crate::rifts::EXIT
-    }
+        tankyard_core::RiftEnd::Exit
+    };
+    let foe = crate::rifts::hostile(event.subject, event.team, viewer.0, viewer.1);
+    crate::rifts::color(end, foe)
 }
 pub struct HullVisual {
     pub radius: f32,
@@ -257,10 +260,12 @@ impl Effects {
     pub fn boss_banner(&self) -> bool {
         self.boss_arrival.is_some() || self.boss_defeat.is_some()
     }
+    /// Takes in a frame's events for the player `local` on `local_team`,
+    /// once each, and returns the new ones for sounds.
     pub fn ingest(
         &mut self,
         events: &[GameEvent],
-        local: EntityId,
+        (local, local_team): (EntityId, u8),
         intensity: f32,
     ) -> Vec<GameEvent> {
         let mut sounds = Vec::new();
@@ -345,12 +350,29 @@ impl Effects {
                 // Heard rather than seen.
                 EventKind::MapSound => (AMBER, 0, false),
                 EventKind::Launch => (Color::from_rgba(166, 204, 60, 255), 8, true),
-                EventKind::RiftOpen => (rift_color(event.value), 14, true),
-                EventKind::RiftClose => (mix(rift_color(event.value), WHITE, 0.3), 28, true),
-                EventKind::RiftTravel if event.value == 0 => {
-                    (mix(crate::rifts::ENTRY, WHITE, 0.45), 10, true)
+                EventKind::RiftOpen => (rift_color(event, (local, local_team)), 14, true),
+                EventKind::RiftClose => (
+                    mix(rift_color(event, (local, local_team)), WHITE, 0.3),
+                    28,
+                    true,
+                ),
+                // A trip is seen leaving the entry and arriving at the exit.
+                EventKind::RiftTravel if event.value == 0 => (
+                    mix(rift_color(event, (local, local_team)), WHITE, 0.45),
+                    10,
+                    true,
+                ),
+                EventKind::RiftTravel => {
+                    let exit = GameEvent {
+                        value: 1,
+                        ..event.clone()
+                    };
+                    (
+                        mix(rift_color(&exit, (local, local_team)), WHITE, 0.3),
+                        3,
+                        false,
+                    )
                 }
-                EventKind::RiftTravel => (mix(crate::rifts::EXIT, WHITE, 0.3), 3, false),
                 EventKind::RiftFizzle => (Color::new(0.74, 0.74, 0.84, 1.), 8, true),
             };
             let count = (count as f32 * intensity) as usize;
@@ -860,18 +882,18 @@ mod tests {
         };
         // The boss is already gone from the snapshot when its kill arrives.
         effects.note_bosses(&[]);
-        effects.ingest(&[kill(10, 7, boss, "Sentinel")], 1, 1.);
+        effects.ingest(&[kill(10, 7, boss, "Sentinel")], (1, 0), 1.);
         let (name, killer, _) = effects.boss_defeat.clone().unwrap();
         assert_eq!((name.as_str(), killer), ("Sentinel", 7));
         assert_eq!(effects.deaths, 0);
         // A player named like a boss is still just a player.
         effects.boss_defeat = None;
-        effects.ingest(&[kill(11, 7, 3, "Sentinel")], 1, 1.);
+        effects.ingest(&[kill(11, 7, 3, "Sentinel")], (1, 0), 1.);
         assert!(effects.boss_defeat.is_none());
         // Reliable replays of the same death don't start a second card.
         let death = kill(12, 7, 1, "Me");
-        effects.ingest(std::slice::from_ref(&death), 1, 1.);
-        effects.ingest(&[death], 1, 1.);
+        effects.ingest(std::slice::from_ref(&death), (1, 0), 1.);
+        effects.ingest(&[death], (1, 0), 1.);
         assert_eq!((effects.deaths, effects.killed_by), (1, Some(7)));
         effects.update(5.1, false);
         assert!(!effects.boss_banner());
@@ -889,7 +911,12 @@ mod tests {
             team: 0,
             elimination: None,
         };
-        assert_eq!(effects.ingest(std::slice::from_ref(&event), 1, 0.).len(), 1);
+        assert_eq!(
+            effects
+                .ingest(std::slice::from_ref(&event), (1, 0), 0.)
+                .len(),
+            1
+        );
         assert!(
             effects.particles.is_empty(),
             "zero intensity must suppress rings too"
@@ -898,7 +925,7 @@ mod tests {
         assert!(effects.boss_arrival.is_some());
         assert!(
             effects
-                .ingest(std::slice::from_ref(&event), 1, 0.)
+                .ingest(std::slice::from_ref(&event), (1, 0), 0.)
                 .is_empty()
         );
         effects.update(0.11, false);
@@ -919,7 +946,7 @@ mod tests {
             team: 0,
             elimination: None,
         };
-        effects.ingest(&[event], 7, 1.);
+        effects.ingest(&[event], (7, 0), 1.);
         assert!(!effects.particles.is_empty());
         let position = effects.popups[0].pos;
         effects.update(0.2, true);
@@ -952,12 +979,19 @@ mod tests {
             elimination: None,
         };
         assert_eq!(
-            effects.ingest(std::slice::from_ref(&newest), 7, 1.0).len(),
+            effects
+                .ingest(std::slice::from_ref(&newest), (7, 0), 1.0)
+                .len(),
             1
         );
-        assert_eq!(effects.ingest(std::slice::from_ref(&late), 7, 1.0).len(), 1);
+        assert_eq!(
+            effects
+                .ingest(std::slice::from_ref(&late), (7, 0), 1.0)
+                .len(),
+            1
+        );
         assert_eq!(effects.notice, "LEVEL 15");
-        assert!(effects.ingest(&[newest, late], 7, 1.0).is_empty());
+        assert!(effects.ingest(&[newest, late], (7, 0), 1.0).is_empty());
     }
 
     #[test]
@@ -1167,7 +1201,7 @@ mod tests {
                     team: 0,
                     elimination: None,
                 }],
-                0,
+                (0, 0),
                 1.0,
             );
         }
@@ -1200,12 +1234,12 @@ mod elimination_regressions {
             }),
         };
         let batch = vec![make(8), make(9)];
-        assert_eq!(effects.ingest(&batch, 7, 1.).len(), 2);
+        assert_eq!(effects.ingest(&batch, (7, 0), 1.).len(), 2);
         assert_eq!(effects.kills.len(), 2);
         assert_eq!(effects.kills[0].name, "Rival 8");
-        assert!(effects.ingest(&batch, 7, 1.).is_empty());
+        assert!(effects.ingest(&batch, (7, 0), 1.).is_empty());
         for victim in 10..=14 {
-            effects.ingest(&[make(victim)], 7, 1.);
+            effects.ingest(&[make(victim)], (7, 0), 1.);
         }
         assert_eq!(effects.kills.len(), 3);
         assert_eq!(effects.kills[2].name, "Rival 14");
@@ -1226,7 +1260,7 @@ mod elimination_regressions {
                     server_badge: Default::default(),
                 }),
             }],
-            7,
+            (7, 0),
             1.,
         );
         assert_eq!(effects.kills[0].name.chars().count(), 24);
@@ -1255,7 +1289,7 @@ mod elimination_regressions {
             ease: 1.,
             easing: Easing::default(),
         };
-        effects.ingest(&[zoom(1, wide)], 7, 1.);
+        effects.ingest(&[zoom(1, wide)], (7, 0), 1.);
         assert_eq!(effects.map_look().scale, 1., "starts where the view was");
         effects.update(0.5, false);
         let halfway = effects.map_look().scale;
@@ -1271,14 +1305,14 @@ mod elimination_regressions {
             ease: 0.5,
             easing: Easing::default(),
         };
-        effects.ingest(&[zoom(2, close)], 7, 1.);
+        effects.ingest(&[zoom(2, close)], (7, 0), 1.);
         assert!((effects.map_look().scale - 0.5).abs() < 1e-3);
         effects.update(1., false);
         assert!((effects.map_look().scale - 2.).abs() < 1e-3);
         effects.update(3.1, false);
         assert_eq!(effects.map_look(), Look::USUAL, "back after its time");
         // Someone else's zoom is theirs.
-        effects.ingest(&[zoom(3, wide)], 8, 1.);
+        effects.ingest(&[zoom(3, wide)], (8, 0), 1.);
         effects.update(2., false);
         assert_eq!(effects.map_look(), Look::USUAL);
     }
@@ -1292,7 +1326,7 @@ mod elimination_regressions {
             ease: 3.,
             easing: Easing::LINEAR,
         };
-        effects.ingest(&[zoom(1, quick)], 7, 1.);
+        effects.ingest(&[zoom(1, quick)], (7, 0), 1.);
         effects.update(0.19, false);
         assert!(effects.map_look().scale < 0.55, "all the way out");
         effects.update(0.22, false);
@@ -1308,7 +1342,7 @@ mod elimination_regressions {
             value: tankyard_core::focus_event([0.25, 0.75], 100),
             ..zoom(2, turn)
         };
-        effects.ingest(&[zoom(2, turn), focus], 7, 1.);
+        effects.ingest(&[zoom(2, turn), focus], (7, 0), 1.);
         let tank = V2::new(100., 100.);
         assert_eq!(effects.map_look().camera(tank, [4000., 2000.]), tank);
         effects.update(1., false);

@@ -124,6 +124,7 @@ impl Editor {
             }
         };
         let mut doc = self.doc.clone();
+        doc.layers.follow(&self.doc.map, &outcome.map);
         doc.map = outcome.map;
         if let Err(error) = doc.check_draft() {
             let error = format!("{name} made a map the workshop cannot keep: {error}");

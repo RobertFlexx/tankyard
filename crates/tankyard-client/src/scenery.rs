@@ -23,6 +23,24 @@ pub struct Shown {
     pub poses: GroupPoses,
     /// The tank decor reacts to, in world units: the player's own.
     pub focus: Option<V2>,
+    /// Pads and decor drawn faded, as the editor shows layers other than
+    /// the one being edited.
+    pub fades: Fades,
+}
+/// How strongly each pad and piece of decor shows, by index, where it is
+/// not 1. Empty in a round.
+#[derive(Clone, Debug, Default)]
+pub struct Fades {
+    pub zones: Vec<f32>,
+    pub decor: Vec<f32>,
+}
+impl Fades {
+    fn zone(&self, index: usize) -> f32 {
+        self.zones.get(index).copied().unwrap_or(1.)
+    }
+    fn decor(&self, index: usize) -> f32 {
+        self.decor.get(index).copied().unwrap_or(1.)
+    }
 }
 
 pub fn wall_style(style: BlockStyle, map: &str) -> WallStyle {
@@ -79,13 +97,14 @@ fn visible(rect: Rect, margin: f32) -> bool {
 pub fn floor(map: &MapDef, config: &WorldConfig, shown: &Shown, view: &View, time: f32) {
     let time = if ui::reduced_motion() { 0. } else { time };
     let mut marks_left = 1024;
-    for zone in &map.zones {
+    for (index, zone) in map.zones.iter().enumerate() {
         if MapDef::group_bit(zone.group) & shown.hidden != 0 {
             continue;
         }
         let rect = shown.poses.shift(zone.rect, zone.group);
+        let fade = shown.fades.zone(index);
         if zone.kind == ZoneKind::Portal {
-            portal(zone, rect, config, view, time);
+            portal(zone, rect, config, view, time, fade);
             continue;
         }
         let r = screen_rect(view, config, rect);
@@ -113,9 +132,16 @@ pub fn floor(map: &MapDef, config: &WorldConfig, shown: &Shown, view: &View, tim
             ZoneKind::Repair => 0.04 * (time * 2.).sin(),
             _ => 0.,
         };
-        draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.13 + breath));
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, (2. * view.zoom).max(1.), alpha(c, 0.65));
-        pad_corners(r, view.zoom, alpha(c, 0.9));
+        draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, (0.13 + breath) * fade));
+        draw_rectangle_lines(
+            r.x,
+            r.y,
+            r.w,
+            r.h,
+            (2. * view.zoom).max(1.),
+            alpha(c, 0.65 * fade),
+        );
+        pad_corners(r, view.zoom, alpha(c, 0.9 * fade));
         // A restrained repeating stencil makes pads distinguishable without
         // relying on colour. The count is capped even for arena-sized pads.
         let spacing = spacing_of(view);
@@ -158,14 +184,14 @@ pub fn floor(map: &MapDef, config: &WorldConfig, shown: &Shown, view: &View, tim
                 } else {
                     zone.angle
                 };
-                zone_mark(zone.kind, angle, p, radius, alpha(c, wave(p)));
+                zone_mark(zone.kind, angle, p, radius, alpha(c, wave(p) * fade));
                 marks_left -= 1;
             }
         }
     }
 }
 /// A portal pad: turning rings over its area and a matching ring at the exit.
-fn portal(zone: &MapZone, rect: [f32; 4], config: &WorldConfig, view: &View, time: f32) {
+fn portal(zone: &MapZone, rect: [f32; 4], config: &WorldConfig, view: &View, time: f32, fade: f32) {
     let r = screen_rect(view, config, rect);
     let exit = view.screen(tankyard_core::map_point(config, zone.exit));
     let exit = vec2(exit.x, exit.y);
@@ -173,18 +199,25 @@ fn portal(zone: &MapZone, rect: [f32; 4], config: &WorldConfig, view: &View, tim
     let radius = (r.w.min(r.h) * 0.5).max(4.);
     if visible(r, 0.) {
         let p = r.center();
-        draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.10));
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, (2. * view.zoom).max(1.), alpha(c, 0.55));
+        draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.10 * fade));
+        draw_rectangle_lines(
+            r.x,
+            r.y,
+            r.w,
+            r.h,
+            (2. * view.zoom).max(1.),
+            alpha(c, 0.55 * fade),
+        );
         for wave in 0..3 {
             let phase = (time * 0.6 + wave as f32 / 3.).fract();
             ring(
                 p,
                 radius * (0.25 + 0.7 * phase),
                 (2.5 * view.zoom).max(1.),
-                alpha(c, 0.75 * (1. - phase)),
+                alpha(c, 0.75 * (1. - phase) * fade),
             );
         }
-        draw_circle(p.x, p.y, radius * 0.18, alpha(c, 0.8));
+        draw_circle(p.x, p.y, radius * 0.18, alpha(c, 0.8 * fade));
     }
     let size = (34. * view.zoom).max(6.);
     if exit.x > -size
@@ -192,7 +225,7 @@ fn portal(zone: &MapZone, rect: [f32; 4], config: &WorldConfig, view: &View, tim
         && exit.x < screen_width() + size
         && exit.y < screen_height() + size
     {
-        ring(exit, size, (2.5 * view.zoom).max(1.), alpha(c, 0.7));
+        ring(exit, size, (2.5 * view.zoom).max(1.), alpha(c, 0.7 * fade));
         draw_poly_lines(
             exit.x,
             exit.y,
@@ -200,7 +233,7 @@ fn portal(zone: &MapZone, rect: [f32; 4], config: &WorldConfig, view: &View, tim
             size * 0.55,
             45. + time * 40.,
             2.,
-            alpha(c, 0.6),
+            alpha(c, 0.6 * fade),
         );
     }
 }
@@ -436,10 +469,11 @@ pub fn decorations(
         if item.above != above {
             continue;
         }
-        let Some((r, scale, look)) = placed(item, config, shown, view, settings.reduced_motion)
+        let Some((r, scale, mut look)) = placed(item, config, shown, view, settings.reduced_motion)
         else {
             continue;
         };
+        look.fade *= shown.fades.decor(index);
         if item.kind == DecorKind::Emitter {
             if remaining == 0 || settings.reduced_motion {
                 continue;
@@ -493,7 +527,7 @@ pub fn lights(
 ) {
     use crate::lighting::Light;
     let time = if reduced_motion { 0. } else { time.max(0.) };
-    for item in &map.decor {
+    for (index, item) in map.decor.iter().enumerate() {
         if out.len() >= crate::lighting::MOST_LIGHTS {
             return;
         }
@@ -503,9 +537,10 @@ pub fn lights(
         if !item.kind.lights() && !glowing {
             continue;
         }
-        let Some((r, scale, look)) = placed(item, config, shown, view, reduced_motion) else {
+        let Some((r, scale, mut look)) = placed(item, config, shown, view, reduced_motion) else {
             continue;
         };
+        look.fade *= shown.fades.decor(index);
         if let Some(effect) = item.effect.as_ref().filter(|_| glowing) {
             let spread = (effect.speed * effect.lifetime * 0.5 + effect.size * 3.) * view.zoom;
             crate::lighting::gather(

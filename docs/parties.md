@@ -18,6 +18,14 @@ Party voice mutes follow the member's connection across respawns and rounds. Ent
 
 The host role comes from a process-local channel. The invitation proves entry with a fresh signature bound to the connection, server and administration key. It stays out of saved server history and is never sent as a password. Relayed traffic uses TLS between each participant and the relay; the relay can observe forwarded game traffic. Direct UDP parties retain the regular unsecure netcode transport, so invitation proofs alone do not authenticate the server or encrypt chat/voice against an on-path observer. Creator and central-owner credentials remain separate.
 
+## In a match
+
+The roster on your screen shows each member's tank, with a health bar that turns red when they're in trouble. A member who is down goes grey until they respawn. When someone joins or leaves, a short line appears beside the roster.
+
+On a team, arrows at the edge of the screen point toward allies who are out of view, with their names. They're for allies only: opponents in your party still show up just on the minimap.
+
+The party panel lists each member's level, what they're doing, their tank and their health. The leader can remove a member with **Kick**, then **Sure?**. Nobody can kick the leader.
+
 ## Ready check
 
 Open the party roster and click **I'm ready**. Every member sees the ready markers and count, alongside whether each person is in a menu or a match. Click again to clear your status. Readiness resets when a new round starts. It is a coordination aid: the current match keeps running and readiness never grants leader permissions.

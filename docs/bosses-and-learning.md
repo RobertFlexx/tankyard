@@ -16,12 +16,12 @@ Boss arrivals use a reliable, deduplicated event: an original 48 kHz alarm, a br
 | Foundry | Armored workshop hull, capped drone escorts and deployed turrets | 100 |
 | Tempest | Arrowhead hull, homing salvos and telegraphed lunges | 78 |
 | Bastion | Square armor, rotating mine ring and explosive cannon | 100 |
-| Eclipse | Offset hexagonal plates and phased radial bursts | 90 |
-| Siege Engine | Tracked chassis and a slow, heavy siege gun | 104 |
+| Eclipse | Dark disc in a spiked ring, phased radial bursts | 90 |
+| Siege Engine | Tracked chassis and a huge cannon whose shot destroys any tank it reaches | 104 |
 | Skirmisher | Twin cannons, fast orbit and a straight charge | 72 |
 | Trapper | Twin trap launchers and side-pocket mines | 88 |
 
-The classic bosses were researched through the community's original game observations: [Guardian](https://diepio.fandom.com/wiki/Guardian), [Summoner](https://diepio.fandom.com/wiki/Summoner), [Defender](https://diepio.fandom.com/wiki/Defender), [Fallen Overlord](https://diepio.fandom.com/wiki/Fallen_Overlord), and [Fallen Booster](https://diepio.fandom.com/wiki/Fallen_Booster). Their recognizable silhouettes and arsenals are recreated with original vector geometry. Tank Yard uses its own sizes, damage values, phases, spawn schedule, and combat rules. No external game artwork or code is included.
+Every boss is drawn in one style: an outlined hull, darker armor plates, grey guns where its rounds leave, and one bright core that whitens as a special attack charges. Tank Yard's bosses use their own sizes, damage values, phases, spawn schedule and combat rules.
 
 Bosses lead moving targets, prefer recent attackers, maintain target continuity, observe line of sight, avoid approaching projectiles, manage distance while replenishing swarms, steer around walls, and respect the current arena border. Drone populations and projectile queues are capped. Custom charge attacks show a directional warning before accelerating.
 
@@ -48,6 +48,14 @@ cargo run --locked -p tankyard-client --bin tankyard-models -- --bosses --column
 ```
 
 Add `--phase 2` or `--phase 3` to draw them wounded: a boss glows amber in its second phase and pulses red in its last.
+
+## Fighting bosses in 2.0
+
+A boss is as tough as the arena is strong. Its health follows how many players are in the arena and how high their levels are, and moves with them if they join or leave mid-fight, keeping how hurt the boss is. A fight lasts about as long for one veteran as for a party. Bosses that command swarms also launch fewer drones against fewer players. Everyone who hit a boss in the last minute shares its reward.
+
+Before a special attack, a boss shows exactly where its rounds will go: lanes for a fan, spokes for a ring, and chevrons for a charge. Its core whitens as the attack charges. It fires faster as it's hurt.
+
+The **Siege Engine's cannon** winds up for 1.5 seconds, drawing a red line to the first wall in its way, then fires a huge, very fast round that destroys any tank it reaches, shields included. Get off the line or get behind cover. Walls stop it, a perfect parry turns it back at a capped damage, and it can't one-shot another boss.
 
 ## v0.2.16 combat update
 

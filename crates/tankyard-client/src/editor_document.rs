@@ -16,9 +16,223 @@ pub struct Document {
     /// Groups the editor will not select, as a mask. Editing only.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub locked: u32,
+    /// The layer each object is on. Editing only.
+    #[serde(default, skip_serializing_if = "Layers::is_empty")]
+    pub layers: Layers,
 }
 fn is_zero(mask: &u32) -> bool {
     *mask == 0
+}
+
+/// How many layers the editor sorts objects into: 0 to 99.
+pub const LAYERS: u8 = 100;
+
+/// Each object's editor layer, in lists beside the map's own. Layers only
+/// sort objects for editing, like locks, and stay out of the map itself.
+/// A list can stop short: objects past its end are on layer 0.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Layers {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    walls: Vec<u8>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    blocks: Vec<u8>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    zones: Vec<u8>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    decor: Vec<u8>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    triggers: Vec<u8>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    spawns: Vec<u8>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    bases: Vec<u8>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    objectives: Vec<u8>,
+}
+impl Layers {
+    fn list(&self, key: Key) -> (&Vec<u8>, usize) {
+        match key {
+            Key::Wall(i) => (&self.walls, i),
+            Key::Block(i) => (&self.blocks, i),
+            Key::Zone(i) => (&self.zones, i),
+            Key::Decor(i) => (&self.decor, i),
+            Key::Trigger(i) => (&self.triggers, i),
+            Key::Spawn(i) => (&self.spawns, i),
+            Key::Base(i) => (&self.bases, i),
+            Key::Objective(i) => (&self.objectives, i),
+        }
+    }
+    fn list_mut(&mut self, key: Key) -> (&mut Vec<u8>, usize) {
+        match key {
+            Key::Wall(i) => (&mut self.walls, i),
+            Key::Block(i) => (&mut self.blocks, i),
+            Key::Zone(i) => (&mut self.zones, i),
+            Key::Decor(i) => (&mut self.decor, i),
+            Key::Trigger(i) => (&mut self.triggers, i),
+            Key::Spawn(i) => (&mut self.spawns, i),
+            Key::Base(i) => (&mut self.bases, i),
+            Key::Objective(i) => (&mut self.objectives, i),
+        }
+    }
+    fn lists_mut(&mut self) -> [&mut Vec<u8>; 8] {
+        [
+            &mut self.walls,
+            &mut self.blocks,
+            &mut self.zones,
+            &mut self.decor,
+            &mut self.triggers,
+            &mut self.spawns,
+            &mut self.bases,
+            &mut self.objectives,
+        ]
+    }
+    pub fn is_empty(&self) -> bool {
+        [
+            &self.walls,
+            &self.blocks,
+            &self.zones,
+            &self.decor,
+            &self.triggers,
+            &self.spawns,
+            &self.bases,
+            &self.objectives,
+        ]
+        .iter()
+        .all(|list| list.is_empty())
+    }
+    /// The layer of the object at `key`.
+    pub fn get(&self, key: Key) -> u8 {
+        let (list, index) = self.list(key);
+        list.get(index).copied().unwrap_or(0)
+    }
+    /// Puts the object at `key` on `layer`.
+    pub fn set(&mut self, key: Key, layer: u8) {
+        let layer = layer.min(LAYERS - 1);
+        let (list, index) = self.list_mut(key);
+        if index >= list.len() {
+            if layer == 0 {
+                return;
+            }
+            list.resize(index + 1, 0);
+        }
+        list[index] = layer;
+        trim(list);
+    }
+    /// The pad layers by index, for drawing, and the decor's.
+    pub fn floor(&self) -> (&[u8], &[u8]) {
+        (&self.zones, &self.decor)
+    }
+    /// Forgets anything kept for `key` and past it, for an object just
+    /// added at the end of its list.
+    fn added(&mut self, key: Key) {
+        let (list, index) = self.list_mut(key);
+        list.truncate(index);
+    }
+    /// Closes the gap an object removed at `key` leaves.
+    fn removed(&mut self, key: Key) {
+        let (list, index) = self.list_mut(key);
+        if index < list.len() {
+            list.remove(index);
+            trim(list);
+        }
+    }
+    /// Drops layers out of range or past the end of `map`'s lists, as a
+    /// file written by hand might hold.
+    fn fit(&mut self, map: &MapDef) {
+        for (list, length) in self.lists_mut().into_iter().zip(list_lengths(map)) {
+            list.truncate(length);
+            for layer in list.iter_mut() {
+                *layer = (*layer).min(LAYERS - 1);
+            }
+            trim(list);
+        }
+    }
+    /// Carries layers over to `after`, a rewrite of the map `before`, as a
+    /// plugin tool makes. An object keeps its layer if it is unchanged, in
+    /// its place or elsewhere in its list, or if it changed in place in a
+    /// list that kept its length.
+    pub fn follow(&mut self, before: &MapDef, after: &MapDef) {
+        fn carry<T: PartialEq>(layers: &mut Vec<u8>, before: &[T], after: &[T]) {
+            if layers.is_empty() {
+                return;
+            }
+            let old = std::mem::take(layers);
+            // Only objects off layer 0 need finding.
+            let wanted: Vec<usize> = (0..old.len().min(before.len()))
+                .filter(|&i| old[i] != 0)
+                .collect();
+            let mut found: Vec<Option<usize>> = vec![None; wanted.len()];
+            let mut taken = vec![false; after.len()];
+            for (slot, &i) in wanted.iter().enumerate() {
+                if after.get(i) == Some(&before[i]) {
+                    found[slot] = Some(i);
+                    taken[i] = true;
+                }
+            }
+            for (slot, &i) in wanted.iter().enumerate() {
+                if found[slot].is_none()
+                    && let Some(at) = (0..after.len()).find(|&j| !taken[j] && after[j] == before[i])
+                {
+                    found[slot] = Some(at);
+                    taken[at] = true;
+                }
+            }
+            // One edited in place is new to the list, unlike one moved or
+            // copied there.
+            if before.len() == after.len() {
+                for (slot, &i) in wanted.iter().enumerate() {
+                    if found[slot].is_none() && !taken[i] && !before.contains(&after[i]) {
+                        found[slot] = Some(i);
+                        taken[i] = true;
+                    }
+                }
+            }
+            for (slot, &i) in wanted.iter().enumerate() {
+                if let Some(at) = found[slot] {
+                    if layers.len() <= at {
+                        layers.resize(at + 1, 0);
+                    }
+                    layers[at] = old[i];
+                }
+            }
+            trim(layers);
+        }
+        carry(&mut self.walls, &before.walls, &after.walls);
+        carry(&mut self.blocks, &before.blocks, &after.blocks);
+        carry(&mut self.zones, &before.zones, &after.zones);
+        carry(&mut self.decor, &before.decor, &after.decor);
+        carry(&mut self.triggers, &before.triggers, &after.triggers);
+        carry(
+            &mut self.spawns,
+            &before.spawn_regions,
+            &after.spawn_regions,
+        );
+        carry(&mut self.bases, &before.team_bases, &after.team_bases);
+        carry(
+            &mut self.objectives,
+            &before.objective_positions,
+            &after.objective_positions,
+        );
+    }
+}
+fn trim(list: &mut Vec<u8>) {
+    while list.last() == Some(&0) {
+        list.pop();
+    }
+}
+/// The lengths of `map`'s object lists, in the order `Key` sorts them.
+fn list_lengths(map: &MapDef) -> [usize; 8] {
+    [
+        map.walls.len(),
+        map.blocks.len(),
+        map.zones.len(),
+        map.decor.len(),
+        map.triggers.len(),
+        map.spawn_regions.len(),
+        map.team_bases.len(),
+        map.objective_positions.len(),
+    ]
 }
 /// An object's place in the document. Keys order as the editor draws:
 /// walls, blocks, pads, decorations, triggers, then markers.
@@ -221,6 +435,7 @@ impl Default for Document {
             map,
             rules: Default::default(),
             locked: 0,
+            layers: Layers::default(),
         }
     }
 }
@@ -240,11 +455,12 @@ impl Document {
                 DOCUMENT_BYTES >> 20
             ));
         }
-        let doc: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let mut doc: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
         if doc.format != 1 {
             return Err("Unsupported editor format or document limits exceeded.".into());
         }
         doc.check_draft()?;
+        doc.layers.fit(&doc.map);
         Ok(doc)
     }
     /// The limits every draft keeps, playable or not: sizes, counts,
@@ -327,6 +543,7 @@ impl Document {
                 ]
             })
             .collect();
+        self.layers.walls.clear();
         self.map.procedural = MapProcedure::None;
         Ok(())
     }
@@ -384,6 +601,68 @@ impl Document {
                 .enumerate()
                 .map(move |(i, p)| (Key::Objective(i), point(*p), 0)),
         )
+    }
+    /// Every object from the top down, as clicks find them: the editor's
+    /// own marks (markers, then triggers) over the arena, and the arena as
+    /// it is drawn: decor above tanks, blocks, walls, decor below tanks and
+    /// pads.
+    pub fn items_from_top(&self) -> impl Iterator<Item = (Key, [f32; 4], u8)> + '_ {
+        let m = &self.map;
+        let point = |p: [f32; 2]| [p[0] - 0.01, p[1] - 0.01, 0.02, 0.02];
+        let decor = move |above: bool| {
+            m.decor
+                .iter()
+                .enumerate()
+                .rev()
+                .filter(move |(_, o)| o.above == above)
+                .map(|(i, o)| (Key::Decor(i), o.rect, o.group))
+        };
+        (m.objective_positions.iter().enumerate().rev())
+            .map(move |(i, p)| (Key::Objective(i), point(*p), 0))
+            .chain(
+                m.team_bases
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .map(move |(i, o)| (Key::Base(i), point(o.position), 0)),
+            )
+            .chain(
+                m.spawn_regions
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .map(|(i, o)| (Key::Spawn(i), o.rect, 0)),
+            )
+            .chain(
+                m.triggers
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .map(|(i, o)| (Key::Trigger(i), o.rect, o.member)),
+            )
+            .chain(decor(true))
+            .chain(
+                m.blocks
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .map(|(i, o)| (Key::Block(i), o.rect, o.group)),
+            )
+            .chain(
+                m.walls
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .map(|(i, r)| (Key::Wall(i), *r, 0)),
+            )
+            .chain(decor(false))
+            .chain(
+                m.zones
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .map(|(i, o)| (Key::Zone(i), o.rect, o.group)),
+            )
     }
     pub fn len(&self) -> usize {
         let m = &self.map;
@@ -471,10 +750,17 @@ impl Document {
     /// line (FlipX) or its horizon (FlipY); turns mirror like flips. Returns
     /// the copies' keys, which stop at a limit.
     pub fn mirror_copy(&mut self, keys: &[Key], axis: Transform) -> Vec<Key> {
-        let objects: Vec<Object> = keys.iter().filter_map(|&key| self.object(key)).collect();
+        let objects: Vec<(Object, u8)> = keys
+            .iter()
+            .filter_map(|&key| Some((self.object(key)?, self.layers.get(key))))
+            .collect();
         let copies: Vec<Key> = objects
             .into_iter()
-            .filter_map(|object| self.insert(object))
+            .filter_map(|(object, layer)| {
+                let key = self.insert(object)?;
+                self.layers.set(key, layer);
+                Some(key)
+            })
             .collect();
         let center = [self.map.width * 0.5, self.map.height * 0.5];
         self.transform_about(&copies, axis, center);
@@ -657,55 +943,67 @@ impl Document {
     /// Move the objects of `keys` to the end of their lists (drawn on top and,
     /// for triggers, run last) or the start. Returns their new keys.
     pub fn order(&mut self, keys: &[Key], front: bool) -> Vec<Key> {
-        fn reorder<T>(items: &mut Vec<T>, chosen: &[usize], front: bool) -> std::ops::Range<usize> {
+        fn reorder<T>(
+            items: &mut Vec<T>,
+            layers: &mut Vec<u8>,
+            chosen: &[usize],
+            front: bool,
+        ) -> std::ops::Range<usize> {
+            layers.resize(items.len(), 0);
             let (mut picked, mut rest) = (Vec::new(), Vec::new());
-            for (index, item) in items.drain(..).enumerate() {
-                if chosen.contains(&index) {
+            for (index, item) in items.drain(..).zip(layers.drain(..)).enumerate() {
+                if chosen.binary_search(&index).is_ok() {
                     picked.push(item);
                 } else {
                     rest.push(item);
                 }
             }
             let (count, others) = (picked.len(), rest.len());
-            if front {
+            let (order, moved) = if front {
                 rest.append(&mut picked);
-                *items = rest;
-                others..others + count
+                (rest, others..others + count)
             } else {
                 picked.append(&mut rest);
-                *items = picked;
-                0..count
-            }
+                (picked, 0..count)
+            };
+            (*items, *layers) = order.into_iter().unzip();
+            trim(layers);
+            moved
         }
         let indices = |wanted: fn(Key) -> Option<usize>| -> Vec<usize> {
-            keys.iter().filter_map(|&key| wanted(key)).collect()
+            let mut chosen: Vec<usize> = keys.iter().filter_map(|&key| wanted(key)).collect();
+            chosen.sort_unstable();
+            chosen
         };
-        let m = &mut self.map;
+        let (m, l) = (&mut self.map, &mut self.layers);
         let mut moved = Vec::new();
         macro_rules! list {
-            ($items:expr, $variant:ident) => {
+            ($items:expr, $layers:expr, $variant:ident) => {
                 let chosen = indices(|key| match key {
                     Key::$variant(i) => Some(i),
                     _ => None,
                 });
                 if !chosen.is_empty() {
-                    moved.extend(reorder(&mut $items, &chosen, front).map(Key::$variant));
+                    moved.extend(
+                        reorder(&mut $items, &mut $layers, &chosen, front).map(Key::$variant),
+                    );
                 }
             };
         }
-        list!(m.walls, Wall);
-        list!(m.blocks, Block);
-        list!(m.zones, Zone);
-        list!(m.decor, Decor);
-        list!(m.triggers, Trigger);
-        list!(m.spawn_regions, Spawn);
-        list!(m.team_bases, Base);
-        list!(m.objective_positions, Objective);
+        list!(m.walls, l.walls, Wall);
+        list!(m.blocks, l.blocks, Block);
+        list!(m.zones, l.zones, Zone);
+        list!(m.decor, l.decor, Decor);
+        list!(m.triggers, l.triggers, Trigger);
+        list!(m.spawn_regions, l.spawns, Spawn);
+        list!(m.team_bases, l.bases, Base);
+        list!(m.objective_positions, l.objectives, Objective);
         moved
     }
     /// Add `objects` so the top-left of their bounds lands at `at` (clamped
-    /// inside the arena). Returns the keys added, which stop at a limit.
-    pub fn place(&mut self, objects: &[Object], at: [f32; 2]) -> Vec<Key> {
+    /// inside the arena), each on the matching entry of `layers` or else
+    /// layer 0. Returns the keys added, which stop at a limit.
+    pub fn place(&mut self, objects: &[Object], layers: &[u8], at: [f32; 2]) -> Vec<Key> {
         let mut rects = objects.iter().map(Object::rect);
         let Some(first) = rects.next() else {
             return Vec::new();
@@ -724,13 +1022,14 @@ impl Document {
             at[1].clamp(0., (1. - size[1]).max(0.)),
         ];
         let mut added = Vec::new();
-        for object in objects {
+        for (index, object) in objects.iter().enumerate() {
             let mut object = object.clone();
             let r = object.rect();
             object.set_rect([r[0] - lo[0] + at[0], r[1] - lo[1] + at[1], r[2], r[3]]);
-            match self.insert(object) {
-                Some(key) => added.push(key),
-                None => continue,
+            if let Some(key) = self.insert(object) {
+                self.layers
+                    .set(key, layers.get(index).copied().unwrap_or(0));
+                added.push(key);
             }
         }
         added
@@ -1159,9 +1458,11 @@ impl Document {
             _ => {}
         }
     }
+    /// Adds `object` at the end of its list, on layer 0, unless a limit
+    /// stops it.
     pub fn insert(&mut self, object: Object) -> Option<Key> {
         let m = &mut self.map;
-        Some(match object {
+        let key = match object {
             Object::Wall(o) if m.walls.len() + m.blocks.len() < tankyard_content::MAP_BLOCKS => {
                 m.walls.push(o);
                 Key::Wall(m.walls.len() - 1)
@@ -1205,7 +1506,9 @@ impl Document {
                 Key::Objective(m.objective_positions.len() - 1)
             }
             _ => return None,
-        })
+        };
+        self.layers.added(key);
+        Some(key)
     }
     pub fn delete(&mut self, keys: &[Key]) {
         let mut keys = keys.to_vec();
@@ -1213,6 +1516,10 @@ impl Document {
         keys.dedup();
         // Reverse order keeps all indices valid while removing a batch.
         for key in keys.into_iter().rev() {
+            if self.rect(key).is_none() {
+                continue;
+            }
+            self.layers.removed(key);
             match key {
                 Key::Wall(i) => {
                     self.map.walls.remove(i);
@@ -1277,152 +1584,145 @@ pub enum Link {
     Signal,
     /// Its otherwise signal, sent while its gate is shut, wakes the other.
     Otherwise,
-    /// It changes a counter the other watches or checks.
+    /// It changes a counter the other watches, checks, uses or shows.
     Counter,
-    /// It switches a group the other watches or checks.
+    /// It switches a group the other watches, checks or shows, or plays a
+    /// motion the other waits for.
     Group,
     /// It resets the other.
     Reset,
 }
 
-/// Whether, and how, `from` acting can affect `to`.
+/// Whether, and how, `from` acting can affect `to`, the strongest way when
+/// there are several: a signal, then a counter, a group, a reset and last
+/// an otherwise signal.
 pub fn link(from: &MapTrigger, to: &MapTrigger) -> Option<Link> {
+    let listens = |channel: u8| to.when == TriggerWhen::Signal && to.source == channel;
+    if from.sends().any(listens) {
+        return Some(Link::Signal);
+    }
     // 0 names no counter or group: a Calculate that picks its counter by
     // another's value can't be followed.
-    let reads_counter = |counter: u8| {
-        counter > 0
-            && ((matches!(to.when, TriggerWhen::Counter | TriggerWhen::Changed)
-                && to.source == counter)
-                || to.conditions().any(|test| {
-                    (test.kind == TestKind::Counter && test.index == counter)
-                        || (test.kind.compares() && test.against == counter)
-                }))
-    };
-    let reads_group = |group: u8| {
-        group > 0
-            && ((matches!(to.when, TriggerWhen::Shown | TriggerWhen::Hidden) && to.source == group)
-                || to
-                    .conditions()
-                    .any(|test| !test.kind.compares() && test.index == group))
-    };
-    let awaits = |group: u8| group > 0 && to.when == TriggerWhen::Arrived && to.source == group;
-    let listens = |channel: u8| to.when == TriggerWhen::Signal && to.source == channel;
-    if from.sends().any(&listens) {
-        Some(Link::Signal)
-    } else if from.action.targets_counter() && reads_counter(from.group) {
-        Some(Link::Counter)
-    } else if (from.action.switches_group() && reads_group(from.group))
-        || (from.action.animates() && awaits(from.group))
+    let mut read = Vec::new();
+    if from.action.targets_counter() && from.group > 0 {
+        counters_read(to, &mut read);
+        if read.contains(&from.group) {
+            return Some(Link::Counter);
+        }
+    }
+    if from.action.switches_group() && from.group > 0 {
+        groups_watched(to, &mut read);
+        if read.contains(&from.group) {
+            return Some(Link::Group);
+        }
+    }
+    if from.action.animates()
+        && from.group > 0
+        && to.when == TriggerWhen::Arrived
+        && to.source == from.group
     {
-        Some(Link::Group)
-    } else if from.action == TriggerAction::Reset && (from.group == 0 || to.member == from.group) {
-        Some(Link::Reset)
-    } else if from.otherwise > 0 && from.only_if.is_some() && listens(from.otherwise) {
-        Some(Link::Otherwise)
-    } else {
-        None
+        return Some(Link::Group);
+    }
+    if from.action == TriggerAction::Reset && (from.group == 0 || to.member == from.group) {
+        return Some(Link::Reset);
+    }
+    (from.otherwise > 0 && from.only_if.is_some() && listens(from.otherwise))
+        .then_some(Link::Otherwise)
+}
+
+/// The counters `t` watches, checks, uses or shows, each once, into `out`:
+/// Counter and On change triggers' counter, conditions, Calculate's
+/// operand and offsets, and what a Show UI widget or announcement shows.
+pub fn counters_read(t: &MapTrigger, out: &mut Vec<u8>) {
+    out.clear();
+    let mut named = Vec::new();
+    if matches!(t.when, TriggerWhen::Counter | TriggerWhen::Changed) {
+        named.push(t.source);
+    }
+    for test in t.conditions() {
+        if test.kind == TestKind::Counter {
+            named.push(test.index);
+        }
+        if test.kind.compares() {
+            named.push(test.against);
+        }
+    }
+    if t.action == TriggerAction::Calculate {
+        named.extend([t.target_offset, t.operand, t.operand_offset]);
+    }
+    if t.action == TriggerAction::Announce {
+        counters_named(&t.text, &mut named);
+    }
+    if let (TriggerAction::Ui, Some(ui)) = (t.action, &t.ui) {
+        named.push(ui.bar);
+        counters_named(&ui.widget.title, &mut named);
+        counters_named(&ui.widget.text, &mut named);
+        for cell in ui.widget.board.iter().flat_map(|board| &board.cells) {
+            counters_named(&cell.text, &mut named);
+            // A group lights a light or button in place of its counter.
+            let lit_by_counter = cell.kind.lights() && cell.group == 0;
+            if lit_by_counter || cell.kind == HudCellKind::Meter {
+                named.push(cell.counter);
+            }
+        }
+    }
+    for counter in named {
+        if counter > 0 && !out.contains(&counter) {
+            out.push(counter);
+        }
     }
 }
 
-/// Which triggers each signal, counter and group reaches, so following
-/// links never searches every trigger.
-pub struct LinkIndex {
-    /// By channel: triggers waiting for its signal.
-    listeners: Vec<Vec<usize>>,
-    /// By counter: triggers that watch or check it.
-    counters: Vec<Vec<usize>>,
-    /// By group: triggers that watch, check or wait for it.
-    groups: Vec<Vec<usize>>,
-    /// By group: the triggers in it, which resetting it resets.
-    members: Vec<Vec<usize>>,
+/// The groups whose showing or hiding `t` watches, checks or shows, each
+/// once, into `out`: Shown and Hidden triggers' group, group conditions and
+/// board cells a group lights.
+pub fn groups_watched(t: &MapTrigger, out: &mut Vec<u8>) {
+    out.clear();
+    let mut named = Vec::new();
+    if matches!(t.when, TriggerWhen::Shown | TriggerWhen::Hidden) {
+        named.push(t.source);
+    }
+    for test in t.conditions() {
+        if !test.kind.compares() {
+            named.push(test.index);
+        }
+    }
+    if let (TriggerAction::Ui, Some(ui)) = (t.action, &t.ui) {
+        for cell in ui.widget.board.iter().flat_map(|board| &board.cells) {
+            if cell.kind.lights() {
+                named.push(cell.group);
+            }
+        }
+    }
+    for group in named {
+        if group > 0 && !out.contains(&group) {
+            out.push(group);
+        }
+    }
 }
-impl LinkIndex {
+
+/// Which triggers listen on each signal channel, so following signals
+/// never searches every trigger.
+pub struct Listeners {
+    /// By channel, from 1.
+    lists: Vec<Vec<usize>>,
+}
+impl Listeners {
     pub fn new(triggers: &[MapTrigger]) -> Self {
-        let mut index = Self {
-            listeners: vec![Vec::new(); usize::from(MAP_CHANNELS) + 1],
-            counters: vec![Vec::new(); usize::from(MAP_COUNTERS) + 1],
-            groups: vec![Vec::new(); usize::from(MAP_GROUPS) + 1],
-            members: vec![Vec::new(); usize::from(MAP_GROUPS) + 1],
-        };
-        // Slot 0 is no channel, counter or group.
-        fn add(lists: &mut [Vec<usize>], slot: u8, trigger: usize) {
-            if slot > 0
-                && let Some(list) = lists.get_mut(usize::from(slot))
-                && list.last() != Some(&trigger)
-            {
-                list.push(trigger);
-            }
-        }
+        let mut lists = vec![Vec::new(); usize::from(MAP_CHANNELS) + 1];
         for (at, t) in triggers.iter().enumerate() {
-            match t.when {
-                TriggerWhen::Signal => add(&mut index.listeners, t.source, at),
-                TriggerWhen::Counter | TriggerWhen::Changed => {
-                    add(&mut index.counters, t.source, at)
-                }
-                TriggerWhen::Shown | TriggerWhen::Hidden | TriggerWhen::Arrived => {
-                    add(&mut index.groups, t.source, at)
-                }
-                _ => {}
+            // Slot 0 is no channel.
+            if t.when == TriggerWhen::Signal && t.source > 0 {
+                lists[usize::from(t.source)].push(at);
             }
-            for test in t.conditions() {
-                if test.kind == TestKind::Counter {
-                    add(&mut index.counters, test.index, at);
-                }
-                if test.kind.compares() {
-                    add(&mut index.counters, test.against, at);
-                } else {
-                    add(&mut index.groups, test.index, at);
-                }
-            }
-            add(&mut index.members, t.member, at);
         }
-        index
+        Self { lists }
     }
     /// The triggers waiting for a signal on `channel`.
-    pub fn listening(&self, channel: u8) -> &[usize] {
-        self.listeners
+    pub fn on(&self, channel: u8) -> &[usize] {
+        self.lists
             .get(usize::from(channel))
             .map_or(&[], Vec::as_slice)
-    }
-    /// What trigger `at` acting can affect and how, each once, into `out`.
-    pub fn affected(&self, triggers: &[MapTrigger], at: usize, out: &mut Vec<(usize, Link)>) {
-        out.clear();
-        let Some(from) = triggers.get(at) else {
-            return;
-        };
-        let mut reach: Vec<usize> = Vec::new();
-        for channel in from.sends() {
-            reach.extend_from_slice(self.listening(channel));
-        }
-        if from.otherwise > 0 && from.only_if.is_some() {
-            reach.extend_from_slice(self.listening(from.otherwise));
-        }
-        let slot = usize::from(from.group);
-        if from.action.targets_counter()
-            && let Some(list) = self.counters.get(slot)
-        {
-            reach.extend_from_slice(list);
-        }
-        if (from.action.switches_group() || from.action.animates())
-            && let Some(list) = self.groups.get(slot)
-        {
-            reach.extend_from_slice(list);
-        }
-        if from.action == TriggerAction::Reset {
-            if from.group == 0 {
-                reach.extend(0..triggers.len());
-            } else if let Some(list) = self.members.get(slot) {
-                reach.extend_from_slice(list);
-            }
-        }
-        reach.sort_unstable();
-        reach.dedup();
-        out.extend(
-            reach
-                .into_iter()
-                .filter(|&other| other != at)
-                .filter_map(|other| Some((other, link(from, triggers.get(other)?)?))),
-        );
     }
 }
 
@@ -1430,7 +1730,7 @@ impl LinkIndex {
 /// index, when there are any: no delay, gate or chance, and not once per round.
 fn signal_loop(triggers: &[MapTrigger]) -> Option<Vec<usize>> {
     let free = |t: &MapTrigger| t.delay == 0. && t.chance == 100 && !t.once && t.only_if.is_none();
-    let links = LinkIndex::new(triggers);
+    let listeners = Listeners::new(triggers);
     let next: Vec<Vec<usize>> = triggers
         .iter()
         .map(|t| {
@@ -1439,7 +1739,7 @@ fn signal_loop(triggers: &[MapTrigger]) -> Option<Vec<usize>> {
             }
             let mut to: Vec<usize> = t
                 .sends()
-                .flat_map(|channel| links.listening(channel).iter().copied())
+                .flat_map(|channel| listeners.on(channel).iter().copied())
                 .filter(|&other| free(&triggers[other]))
                 .collect();
             to.sort_unstable();
@@ -1652,6 +1952,7 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         TriggerWhen::Cleared => format!("When the last {}{team} leaves", &who[2..]),
         TriggerWhen::Destroyed => format!("When {who}{team} is destroyed here"),
         TriggerWhen::Changed => format!("When counter {} changes", t.source),
+        TriggerWhen::Inputs => "When a counter or group its conditions read changes".into(),
         TriggerWhen::Shown => format!("When group {} is shown", t.source),
         TriggerWhen::Hidden => format!("When group {} is hidden", t.source),
         TriggerWhen::Arrived => format!("When group {} finishes a motion", t.source),
@@ -1662,7 +1963,8 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
             None => "When a boss is defeated".into(),
         },
     };
-    if let Some(gate) = describe_gate(t) {
+    // Gate to counter stores its gate rather than waiting on it.
+    if let Some(gate) = describe_gate(t).filter(|_| t.action != TriggerAction::Output) {
         text += ", ";
         text += &gate;
     }
@@ -1683,6 +1985,13 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
         TriggerAction::Count => format!("add {} to counter {}", t.amount, t.group),
         TriggerAction::Shapes => format!("spawn {} shapes here", t.amount),
         TriggerAction::Set => format!("set counter {} to {}", t.group, t.amount),
+        TriggerAction::Output => match describe_gate(t) {
+            Some(gate) => format!(
+                "set counter {} to {} {gate}, otherwise to 0",
+                t.group, t.amount
+            ),
+            None => format!("set counter {} to {}", t.group, t.amount),
+        },
         TriggerAction::Random => format!(
             "send one of signals {} to {}",
             t.group,
@@ -1929,13 +2238,16 @@ pub fn describe_gate(t: &MapTrigger) -> Option<String> {
     };
     Some(match (t.gate, tests.len()) {
         (_, 0) => return None,
-        (GateMode::NotAll | GateMode::NoneOf, 1) => format!("unless {}", tests[0]),
-        (GateMode::All | GateMode::Any | GateMode::One, 1) => format!("if {}", tests[0]),
+        (gate, 1) if gate.inverts() => format!("unless {}", tests[0]),
+        (_, 1) => format!("if {}", tests[0]),
         (GateMode::All, _) => format!("if {}", list("and")),
         (GateMode::Any, _) => format!("if {}", list("or")),
         (GateMode::NotAll, _) => format!("unless {}", list("and")),
         (GateMode::NoneOf, _) => format!("unless {}", list("or")),
         (GateMode::One, _) => format!("if just one of {} holds", list("or")),
+        (GateMode::Even, _) => format!("if an even number of these hold: {}", list("and")),
+        (GateMode::Odd, _) => format!("if an odd number of these hold: {}", list("and")),
+        (GateMode::Most, _) => format!("if most of these hold: {}", list("and")),
     })
 }
 /// A condition in a few characters: "#1≥3", "G4 on".
@@ -1961,7 +2273,7 @@ fn gate_tag(t: &MapTrigger, compact: bool) -> Option<String> {
     let tests: Vec<String> = t.conditions().map(test_tag).collect();
     Some(match (t.gate, tests.len()) {
         (_, 0) => return None,
-        (GateMode::NotAll | GateMode::NoneOf, 1) => format!("not {}", tests[0]),
+        (gate, 1) if gate.inverts() => format!("not {}", tests[0]),
         (_, 1) => tests[0].clone(),
         (gate, n) if compact => format!("{} of {n}", gate.short()),
         (gate, _) => format!("{}({})", gate.short(), tests.join(", ")),
@@ -2060,6 +2372,7 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
         TriggerWhen::Cleared => "Empty".into(),
         TriggerWhen::Destroyed => "Destroy".into(),
         TriggerWhen::Changed => format!("#{} changes", t.source),
+        TriggerWhen::Inputs => "Inputs".into(),
         TriggerWhen::Shown => format!("G{} shown", t.source),
         TriggerWhen::Hidden => format!("G{} hidden", t.source),
         TriggerWhen::Defeated => "Boss down".into(),
@@ -2077,6 +2390,14 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
         TriggerAction::Count => format!("#{} {:+}", t.group, t.amount),
         TriggerAction::Shapes => format!("{} shapes", t.amount),
         TriggerAction::Set => format!("#{} = {}", t.group, t.amount),
+        TriggerAction::Output => {
+            let gate = gate_tag(t, compact);
+            match (gate, t.amount) {
+                (Some(gate), 1) => format!("#{} = {gate}", t.group),
+                (Some(gate), amount) => format!("#{} = {amount} if {gate}", t.group),
+                (None, amount) => format!("#{} = {amount}", t.group),
+            }
+        }
         TriggerAction::Random => format!(
             "Send {}\u{2013}{}",
             t.group,
@@ -2147,7 +2468,7 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
         TriggerAction::HideUi if t.group == 0 => "Hide all UI".into(),
         TriggerAction::HideUi => format!("Hide UI {}", t.group),
     };
-    let mut tag = match gate_tag(t, compact) {
+    let mut tag = match gate_tag(t, compact).filter(|_| t.action != TriggerAction::Output) {
         Some(gate) => format!("{when} if {gate} \u{2192} {action}"),
         None => format!("{when} \u{2192} {action}"),
     };
@@ -2314,10 +2635,147 @@ mod tests {
     fn placing_keeps_layout_and_stays_inside() {
         let mut doc = Document::default();
         let objects = [block([0.1, 0.1, 0.1, 0.1]), block([0.3, 0.2, 0.1, 0.1])];
-        let keys = doc.place(&objects, [0.95, 0.5]);
+        let keys = doc.place(&objects, &[], [0.95, 0.5]);
         assert_eq!(keys.len(), 2);
         let b = doc.bounds(&keys).unwrap();
         assert!(close(b, [0.7, 0.5, 0.3, 0.2]));
+    }
+    #[test]
+    fn layers_follow_their_objects_through_every_edit() {
+        let mut doc = Document::default();
+        let keys: Vec<Key> = (0..5)
+            .map(|i| {
+                doc.insert(block([0.1 * i as f32, 0.1, 0.05, 0.05]))
+                    .unwrap()
+            })
+            .collect();
+        for (&key, layer) in keys.iter().zip([0, 3, 0, 7, 9]) {
+            doc.layers.set(key, layer);
+        }
+        let layer_at = |doc: &Document, x: f32| {
+            let key = doc
+                .keys()
+                .into_iter()
+                .find(|&key| (doc.rect(key).unwrap()[0] - x).abs() < 1e-4)
+                .unwrap();
+            doc.layers.get(key)
+        };
+        // Deleting closes the gap; the rest keep their layers.
+        doc.delete(&[Key::Block(1)]);
+        assert_eq!(layer_at(&doc, 0.3), 7);
+        assert_eq!(layer_at(&doc, 0.4), 9);
+        // Ordering carries layers along.
+        doc.order(&[Key::Block(2)], false);
+        assert_eq!(doc.layers.get(Key::Block(0)), 7);
+        assert_eq!(layer_at(&doc, 0.4), 9);
+        assert_eq!(layer_at(&doc, 0.0), 0);
+        // A new object starts on layer 0, even where a removed one was.
+        let added = doc.insert(block([0.6, 0.6, 0.05, 0.05])).unwrap();
+        assert_eq!(doc.layers.get(added), 0);
+        // Placing copies sets each one's layer; mirrors keep the original's.
+        let copies = doc.place(&[block([0.2, 0.2, 0.1, 0.1])], &[42], [0.5, 0.5]);
+        assert_eq!(doc.layers.get(copies[0]), 42);
+        let mirrored = doc.mirror_copy(&[Key::Block(0)], Transform::FlipX);
+        assert_eq!(doc.layers.get(mirrored[0]), 7);
+        // Saved and opened again, everything stays put; layers past the
+        // lists or out of range in a hand-edited file are dropped.
+        let json = serde_json::to_vec(&doc).unwrap();
+        let back = Document::from_json(&json).unwrap();
+        assert_eq!(back, doc);
+        let mut wild = doc.clone();
+        wild.layers.blocks.extend([5, 5, 5]);
+        wild.layers.walls = vec![200];
+        let opened = Document::from_json(&serde_json::to_vec(&wild).unwrap()).unwrap();
+        assert_eq!(
+            opened.layers.blocks.len(),
+            doc.map.blocks.len().min(opened.layers.blocks.len())
+        );
+        assert!(opened.layers.blocks.len() <= opened.map.blocks.len());
+        assert!(opened.layers.walls.is_empty());
+        // A project with every object on layer 0 saves no layers at all.
+        let plain = Document::default();
+        let text = String::from_utf8(serde_json::to_vec(&plain).unwrap()).unwrap();
+        assert!(!text.contains("layers"));
+    }
+    #[test]
+    fn clicks_find_objects_in_the_order_they_are_drawn() {
+        let mut doc = Document::default();
+        doc.map.spawn_regions.clear();
+        doc.map.walls = vec![[0.1, 0.1, 0.3, 0.3]];
+        let square = [0.1, 0.1, 0.3, 0.3];
+        let tile = |above: bool| {
+            Object::Decor(MapDecor {
+                kind: DecorKind::Tile,
+                rect: square,
+                color: [90, 120, 140],
+                alpha: 90,
+                rotation: 0.,
+                pulse: 0.,
+                spin: 0.,
+                above,
+                text: String::new(),
+                effect: None,
+                group: 0,
+                flicker: 0.,
+                react: DecorReact::None,
+                reach: 0.,
+            })
+        };
+        let floor = doc.insert(tile(false)).unwrap();
+        let roof = doc.insert(tile(true)).unwrap();
+        let pad = doc
+            .insert(Object::Zone(MapZone {
+                kind: ZoneKind::Speed,
+                rect: square,
+                strength: 1.,
+                group: 0,
+                angle: 0.,
+                exit: [0., 0.],
+            }))
+            .unwrap();
+        let wall = doc.insert(block(square)).unwrap();
+        let trigger = doc
+            .insert(Object::Trigger(MapTrigger {
+                rect: square,
+                ..Default::default()
+            }))
+            .unwrap();
+        let order: Vec<Key> = doc.items_from_top().map(|(key, _, _)| key).collect();
+        assert_eq!(
+            order,
+            vec![trigger, roof, wall, Key::Wall(0), floor, pad],
+            "every object, top first"
+        );
+        assert_eq!(order.len(), doc.len());
+    }
+    #[test]
+    fn layers_survive_a_tool_rewriting_the_map() {
+        let mut doc = Document::default();
+        for i in 0..4 {
+            let key = doc
+                .insert(block([0.1 * i as f32, 0.1, 0.05, 0.05]))
+                .unwrap();
+            doc.layers.set(key, i as u8 * 2);
+        }
+        let before = doc.map.clone();
+        let mut after = before.clone();
+        // The tool drops the second block, recolors the last and adds one.
+        after.blocks.remove(1);
+        after.blocks[2].color = Some([200, 10, 10]);
+        after.blocks.push(after.blocks[0].clone());
+        doc.layers.follow(&before, &after);
+        doc.map = after;
+        assert_eq!(doc.layers.get(Key::Block(0)), 0);
+        assert_eq!(doc.layers.get(Key::Block(1)), 4);
+        // Changed and moved in its list, the last block can't be traced.
+        assert_eq!(doc.layers.get(Key::Block(2)), 0);
+        assert_eq!(doc.layers.get(Key::Block(3)), 0);
+        // With the length kept, an object changed in place keeps its layer.
+        let before = doc.map.clone();
+        let mut after = before.clone();
+        after.blocks[1].color = Some([1, 2, 3]);
+        doc.layers.follow(&before, &after);
+        assert_eq!(doc.layers.get(Key::Block(1)), 4);
     }
     #[test]
     fn free_groups_skip_members_targets_and_hidden_groups() {
@@ -2699,16 +3157,57 @@ mod tests {
                 } else {
                     Vec::new()
                 };
+                let action = TriggerAction::ALL[roll(TriggerAction::ALL.len())];
+                // Announcements and widgets read counters through their
+                // text, and boards send on their buttons' channels.
+                let text = ["", "{1}", "{2|3:4}", "{4:b4} and {9}"][roll(4)].to_owned();
+                let ui = (action == TriggerAction::Ui).then(|| {
+                    let kinds = [
+                        HudCellKind::Label,
+                        HudCellKind::Button,
+                        HudCellKind::Light,
+                        HudCellKind::Meter,
+                        HudCellKind::Digits,
+                    ];
+                    let cells = (0..roll(4))
+                        .map(|_| HudCell {
+                            kind: kinds[roll(kinds.len())],
+                            channel: roll(5) as u8,
+                            counter: roll(5) as u8,
+                            group: roll(3) as u8,
+                            text: text.clone(),
+                            ..HudCell::default()
+                        })
+                        .collect();
+                    Box::new(MapUi {
+                        bar: roll(4) as u8,
+                        channels: vec![roll(5) as u8],
+                        widget: HudWidget {
+                            text: text.clone(),
+                            board: Some(HudBoard {
+                                cells,
+                                ..HudBoard::default()
+                            }),
+                            ..HudWidget::default()
+                        },
+                        ..MapUi::default()
+                    })
+                });
                 MapTrigger {
                     when: TriggerWhen::ALL[roll(TriggerWhen::ALL.len())],
                     source: roll(5) as u8,
-                    action: TriggerAction::ALL[roll(TriggerAction::ALL.len())],
+                    action,
                     group: roll(5) as u8,
                     amount: roll(4) as i32,
                     member: roll(4) as u8,
                     otherwise: roll(4) as u8,
                     only_if,
                     also_if,
+                    operand: roll(4) as u8,
+                    target_offset: roll(3) as u8,
+                    operand_offset: roll(3) as u8,
+                    text,
+                    ui,
                     ..Default::default()
                 }
             })
@@ -2716,20 +3215,48 @@ mod tests {
     }
 
     #[test]
-    fn the_link_index_finds_exactly_the_links_a_full_search_finds() {
-        for seed in 1..40 {
-            let triggers = tangle(60, seed);
-            let index = LinkIndex::new(&triggers);
-            let mut found = Vec::new();
-            for (at, from) in triggers.iter().enumerate() {
-                index.affected(&triggers, at, &mut found);
+    fn the_wiring_finds_exactly_the_links_a_full_search_finds() {
+        use crate::editor_wiring::Wiring;
+        for seed in 1..60 {
+            let mut doc = Document::default();
+            doc.map.triggers = tangle(60, seed);
+            let triggers = &doc.map.triggers;
+            let wiring = Wiring::new(&doc);
+            let (mut from_it, mut into_it) = (Vec::new(), Vec::new());
+            for (at, trigger) in triggers.iter().enumerate() {
+                wiring.links_from(at, &mut from_it);
                 let every: Vec<(usize, Link)> = triggers
                     .iter()
                     .enumerate()
                     .filter(|&(other, _)| other != at)
-                    .filter_map(|(other, to)| Some((other, link(from, to)?)))
+                    .filter_map(|(other, to)| Some((other, link(trigger, to)?)))
                     .collect();
-                assert_eq!(found, every, "seed {seed}, trigger {at}: {from:?}");
+                assert_eq!(from_it, every, "seed {seed}, from {at}: {trigger:?}");
+                wiring.links_into(at, &mut into_it);
+                let every: Vec<(usize, Link)> = triggers
+                    .iter()
+                    .enumerate()
+                    .filter(|&(other, _)| other != at)
+                    .filter_map(|(other, from)| Some((other, link(from, trigger)?)))
+                    .collect();
+                assert_eq!(into_it, every, "seed {seed}, into {at}: {trigger:?}");
+            }
+            // A net joins every trigger on one side to every one on the
+            // other, so a hub never draws a link that isn't there.
+            for net in &wiring.nets {
+                for &from in &net.from {
+                    for &key in &net.to {
+                        if let Key::Trigger(to) = key
+                            && to != from
+                            && net.carrier != crate::editor_wiring::Carrier::Members
+                        {
+                            assert!(
+                                link(&triggers[from], &triggers[to]).is_some(),
+                                "seed {seed}: {net:?} joins {from} to {to}"
+                            );
+                        }
+                    }
+                }
             }
         }
     }

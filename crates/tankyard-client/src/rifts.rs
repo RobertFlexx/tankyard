@@ -2,7 +2,8 @@
 //! far below the floor in three layers, so it slides past the rim as the
 //! camera moves, the far stars slowest. Entries wind their light in toward
 //! the heart and exits pour it out; a rift still waiting for its other end
-//! shows a broken rim.
+//! shows a broken rim. Each player sees their own side's rifts in violet and
+//! teal and an opponent's in crimson and amber, ringed with thorns.
 use crate::render::View;
 use crate::ui::mix;
 use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation};
@@ -13,19 +14,37 @@ use tankyard_core::{
     EntityId, RIFT_CLOSING, RIFT_RADIUS, RIFT_SECONDS, Rift, RiftEnd, RiftShot, Snapshot, V2,
 };
 
-/// Entries are violet, exits teal.
+/// Your own side's rifts: entries violet, exits teal.
 pub const ENTRY: Color = Color::new(0.72, 0.45, 1.0, 1.);
 pub const EXIT: Color = Color::new(0.27, 0.96, 0.84, 1.);
+/// An opponent's rifts: entries crimson, exits amber.
+pub const HOSTILE_ENTRY: Color = Color::new(1.0, 0.27, 0.36, 1.);
+pub const HOSTILE_EXIT: Color = Color::new(1.0, 0.64, 0.2, 1.);
 /// How long a rift takes to open, overshooting a little.
 const OPENING: f32 = 0.42;
 /// The drawn quad reaches past the rim, for the rim's soft edge.
 const QUAD: f32 = 1.25;
 
-pub fn color(end: RiftEnd) -> Color {
-    match end {
-        RiftEnd::Entry => ENTRY,
-        RiftEnd::Exit => EXIT,
+pub fn color(end: RiftEnd, hostile: bool) -> Color {
+    match (end, hostile) {
+        (RiftEnd::Entry, false) => ENTRY,
+        (RiftEnd::Exit, false) => EXIT,
+        (RiftEnd::Entry, true) => HOSTILE_ENTRY,
+        (RiftEnd::Exit, true) => HOSTILE_EXIT,
     }
+}
+/// Whether a rift `owner` on `team` made is an opponent's to the player
+/// `viewer` on `viewer_team`: one they can't travel through.
+pub fn hostile(owner: EntityId, team: u8, viewer: EntityId, viewer_team: u8) -> bool {
+    owner != viewer && (team == 0 || team != viewer_team)
+}
+/// The team of the player `local`, or 0.
+pub fn team_of(snapshot: &Snapshot, local: EntityId) -> u8 {
+    snapshot
+        .tanks
+        .iter()
+        .find(|tank| tank.id == local)
+        .map_or(0, |tank| tank.team)
 }
 
 /// Each layer of deep space: how fast it slides compared with the floor,
@@ -46,7 +65,7 @@ void main() { gl_Position = Projection * Model * vec4(position, 1.0); uv = texco
 // rift's heart in that layer's star cells. Shape: star cells per rim
 // radius for the far and near layers, +1 entry or -1 exit, and the size of
 // a pixel in rim radii. Look: rim color and opacity. Clock: seconds,
-// whether linked, how far collapsed.
+// whether linked, how far collapsed, and 1 for an opponent's rift.
 const FRAGMENT: &str = r#"#version 100
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -123,7 +142,7 @@ void main() {
     float haze = clouds(far * 0.42 + vec2(t * 0.02, -t * 0.013));
     float drift = clouds(near * 0.55 - vec2(t * 0.03, t * 0.02));
     color += Look.rgb * pow(haze, 3.0) * 1.15;
-    color += vec3(0.55, 0.22, 0.85) * pow(drift, 4.0) * 0.9;
+    color += mix(vec3(0.55, 0.22, 0.85), vec3(0.8, 0.2, 0.16), Clock.w) * pow(drift, 4.0) * 0.9;
     color += stars(far, 0.5, 0.075, t) * 0.75;
     color += stars(middle + 31.0, 0.34, 0.085, t * 1.4);
     color += stars(near, 0.24, 0.095, t * 1.9) * 1.25;
@@ -216,7 +235,7 @@ fragment float4 fragmentShader(Varyings in [[stage_in]], constant Uniforms& u [[
     float haze = clouds(far * 0.42 + float2(t * 0.02, -t * 0.013));
     float drift = clouds(near * 0.55 - float2(t * 0.03, t * 0.02));
     color += u.Look.rgb * pow(haze, 3.0) * 1.15;
-    color += float3(0.55, 0.22, 0.85) * pow(drift, 4.0) * 0.9;
+    color += mix(float3(0.55, 0.22, 0.85), float3(0.8, 0.2, 0.16), u.Clock.w) * pow(drift, 4.0) * 0.9;
     color += stars(far, 0.5, 0.075, t) * 0.75;
     color += stars(middle + 31.0, 0.34, 0.085, t * 1.4);
     color += stars(near, 0.24, 0.095, t * 1.9) * 1.25;
@@ -363,11 +382,7 @@ pub fn draw(
     if snapshot.rifts.is_empty() {
         return;
     }
-    let local_team = snapshot
-        .tanks
-        .iter()
-        .find(|tank| tank.id == local)
-        .map_or(0, |tank| tank.team);
+    let local_team = team_of(snapshot, local);
     // The thread between a pair shows the owner and their team which way
     // their rift leads.
     for entry in snapshot
@@ -397,7 +412,8 @@ pub fn draw(
             continue;
         }
         let at = view.screen(rift.pos);
-        let tint = color(rift.end);
+        let foe = hostile(rift.owner, rift.team, local, local_team);
+        let tint = color(rift.end, foe);
         let linked = rift.partner != 0;
         let collapse = (-life / RIFT_CLOSING).clamp(0., 1.);
         // Light spills onto the floor around the rim.
@@ -437,7 +453,7 @@ pub fn draw(
                         t + rift.id as f32 * 0.37 % 60.,
                         f32::from(u8::from(linked)),
                         collapse,
-                        0.,
+                        f32::from(u8::from(foe)),
                     ),
                 );
                 let half = radius * QUAD;
@@ -457,6 +473,9 @@ pub fn draw(
             None => flat(at, radius, tint, linked, rift.end, t),
         }
         motes(at, radius, tint, rift.end, linked, t, rift.id);
+        if foe {
+            thorns(at, radius, tint, t, collapse);
+        }
         // The rim forming: a bright ring springs out as a rift opens.
         if age < 0.4 {
             let fade = 1. - age / 0.4;
@@ -532,6 +551,26 @@ fn motes(at: Vec2, radius: f32, tint: Color, end: RiftEnd, linked: bool, t: f32,
     crate::glow::end();
 }
 
+/// A ring of short thorns just outside an opponent's rim, turning slowly,
+/// so it reads as theirs without color.
+fn thorns(at: Vec2, radius: f32, tint: Color, t: f32, collapse: f32) {
+    if radius < 6. {
+        return;
+    }
+    let width = (radius * 0.05).clamp(1., 3.);
+    let color = Color {
+        a: 0.8 * (1. - collapse),
+        ..mix(tint, WHITE, 0.2)
+    };
+    for index in 0..12 {
+        let angle = index as f32 * std::f32::consts::TAU / 12. + t * 0.35;
+        let dir = vec2(angle.cos(), angle.sin());
+        let from = at + dir * radius * 1.08;
+        let to = at + dir * radius * 1.24;
+        draw_line(from.x, from.y, to.x, to.y, width, color);
+    }
+}
+
 /// Dots drifting from an entry to its exit.
 fn thread(view: &View, entry: &Rift, exit: &Rift, clocks: &Clocks, time: f32, reduced: bool) {
     let (entry_age, _) = clocks.of(entry);
@@ -586,9 +625,16 @@ pub fn next_end(snapshot: &Snapshot, owner: EntityId) -> RiftEnd {
 }
 
 /// An armed rift gun glows at its lens and core in the color of the end
-/// it opens next.
-pub fn armed(core: Vec2, radius: f32, lens: Vec2, end: RiftEnd, zoom: f32, time: f32) {
-    let tint = color(end);
+/// it opens next, as the viewer sees that player's rifts.
+pub fn armed(
+    core: Vec2,
+    radius: f32,
+    lens: Vec2,
+    (end, foe): (RiftEnd, bool),
+    zoom: f32,
+    time: f32,
+) {
+    let tint = color(end, foe);
     let pulse = 0.8 + 0.2 * (time * 6.).sin();
     if crate::glow::begin(crate::glow::Blend::Glow) {
         crate::glow::spot(lens, 30. * zoom * pulse, Color { a: 0.95, ..tint });
@@ -600,20 +646,27 @@ pub fn armed(core: Vec2, radius: f32, lens: Vec2, end: RiftEnd, zoom: f32, time:
     draw_circle_lines(core.x, core.y, radius * 0.46, 1.8 * zoom, tint);
 }
 
-/// Rift shots in flight: bright bolts with a short tail.
-pub fn draw_shots(shots: &[RiftShot], view: &View, interpolation: f32) {
+/// Rift shots in flight: bright bolts with a short tail. `viewer` is the
+/// player and their team.
+pub fn draw_shots(shots: &[RiftShot], view: &View, interpolation: f32, viewer: (EntityId, u8)) {
     if shots.is_empty() {
         return;
     }
+    let tint_of =
+        |shot: &RiftShot| color(shot.end, hostile(shot.owner, shot.team, viewer.0, viewer.1));
+    // A snapshot holds where a shot is; draw it on the way there from where
+    // it was a tick before, as other rounds are.
+    let place = |shot: &RiftShot| {
+        shot.pos + shot.vel * (tankyard_core::DT * (interpolation.clamp(0., 1.) - 1.))
+    };
     let glowing = crate::glow::begin(crate::glow::Blend::Glow);
     for shot in shots {
-        // A snapshot holds where a shot is; ease it on by this frame's share.
-        let at = shot.pos + shot.vel * (tankyard_core::DT * interpolation.clamp(0., 1.));
+        let at = place(shot);
         if !view.visible(at, 80.) {
             continue;
         }
         let p = view.screen(at);
-        let tint = color(shot.end);
+        let tint = tint_of(shot);
         let back = shot.vel.normalized() * (-34. * view.zoom);
         if glowing {
             crate::glow::stretched_spot(
@@ -629,12 +682,12 @@ pub fn draw_shots(shots: &[RiftShot], view: &View, interpolation: f32) {
         crate::glow::end();
     }
     for shot in shots {
-        let at = shot.pos + shot.vel * (tankyard_core::DT * interpolation.clamp(0., 1.));
+        let at = place(shot);
         if !view.visible(at, 40.) {
             continue;
         }
         let p = view.screen(at);
-        draw_circle(p.x, p.y, 6.5 * view.zoom, mix(color(shot.end), WHITE, 0.3));
+        draw_circle(p.x, p.y, 6.5 * view.zoom, mix(tint_of(shot), WHITE, 0.3));
         draw_circle(p.x, p.y, 3. * view.zoom, WHITE);
     }
 }

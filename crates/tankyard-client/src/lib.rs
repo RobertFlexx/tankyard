@@ -4,6 +4,7 @@ pub mod boss_model;
 pub mod clipboard;
 pub mod credential_vault;
 pub mod editor_document;
+pub mod editor_wiring;
 pub mod map_model;
 pub mod number_input;
 pub mod party_network;

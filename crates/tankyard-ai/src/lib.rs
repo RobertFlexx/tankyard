@@ -429,7 +429,9 @@ impl BotController {
             brain.steering = brain.steering.lerp(movement, smoothing).clamp_length(1.);
             movement = brain.steering;
 
-            let (mut desired_aim, mut fire, target_distance) = if let Some(target) = brain.target {
+            let (mut desired_aim, mut fire, mut target_distance) = if let Some(target) =
+                brain.target
+            {
                 // Continue the last observed motion between decisions.
                 let sample_age =
                     (world.tick.saturating_sub(brain.last_decision_tick) as f32 / 60.0).min(0.45);
@@ -464,6 +466,19 @@ impl BotController {
             } else {
                 ((brain.goal - tank.pos).angle(), false, f32::MAX)
             };
+            // Out of reach of its target with a boss's swarm on its heels:
+            // shoot the drones down instead of only running from them.
+            if !fire
+                && !world.bosses.is_empty()
+                && brain.escape.length() > 0.
+                && let Some((drone, distance)) =
+                    nearest_boss_drone(world, &self.perception, tank, &mut self.seen)
+                && self.navigation.clear_path(tank.pos, drone, 5.)
+            {
+                desired_aim = (drone - tank.pos).angle();
+                fire = true;
+                target_distance = distance;
+            }
             let escaping = brain.state == BotState::Retreating
                 && matches!(class.ability, Ability::Dash | Ability::Blink);
             if escaping {

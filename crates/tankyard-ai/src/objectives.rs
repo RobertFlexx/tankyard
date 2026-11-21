@@ -50,29 +50,7 @@ pub(super) fn objective_goal(
                 BotState::Exploring,
             ))
         }
-        Mode::BossRush => world
-            .bosses
-            .iter()
-            .filter(|boss| boss.health > 0. && hostile(tank.team, boss.team))
-            .min_by(|a, b| {
-                tank.pos
-                    .distance(a.pos)
-                    .total_cmp(&tank.pos.distance(b.pos))
-            })
-            .map(|boss| {
-                let direction = (tank.pos - boss.pos).normalized();
-                let angle = (noise(tank.id) - 0.5) * 0.65;
-                let offset = direction.rotate(angle) * (boss.radius + 220.);
-                (
-                    if tank.pos.distance(boss.pos) > 400. {
-                        1.6
-                    } else {
-                        0.15
-                    },
-                    boss.pos + offset,
-                    BotState::BossEngagement,
-                )
-            }),
+        Mode::BossRush => boss_hunt(world, tank, 1.6),
         Mode::CoopPve => {
             let enemy = world
                 .tanks
@@ -226,6 +204,36 @@ pub(super) fn objective_goal(
                 })
                 .max_by(|a, b| a.0.total_cmp(&b.0))
         }
+        // Elsewhere a boss draws the arena's veterans, while they are healthy
+        // enough to fight it.
+        _ if tank.level >= 25 && tank.health > tank.max_health * 0.5 => boss_hunt(world, tank, 1.),
         _ => None,
     }
+}
+
+/// Close on the nearest boss, to a spot of this bot's own beside it.
+fn boss_hunt(world: &World, tank: &Tank, priority: f32) -> Option<(f32, V2, BotState)> {
+    world
+        .bosses
+        .iter()
+        .filter(|boss| boss.health > 0. && hostile(tank.team, boss.team))
+        .min_by(|a, b| {
+            tank.pos
+                .distance(a.pos)
+                .total_cmp(&tank.pos.distance(b.pos))
+        })
+        .map(|boss| {
+            let direction = (tank.pos - boss.pos).normalized();
+            let angle = (noise(tank.id) - 0.5) * 0.65;
+            let offset = direction.rotate(angle) * (boss.radius + 220.);
+            (
+                if tank.pos.distance(boss.pos) > 400. {
+                    priority
+                } else {
+                    0.15
+                },
+                boss.pos + offset,
+                BotState::BossEngagement,
+            )
+        })
 }

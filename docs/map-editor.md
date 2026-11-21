@@ -74,7 +74,9 @@ Press **F1** for the in-editor list. Ctrl means Cmd on a Mac.
 | Ctrl+Z, Ctrl+Y (or Ctrl+Shift+Z) | Undo, redo (48 steps) |
 | Ctrl+S | Save the project |
 | Ctrl+R | Run the last plugin tool again |
+| Click a selected object again | Select the next object under the pointer, wrapping round to the top |
 | Tab, Shift+Tab | Cycle overlapping objects under the pointer |
+| , and . | Go down or up a [layer](#layers) (Shift: skip empty layers) |
 | Mouse wheel | Zoom around the pointer (Auto and Mouse scroll) |
 | +, − | Zoom around the canvas center |
 | Two-finger scroll | Pan (Auto and Trackpad scroll) |
@@ -92,6 +94,20 @@ Press **F1** for the in-editor list. Ctrl means Cmd on a Mac.
 Shortcuts pause while a text box has focus. Holding a nudge key repeats it, and the whole hold undoes as one step.
 
 The **Grid** switch cycles through 10, 20, 40, 80, 160 and 320 world units; Shift-click steps back. With **Snap** off, objects follow the pointer exactly. The step button sets the nudge distance: one unit, half a cell, one cell or four cells.
+
+## Layers
+
+Layers keep a busy map workable. Every object sits on a layer from 0 to 99, and new objects land on the layer you're editing.
+
+- The **layer bar** at the lower left of the canvas shows the current layer. Its arrows step through the layers, and clicking its name switches between that layer and **All layers**.
+- **,** and **.** go down and up a layer. Hold Shift to skip layers with nothing on them.
+- While you edit one layer, everything else fades and can't be selected, so you can reach what's underneath without moving what's on top.
+- The **Layer** field in the Object tab moves the selection to another layer.
+- Copies keep their layers. While you edit one layer, pasted objects land on it.
+
+Layers are only for the workshop. They're saved in your project, never change how a map plays, and don't affect draw order. Use **[** and **]** for that.
+
+To reach an object under another without layers, click it. Clicking the one selected object again selects the next object under the pointer, top to bottom, and wraps round. A click and a drag stay separate, so dragging still moves what you selected.
 
 ## Inspector
 
@@ -152,7 +168,7 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 
 ### When
 
-- **Every:** repeats every *Every (s)* seconds, starting after *First wait*.
+- **Every:** repeats every *Every (s)* seconds, as often as every 0.05 seconds, starting after *First wait*.
 - **On enter / On exit:** a tank crosses into or out of the trigger's area. *Rest after acting* is the cooldown. Who and Team pick which tanks count: anyone, players only, bots only, and any team or teams 1–4. A tank that dies inside does not count as leaving.
 - **While inside:** acts as soon as *Tanks needed* noticed tanks are in the area, then again every *Every (s)* seconds while they stay. Good for capture points.
 - **On empty:** the last noticed tank leaves the area or is destroyed.
@@ -164,6 +180,7 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **On shown / On hidden:** its group is shown or hidden, however that happened: a trigger, an *Undo after* timer or a script. The groups a round starts with don't count, so a group hidden from the start doesn't fire On hidden.
 - **On boss down:** a boss is defeated anywhere in the arena. Pick one boss, or *Any boss*.
 - **On touch / On release:** a block of the watched group starts to overlap the trigger's area, or the last one stops overlapping it. A crate pushed onto a plate, a door sliding shut or a ferry reaching its dock all count. Together they make a pressure plate that only cover can press.
+- **On input change:** a counter or group that the trigger's conditions read changes, and once as the round starts. With **Gate to counter** it's a live logic gate that needs no clock. See [Live gates](#live-gates).
 - **On arrive:** a motion of its group ends: a move, turn, fade, tint, size change or an animation easing in or out, the trip back included. A group on a path arrives at the path's end, not at each point. Several motions ending for the same group in one simulation tick produce one event. A motion cut short by another doesn't count, and neither does one with nowhere to go, such as a door told to open while it's open, or one that a Stop action halts. See [Motions](#motions).
 
 ### Actions
@@ -176,6 +193,7 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **Sequence:** sends on the next channel of a run each time it acts, then starts over: with *First channel* 5 and 3 channels it sends 5, 6, 7, 5, 6…
 - **Count:** adds an amount (negative subtracts) to a counter. Counters stay within ±1,073,741,823 and reset each round.
 - **Set counter:** puts a counter at an exact value. Goals watching that value act as if it had been counted to.
+- **Gate to counter:** stores whether the trigger's gate is open in a counter, as 1 or 0. The gate never stops this action. See [Live gates](#live-gates).
 - **Calculate:** changes a counter with a number or with another counter: add, subtract, multiply, divide (rounding down), remainder, lowest, highest, copy, a random number below the other value, flip between 0 and 1, and (1.7) the bit math AND, OR, XOR, shift left and shift right, and power. Dividing by zero changes nothing, and so does a negative power. Either counter can be **moved along by another counter** for lists of counters; see [Counters](#counters).
 - **Shapes:** drops 1–24 shapes inside the trigger's area.
 - **Repair tanks, Damage tanks:** restore or take 1–100% of maximum health from every noticed tank inside the area. Damage goes through normal damage protection.
@@ -411,7 +429,7 @@ A board stays up when a button is clicked, and each player can click up to 20 ti
 
 ### Conditions and gates
 
-**Only if** gives a trigger a gate. When the trigger fires, it checks its conditions and acts only if the gate is open. Press **Add a condition** to start one, and **Add another condition** for up to four. Each condition is a card with its own kind:
+**Only if** gives a trigger a gate. When the trigger fires, it checks its conditions and acts only if the gate is open. Press **Add a condition** to start one, and **Add another condition** for up to eight. Each condition is a card with its own kind:
 
 - **Counter:** a counter compares as chosen (=, ≠, <, >, ≤ or ≥) against a number, or with **Against a counter**, against another counter.
 - **Group shown / Group hidden:** a group is currently shown or hidden.
@@ -429,12 +447,21 @@ With two or more conditions, **Combine** chooses how they make the gate:
 | Not all | at least one fails | NAND |
 | None | none of them holds | NOR |
 | Just one | exactly one holds | XOR |
+| Even number | an even number hold, none included | XNOR |
+| Odd number | an odd number hold | Parity |
+| Most | more than half hold | Majority |
 
 With one condition, *Not all* and *None* both open when it fails, which makes a NOT gate.
 
-A shut gate does nothing by default, and doesn't use up *Once per round*, the rest time or *Chance*. Switch on **Otherwise send a signal** to send on the *Otherwise channel* instead (it starts at the lowest channel nothing uses), which makes an if/else: the trigger acts when the gate is open and signals when it's shut. If all 255 channels are in use, free one before adding an otherwise signal. Otherwise signals count toward the 4,096 chained actions a tick, so they can't loop forever.
+A shut gate does nothing by default, and doesn't use up *Once per round*, the rest time or *Chance*. Switch on **Otherwise send a signal** to send on the *Otherwise channel* instead (it starts at the lowest channel nothing uses), which makes an if/else: the trigger acts when the gate is open and signals when it's shut. If all 255 channels are in use, free one before adding an otherwise signal. Otherwise signals count toward the chained actions a tick, so they can't loop forever.
 
 While the preview runs, every card shows **holds** or **fails**, and the gate shows how many hold and whether it is **open** or **shut**, updated live. Gated triggers show a small diamond on their canvas badge, and their tag reads like `AND of 2 → Hide` or `#1≥3 → Signal 4`. The Logic tab's trigger list spells each gate out in full.
+
+### Live gates
+
+A gate on an ordinary trigger is only checked when that trigger fires. A **live gate** follows its inputs by itself. Set a trigger's *When* to **On input change** and its action to **Gate to counter**: its output counter then holds 1 while the gate is open and 0 while it's shut, and updates the moment an input changes.
+
+Live gates wire together like real logic. One gate's output counter is the next gate's input, and a chain settles within the tick. With them, a map can hold adders, latches, registers, comparators and counters, and with enough triggers, a working computer. A gate that feeds itself makes memory: the **Latch** piece turns on with one counter, off with another, and holds in between. A loop that never settles stops at the tick's budget and carries on next tick, so it can't freeze a server.
 
 ### Timing
 
@@ -444,13 +471,13 @@ For every trigger:
 - *Delay before acting* waits that long after the trigger fires.
 - *Once per round* stops it after its first action, until a Reset triggers action rearms it.
 
-Signals, counters and group changes can chain: a Show action can set off an On shown watcher, which counts, which sets off a Goal. Each tick allows 4,096 chained actions and 65,536 checks of triggers that heard something, acting or not, so a loop stops instead of freezing the server. Up to 4,096 delayed actions can wait at once. Map changes and new rounds reset the logic.
+Signals, counters and group changes can chain: a Show action can set off an On shown watcher, which counts, which sets off a Goal. Each tick allows 32,768 chained actions and 262,144 checks of triggers that heard something, acting or not, so a loop stops instead of freezing the server. Up to 16,384 delayed actions can wait at once, and a tick carries out at most 4,096 outward effects such as moving groups or dropping shapes. Map changes and new rounds reset the logic.
 
 Triggers keep their listeners in lookup tables built when a round starts, so a signal or counter change only visits the triggers listening for it. A map with all 4,096 triggers costs no more per tick than the triggers that actually fire.
 
 ### Links
 
-With **L** on, the canvas draws a wire between every pair of linked triggers, and from triggers to the objects they act on:
+With **L** on, the canvas draws every connection in the map, between linked triggers and from triggers to the objects they act on. A channel, counter or group with many ends meets at a small hub, so a busy map stays readable and quick to draw, even on slower computers.
 
 - **Violet:** a signal. A thinner violet wire is an otherwise signal.
 - **Amber:** a counter one trigger changes and another watches or checks.
@@ -480,6 +507,10 @@ The **Gates** tab in Build holds ready-made logic. Each piece starts on counters
 | --- | --- |
 | Gate | Passes signal 1 on as signal 2 while counter 1 is at least 1 |
 | AND, OR, XOR | Pass signal 1 on as signal 3 while counters 1 and 2 are both on, either is on, or just one is on |
+| NOT | Passes signal 1 on as signal 3 while counter 1 is off |
+| NAND, NOR, XNOR | Pass signal 1 on as signal 3 unless both are on, while both are off, or while both match |
+| Majority | Passes signal 1 on as signal 3 while two or more of counters 1, 2 and 4 are on |
+| Parity | Passes signal 1 on as signal 3 while one or all three of counters 1, 2 and 4 are on |
 | If/else | On signal 1, sends signal 2 if counter 1 is on, otherwise signal 3 |
 | Lever | Flips counter 1 between 0 and 1 when a tank enters |
 | Coin flip | Toggles a group half of the time, every 5 seconds |
@@ -494,6 +525,21 @@ The **Gates** tab in Build holds ready-made logic. Each piece starts on counters
 | Clock | Announces every 30 seconds once the round passes 5 minutes |
 
 The **Logic** tab keeps the single-step pieces: Timer, Plate, Exit pad, Start, Sender, Receiver, Counter, Goal, Shapes, Boss, Capture, Bonus, Medic, Trap and Script.
+
+### The Circuits palette
+
+The **Circuits** tab holds [live gates](#live-gates) and the parts of a computer. Live pieces keep their output counter up to date with no signal.
+
+| Piece | What it does |
+| --- | --- |
+| Live AND, OR, NOT, XOR | Keep an output counter at 1 while the gate is open, else 0 |
+| Sum bit, Carry bit | Keep counters 4 and 5 at the sum and carry of counters 1, 2 and 3. Together they make a full adder |
+| Latch | Counter 3 turns on with counter 1, off with counter 2, and holds between |
+| Compare | Keeps counter 3 at 1 while counter 1 is at least counter 2 |
+| Register | On signal 1, copies counter 1 into counter 2, which keeps it until the next |
+| Flip bit | On signal 1, flips counter 1 between 0 and 1 |
+| Number | Sets counter 1 to 10 as the round starts |
+| Pulse | Sends signal 1 ten times a second to step a circuit along |
 
 ### Recipes
 
@@ -593,7 +639,7 @@ The workshop folder is `workshop/` inside Tank Yard's data directory. **Files �
 - `exports/<map-id>-<timestamp>.zip`: portable exports.
 - `prefs.json`: panel sizes, canvas switches, navigation settings, the palette tab and item, the inspector tab, the logic preview's speed, and where you were looking in the map you had open.
 
-Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings, and maps that use them need 1.0. Tank Yard 1.1.0 adds launch pads, Tint, Scale, Animate, Stop, Shake screen and Play sound; it uses protocol 28, so 1.1.0 and 1.2.0 servers and players play together, and maps that use the new pieces need 1.1.0 to open. Tank Yard 1.3.0 adds pushable bodies, paths, ice, gravity wells, darkness and lighting, decor that responds to tanks, the new decor shapes, group names and the Physics triggers; it uses protocol 29, so 1.3.0 servers and players play only with each other, and maps that use the new pieces need 1.3.0 to open. Tank Yard 1.4.0 adds Show UI, Hide UI and the *Tank that set it off* filter; it uses protocol 30, so 1.4.0 servers and players play only with each other, and maps that use the new pieces need 1.4.0 to open. Tank Yard 1.5.0 adds widgets that float over an area or a tank, choice arrangements, glow and the new icons; it uses protocol 31, so 1.5.0, 1.5.1 and 1.5.2 servers and players play only with each other, and maps that use the new pieces need 1.5.0 to open. Tank Yard 1.6.0 adds widget shapes, borders, fills, lettering, title colors, bar looks, button looks and the one-click looks; it uses protocol 32, so 1.6.0 servers and players play only with each other, and maps that use the new looks need 1.6.0 to open. Tank Yard 1.7.0 adds boards, 255 counters and signal channels, larger counters, the bit and power math, counters moved along by other counters, the new counter formats and the new Zoom view settings, and allows 4,096 triggers and 4,096 decor items a map; it uses protocol 33, so 1.7.0 servers and players play only with each other, and maps that use any of these need 1.7.0 to open. Maps from earlier versions open unchanged.
+Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings, and maps that use them need 1.0. Tank Yard 1.1.0 adds launch pads, Tint, Scale, Animate, Stop, Shake screen and Play sound; it uses protocol 28, so 1.1.0 and 1.2.0 servers and players play together, and maps that use the new pieces need 1.1.0 to open. Tank Yard 1.3.0 adds pushable bodies, paths, ice, gravity wells, darkness and lighting, decor that responds to tanks, the new decor shapes, group names and the Physics triggers; it uses protocol 29, so 1.3.0 servers and players play only with each other, and maps that use the new pieces need 1.3.0 to open. Tank Yard 1.4.0 adds Show UI, Hide UI and the *Tank that set it off* filter; it uses protocol 30, so 1.4.0 servers and players play only with each other, and maps that use the new pieces need 1.4.0 to open. Tank Yard 1.5.0 adds widgets that float over an area or a tank, choice arrangements, glow and the new icons; it uses protocol 31, so 1.5.0, 1.5.1 and 1.5.2 servers and players play only with each other, and maps that use the new pieces need 1.5.0 to open. Tank Yard 1.6.0 adds widget shapes, borders, fills, lettering, title colors, bar looks, button looks and the one-click looks; it uses protocol 32, so 1.6.0 servers and players play only with each other, and maps that use the new looks need 1.6.0 to open. Tank Yard 1.7.0 adds boards, 255 counters and signal channels, larger counters, the bit and power math, counters moved along by other counters, the new counter formats and the new Zoom view settings, and allows 4,096 triggers and 4,096 decor items a map; it uses protocol 33, so 1.7.0 servers and players play only with each other, and maps that use any of these need 1.7.0 to open. Tank Yard 2.0.0 adds the Even, Odd and Most gates, up to eight conditions, On input change, Gate to counter and timers as short as 0.05 seconds; it uses protocol 34, so 2.0.0 servers and players play only with each other, and maps that use any of these need 2.0.0 to open. Maps from earlier versions open unchanged.
 
 For a dedicated server, put the ZIP in persistent storage, add its path to the top-level `mods` list, and run `reload-mods`. Then `maps` lists it and `map my_arena` selects it. Joining clients receive the checked map data automatically. See [Hosting](hosting.md) and [domain setup](hosting-domain.md).
 

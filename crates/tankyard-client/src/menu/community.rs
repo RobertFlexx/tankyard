@@ -399,7 +399,7 @@ impl Menu {
             20.0 * s,
             text_color(),
         );
-        if hovered && is_mouse_button_pressed(MouseButton::Left) {
+        if hovered && take_click() {
             self.lobbies_open = !self.lobbies_open;
             if self.lobbies_open {
                 self.lobby_page = 0;
@@ -529,7 +529,7 @@ impl Menu {
                 13.0 * s,
                 if full { RED } else { text_color() },
             );
-            if over && is_mouse_button_pressed(MouseButton::Left) {
+            if over && take_click() {
                 chosen = Some(index as u8);
             }
         }

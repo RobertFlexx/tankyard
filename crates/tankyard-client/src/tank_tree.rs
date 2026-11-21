@@ -250,7 +250,7 @@ impl Tree {
                     Color::new(0.12, 0.15, 0.18, 1.),
                 );
             }
-            if hover && is_mouse_button_pressed(MouseButton::Left) {
+            if hover && crate::ui::take_click() {
                 *selected = i;
             }
         }

@@ -30,6 +30,208 @@ fn boss_clear_steering(pos: V2, desired: V2, radius: f32, bounds: Rect, walls: &
     best
 }
 
+/// One round of a boss's volley.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BossRound {
+    /// The way it flies, in radians.
+    pub angle: f32,
+    pub kind: ProjectileKind,
+    pub speed: f32,
+    pub damage: f32,
+    pub radius: f32,
+    /// Seconds before it fades.
+    pub life: f32,
+    pub penetration: f32,
+    pub bounces: u8,
+}
+
+/// How fast the Siege Engine's cannon round flies.
+pub const SIEGE_ROUND_SPEED: f32 = 1500.;
+/// How wide the Siege Engine's cannon round is.
+pub const SIEGE_ROUND_RADIUS: f32 = 24.;
+
+#[allow(clippy::too_many_arguments)]
+const fn round(
+    angle: f32,
+    kind: ProjectileKind,
+    speed: f32,
+    damage: f32,
+    radius: f32,
+    life: f32,
+    penetration: f32,
+    bounces: u8,
+) -> BossRound {
+    BossRound {
+        angle,
+        kind,
+        speed,
+        damage,
+        radius,
+        life,
+        penetration,
+        bounces,
+    }
+}
+
+/// The rounds of a boss's special attack: the `attack`th it has made,
+/// aimed at `aim`, in `phase`. Its warning shows these same lanes. Each
+/// complements the boss's normal fire, every ring leaves a turning gap, and
+/// every round meets walls, parries and the round limit as any other.
+pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<BossRound> {
+    use ProjectileKind::*;
+    use std::f32::consts::{FRAC_PI_2, TAU};
+    let turn = f32::from(attack) * 0.33;
+    let mut rounds = Vec::with_capacity(24);
+    match kind {
+        BossKind::SiegeEngine => {
+            // One giant round down the locked line destroys whatever it
+            // hits; cover stops it. Wounded, it flanks the line with shells.
+            rounds.push(round(
+                aim,
+                Shell,
+                SIEGE_ROUND_SPEED,
+                LETHAL_DAMAGE,
+                SIEGE_ROUND_RADIUS,
+                1.8,
+                40.,
+                0,
+            ));
+            if phase >= 2 {
+                for side in [-1., 1.] {
+                    rounds.push(round(
+                        aim + side * 0.2,
+                        Explosive,
+                        520.,
+                        40.,
+                        13.,
+                        2.4,
+                        1.8,
+                        0,
+                    ));
+                }
+            }
+        }
+        BossKind::Skirmisher => {
+            for n in [-2., -1., 1., 2.] {
+                rounds.push(round(aim + n * 0.18, Bullet, 420., 18., 7., 2.4, 1.2, 0));
+            }
+        }
+        BossKind::Trapper => {
+            // Two side pockets leave the whole forward lane open.
+            for side in [-1., 1.] {
+                for n in -1..=1 {
+                    rounds.push(round(
+                        aim + side * FRAC_PI_2 + n as f32 * 0.19,
+                        Mine,
+                        230.,
+                        23.,
+                        11.,
+                        5.,
+                        2.2,
+                        0,
+                    ));
+                }
+            }
+        }
+        BossKind::Guardian | BossKind::Summoner | BossKind::FallenOverlord => {
+            let shot = if kind == BossKind::FallenOverlord {
+                Homing
+            } else {
+                Bullet
+            };
+            for n in 0..12 {
+                let angle = aim + turn + (n as f32 - 5.5) * 0.24;
+                rounds.push(round(angle, shot, 340., 18., 8., 2.8, 1.3, 0));
+            }
+        }
+        BossKind::Defender | BossKind::Bastion => {
+            for n in 1..12 {
+                rounds.push(round(
+                    aim + turn + n as f32 * TAU / 12.,
+                    Trap,
+                    320.,
+                    27.,
+                    12.,
+                    5.,
+                    3.5,
+                    0,
+                ));
+            }
+            rounds.push(round(aim, Shell, 460., 38., 14., 2.5, 2., 0));
+        }
+        BossKind::FallenBooster | BossKind::Tempest => {
+            for n in 0..5 {
+                rounds.push(round(
+                    aim + (n as f32 - 2.) * 0.22,
+                    Homing,
+                    350.,
+                    18.,
+                    8.,
+                    3.,
+                    1.2,
+                    0,
+                ));
+            }
+        }
+        BossKind::Sentinel => {
+            for n in 0..7 {
+                rounds.push(round(
+                    aim + (n as f32 - 3.) * 0.13,
+                    Piercing,
+                    560.,
+                    28.,
+                    8.,
+                    2.5,
+                    2.,
+                    0,
+                ));
+            }
+        }
+        BossKind::Prism | BossKind::Eclipse => {
+            let shot = if attack == 1 { Homing } else { Piercing };
+            for n in 1..16 {
+                rounds.push(round(
+                    aim + turn + n as f32 * TAU / 16.,
+                    shot,
+                    300. + n as f32 * 8.,
+                    17.,
+                    7.,
+                    3.,
+                    1.5,
+                    1,
+                ));
+            }
+        }
+        BossKind::Foundry => {
+            for n in 0..5 {
+                rounds.push(round(
+                    aim + (n as f32 - 2.) * 0.35,
+                    Explosive,
+                    310.,
+                    32.,
+                    12.,
+                    3.,
+                    1.5,
+                    0,
+                ));
+            }
+            for n in 0..6 {
+                rounds.push(round(
+                    aim + n as f32 * TAU / 6.,
+                    Mine,
+                    240.,
+                    25.,
+                    11.,
+                    5.,
+                    2.5,
+                    0,
+                ));
+            }
+        }
+    }
+    rounds
+}
+
 impl World {
     pub(crate) fn boss_drone_goal(&self, boss: &Boss, drone: EntityId, pos: V2, team: u8) -> V2 {
         let (acquisition, leash) = match boss.kind {
@@ -99,6 +301,40 @@ impl World {
             let index = (self.random() * BossKind::ALL.len() as f32) as usize;
             self.spawn_boss(BossKind::ALL[index.min(BossKind::ALL.len() - 1)]);
         }
+    }
+
+    /// How many full-level tanks the arena's tanks are worth, up to 16. A
+    /// new tank counts for about an eighth of one at the top level.
+    pub(crate) fn arena_strength(&self) -> f32 {
+        self.tanks
+            .iter()
+            .map(|tank| {
+                let level = f32::from(tank.level) / f32::from(tankyard_content::MAX_LEVEL);
+                0.12 + 0.88 * level.clamp(0., 1.).powf(1.6)
+            })
+            .sum::<f32>()
+            .min(16.)
+    }
+
+    /// A boss's full health in this arena: as tough as the arena is strong,
+    /// so a fight lasts about as long for one veteran, a party or a crowd of
+    /// new players.
+    pub(crate) fn boss_health(&self, kind: BossKind) -> f32 {
+        self.boss_health_at(kind, self.arena_strength())
+    }
+
+    fn boss_health_at(&self, kind: BossKind, strength: f32) -> f32 {
+        // A swarm stops growing at four players; past that, its hull does.
+        let crowd = if kind.drone_limit() > 0 {
+            1. + (strength - 4.).max(0.) * 0.25
+        } else {
+            1.
+        };
+        11_000.
+            * (1. + f32::from(self.match_state.boss_wave.max(1) - 1) * 0.14)
+            * kind.toughness()
+            * (0.3 + 0.7 * strength)
+            * crowd
     }
 
     /// Returns zero if the map cannot accommodate the boss safely.
@@ -172,14 +408,7 @@ impl World {
         if safety < 100. {
             return 0;
         }
-        let health = (4400. + f32::from(self.match_state.boss_wave.max(1)) * 700.)
-            * match kind {
-                BossKind::Bastion | BossKind::Defender | BossKind::SiegeEngine => 1.35,
-                BossKind::Guardian | BossKind::Summoner => 1.15,
-                BossKind::Tempest | BossKind::FallenBooster | BossKind::Skirmisher => 0.9,
-                _ => 1.,
-            };
-        let health = health * (1. + self.tanks.len().saturating_sub(4).min(16) as f32 * 0.045);
+        let health = self.boss_health(kind);
         let id = self.id();
         self.bosses.push(Boss {
             id,
@@ -208,8 +437,29 @@ impl World {
         id
     }
     pub(crate) fn update_bosses(&mut self) {
+        if self.bosses.is_empty() {
+            return;
+        }
         let mut volleys = Vec::new();
         let mut warnings = Vec::new();
+        // A swarm grows with the arena: one player can still cut through to
+        // the hull, and it reaches its full size against a party of four.
+        let strength = self.arena_strength();
+        let swarm = (0.25 + 0.1875 * strength).min(1.);
+        // Players joining or leaving mid-fight move a wild boss's health with
+        // them, keeping how hurt it is. Modes that set their own leave theirs.
+        for i in 0..self.bosses.len() {
+            let boss = &self.bosses[i];
+            if boss.mothership || boss.team != 0 {
+                continue;
+            }
+            let full = self.boss_health_at(boss.kind, strength);
+            let boss = &mut self.bosses[i];
+            if (full - boss.max_health).abs() > boss.max_health * 0.02 {
+                boss.health *= full / boss.max_health.max(1.);
+                boss.max_health = full;
+            }
+        }
         for i in 0..self.bosses.len() {
             let b = &self.bosses[i];
             if b.health <= 0. {
@@ -320,7 +570,8 @@ impl World {
                 BossKind::Trapper => 580.,
                 _ => 450.,
             };
-            let depleted = b.kind.drone_limit() > 0 && owned < b.kind.drone_limit() / 3;
+            let drone_limit = (b.kind.drone_limit() as f32 * swarm).ceil() as usize;
+            let depleted = drone_limit > 0 && owned < drone_limit / 3;
             let mut desired = if target.is_none() {
                 b.tactic = BossTactic::Patrol;
                 to.normalized() * speed * 0.45
@@ -388,12 +639,13 @@ impl World {
             let primary_due = b.timer <= 0. && b.arrival <= 0.;
             let previous_windup = b.attack_windup;
             b.attack_windup = (b.attack_windup - DT).max(0.);
-            let secondary = previous_windup > 0. && b.attack_windup <= 0. && target.is_some();
+            // A warned attack always comes, even at a target gone behind cover.
+            let secondary = previous_windup > 0. && b.attack_windup <= 0.;
             if b.arrival <= 0. && target.is_some() && previous_windup <= 0. {
                 b.attack_timer -= DT;
                 if b.attack_timer <= 0. {
                     b.attack = (b.attack + 1) % 3;
-                    b.attack_windup = 0.9;
+                    b.attack_windup = b.kind.windup();
                     b.attack_timer = 9.5 - f32::from(b.phase) * 1.5;
                     warnings.push((b.pos, b.id, b.attack as u32, b.team));
                 }
@@ -404,7 +656,7 @@ impl World {
             if secondary {
                 b.timer = b.timer.max(0.4);
             }
-            if target.is_none() || (!primary && !secondary) {
+            if !secondary && (target.is_none() || !primary) {
                 continue;
             }
             let mut spawned_drones = owned;
@@ -417,7 +669,7 @@ impl World {
                             pen: f32,
                             bounces: u8| {
                 if kind.is_drone() {
-                    if spawned_drones >= b.kind.drone_limit() {
+                    if spawned_drones >= drone_limit {
                         return;
                     }
                     spawned_drones += 1;
@@ -445,165 +697,34 @@ impl World {
                 ));
             };
             if secondary {
-                // Distinct, telegraphed complements to each boss's normal arsenal.
-                // Every ring leaves a moving gap and every projectile uses normal
-                // wall collisions, parries, lifetime and resource limits.
-                let turn = f32::from(b.attack) * 0.33;
+                for round in special_volley(b.kind, b.attack, b.aim, b.phase) {
+                    emit(
+                        round.angle,
+                        round.kind,
+                        round.speed,
+                        round.damage,
+                        round.radius,
+                        round.life,
+                        round.penetration,
+                        round.bounces,
+                    );
+                }
+                // The quick ones dash in behind their volley.
                 match b.kind {
-                    BossKind::SiegeEngine => {
-                        // A locked, slow-turning siege gun. The broad warning
-                        // leaves time to cross its firing line before the salvo.
-                        for n in -1..=1 {
-                            emit(
-                                b.aim + n as f32 * 0.14,
-                                ProjectileKind::Explosive,
-                                380.,
-                                38.,
-                                14.,
-                                3.,
-                                1.8,
-                                0,
-                            );
-                        }
-                    }
                     BossKind::Skirmisher => {
-                        for n in [-2., -1., 1., 2.] {
-                            emit(
-                                b.aim + n * 0.18,
-                                ProjectileKind::Bullet,
-                                420.,
-                                18.,
-                                7.,
-                                2.4,
-                                1.2,
-                                0,
-                            );
-                        }
                         b.tactic = BossTactic::Windup;
                         b.tactic_time = 0.55;
                     }
-                    BossKind::Trapper => {
-                        // Two side pockets leave the whole forward lane open.
-                        for side in [-1., 1.] {
-                            for n in -1..=1 {
-                                emit(
-                                    b.aim + side * std::f32::consts::FRAC_PI_2 + n as f32 * 0.19,
-                                    ProjectileKind::Mine,
-                                    230.,
-                                    23.,
-                                    11.,
-                                    5.,
-                                    2.2,
-                                    0,
-                                );
-                            }
-                        }
+                    BossKind::FallenBooster | BossKind::Tempest
+                        if b.tactic != BossTactic::Charge =>
+                    {
+                        b.tactic = BossTactic::Windup;
+                        b.tactic_time = 0.7;
                     }
-                    BossKind::Guardian | BossKind::Summoner | BossKind::FallenOverlord => {
-                        for n in 0..12 {
-                            let a = b.aim + turn + (n as f32 - 5.5) * 0.24;
-                            let kind = if b.kind == BossKind::FallenOverlord {
-                                ProjectileKind::Homing
-                            } else {
-                                ProjectileKind::Bullet
-                            };
-                            emit(a, kind, 340., 18., 8., 2.8, 1.3, 0);
-                        }
-                    }
-                    BossKind::Defender | BossKind::Bastion => {
-                        for n in 1..12 {
-                            emit(
-                                b.aim + turn + n as f32 * std::f32::consts::TAU / 12.,
-                                ProjectileKind::Trap,
-                                320.,
-                                27.,
-                                12.,
-                                5.,
-                                3.5,
-                                0,
-                            );
-                        }
-                        emit(b.aim, ProjectileKind::Shell, 460., 38., 14., 2.5, 2., 0);
-                    }
-                    BossKind::FallenBooster | BossKind::Tempest => {
-                        for n in 0..5 {
-                            emit(
-                                b.aim + (n as f32 - 2.) * 0.22,
-                                ProjectileKind::Homing,
-                                350.,
-                                18.,
-                                8.,
-                                3.,
-                                1.2,
-                                0,
-                            );
-                        }
-                        if b.tactic != BossTactic::Charge {
-                            b.tactic = BossTactic::Windup;
-                            b.tactic_time = 0.7;
-                        }
-                    }
-                    BossKind::Sentinel => {
-                        for n in 0..7 {
-                            emit(
-                                b.aim + (n as f32 - 3.) * 0.13,
-                                ProjectileKind::Piercing,
-                                560.,
-                                28.,
-                                8.,
-                                2.5,
-                                2.,
-                                0,
-                            );
-                        }
-                    }
-                    BossKind::Prism | BossKind::Eclipse => {
-                        for n in 1..16 {
-                            emit(
-                                b.aim + turn + n as f32 * std::f32::consts::TAU / 16.,
-                                if b.attack == 1 {
-                                    ProjectileKind::Homing
-                                } else {
-                                    ProjectileKind::Piercing
-                                },
-                                300. + n as f32 * 8.,
-                                17.,
-                                7.,
-                                3.,
-                                1.5,
-                                1,
-                            );
-                        }
-                    }
-                    BossKind::Foundry => {
-                        for n in 0..5 {
-                            emit(
-                                b.aim + (n as f32 - 2.) * 0.35,
-                                ProjectileKind::Explosive,
-                                310.,
-                                32.,
-                                12.,
-                                3.,
-                                1.5,
-                                0,
-                            );
-                        }
-                        for n in 0..6 {
-                            emit(
-                                b.aim + n as f32 * std::f32::consts::TAU / 6.,
-                                ProjectileKind::Mine,
-                                240.,
-                                25.,
-                                11.,
-                                5.,
-                                2.5,
-                                0,
-                            );
-                        }
-                    }
+                    _ => {}
                 }
             }
-            if !primary {
+            if !primary || target.is_none() {
                 continue;
             }
             match b.kind {
@@ -654,7 +775,7 @@ impl World {
                             0,
                         );
                     }
-                    b.timer = 0.65;
+                    b.timer = 1.1;
                 }
                 BossKind::Summoner => {
                     for n in 0..4 {
@@ -665,11 +786,11 @@ impl World {
                             18.,
                             19.,
                             11.,
-                            4.,
+                            3.,
                             0,
                         );
                     }
-                    b.timer = 0.72;
+                    b.timer = 2.3;
                 }
                 BossKind::FallenOverlord => {
                     for n in 0..4 {
@@ -680,16 +801,18 @@ impl World {
                             24.,
                             17.,
                             10.,
-                            5.,
+                            3.5,
                             0,
                         );
                     }
-                    b.timer = 0.95;
+                    b.timer = 2.4;
                 }
                 BossKind::Defender => {
                     for n in 0..3 {
-                        let angle =
-                            self.tick as f32 * DT * 0.35 + n as f32 * std::f32::consts::TAU / 3.;
+                        // Out of the launchers on its turning sides.
+                        let angle = b.kind.turn(self.tick)
+                            + std::f32::consts::PI
+                            + n as f32 * std::f32::consts::TAU / 3.;
                         emit(angle, ProjectileKind::Trap, 180., 26., 18., 7., 3., 0);
                         emit(
                             b.aim + (n as f32 - 1.) * 0.1,
@@ -739,7 +862,7 @@ impl World {
                 BossKind::Prism => {
                     for n in 0..(6 + b.phase as usize * 2) {
                         emit(
-                            self.tick as f32 * DT * 0.6
+                            b.kind.turn(self.tick)
                                 + n as f32 * std::f32::consts::TAU
                                     / (6 + b.phase as usize * 2) as f32,
                             ProjectileKind::Piercing,
@@ -769,7 +892,7 @@ impl World {
                     if b.phase > 1 {
                         emit(b.aim, ProjectileKind::Turret, 80., 19., 17., 6., 4., 0);
                     }
-                    b.timer = 1.8;
+                    b.timer = 2.2;
                 }
                 BossKind::Tempest => {
                     let count = 3 + b.phase;
@@ -794,7 +917,7 @@ impl World {
                 BossKind::Bastion => {
                     for n in 0..8 {
                         emit(
-                            n as f32 * std::f32::consts::TAU / 8. + self.tick as f32 * 0.005,
+                            b.kind.turn(self.tick) + n as f32 * std::f32::consts::TAU / 8.,
                             ProjectileKind::Mine,
                             220.,
                             27.,
@@ -829,6 +952,13 @@ impl World {
                     }
                 }
             }
+            // It fires faster the more it is hurt. A smaller swarm is also
+            // launched more slowly, so it isn't simply refilled at once.
+            b.timer *= match b.phase {
+                1 => 1.,
+                2 => 0.9,
+                _ => 0.8,
+            } / if b.kind.drone_limit() > 0 { swarm } else { 1. };
         }
         for (pos, id, attack, team) in warnings {
             self.event(EventKind::BossAttack, pos, id, attack, team);
@@ -852,6 +982,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::BOSS_CREDIT_TICKS;
     use tankyard_content::Content;
 
     fn arena() -> World {
@@ -955,7 +1086,7 @@ mod tests {
                 world.projectiles.is_empty(),
                 "{kind:?} hid its windup behind a primary volley"
             );
-            for _ in 0..55 {
+            for _ in 0..(kind.windup() / DT) as usize + 2 {
                 world.update_bosses();
             }
             assert!(
@@ -981,13 +1112,13 @@ mod tests {
             world.tanks[0].pos = V2::new(2450., 1300.);
             world.spawn_boss(kind);
             let boss = &mut world.bosses[0];
-            assert!(boss.max_health >= 4500.);
+            assert!(boss.max_health >= 3000.);
             boss.pos = V2::new(1600., 1300.);
             boss.arrival = 0.;
             boss.timer = 1000.;
             boss.attack_timer = 0.;
             world.update_bosses();
-            assert!(world.bosses[0].attack_windup > 0.8);
+            assert!(world.bosses[0].attack_windup >= kind.windup() - DT * 2.);
             assert!(
                 world.projectiles.is_empty(),
                 "{kind:?} attacked before its warning"
@@ -998,7 +1129,7 @@ mod tests {
                     .iter()
                     .any(|e| matches!(e.kind, EventKind::BossAttack))
             );
-            for _ in 0..60 {
+            for _ in 0..(kind.windup() / DT) as usize + 5 {
                 world.update_bosses();
             }
             assert!(
@@ -1013,6 +1144,174 @@ mod tests {
                     .all(|p| p.vel.finite() && p.owner == world.bosses[0].id)
             );
         }
+    }
+
+    fn siege_round(world: &mut World, target: V2, cover: Option<Rect>) -> EntityId {
+        world.spawn_boss(BossKind::SiegeEngine);
+        let boss = &mut world.bosses[0];
+        boss.pos = V2::new(900., 1300.);
+        boss.aim = (target - boss.pos).angle();
+        boss.arrival = 0.;
+        boss.timer = 1000.;
+        boss.attack_timer = 0.;
+        let id = boss.id;
+        world.update_bosses();
+        assert_eq!(
+            world.bosses[0].attack_windup,
+            BossKind::SiegeEngine.windup()
+        );
+        world.walls.extend(cover);
+        for _ in 0..(BossKind::SiegeEngine.windup() / DT) as usize + 2 {
+            world.update_bosses();
+            world.bosses[0].pos = V2::new(900., 1300.);
+        }
+        assert!(
+            world.projectiles.iter().any(|p| p.damage >= LETHAL_DAMAGE),
+            "the cannon fired"
+        );
+        id
+    }
+
+    #[test]
+    fn the_siege_cannon_destroys_any_tank_on_its_line_after_a_long_warning() {
+        let mut world = arena();
+        world.tanks[0].pos = V2::new(1900., 1300.);
+        world.tanks[0].max_health = 5000.;
+        world.tanks[0].health = 5000.;
+        world.tanks[0].shield = 100.;
+        let target = world.tanks[0].pos;
+        let id = siege_round(&mut world, target, None);
+        let round = world
+            .projectiles
+            .iter()
+            .find(|p| p.owner == id && p.damage >= LETHAL_DAMAGE)
+            .unwrap();
+        assert!(round.radius >= 20. && round.vel.length() >= 1400.);
+        world.tanks[0].shield = 100.;
+        for _ in 0..60 {
+            world.step();
+            if world.tanks[0].deaths > 0 {
+                return;
+            }
+            world.tanks[0].shield = 100.;
+        }
+        panic!("the round should destroy a shielded tank in one hit");
+    }
+
+    #[test]
+    fn cover_stops_the_siege_cannon_and_bosses_survive_it() {
+        let mut world = arena();
+        world.tanks[0].pos = V2::new(2000., 1300.);
+        let wall = Rect {
+            x: 1400.,
+            y: 1100.,
+            w: 60.,
+            h: 400.,
+        };
+        let target = world.tanks[0].pos;
+        siege_round(&mut world, target, Some(wall));
+        for _ in 0..90 {
+            world.step();
+        }
+        assert_eq!(world.tanks[0].deaths, 0, "the wall took it");
+
+        let mut world = arena();
+        world.tanks[0].pos = V2::new(300., 300.);
+        let target = V2::new(2000., 1300.);
+        let id = siege_round(&mut world, target, None);
+        let other = world.spawn_boss(BossKind::Sentinel);
+        let boss = world.bosses.iter_mut().find(|b| b.id == other).unwrap();
+        boss.pos = V2::new(1600., 1300.);
+        boss.arrival = 5.;
+        let health = boss.health;
+        for _ in 0..40 {
+            world.step();
+        }
+        let boss = world.bosses.iter().find(|b| b.id == other).unwrap();
+        assert!(boss.health >= health - LETHAL_CAP - 1., "capped on bosses");
+        assert!(world.bosses.iter().any(|b| b.id == id));
+    }
+
+    #[test]
+    fn the_siege_round_respects_spawn_protection_and_leaves_assists_their_credit() {
+        let mut world = arena();
+        world.tanks[0].pos = V2::new(1900., 1300.);
+        let target = world.tanks[0].pos;
+        siege_round(&mut world, target, None);
+        for _ in 0..50 {
+            world.tanks[0].protection = 5.;
+            world.step();
+        }
+        assert_eq!(world.tanks[0].deaths, 0, "protection holds");
+
+        let mut world = arena();
+        let friend = world.add_player("Friend", false);
+        let victim = world.tanks[0].id;
+        world.record_damage(victim, friend, 50.);
+        world.damage_tank(0, LETHAL_DAMAGE, 777, V2::ZERO);
+        let list = &world.contributions[&victim];
+        let boss = list.iter().find(|entry| entry.0 == 777).unwrap().1;
+        assert!(boss <= LETHAL_CAP, "{boss}");
+        assert!(world.events.iter().all(|e| e.value <= LETHAL_CAP as u32));
+    }
+
+    #[test]
+    fn a_parried_siege_round_returns_as_a_heavy_shot_not_a_one_shot() {
+        let mut world = arena();
+        world.config.mode = Mode::Sandbox;
+        assert!(world.sandbox_class(world.tanks[0].id, "riposte"));
+        world.tanks[0].pos = V2::new(1200., 1300.);
+        let parry = world
+            .content
+            .class("riposte")
+            .unwrap()
+            .ability
+            .parry_window();
+        world.tanks[0].shield = parry.unwrap();
+        let target = world.tanks[0].pos;
+        let id = siege_round(&mut world, target, None);
+        let index = world
+            .projectiles
+            .iter()
+            .position(|p| p.owner == id && p.damage >= LETHAL_DAMAGE)
+            .unwrap();
+        let impact = world.tanks[0].pos;
+        assert!(world.parry_projectile(index, 0, impact));
+        let returned = &world.projectiles[index];
+        assert_eq!(returned.owner, world.tanks[0].id);
+        assert!(returned.damage <= 240., "{}", returned.damage);
+    }
+
+    #[test]
+    fn a_bosses_health_follows_the_arena_and_keeps_how_hurt_it_is() {
+        let mut world = arena();
+        world.tanks[0].pos = V2::new(2450., 1300.);
+        world.spawn_boss(BossKind::Sentinel);
+        let before = world.bosses[0].max_health;
+        world.bosses[0].health = before * 0.5;
+        for n in 0..3 {
+            let id = world.add_player(&format!("Friend {n}"), false);
+            world.set_level_unchecked(id, MAX_LEVEL);
+        }
+        world.update_bosses();
+        let boss = &world.bosses[0];
+        assert!(boss.max_health > before * 2.);
+        assert!((boss.health / boss.max_health - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn everyone_who_hurt_a_boss_in_the_last_minute_shares_its_reward() {
+        let mut world = arena();
+        world.tanks[0].pos = V2::new(2450., 1300.);
+        let early = world.tanks[0].id;
+        world.spawn_boss(BossKind::Sentinel);
+        let boss = world.bosses[0].id;
+        world.record_damage(boss, early, 500.);
+        world.tick += 1800;
+        world.contributions.retain(|_, v| !v.is_empty());
+        let before = world.tanks[0].score;
+        world.reward_within(boss, 0, 1000, 1000, BOSS_CREDIT_TICKS);
+        assert!(world.tanks[0].score > before);
     }
 
     #[test]
@@ -1057,23 +1356,18 @@ mod tests {
             let id = world.spawn_boss(kind);
             assert_ne!(id, 0);
             world.bosses[0].pos = V2::new(1600., 1300.);
+            let mut largest = 0;
             for _ in 0..1200 {
                 world.step();
-                assert!(
-                    world
-                        .projectiles
-                        .iter()
-                        .filter(|p| p.owner == id && p.kind.is_drone())
-                        .count()
-                        <= kind.drone_limit()
-                );
-            }
-            assert!(
-                world
+                let swarm = world
                     .projectiles
                     .iter()
-                    .any(|p| p.owner == id && p.kind.is_drone())
-            );
+                    .filter(|p| p.owner == id && p.kind.is_drone())
+                    .count();
+                assert!(swarm <= kind.drone_limit());
+                largest = largest.max(swarm);
+            }
+            assert!(largest > 0, "{kind:?} launched no swarm");
             assert_eq!(world.bosses[0].target, player);
         }
     }

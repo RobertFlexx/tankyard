@@ -158,9 +158,13 @@ fn export_bosses(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             kind,
             vec2(x, y),
             kind.radius() * 0.9,
-            args.aim,
-            args.time,
-            args.phase,
+            tankyard_client::boss_model::Pose {
+                aim: args.aim,
+                turn: kind.turn((args.time / tankyard_core::DT) as u64),
+                time: args.time,
+                phase: args.phase,
+                charge: 0.,
+            },
             None,
             &mut |primitive| write_primitive(&mut svg, primitive),
         );

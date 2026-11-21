@@ -693,6 +693,9 @@ impl Session {
                 for p in &previous.projectiles {
                     self.previous_positions.insert(p.id, (p.pos, p.vel.angle()));
                 }
+                for shot in &previous.rift_shots {
+                    self.previous_positions.insert(shot.id, (shot.pos, 0.));
+                }
                 for target in &previous.targets {
                     self.previous_positions
                         .insert(target.id, (target.pos, target.angle));
@@ -830,13 +833,24 @@ impl Session {
         for (projectile, latest) in display.projectiles.iter_mut().zip(&snapshot.projectiles) {
             if let Some((previous, _)) = self.previous_positions.get(&projectile.id) {
                 projectile.pos = extrapolate_position(
-                    previous.lerp(latest.pos, alpha),
+                    shown_round(
+                        *previous,
+                        (latest.pos, latest.vel),
+                        &snapshot.rifts,
+                        interval as f32,
+                        alpha,
+                    ),
                     latest.vel,
                     extrapolation,
                     latest.radius,
                     &snapshot.config,
                     &self.walls_now,
                 );
+            }
+        }
+        for (shot, latest) in display.rift_shots.iter_mut().zip(&snapshot.rift_shots) {
+            if let Some((previous, _)) = self.previous_positions.get(&shot.id) {
+                shot.pos = previous.lerp(latest.pos, alpha) + latest.vel * extrapolation;
             }
         }
         for (target, latest) in display.targets.iter_mut().zip(&snapshot.targets) {
@@ -1513,6 +1527,56 @@ fn predict_pads(
     );
 }
 
+/// Where to show a round `fraction` of the way from its place in the last
+/// snapshot, `previous`, to `latest`, its place and velocity in this one,
+/// `interval` seconds on. One that went through a rift in between follows
+/// its path into the entry's heart and out of the exit's at its own pace,
+/// rather than sliding across the arena between them; one that moved
+/// farther than it could fly is shown where it is.
+pub fn shown_round(
+    previous: V2,
+    latest: (V2, V2),
+    rifts: &[tankyard_core::Rift],
+    interval: f32,
+    fraction: f32,
+) -> V2 {
+    let (pos, vel) = latest;
+    let fraction = fraction.clamp(0., 1.);
+    let speed = vel.length();
+    if previous.distance(pos) <= speed * interval * 1.5 + 60. {
+        return previous.lerp(pos, fraction);
+    }
+    if speed < 1. {
+        return pos;
+    }
+    let dir = vel / speed;
+    let reach = tankyard_core::RIFT_RADIUS;
+    let path = rifts
+        .iter()
+        .filter(|exit| exit.end == tankyard_core::RiftEnd::Exit && exit.partner != 0)
+        .find_map(|exit| {
+            let entry = rifts.iter().find(|rift| rift.id == exit.partner)?;
+            // On its way into the entry, and on its way out of the exit.
+            let into = (entry.pos - previous).dot(dir);
+            let out = (pos - exit.pos).dot(dir);
+            let near = (previous + dir * into).distance(entry.pos) <= reach
+                && (exit.pos + dir * out).distance(pos) <= reach;
+            (near && into > -reach && out > -reach).then_some((entry.pos, exit.pos, into, out))
+        });
+    let Some((entry, exit, into, out)) = path else {
+        return pos;
+    };
+    let (into, out) = (into.max(0.), out.max(0.));
+    let travelled = (into + out) * fraction;
+    if travelled < into {
+        previous.lerp(entry, travelled / into)
+    } else if out > 0. {
+        exit.lerp(pos, (travelled - into) / out)
+    } else {
+        pos
+    }
+}
+
 pub fn interpolate_position(previous: V2, current: V2, fraction: f32) -> V2 {
     if previous.distance(current) > 150.0 {
         current
@@ -1574,6 +1638,47 @@ pub fn trusted_address(address: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rounds_through_a_rift_keep_their_pace_between_snapshots() {
+        use tankyard_core::{Rift, RiftEnd};
+        let rift = |id, end, pos, partner| Rift {
+            id,
+            owner: 1,
+            team: 0,
+            end,
+            pos,
+            angle: 0.,
+            age: 1.,
+            life: 10.,
+            partner,
+        };
+        let rifts = [
+            rift(10, RiftEnd::Entry, V2::new(1000., 500.), 11),
+            rift(11, RiftEnd::Exit, V2::new(300., 1500.), 10),
+        ];
+        let vel = V2::new(1200., 0.);
+        // 40 units short of the entry, then 20 past the exit, in 50 ms.
+        let previous = V2::new(960., 500.);
+        let latest = (V2::new(320., 1500.), vel);
+        let at = |fraction| shown_round(previous, latest, &rifts, 0.05, fraction);
+        assert!(at(0.).distance(previous) < 1e-3);
+        assert!(at(1.).distance(latest.0) < 1e-3);
+        // Two thirds of the path lie before the entry's heart.
+        assert!(at(0.5).distance(V2::new(990., 500.)) < 1e-3);
+        assert!(at(0.9).distance(V2::new(314., 1500.)) < 1e-3);
+        // Never on the line between the two rifts.
+        for step in 0..=20 {
+            let p = at(step as f32 / 20.);
+            assert!(
+                p.distance(V2::new(1000., 500.)) < 41. || p.distance(V2::new(300., 1500.)) < 21.
+            );
+        }
+        // An ordinary round slides, and one that jumped elsewhere snaps.
+        let slide = shown_round(V2::ZERO, (V2::new(60., 0.), vel), &rifts, 0.05, 0.5);
+        assert!(slide.distance(V2::new(30., 0.)) < 1e-3);
+        let snap = shown_round(V2::ZERO, (V2::new(2000., 2000.), vel), &rifts, 0.05, 0.5);
+        assert_eq!(snap, V2::new(2000., 2000.));
+    }
     #[test]
     fn staff_proofs_go_unasked_only_to_the_official_server_or_this_computer() {
         for address in [

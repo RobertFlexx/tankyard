@@ -19,14 +19,15 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 33 carries map boards, up to 255 map counters (only those labels
-/// show) and Zoom views that hold, ease and turn, which version 32 can't
-/// hold, so clients and servers update together. Tank Yard 1.7.0 uses it;
-/// 1.6.0 used version 32, 1.5.0 to 1.5.2 version 31, 1.4.0 version 30,
-/// 1.3.0 version 29, and 1.1.0 and 1.2.0 version 28.
-pub const PROTOCOL_VERSION: u32 = 33;
+/// Version 34 carries the Even, Odd and Most gates, eight conditions a
+/// trigger, On input change, Gate to counter and rift events that name their
+/// owner, which version 33 can't hold, so clients and servers update
+/// together. Tank Yard 2.0.0 uses it; 1.7.0 used version 33, 1.6.0 version
+/// 32, 1.5.0 to 1.5.2 version 31, 1.4.0 version 30, 1.3.0 version 29, and
+/// 1.1.0 and 1.2.0 version 28.
+pub const PROTOCOL_VERSION: u32 = 34;
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 33;
+pub const MIN_PROTOCOL_VERSION: u32 = 34;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
 pub const SERVER_OUTDATED: &str =
     "This server runs an older Tank Yard. Its host needs to update it.";

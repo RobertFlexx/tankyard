@@ -6,6 +6,7 @@ compile_error!(
 
 mod accessibility;
 mod ambient;
+mod boss_fx;
 mod central_owner;
 mod community_ui;
 mod creator;
@@ -548,6 +549,19 @@ impl App {
                     && !client.party_ready(ready)
                 {
                     self.party_ui.notice = "Ready status could not be sent. Try again.".into();
+                }
+            }
+            Action::KickFromParty(player) => {
+                if let Some(Session {
+                    engine: session::Engine::Online { client, .. },
+                    ..
+                }) = &mut self.session
+                    && !client.admin(tankyard_protocol::ServerCommand::Kick {
+                        player,
+                        reason: "Removed from the party by the host.".into(),
+                    })
+                {
+                    self.party_ui.notice = "Could not remove that player. Try again.".into();
                 }
             }
             Action::ResumeParty => self.resume_party(),
@@ -1691,8 +1705,7 @@ impl App {
             });
         if can_attack {
             self.ability_queued |= is_key_pressed(self.settings.key(4));
-            self.fire_queued |=
-                is_mouse_button_pressed(MouseButton::Left) && !self.pointer_over_ui(s);
+            self.fire_queued |= ui::clicked() && !self.pointer_over_ui(s);
         } else {
             self.ability_queued = false;
             self.fire_queued = false;
@@ -1845,7 +1858,10 @@ impl App {
             self.effects.note_rifts(&snapshot.rifts, dt);
             let sounds = self.effects.ingest(
                 &session.events,
-                session.player,
+                (
+                    session.player,
+                    crate::rifts::team_of(snapshot, session.player),
+                ),
                 if self.settings.reduced_motion {
                     0.
                 } else {
@@ -1981,6 +1997,8 @@ impl App {
                 messages: &messages,
                 revision: 1,
                 chat_enabled: true,
+                snapshot: None,
+                can_kick: true,
             };
             let _ = self.party_ui.panel_view(
                 &view,
@@ -2227,6 +2245,17 @@ impl App {
                         .find(|map| map.id == snapshot.config.map)
                         .map_or("slate", |map| map.background.as_str()),
                 );
+                if let session::Engine::Online { client, .. } = &session.engine
+                    && !self.hud.sandbox
+                {
+                    party_ui::PartyUi::markers(
+                        &client.party_members,
+                        session.player,
+                        snapshot,
+                        &self.view,
+                        s,
+                    );
+                }
                 set_interactive(input_allowed && !screen_menu);
                 actions = self.hud.draw(
                     snapshot,

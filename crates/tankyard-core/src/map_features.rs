@@ -6,11 +6,11 @@
 //! the server's arithmetic.
 use crate::*;
 use tankyard_content::{
-    AnimateStyle, CONVEYOR_SPEED, COUNTER_LIMIT, Curve, EaseMode, Easing, GateState, GroupPoses,
-    ICE_GRIP, LAUNCH_SPEED, MAP_CHANNELS, MAP_COUNTERS, MAP_GROUPS, MapCounters, MapDef, MapSound,
-    MapTrigger, MapZone, MathOp, PULL_SPEED, SCALE_LIMIT, SHAKE_SECONDS, TRIGGER_AWARD,
-    TRIGGER_SHAPES, TriggerAction, TriggerWhen, TriggerWho, Tween, TweenChannel, TweenValue,
-    UiAudience, ZOOM_EASE, ZOOM_RANGE, ZOOM_SECONDS, ZoneKind,
+    AnimateStyle, CONVEYOR_SPEED, COUNTER_LIMIT, Curve, EVERY_LEAST, EaseMode, Easing, GateState,
+    GroupPoses, ICE_GRIP, LAUNCH_SPEED, MAP_CHANNELS, MAP_COUNTERS, MAP_GROUPS, MapCounters,
+    MapDef, MapSound, MapTrigger, MapZone, MathOp, PULL_SPEED, SCALE_LIMIT, SHAKE_SECONDS,
+    TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction, TriggerWhen, TriggerWho, Tween, TweenChannel,
+    TweenValue, UiAudience, ZOOM_EASE, ZOOM_RANGE, ZOOM_SECONDS, ZoneKind,
 };
 
 mod bodies;
@@ -548,13 +548,18 @@ pub struct MapEvent {
     pub at: V2,
 }
 
-/// Trigger actions per step, so signals that fire each other stop.
-const CHAIN_BUDGET: u32 = 4096;
+/// Trigger actions per step, so signals that fire each other stop. An
+/// action takes tens of nanoseconds, so a full step stays under a
+/// millisecond.
+const CHAIN_BUDGET: u32 = 32_768;
 /// Triggers woken per step, acting or not: a signal heard by many shut
 /// gates costs no actions but still takes checking.
-const CHECK_BUDGET: u32 = 65_536;
+const CHECK_BUDGET: u32 = 262_144;
 /// Delayed actions waiting at once.
-const PENDING_LIMIT: usize = 4096;
+const PENDING_LIMIT: usize = 16_384;
+/// Effects one step may raise: sounds, words, widgets and the like reach
+/// players, so however much a map computes it can't flood them.
+const EFFECT_LIMIT: usize = 4096;
 /// Script requests waiting for the next step.
 const INBOX_LIMIT: usize = 256;
 /// Script events raised in one tick.
@@ -572,6 +577,11 @@ struct Listeners {
     change: Vec<Vec<usize>>,
     /// Triggers watching groups be shown or hidden.
     groups: Vec<usize>,
+    /// Triggers waking on any change to their conditions' inputs, which
+    /// also wake as the round starts; their counters are in `change`.
+    inputs: Vec<usize>,
+    /// Those of them whose conditions look at groups, with the groups as bits.
+    input_groups: Vec<(usize, u32)>,
     defeated: Vec<usize>,
     /// Triggers waiting for a group's motion to end.
     arrived: Vec<usize>,
@@ -589,7 +599,19 @@ impl Listeners {
             change: vec![Vec::new(); usize::from(MAP_COUNTERS) + 1],
             ..Self::default()
         };
+        let mut counters = Vec::new();
         for (index, trigger) in map.triggers.iter().enumerate() {
+            if trigger.when == TriggerWhen::Inputs {
+                let groups = trigger.inputs(&mut counters);
+                for &counter in &counters {
+                    lists.change[usize::from(counter)].push(index);
+                }
+                if groups != 0 {
+                    lists.input_groups.push((index, groups));
+                }
+                lists.inputs.push(index);
+                continue;
+            }
             let slot = usize::from(trigger.source);
             if let Some(list) = match trigger.when {
                 TriggerWhen::Signal => lists.signal.get_mut(slot),
@@ -654,6 +676,8 @@ pub struct MapLogic {
     /// Requests from scripts, oldest first.
     inbox: Vec<LogicInput>,
     budget: u32,
+    /// How long the effects list may grow this step.
+    effect_cap: usize,
     /// Woken triggers left to check this step.
     checks: u32,
     /// How many times each trigger has acted this round.
@@ -857,6 +881,11 @@ impl MapLogic {
                 self.queue.push((index, self.cause));
             }
         }
+        for &(index, groups) in &self.listeners.input_groups {
+            if changed & groups != 0 {
+                self.queue.push((index, self.cause));
+            }
+        }
     }
 
     /// Start the round's state for `map`, unless it already has. The groups
@@ -889,6 +918,10 @@ impl MapLogic {
         self.poses = GroupPoses::default();
         self.pending.clear();
         self.queue.clear();
+        // Input watchers settle once as the round starts, so a gate's
+        // counter is right before any of its inputs changes.
+        let inputs = &self.listeners.inputs;
+        self.queue.extend(inputs.iter().map(|&index| (index, 0)));
         self.cause = 0;
         self.ready = true;
     }
@@ -928,6 +961,7 @@ impl MapLogic {
         self.prepare(map, now, *hidden);
         self.budget = CHAIN_BUDGET;
         self.checks = CHECK_BUDGET;
+        self.effect_cap = effects.len() + EFFECT_LIMIT;
         self.alive.clear();
         self.alive.extend(tanks.iter().map(|tank| tank.id));
         self.alive.sort_unstable();
@@ -976,7 +1010,7 @@ impl MapLogic {
             let fire = match trigger.when {
                 TriggerWhen::Every => {
                     // Catch up without firing twice in one step.
-                    let period = trigger.seconds.max(0.5);
+                    let period = trigger.seconds.max(EVERY_LEAST);
                     let missed = ((now - self.next[index]) / period).floor() + 1.;
                     self.next[index] += missed * period;
                     true
@@ -1007,6 +1041,7 @@ impl MapLogic {
                 TriggerWhen::Signal
                 | TriggerWhen::Counter
                 | TriggerWhen::Changed
+                | TriggerWhen::Inputs
                 | TriggerWhen::Shown
                 | TriggerWhen::Hidden
                 | TriggerWhen::Defeated
@@ -1115,6 +1150,7 @@ impl MapLogic {
         self.poses = self.current_poses(now);
         self.budget = CHAIN_BUDGET;
         self.checks = CHECK_BUDGET;
+        self.effect_cap = effects.len() + EFFECT_LIMIT;
         self.alive.clear();
         self.alive.extend(tanks.iter().map(|tank| tank.id));
         self.alive.sort_unstable();
@@ -1188,7 +1224,10 @@ impl MapLogic {
                 self.budget -= 1;
                 self.signal(trigger.otherwise);
             }
-            return false;
+            // A gate's result goes to its counter open or shut.
+            if trigger.action != TriggerAction::Output {
+                return false;
+            }
         }
         if trigger.chance < 100 && random() * 100. >= f32::from(trigger.chance) {
             return false;
@@ -1540,6 +1579,9 @@ impl MapLogic {
         self.budget -= 1;
         self.acted[index] = self.acted[index].saturating_add(1);
         let trigger = &map.triggers[index];
+        if effects.len() >= self.effect_cap && raises_effect(trigger.action) {
+            return;
+        }
         match trigger.action {
             TriggerAction::Toggle | TriggerAction::Show | TriggerAction::Hide => {
                 let bit = MapDef::group_bit(trigger.group);
@@ -1676,6 +1718,12 @@ impl MapLogic {
                 }
             }
             TriggerAction::Set => self.set_counter(map, trigger.group, trigger.amount),
+            TriggerAction::Output => {
+                let open = trigger.only_if.is_none()
+                    || self.gate_open(trigger, config, now, *hidden, tanks);
+                let value = if open { trigger.amount } else { 0 };
+                self.set_counter(map, trigger.group, value);
+            }
             TriggerAction::Calculate => {
                 let counter = |n: usize| {
                     n.checked_sub(1)
@@ -1818,10 +1866,27 @@ fn keep_phase(now: f32, current: TweenValue, speed: f32) -> f32 {
 /// When a trigger first fires on its own, for rounds starting at `from`.
 fn schedule(trigger: &MapTrigger, from: f32) -> f32 {
     match trigger.when {
-        TriggerWhen::Every => from + trigger.offset + trigger.seconds,
+        TriggerWhen::Every => from + trigger.offset + trigger.seconds.max(EVERY_LEAST),
         TriggerWhen::Start => from + trigger.seconds,
         _ => 0.,
     }
+}
+
+/// Whether `action` raises an effect for the world to carry out, rather
+/// than changing map logic's own state.
+fn raises_effect(action: TriggerAction) -> bool {
+    action.affects_tanks()
+        || matches!(
+            action,
+            TriggerAction::Shove
+                | TriggerAction::Sound
+                | TriggerAction::Announce
+                | TriggerAction::Ui
+                | TriggerAction::HideUi
+                | TriggerAction::Boss
+                | TriggerAction::Shapes
+                | TriggerAction::Script
+        )
 }
 
 /// What `trigger`'s gate sees: the counters, the groups, the round time and
@@ -3913,6 +3978,140 @@ mod tests {
         }
     }
 
+    /// A live gate: counter `out` holds whether `gate` is open over `tests`.
+    fn live(gate: tankyard_content::GateMode, tests: Vec<TriggerTest>, out: u8) -> MapTrigger {
+        let mut t = MapTrigger {
+            group: out,
+            amount: 1,
+            gate,
+            ..trigger(TriggerWhen::Inputs, TriggerAction::Output)
+        };
+        t.set_conditions(tests);
+        t
+    }
+    fn on(index: u8) -> TriggerTest {
+        test(TestKind::Counter, index, Compare::AtLeast, 1)
+    }
+
+    #[test]
+    fn live_gates_keep_their_counters_up_to_date() {
+        use tankyard_content::GateMode;
+        let mut bench = Bench::new(vec![
+            // NOT is right from the first step, before anything changes.
+            live(GateMode::NoneOf, vec![on(1)], 3),
+            live(GateMode::All, vec![on(1), on(2)], 4),
+            // Fed by the NOT: a chain settles within the step.
+            live(GateMode::Any, vec![on(3), on(4)], 5),
+            live(GateMode::Odd, vec![on(1), on(2), on(6)], 7),
+            live(GateMode::Most, vec![on(1), on(2), on(6)], 8),
+        ]);
+        bench.step(&[]);
+        assert_eq!(bench.logic.counters[..8], [0, 0, 1, 0, 1, 0, 0, 0]);
+        let mut check = |a: i32, b: i32, c: i32| {
+            bench.logic.input(LogicInput::SetCounter(1, a));
+            bench.logic.input(LogicInput::SetCounter(2, b));
+            bench.logic.input(LogicInput::SetCounter(6, c));
+            bench.step(&[]);
+            let counters = &bench.logic.counters;
+            let not = i32::from(a == 0);
+            let and = i32::from(a == 1 && b == 1);
+            assert_eq!(counters[2], not, "NOT {a}");
+            assert_eq!(counters[3], and, "AND {a} {b}");
+            assert_eq!(counters[4], not | and, "OR after them");
+            assert_eq!(counters[6], (a + b + c) % 2, "sum of {a} {b} {c}");
+            assert_eq!(
+                counters[7],
+                i32::from(a + b + c >= 2),
+                "carry of {a} {b} {c}"
+            );
+        };
+        for bits in 0..8 {
+            check(bits & 1, bits >> 1 & 1, bits >> 2 & 1);
+        }
+    }
+
+    #[test]
+    fn a_live_majority_gate_on_its_own_counter_is_a_latch() {
+        use tankyard_content::GateMode;
+        let off = test(TestKind::Counter, 2, Compare::AtMost, 0);
+        let mut bench = Bench::new(vec![live(GateMode::Most, vec![on(1), on(3), off], 3)]);
+        let mut press = |set: i32, reset: i32| {
+            bench.logic.input(LogicInput::SetCounter(1, set));
+            bench.logic.input(LogicInput::SetCounter(2, reset));
+            bench.step(&[]);
+            bench.logic.counters[2]
+        };
+        assert_eq!(press(0, 0), 0);
+        assert_eq!(press(1, 0), 1, "set");
+        assert_eq!(press(0, 0), 1, "holds");
+        assert_eq!(press(0, 1), 0, "reset");
+        assert_eq!(press(0, 0), 0, "holds off");
+        assert_eq!(press(1, 1), 0, "both hold it as it was");
+        assert_eq!(press(1, 0), 1);
+        assert_eq!(press(1, 1), 1);
+    }
+
+    #[test]
+    fn live_gates_watch_groups_and_store_a_value() {
+        use tankyard_content::GateMode;
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                amount: 40,
+                ..live(
+                    GateMode::All,
+                    vec![test(TestKind::Hidden, 2, Compare::AtLeast, 0)],
+                    1,
+                )
+            },
+            MapTrigger {
+                source: 1,
+                group: 2,
+                ..trigger(TriggerWhen::Signal, TriggerAction::Toggle)
+            },
+        ]);
+        bench.step(&[]);
+        assert_eq!(bench.logic.counters[0], 0, "group 2 starts shown");
+        bench.logic.input(LogicInput::Signal(1));
+        bench.step(&[]);
+        assert_eq!(bench.logic.counters[0], 40);
+        bench.logic.input(LogicInput::Signal(1));
+        bench.step(&[]);
+        assert_eq!(bench.logic.counters[0], 0);
+    }
+
+    #[test]
+    fn loops_that_compute_cannot_flood_players_with_effects() {
+        let mut bench = Bench::new(vec![
+            MapTrigger {
+                group: 1,
+                seconds: 0.,
+                ..trigger(TriggerWhen::Start, TriggerAction::Signal)
+            },
+            MapTrigger {
+                source: 1,
+                group: 1,
+                ..trigger(TriggerWhen::Signal, TriggerAction::Signal)
+            },
+            MapTrigger {
+                source: 1,
+                text: "again".into(),
+                ..trigger(TriggerWhen::Signal, TriggerAction::Announce)
+            },
+            MapTrigger {
+                source: 1,
+                group: 1,
+                ..trigger(TriggerWhen::Signal, TriggerAction::Count)
+            },
+        ]);
+        bench.step(&[]);
+        assert_eq!(bench.effects.len(), EFFECT_LIMIT);
+        let counted = bench.logic.counters[0];
+        assert!(
+            counted > EFFECT_LIMIT as i32,
+            "the counting goes on past the effects: {counted}"
+        );
+    }
+
     #[test]
     fn gate_modes_combine_their_conditions_like_logic_gates() {
         use tankyard_content::GateMode;
@@ -4378,7 +4577,7 @@ mod tests {
         bench.step(&[]);
         assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
         let loops = bench.logic.acted[1];
-        assert!((1..=17).contains(&loops), "{loops}");
+        assert!((1..=34).contains(&loops), "{loops}");
         assert_eq!(bench.logic.counters[1], 0);
         assert!(bench.logic.queue.is_empty());
     }

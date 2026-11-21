@@ -92,42 +92,94 @@ fn plate(emit: &mut impl FnMut(Primitive), center: Vec2, size: Vec2, angle: f32,
     });
 }
 
+/// An outlined triangle, its outline grown out from its middle.
+fn shard(emit: &mut impl FnMut(Primitive), vertices: [Vec2; 3], color: Color, edge: f32) {
+    let middle = (vertices[0] + vertices[1] + vertices[2]) / 3.;
+    let grown = vertices.map(|v| {
+        let out = v - middle;
+        v + out.normalize_or_zero() * edge * 1.8
+    });
+    emit(Primitive::Triangle {
+        vertices: grown,
+        color: Color {
+            a: color.a,
+            ..OUTLINE
+        },
+    });
+    emit(Primitive::Triangle { vertices, color });
+}
+
+/// How a boss is posed when drawn.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Pose {
+    /// Where its guns point.
+    pub aim: f32,
+    /// The angle of its turning launchers, from `BossKind::turn`.
+    pub turn: f32,
+    /// Seconds, for slow decorative motion; held still when motion is
+    /// reduced.
+    pub time: f32,
+    /// 1 at full health, 2 when hurt, 3 when nearly beaten.
+    pub phase: u8,
+    /// How far its special attack has charged, 0 to 1.
+    pub charge: f32,
+}
+
 /// Each boss's main armor: its sides, its size against the boss radius and
 /// its angle, matching the hulls drawn below.
-fn armor(kind: BossKind, aim: f32, rotate: f32) -> (u8, f32, f32) {
+fn armor(kind: BossKind, aim: f32, turn: f32) -> (u8, f32, f32) {
     match kind {
         BossKind::Guardian | BossKind::Tempest | BossKind::Skirmisher => (3, 1., aim),
-        BossKind::Defender | BossKind::Prism => (3, 1., rotate),
+        BossKind::Defender | BossKind::Prism => (3, 1., turn),
         BossKind::Summoner => (4, 1., aim + FRAC_PI_4),
-        BossKind::Foundry => (4, 0.89, aim + FRAC_PI_4),
-        BossKind::SiegeEngine => (4, 0.81, aim + FRAC_PI_4),
+        BossKind::Foundry => (4, 0.9, aim + FRAC_PI_4),
+        BossKind::SiegeEngine => (4, 0.8, aim + FRAC_PI_4),
         BossKind::Bastion => (4, 1., FRAC_PI_4),
-        BossKind::FallenOverlord | BossKind::FallenBooster => (0, 1., 0.),
-        BossKind::Sentinel | BossKind::Eclipse | BossKind::Trapper => (6, 1., aim),
+        BossKind::FallenOverlord | BossKind::FallenBooster | BossKind::Eclipse => (0, 1., 0.),
+        BossKind::Sentinel | BossKind::Trapper => (6, 1., aim + PI / 6.),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Where a boss's glowing core sits, which brightens as it charges.
+pub fn core_position(kind: BossKind, p: Vec2, r: f32, aim: f32) -> Vec2 {
+    let ahead = vec2(aim.cos(), aim.sin());
+    match kind {
+        BossKind::Sentinel => p + ahead * r * 0.5,
+        BossKind::Guardian => p - ahead * r * 0.12,
+        BossKind::Tempest | BossKind::Skirmisher => p + ahead * r * 0.12,
+        BossKind::Eclipse => p - ahead * r * 0.5,
+        _ => p,
+    }
+}
+
+/// A boss's shape in its own color, or its team's for a mothership. Every
+/// boss is built the same way: a dark outline, a raised rim, armor plates a
+/// shade darker inside, grey guns where its rounds really leave, and one
+/// bright core.
 pub fn boss_model_geometry(
     kind: BossKind,
     p: Vec2,
     r: f32,
-    aim: f32,
-    time: f32,
-    phase: u8,
+    pose: Pose,
     team_color: Option<Color>,
     emit: &mut impl FnMut(Primitive),
 ) {
-    if !r.is_finite() || r <= 0. || !aim.is_finite() || !time.is_finite() {
+    let Pose {
+        aim,
+        turn,
+        time,
+        phase,
+        charge,
+    } = pose;
+    if !r.is_finite() || r <= 0. || !aim.is_finite() || !turn.is_finite() || !time.is_finite() {
         return;
     }
     let color = team_color.unwrap_or_else(|| boss_color(kind));
     let edge = (r * 0.045).max(0.6);
-    let rotate = time * 0.16;
     // A wounded boss burns: amber at its second phase, a pulsing red at its
     // last, glowing around its armor in the armor's own shape.
     if phase >= 2 {
-        let (sides, size, angle) = armor(kind, aim, rotate);
+        let (sides, size, angle) = armor(kind, aim, turn);
         let (heat, pulse) = if phase >= 3 {
             (
                 Color::new(1., 0.28, 0.2, color.a),
@@ -151,6 +203,12 @@ pub fn boss_model_geometry(
         }
     }
     let direction = |angle: f32| vec2(angle.cos(), angle.sin());
+    let ahead = direction(aim);
+    let across = vec2(-ahead.y, ahead.x);
+    let dark = tint(color, 0.72);
+    let plate_color = tint(color, 0.86);
+    // The core brightens toward white as a special attack charges.
+    let glow = lighten(color, 0.55 + 0.4 * charge.clamp(0., 1.));
     let mount = |emit: &mut _, angle: f32, width: f32, length: f32, flare: f32| {
         cannon_profile(
             emit,
@@ -165,58 +223,243 @@ pub fn boss_model_geometry(
         );
     };
     match kind {
-        BossKind::Guardian => {
-            mount(emit, aim + PI, 0.64, 0.90, 1.6);
-            hull(emit, p, 3, r, aim, color, edge);
-            poly(
-                emit,
-                p - direction(aim) * r * 0.12,
-                3,
-                r * 0.44,
-                aim,
-                tint(color, 0.93),
-            );
-        }
-        BossKind::Summoner => {
-            for n in 0..4 {
-                mount(emit, aim + n as f32 * FRAC_PI_2, 0.55, 0.90, 1.6);
+        BossKind::Sentinel => {
+            // A hexagonal watchtower: two heavy guns side by side under a
+            // visor with one burning slit.
+            for side in [-1., 1.] {
+                cannon_profile(
+                    emit,
+                    p + across * side * r * 0.3,
+                    aim,
+                    r * 1.4,
+                    r * 0.32,
+                    color,
+                    0.,
+                    1.,
+                    Some(edge),
+                );
             }
-            hull(emit, p, 4, r, aim + FRAC_PI_4, color, edge);
+            hull(emit, p, 6, r, aim + PI / 6., color, edge);
             hull(
                 emit,
-                p,
-                4,
-                r * 0.44,
-                aim + FRAC_PI_4,
-                tint(color, 0.96),
-                edge * 0.4,
+                p - ahead * r * 0.2,
+                6,
+                r * 0.48,
+                aim + PI / 6.,
+                plate_color,
+                edge * 0.45,
+            );
+            plate(
+                emit,
+                p + ahead * r * 0.5,
+                vec2(r * 0.3, r * 1.04),
+                aim,
+                OUTLINE,
+            );
+            plate(
+                emit,
+                p + ahead * r * 0.5,
+                vec2(r * 0.3 - edge * 2., r * 1.04 - edge * 2.),
+                aim,
+                dark,
+            );
+            plate(
+                emit,
+                p + ahead * r * 0.5,
+                vec2(r * 0.09, r * 0.68),
+                aim,
+                glow,
             );
         }
-        BossKind::FallenOverlord => {
-            for n in 0..4 {
-                mount(emit, aim + n as f32 * FRAC_PI_2, 0.47, 0.90, 1.65);
+        BossKind::Prism => {
+            // A turning crystal: three facets in three shades, an emitter
+            // at each point.
+            for n in 0..3 {
+                mount(emit, turn + n as f32 * TAU / 3., 0.2, 0.78, 1.25);
             }
-            hull(emit, p, 0, r, 0., color, edge);
-            hull(emit, p, 0, r * 0.56, 0., tint(color, 0.94), edge * 0.4);
-            poly(emit, p, 4, r * 0.2, aim + FRAC_PI_4, OUTLINE);
+            hull(emit, p, 3, r, turn, color, edge);
+            let inner = r - (r * 0.07).min(edge * 2.5);
+            for n in 0..3 {
+                let a = turn + n as f32 * TAU / 3.;
+                emit(Primitive::Triangle {
+                    vertices: [
+                        p,
+                        p + direction(a) * inner,
+                        p + direction(a + TAU / 3.) * inner,
+                    ],
+                    color: [lighten(color, 0.22), color, tint(color, 0.74)][n],
+                });
+            }
+            poly(emit, p, 3, r * 0.24, turn + PI, OUTLINE);
+            poly(emit, p, 3, r * 0.24 - edge, turn + PI, glow);
         }
-        BossKind::FallenBooster => {
-            for offset in [-0.45, -0.2, 0.2, 0.45] {
-                mount(emit, aim + PI + offset, 0.24, 0.95, 1.);
+        BossKind::Foundry => {
+            // A works: two launch bays at its front corners, a furnace
+            // behind a grille and two stacks at the back.
+            for side in [-1., 1.] {
+                mount(emit, aim + side * 0.7, 0.5, 0.82, 1.4);
             }
-            mount(emit, aim, 0.46, 1.10, 1.);
-            hull(emit, p, 0, r, 0., color, edge);
-            hull(emit, p, 0, r * 0.53, 0., tint(color, 0.9), edge * 0.55);
+            hull(emit, p, 4, r * 0.9, aim + FRAC_PI_4, color, edge);
+            for side in [-1., 1.] {
+                let stack = p - ahead * r * 0.42 + across * side * r * 0.4;
+                hull(emit, stack, 0, r * 0.17, 0., dark, edge * 0.7);
+                poly(emit, stack, 0, r * 0.09, 0., OUTLINE);
+            }
+            plate(
+                emit,
+                p + ahead * r * 0.1,
+                vec2(r * 0.66, r * 0.66),
+                aim,
+                OUTLINE,
+            );
+            plate(
+                emit,
+                p + ahead * r * 0.1,
+                vec2(r * 0.66 - edge * 2., r * 0.66 - edge * 2.),
+                aim,
+                tint(color, 0.5),
+            );
+            for n in -1..=1 {
+                plate(
+                    emit,
+                    p + ahead * r * 0.1 + across * n as f32 * r * 0.19,
+                    vec2(r * 0.5, r * 0.07),
+                    aim,
+                    glow,
+                );
+            }
+        }
+        BossKind::Tempest => {
+            // A storm dart: a long point, swept wings and missile racks.
+            for side in [-1., 1.] {
+                shard(
+                    emit,
+                    [
+                        p - ahead * r * 0.15 + across * side * r * 0.4,
+                        p - ahead * r * 1.1 + across * side * r * 1.22,
+                        p - ahead * r * 0.62 + across * side * r * 0.3,
+                    ],
+                    dark,
+                    edge,
+                );
+                cannon_profile(
+                    emit,
+                    p - ahead * r * 0.42 + across * side * r * 0.74,
+                    aim,
+                    r * 0.92,
+                    r * 0.22,
+                    color,
+                    0.,
+                    1.,
+                    Some(edge),
+                );
+            }
+            hull(emit, p, 3, r, aim, color, edge);
+            poly(emit, p + ahead * r * 0.12, 4, r * 0.26, aim, OUTLINE);
+            poly(
+                emit,
+                p + ahead * r * 0.12,
+                4,
+                r * 0.26 - edge * 1.4,
+                aim,
+                glow,
+            );
+        }
+        BossKind::Bastion => {
+            // A square keep with round towers at its corners; the gun turns
+            // on a ring in the middle.
+            hull(emit, p, 4, r, FRAC_PI_4, color, edge);
+            hull(emit, p, 4, r * 0.7, FRAC_PI_4, plate_color, edge * 0.45);
+            for n in 0..4 {
+                let corner = p + direction(FRAC_PI_4 + n as f32 * FRAC_PI_2) * r * 0.76;
+                hull(emit, corner, 0, r * 0.25, 0., dark, edge * 0.7);
+                // Mine hatches, turning with its launchers.
+                poly(emit, corner, 4, r * 0.12, turn, OUTLINE);
+                poly(emit, corner, 4, r * 0.12 - edge, turn, tint(color, 0.55));
+            }
+            cannon_profile(emit, p, aim, r * 1.52, r * 0.46, color, 0., 1., Some(edge));
+            hull(emit, p, 0, r * 0.34, 0., plate_color, edge * 0.8);
+            poly(emit, p, 0, r * 0.15, 0., OUTLINE);
+            poly(emit, p, 0, r * 0.15 - edge, 0., glow);
+        }
+        BossKind::Eclipse => {
+            // A dark moon across a burning disc, a corona of rays around
+            // it; its fragments burst out of the corona.
+            for n in 0..12 {
+                let a = time * 0.12 + n as f32 * TAU / 12.;
+                shard(
+                    emit,
+                    [
+                        p + direction(a - 0.13) * r * 0.9,
+                        p + direction(a) * r * 1.22,
+                        p + direction(a + 0.13) * r * 0.9,
+                    ],
+                    lighten(color, 0.3),
+                    edge * 0.6,
+                );
+            }
+            hull(emit, p, 0, r * 0.96, 0., lighten(color, 0.45), edge);
+            poly(emit, p + ahead * r * 0.17, 0, r * 0.8, 0., glow);
+            poly(
+                emit,
+                p + ahead * r * 0.2,
+                0,
+                r * 0.76,
+                0.,
+                Color::new(0.1, 0.07, 0.16, color.a),
+            );
+        }
+        BossKind::Guardian => {
+            // A broad wedge that launches its swarm from a bay at the back,
+            // with a pentagon set at each point.
+            mount(emit, aim + PI, 0.64, 0.9, 1.6);
+            hull(emit, p, 3, r, aim, color, edge);
+            hull(
+                emit,
+                p - ahead * r * 0.12,
+                3,
+                r * 0.48,
+                aim,
+                plate_color,
+                edge * 0.45,
+            );
+            for n in 0..3 {
+                let a = aim + n as f32 * TAU / 3.;
+                hull(
+                    emit,
+                    p + direction(a) * r * 0.66,
+                    5,
+                    r * 0.12,
+                    a,
+                    dark,
+                    edge * 0.5,
+                );
+            }
+            poly(emit, p - ahead * r * 0.12, 5, r * 0.16, aim, OUTLINE);
+            poly(emit, p - ahead * r * 0.12, 5, r * 0.16 - edge, aim, glow);
+        }
+        BossKind::Summoner => {
+            // A square seal with a bay on every side.
+            for n in 0..4 {
+                mount(emit, aim + n as f32 * FRAC_PI_2, 0.55, 0.9, 1.6);
+            }
+            hull(emit, p, 4, r, aim + FRAC_PI_4, color, edge);
+            hull(emit, p, 4, r * 0.6, aim, plate_color, edge * 0.45);
+            hull(emit, p, 4, r * 0.4, aim + FRAC_PI_4, dark, edge * 0.45);
+            poly(emit, p, 4, r * 0.18, aim, OUTLINE);
+            poly(emit, p, 4, r * 0.18 - edge, aim, glow);
         }
         BossKind::Defender => {
+            // A turning triangle: trap launchers on its sides, a turret at
+            // each point watching its target.
             for n in 0..3 {
-                mount(emit, rotate + n as f32 * TAU / 3. + PI, 0.42, 0.94, 1.45);
+                mount(emit, turn + PI + n as f32 * TAU / 3., 0.42, 0.94, 1.45);
             }
-            hull(emit, p, 3, r, rotate, color, edge);
-            hull(emit, p, 3, r * 0.42, rotate, tint(color, 0.86), edge * 0.5);
+            hull(emit, p, 3, r, turn, color, edge);
+            hull(emit, p, 3, r * 0.42, turn, dark, edge * 0.5);
             // Every turret barrel goes down before any turret ring, so no
             // barrel crosses another turret.
-            let turrets = (0..3).map(|n| p + direction(rotate + n as f32 * TAU / 3.) * r * 0.51);
+            let turrets = (0..3).map(|n| p + direction(turn + n as f32 * TAU / 3.) * r * 0.51);
             for position in turrets.clone() {
                 cannon_profile(
                     emit,
@@ -241,156 +484,89 @@ pub fn boss_model_geometry(
                     edge * 0.7,
                 );
             }
+            poly(emit, p, 3, r * 0.17, turn + PI, glow);
         }
-        BossKind::Sentinel => {
-            for side in [-1., 1.] {
-                mount(emit, aim + side * 0.36, 0.34, 1.0, 1.);
-            }
-            hull(emit, p, 6, r, aim, color, edge);
-            hull(emit, p, 6, r * 0.6, aim, tint(color, 0.9), edge * 0.45);
-            // A visor across the front, turned where it watches.
-            plate(
-                emit,
-                p + direction(aim) * r * 0.22,
-                vec2(r * 0.15, r * 0.5),
-                aim,
-                tint(color, 0.55),
-            );
-        }
-        BossKind::Prism => {
-            for n in 0..3 {
-                mount(emit, rotate + n as f32 * TAU / 3., 0.25, 0.85, 1.);
-            }
-            hull(emit, p, 3, r, rotate, color, edge);
-            let a = p + direction(rotate) * r * 0.77;
-            let b = p + direction(rotate + TAU / 3.) * r * 0.77;
-            emit(Primitive::Triangle {
-                vertices: [p, a, b],
-                color: tint(color, 1.13),
-            });
-            poly(emit, p, 3, r * 0.25, rotate, tint(color, 0.62));
-        }
-        BossKind::Foundry => {
-            for side in [-1., 1.] {
-                mount(emit, aim + side * 1.0, 0.48, 0.82, 1.5);
-                let pod = p + direction(aim + side * FRAC_PI_2) * r * 0.64;
-                hull(
-                    emit,
-                    pod,
-                    4,
-                    r * 0.38,
-                    aim + FRAC_PI_4,
-                    tint(color, 0.72),
-                    edge * 0.7,
-                );
-            }
-            hull(emit, p, 4, r * 0.89, aim + FRAC_PI_4, color, edge);
-            plate(emit, p, vec2(r * 0.64, r * 0.46), aim, tint(color, 0.5));
-            for n in -1..=1 {
-                plate(
-                    emit,
-                    p + direction(aim) * n as f32 * r * 0.19,
-                    vec2(r * 0.07, r * 0.36),
-                    aim,
-                    tint(color, 1.1),
-                );
-            }
-        }
-        BossKind::Tempest => {
-            for side in [-1., 1.] {
-                mount(emit, aim + PI + side * 0.5, 0.3, 0.9, 1.);
-            }
-            mount(emit, aim, 0.3, 1.05, 1.);
-            hull(emit, p, 3, r, aim, color, edge);
-            emit(Primitive::Triangle {
-                vertices: [
-                    p + direction(aim) * r * 0.7,
-                    p + direction(aim + 2.5) * r * 0.43,
-                    p + direction(aim - 2.5) * r * 0.43,
-                ],
-                color: tint(color, 0.68),
-            });
-        }
-        BossKind::Bastion => {
-            // A square keep with round towers at its corners; the gun turns
-            // on a ring in the middle.
-            hull(emit, p, 4, r, FRAC_PI_4, color, edge);
-            hull(
-                emit,
-                p,
-                4,
-                r * 0.7,
-                FRAC_PI_4,
-                tint(color, 0.86),
-                edge * 0.45,
-            );
+        BossKind::FallenOverlord => {
             for n in 0..4 {
-                let corner = p + direction(FRAC_PI_4 + n as f32 * FRAC_PI_2) * r * 0.76;
-                hull(emit, corner, 0, r * 0.25, 0., tint(color, 0.78), edge * 0.7);
-                poly(emit, corner, 0, r * 0.1, 0., tint(color, 0.62));
+                mount(emit, aim + n as f32 * FRAC_PI_2, 0.47, 0.9, 1.65);
             }
-            cannon_profile(emit, p, aim, r * 1.52, r * 0.46, color, 0., 1., Some(edge));
-            hull(emit, p, 0, r * 0.34, 0., tint(color, 0.95), edge * 0.8);
-            poly(emit, p, 4, r * 0.13, aim + FRAC_PI_4, tint(color, 0.6));
+            hull(emit, p, 0, r, 0., color, edge);
+            hull(emit, p, 0, r * 0.56, 0., plate_color, edge * 0.4);
+            poly(emit, p, 4, r * 0.24, aim + FRAC_PI_4, OUTLINE);
+            poly(emit, p, 4, r * 0.24 - edge * 1.4, aim + FRAC_PI_4, glow);
         }
-        BossKind::Eclipse => {
-            mount(emit, aim + 0.8, 0.24, 0.82, 1.);
-            mount(emit, aim - 0.8, 0.24, 0.82, 1.);
-            hull(emit, p, 6, r, aim, tint(color, 0.76), edge);
-            hull(
-                emit,
-                p - direction(aim) * r * 0.16,
-                6,
-                r * 0.63,
-                aim,
-                color,
-                edge * 0.6,
-            );
-            plate(
-                emit,
-                p + direction(aim) * r * 0.25,
-                vec2(r * 0.16, r * 0.72),
-                aim,
-                tint(color, 0.45),
-            );
+        BossKind::FallenBooster => {
+            // A heavy front gun and four thrusters behind.
+            for offset in [-0.45, -0.2, 0.2, 0.45] {
+                mount(emit, aim + PI + offset, 0.24, 0.95, 1.2);
+            }
+            mount(emit, aim, 0.46, 1.1, 1.);
+            hull(emit, p, 0, r, 0., color, edge);
+            hull(emit, p, 0, r * 0.53, 0., plate_color, edge * 0.55);
+            poly(emit, p, 0, r * 0.2, 0., OUTLINE);
+            poly(emit, p, 0, r * 0.2 - edge, 0., glow);
         }
         BossKind::SiegeEngine => {
+            // Two long treads, a square hull, and on its turret ring one
+            // huge gun with a muzzle brake. Everything it fires leaves it.
             for side in [-1., 1.] {
-                let track = p + direction(aim + FRAC_PI_2) * r * 0.62 * side;
-                plate(emit, track, vec2(r * 1.40, r * 0.36), aim, OUTLINE);
+                let track = p + across * side * r * 0.64;
+                plate(emit, track, vec2(r * 1.46, r * 0.4), aim, OUTLINE);
                 plate(
                     emit,
                     track,
-                    vec2(r * 1.28, r * 0.24),
+                    vec2(r * 1.46 - edge * 2., r * 0.4 - edge * 2.),
                     aim,
-                    tint(color, 0.65),
+                    tint(color, 0.5),
                 );
-                for n in -2..=2 {
+                for n in -3..=3 {
                     plate(
                         emit,
-                        track + direction(aim) * n as f32 * r * 0.24,
-                        vec2(edge * 0.8, r * 0.22),
+                        track + ahead * n as f32 * r * 0.19,
+                        vec2(edge * 0.9, r * 0.3),
                         aim,
                         OUTLINE,
                     );
                 }
             }
-            mount(emit, aim, 0.55, 1.25, 1.);
-            hull(emit, p, 4, r * 0.81, aim + FRAC_PI_4, color, edge);
+            hull(emit, p, 4, r * 0.8, aim + FRAC_PI_4, color, edge);
             plate(
                 emit,
-                p - direction(aim) * r * 0.20,
-                vec2(r * 0.4, r * 0.55),
+                p - ahead * r * 0.42,
+                vec2(r * 0.16, r * 0.7),
                 aim,
-                tint(color, 0.72),
+                dark,
             );
+            cannon_profile(emit, p, aim, r * 1.62, r * 0.34, color, 0., 1., Some(edge));
+            let brake = p + ahead * r * 1.48;
+            plate(emit, brake, vec2(r * 0.28, r * 0.5), aim, OUTLINE);
+            plate(
+                emit,
+                brake,
+                vec2(r * 0.28 - edge * 2., r * 0.5 - edge * 2.),
+                aim,
+                Color::new(0.6, 0.6, 0.6, color.a),
+            );
+            hull(emit, p, 0, r * 0.4, 0., plate_color, edge);
+            poly(emit, p, 0, r * 0.16, 0., OUTLINE);
+            poly(emit, p, 0, r * 0.16 - edge, 0., glow);
         }
         BossKind::Skirmisher => {
+            // A small, quick wedge: a gun on each wing, fins swept back.
             for side in [-1., 1.] {
-                let mount_at = p + direction(aim + side * 1.1) * r * 0.45;
+                shard(
+                    emit,
+                    [
+                        p - ahead * r * 0.2 + across * side * r * 0.45,
+                        p - ahead * r * 1.12 + across * side * r * 1.05,
+                        p - ahead * r * 0.6 + across * side * r * 0.25,
+                    ],
+                    dark,
+                    edge,
+                );
                 cannon_profile(
                     emit,
-                    mount_at,
+                    p + direction(aim + side * 1.1) * r * 0.45,
                     aim,
                     r * 0.91,
                     r * 0.23,
@@ -401,40 +577,44 @@ pub fn boss_model_geometry(
                 );
             }
             hull(emit, p, 3, r, aim, color, edge);
+            hull(
+                emit,
+                p - ahead * r * 0.06,
+                3,
+                r * 0.5,
+                aim,
+                plate_color,
+                edge * 0.45,
+            );
+            poly(emit, p + ahead * r * 0.12, 4, r * 0.18, aim, OUTLINE);
             poly(
                 emit,
-                p - direction(aim) * r * 0.08,
-                3,
-                r * 0.52,
+                p + ahead * r * 0.12,
+                4,
+                r * 0.18 - edge * 1.2,
                 aim,
-                tint(color, 0.88),
-            );
-            plate(
-                emit,
-                p - direction(aim) * r * 0.12,
-                vec2(r * 0.3, r * 0.17),
-                aim,
-                tint(color, 0.58),
+                glow,
             );
         }
         BossKind::Trapper => {
+            // A hexagon with two trap launchers ahead and a mine rack on
+            // each side, where its pockets of mines come from.
             for side in [-1., 1.] {
-                mount(emit, aim + side * 0.55, 0.40, 0.83, 1.4);
+                mount(emit, aim + side * 0.55, 0.4, 0.98, 1.4);
+                mount(emit, aim + side * FRAC_PI_2, 0.5, 0.7, 1.55);
             }
-            hull(emit, p, 6, r, aim, color, edge);
-            hull(emit, p, 6, r * 0.3, aim, tint(color, 0.82), edge * 0.5);
-            for side in [-1., 1.] {
-                let cassette = p + direction(aim + side * FRAC_PI_2) * r * 0.55;
-                hull(
-                    emit,
-                    cassette,
-                    3,
-                    r * 0.23,
-                    aim + side * FRAC_PI_2,
-                    tint(color, 0.6),
-                    edge * 0.6,
-                );
-            }
+            hull(emit, p, 6, r, aim + PI / 6., color, edge);
+            hull(
+                emit,
+                p,
+                6,
+                r * 0.56,
+                aim + PI / 6.,
+                plate_color,
+                edge * 0.45,
+            );
+            poly(emit, p, 3, r * 0.24, aim, OUTLINE);
+            poly(emit, p, 3, r * 0.24 - edge * 1.6, aim, glow);
         }
     }
 }
@@ -510,9 +690,13 @@ mod tests {
                 kind,
                 Vec2::ZERO,
                 kind.radius(),
-                0.4,
-                2.,
-                2,
+                Pose {
+                    aim: 0.4,
+                    turn: 1.,
+                    time: 2.,
+                    phase: 2,
+                    charge: 0.5,
+                },
                 None,
                 &mut |primitive| {
                     let points = match primitive {

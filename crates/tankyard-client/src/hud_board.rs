@@ -97,7 +97,7 @@ pub fn paint(
             }
             HudCellKind::Button => {
                 button(cell, &text, rect, scale, skin, over, over && pressed);
-                if over && is_mouse_button_pressed(MouseButton::Left) {
+                if over && crate::ui::take_click() {
                     picked = Some(index as u8);
                 }
             }

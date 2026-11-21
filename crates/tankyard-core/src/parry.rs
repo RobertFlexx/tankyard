@@ -119,7 +119,9 @@ impl World {
         shot.penetration = shot.penetration.clamp(1.0, 3.0);
         let (multiplier, minimum, maximum, healing) = match ability {
             Ability::CounterParry => (3., 55., 220., 0.12),
-            Ability::VolleyParry => (3.2, 60., 240., 0.15),
+            // The volley's echoes are its edge; the reflection itself
+            // matches the counter's.
+            Ability::VolleyParry => (3., 55., 220., 0.12),
             _ => (2.6, 45., 200., 0.08),
         };
         // Only a successful reflection earns this damage and healing. The
@@ -134,7 +136,7 @@ impl World {
             shot.pos,
             shot.cruise_speed * 0.92,
             (shot.radius * 0.75).clamp(3., 8.),
-            (shot.damage * 0.45).min(80.),
+            (shot.damage * 0.35).min(60.),
         );
         let tank = &mut self.tanks[defender];
         tank.health = (tank.health + tank.max_health * healing).min(tank.max_health);
@@ -186,7 +188,7 @@ impl World {
         let (multiplier, damage_cap, health_cap, radius_cap, speed, lifetime, healing) =
             match ability {
                 Ability::CounterParry => (3.0, 260., 9., 42., 560., 7., 0.12),
-                Ability::VolleyParry => (3.2, 320., 12., 48., 620., 8., 0.15),
+                Ability::VolleyParry => (3.0, 280., 10., 45., 580., 7.5, 0.12),
                 _ => (2.6, 200., 6., 36., 500., 6., 0.08),
             };
         let damage = (incoming.damage * multiplier).clamp(45., damage_cap);

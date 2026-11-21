@@ -172,9 +172,12 @@ impl History {
                 return None;
             }
             positions.insert((kind, id), position);
-            // Things first seen this frame have no past; treat them as fixed.
+            // Things first seen this frame have no past, and a round leaving
+            // a rift has jumped rather than moved; treat them as fixed.
             let motion = match (cut, seen.get(&(kind, id))) {
-                (false, Some(&last)) => before.screen(last) - here,
+                (false, Some(&last)) if last.distance(position) <= 400. => {
+                    before.screen(last) - here
+                }
                 _ => camera_motion,
             };
             Some((here, encode(motion * render)))

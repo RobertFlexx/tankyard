@@ -579,7 +579,7 @@ impl VoiceChat {
             "Mic muted [M]"
         };
         label(title, r.x + 10. * s, r.y + 25. * s, 13. * s, color);
-        if hovered && is_mouse_button_pressed(MouseButton::Left) {
+        if hovered && crate::ui::take_click() {
             self.toggle();
         }
         if hovered {

@@ -416,7 +416,7 @@ pub fn world(
     let z = view.zoom;
     let top = view.world(vec2(0.0, 0.0));
     let bottom = view.world(vec2(screen_width(), screen_height()));
-    // Fine world-space grid, Diep-style. Remains crisp at arbitrary aspect ratios.
+    // Fine world-space grid. Remains crisp at arbitrary aspect ratios.
     let grid = 40.0;
     for x in ((top.x / grid).floor() as i32)..=((bottom.x / grid).ceil() as i32) {
         let p = view.screen(V2::new(x as f32 * grid, 0.0));
@@ -542,6 +542,7 @@ pub fn world(
             .iter()
             .find(|tank| tank.id == local && tank.alive)
             .map(|tank| placed(tank.id, tank.pos)),
+        fades: Default::default(),
     };
     if let Some(map) = map {
         crate::profile::phase("pads", || {
@@ -821,6 +822,7 @@ pub fn world(
             draw_circle(p.x, p.y, r, alpha(c, t * 0.7));
         }
     }
+    let mut boss_glows = Vec::new();
     for projectile in &snapshot.projectiles {
         // Fixed-step simulation / unlocked rendering: interpolate local bullets
         // between authoritative 60 Hz positions without altering collisions.
@@ -851,6 +853,33 @@ pub fn world(
         let fade = (projectile.lifetime / 0.18).clamp(0.0, 1.0);
         let appear = (projectile.age / 0.045).clamp(0.45, 1.0);
         let opacity = fade * appear;
+        if boss.is_some()
+            && matches!(
+                projectile.kind,
+                ProjectileKind::Bullet
+                    | ProjectileKind::Shell
+                    | ProjectileKind::Piercing
+                    | ProjectileKind::Scatter
+                    | ProjectileKind::Explosive
+                    | ProjectileKind::Fragment
+                    | ProjectileKind::Homing
+            )
+            && projectile.frozen.is_none()
+        {
+            crate::boss_fx::shot(
+                p,
+                r,
+                vec2(projectile.vel.x, projectile.vel.y),
+                projectile.kind,
+                projectile.damage,
+                c,
+                opacity,
+                projectile.age,
+                z,
+                &mut boss_glows,
+            );
+            continue;
+        }
         match projectile.kind {
             ProjectileKind::Minion => {
                 crate::tank_model::minion_model_geometry(
@@ -911,7 +940,14 @@ pub fn world(
             }
         }
     }
-    crate::rifts::draw_shots(&snapshot.rift_shots, view, interpolation);
+    crate::boss_fx::shot_glows(&mut boss_glows);
+    crate::rifts::draw_shots(
+        &snapshot.rift_shots,
+        view,
+        interpolation,
+        (local, crate::rifts::team_of(snapshot, local)),
+    );
+    let boss_time = crate::accessibility::motion_time(snapshot.tick as f32 / 60.);
     for boss in &snapshot.bosses {
         let position = previous_positions
             .get(&boss.id)
@@ -923,55 +959,45 @@ pub fn world(
         }
         let p = view.screen(position);
         let r = boss.radius * z;
-        if boss.attack_windup > 0. {
-            let progress = 1. - boss.attack_windup / 0.9;
-            // Aim stays locked throughout a special's warning. Show the
-            // actual firing lanes for aimed attacks, not just a generic halo.
-            let lanes: &[f32] = match boss.kind {
-                tankyard_core::BossKind::SiegeEngine => &[-0.14, 0., 0.14],
-                tankyard_core::BossKind::Skirmisher => &[-0.36, -0.18, 0.18, 0.36],
-                tankyard_core::BossKind::Trapper => &[-1.76, -1.57, -1.38, 1.38, 1.57, 1.76],
-                tankyard_core::BossKind::Sentinel => &[-0.39, 0., 0.39],
-                _ => &[],
-            };
-            for offset in lanes {
-                let angle = boss.aim + offset;
-                let d = vec2(angle.cos(), angle.sin());
-                let start = p + d * (r + 4. * z);
-                let end = p + d * (r + 520. * z);
-                draw_line(
-                    start.x,
-                    start.y,
-                    end.x,
-                    end.y,
-                    (3. * z).max(1.),
-                    alpha(AMBER, 0.2 + progress * 0.35),
-                );
-            }
-            draw_circle_lines(
-                p.x,
-                p.y,
-                r * (1.65 - progress * 0.35),
-                2.5 * z,
-                alpha(WHITE, 0.65),
+        let charge = if boss.attack_windup > 0. {
+            crate::boss_fx::warning(
+                view,
+                boss,
+                position,
+                snapshot.walls.iter().map(scaled),
+                boss_time,
             );
-            draw_circle_lines(p.x, p.y, r * 1.12, 1.5 * z, alpha(AMBER, 0.6));
-        }
-        if boss.tactic == tankyard_core::BossTactic::Windup {
-            let end = p + vec2(boss.aim.cos(), boss.aim.sin()) * r * 4.;
-            draw_line(p.x, p.y, end.x, end.y, r * 0.55, alpha(RED, 0.12));
-            draw_circle_lines(p.x, p.y, r * 1.25, 2., alpha(RED, 0.55));
-        }
+            (1. - boss.attack_windup / boss.kind.windup()).clamp(0., 1.)
+        } else {
+            0.
+        };
+        crate::boss_fx::dash(view, boss, position, boss_time);
+        let color = if boss.mothership {
+            team_color(boss.team, false, settings.colorblind)
+        } else {
+            tankyard_client::boss_model::boss_color(boss.kind)
+        };
         tankyard_client::boss_model::boss_model_geometry(
             boss.kind,
             p,
             r,
-            boss.aim,
-            crate::accessibility::motion_time(snapshot.tick as f32 / 60.),
-            boss.phase,
-            boss.mothership
-                .then(|| team_color(boss.team, false, settings.colorblind)),
+            tankyard_client::boss_model::Pose {
+                aim: boss.aim,
+                turn: boss.kind.turn(snapshot.tick),
+                time: boss_time,
+                phase: boss.phase,
+                charge,
+            },
+            boss.mothership.then_some(color),
             &mut draw_model_primitive,
+        );
+        crate::boss_fx::core_glow(
+            tankyard_client::boss_model::core_position(boss.kind, p, r, boss.aim),
+            r,
+            color,
+            charge,
+            boss.phase,
+            boss_time,
         );
         health_bar(p, r, boss.health / boss.max_health, z, RED);
         center_label(
@@ -1135,11 +1161,17 @@ pub fn world(
             let d = vec2((aim + barrel.angle).cos(), (aim + barrel.angle).sin());
             let mount = V2::new(barrel.offset[0], barrel.offset[1]).rotate(aim);
             let lens = p + vec2(mount.x, mount.y) * z + d * (barrel.length * z + r * 0.45) * 0.98;
+            let foe = crate::rifts::hostile(
+                tank.id,
+                tank.team,
+                local,
+                crate::rifts::team_of(snapshot, local),
+            );
             crate::rifts::armed(
                 p,
                 r,
                 lens,
-                crate::rifts::next_end(snapshot, tank.id),
+                (crate::rifts::next_end(snapshot, tank.id), foe),
                 z,
                 if settings.reduced_motion {
                     0.
@@ -1363,17 +1395,19 @@ fn arena_lights(
             },
         );
     }
+    let local_team = crate::rifts::team_of(snapshot, local);
     for rift in &snapshot.rifts {
         if !view.visible(rift.pos, tankyard_core::RIFT_RADIUS * 3.) {
             continue;
         }
         let size = crate::rifts::scale(rift.age, rift.life);
+        let foe = crate::rifts::hostile(rift.owner, rift.team, local, local_team);
         crate::lighting::gather(
             out,
             Light::Spot {
                 at: view.screen(rift.pos),
                 radius: tankyard_core::RIFT_RADIUS * 3.4 * size * z,
-                color: alpha(crate::rifts::color(rift.end), 0.9),
+                color: alpha(crate::rifts::color(rift.end, foe), 0.9),
             },
         );
     }

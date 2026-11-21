@@ -24,8 +24,9 @@ impl Brush {
     }
 }
 
-pub const CATEGORIES: [&str; 10] = [
-    "Blocks", "Pads", "Decor", "Logic", "Gates", "Motion", "Effects", "Physics", "Markers", "UI",
+pub const CATEGORIES: [&str; 11] = [
+    "Blocks", "Pads", "Decor", "Logic", "Gates", "Circuits", "Motion", "Effects", "Physics",
+    "Markers", "UI",
 ];
 
 fn block(name: &'static str, style: BlockStyle) -> Brush {
@@ -185,6 +186,28 @@ fn on(index: u8) -> TriggerTest {
         index,
         ..Default::default()
     }
+}
+/// Counter `index` is 0 or less: a switch that is off.
+fn off(index: u8) -> TriggerTest {
+    TriggerTest {
+        compare: Compare::AtMost,
+        value: 0,
+        ..on(index)
+    }
+}
+/// A live gate: counter `out` holds 1 while `gate` is open over `tests`
+/// and 0 otherwise, kept up to date as they change.
+fn live(gate: GateMode, tests: Vec<TriggerTest>, out: u8) -> MapTrigger {
+    let mut trigger = MapTrigger {
+        when: TriggerWhen::Inputs,
+        action: TriggerAction::Output,
+        group: out,
+        amount: 1,
+        gate,
+        ..Default::default()
+    };
+    trigger.set_conditions(tests);
+    trigger
 }
 
 /// Particle presets shared by the palette and the inspector.
@@ -583,6 +606,26 @@ pub fn catalog() -> Vec<Vec<Brush>> {
                 .hint("Passes signal 1 on as 3 while counter 1 or 2 is on"),
             logic("XOR", small, relay(GateMode::One, vec![on(1), on(2)]))
                 .hint("Passes signal 1 on as 3 while just one of counters 1 and 2 is on"),
+            logic("NOT", small, relay(GateMode::NoneOf, vec![on(1)]))
+                .hint("Passes signal 1 on as 3 while counter 1 is off"),
+            logic("NAND", small, relay(GateMode::NotAll, vec![on(1), on(2)]))
+                .hint("Passes signal 1 on as 3 unless counters 1 and 2 are both on"),
+            logic("NOR", small, relay(GateMode::NoneOf, vec![on(1), on(2)]))
+                .hint("Passes signal 1 on as 3 while counters 1 and 2 are both off"),
+            logic("XNOR", small, relay(GateMode::Even, vec![on(1), on(2)]))
+                .hint("Passes signal 1 on as 3 while counters 1 and 2 are both on or both off"),
+            logic(
+                "Majority",
+                small,
+                relay(GateMode::Most, vec![on(1), on(2), on(4)]),
+            )
+            .hint("Passes signal 1 on as 3 while two or more of counters 1, 2 and 4 are on"),
+            logic(
+                "Parity",
+                small,
+                relay(GateMode::Odd, vec![on(1), on(2), on(4)]),
+            )
+            .hint("Passes signal 1 on as 3 while one or all three of counters 1, 2 and 4 are on"),
             logic(
                 "If/else",
                 small,
@@ -728,6 +771,100 @@ pub fn catalog() -> Vec<Vec<Brush>> {
                 overtime
             })
             .hint("Announces every 30 s once the round passes 5 minutes"),
+        ],
+        vec![
+            logic(
+                "Live AND",
+                small,
+                live(GateMode::All, vec![on(1), on(2)], 3),
+            )
+            .hint("Keeps counter 3 at 1 while counters 1 and 2 are both on, else 0"),
+            logic("Live OR", small, live(GateMode::Any, vec![on(1), on(2)], 3))
+                .hint("Keeps counter 3 at 1 while counter 1 or 2 is on, else 0"),
+            logic("Live NOT", small, live(GateMode::NoneOf, vec![on(1)], 2))
+                .hint("Keeps counter 2 at 1 while counter 1 is off, else 0"),
+            logic(
+                "Live XOR",
+                small,
+                live(GateMode::One, vec![on(1), on(2)], 3),
+            )
+            .hint("Keeps counter 3 at 1 while just one of counters 1 and 2 is on"),
+            logic(
+                "Sum bit",
+                small,
+                live(GateMode::Odd, vec![on(1), on(2), on(3)], 4),
+            )
+            .hint("Keeps counter 4 at the sum bit of counters 1, 2 and 3, as a full adder"),
+            logic(
+                "Carry bit",
+                small,
+                live(GateMode::Most, vec![on(1), on(2), on(3)], 5),
+            )
+            .hint("Keeps counter 5 at the carry of counters 1, 2 and 3, as a full adder"),
+            logic(
+                "Latch",
+                small,
+                live(GateMode::Most, vec![on(1), on(3), off(2)], 3),
+            )
+            .hint("Counter 3 turns on with counter 1, off with counter 2, and holds between"),
+            logic("Compare", small, {
+                live(
+                    GateMode::All,
+                    vec![TriggerTest {
+                        against: 2,
+                        ..on(1)
+                    }],
+                    3,
+                )
+            })
+            .hint("Keeps counter 3 at 1 while counter 1 is at least counter 2, else 0"),
+            logic(
+                "Register",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Signal,
+                    action: TriggerAction::Calculate,
+                    math: MathOp::Copy,
+                    group: 2,
+                    operand: 1,
+                    ..Default::default()
+                },
+            )
+            .hint("On signal 1, copies counter 1 into counter 2, which keeps it until the next"),
+            logic(
+                "Flip bit",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Signal,
+                    action: TriggerAction::Calculate,
+                    math: MathOp::Flip,
+                    ..Default::default()
+                },
+            )
+            .hint("On signal 1, flips counter 1 between 0 and 1"),
+            logic(
+                "Number",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Start,
+                    action: TriggerAction::Set,
+                    seconds: 0.,
+                    amount: 10,
+                    ..Default::default()
+                },
+            )
+            .hint("Sets counter 1 to 10 as the round starts"),
+            logic(
+                "Pulse",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Every,
+                    action: TriggerAction::Signal,
+                    seconds: 0.1,
+                    ..Default::default()
+                },
+            )
+            .hint("Sends signal 1 ten times a second to step a circuit along"),
         ],
         vec![
             // Move to rather than Move: a busy doorway holds the door open
@@ -1406,7 +1543,10 @@ pub fn trigger_badge(action: TriggerAction, r: Rect, lit: f32) {
         TriggerAction::Signal => {
             draw_circle(c.x - u * 0.7, c.y, u * 0.28, ink);
             for radius in [0.75, 1.3] {
-                draw_arc(c.x - u * 0.7, c.y, 24, u * radius, -45., line, 90., ink);
+                // Arc segments go by the size, so a canvas of small badges
+                // stays light; the 90-degree arc reads smooth at either end.
+                let sides = (u * radius * 0.6).clamp(4., 24.) as u8;
+                draw_arc(c.x - u * 0.7, c.y, sides, u * radius, -45., line, 90., ink);
             }
         }
         TriggerAction::Count => {
@@ -1479,6 +1619,20 @@ pub fn trigger_badge(action: TriggerAction, r: Rect, lit: f32) {
                 u * 0.62,
                 line * 0.8,
                 Color::new(0.13, 0.12, 0.10, 1.),
+            );
+        }
+        TriggerAction::Output => {
+            // A gate's diamond feeding a line into the counter's box.
+            draw_poly(c.x - u * 0.35, c.y, 4, u * 0.42, 0., ink);
+            draw_line(c.x, c.y, c.x + u * 0.62, c.y, line, ink);
+            draw_poly(c.x + u * 0.62, c.y, 4, u * 0.16, 0., ink);
+            draw_rectangle_lines(
+                c.x - u,
+                c.y - u,
+                u * 2.,
+                u * 2.,
+                line * 0.7,
+                alpha(ink, 0.5),
             );
         }
         TriggerAction::Calculate => {
@@ -1799,33 +1953,238 @@ pub fn trigger_badge(action: TriggerAction, r: Rect, lit: f32) {
 }
 
 /// The corner mark of a trigger that only acts when its gate is open.
+/// The name a badge shows for a trigger's gate: how several conditions
+/// combine, or NOT for one condition turned around; None for one plain
+/// condition, which shows as a diamond.
+pub fn gate_name(trigger: &MapTrigger) -> Option<&'static str> {
+    match trigger.conditions().count() {
+        0 => None,
+        1 if trigger.gate.inverts() => Some("NOT"),
+        1 => None,
+        _ => Some(trigger.gate.short()),
+    }
+}
+
 /// The mark of a trigger with conditions, on the corner of its badge, clear
 /// of the action's mark: the gate's name when it combines several and the
-/// badge has room, otherwise a diamond.
-pub fn gate_mark(trigger: &MapTrigger, r: Rect, lit: f32) {
+/// badge has room, otherwise a diamond. Returns the name, to draw over it
+/// once the shapes are done.
+pub fn gate_mark(trigger: &MapTrigger, r: Rect, lit: f32) -> Option<Word> {
     let ink = mix(LOGIC, WHITE, lit * 0.6);
     let dark = Color::new(0.13, 0.12, 0.10, 1.);
     let size = r.w.min(r.h) * 0.24;
     let c = vec2(r.right(), r.y);
-    if trigger.conditions().nth(1).is_some() && r.w >= 30. {
-        let name = trigger.gate.short();
+    if let Some(name) = gate_name(trigger).filter(|_| r.w >= 30.) {
         let text = (r.w * 0.24).clamp(8., 13.);
         let w = label_width(name, text) + text * 0.6;
         let h = text * 1.3;
         let x = (c.x - w * 0.6).min(r.right() - w * 0.4);
         draw_rectangle(x, c.y - h * 0.5, w, h, dark);
         draw_rectangle_lines(x, c.y - h * 0.5, w, h, (size * 0.2).max(1.), ink);
-        center_label(name, x + w * 0.5, c.y + text * 0.36, text, ink);
-        return;
+        return Some(Word {
+            text: name.into(),
+            x: x + w * 0.5,
+            y: c.y + text * 0.36,
+            size: text,
+            color: ink,
+        });
     }
     draw_poly(c.x, c.y, 4, size, 0., dark);
     draw_poly_lines(c.x, c.y, 4, size, 0., (size * 0.25).max(1.), ink);
+    None
+}
+
+/// Badge sizes the atlas holds, in pixels; each badge draws from the
+/// nearer, so none is scaled far enough to blur or break up.
+const ATLAS_SIZES: [f32; 2] = [26., 52.];
+/// Room around each atlas picture, so smoothing never reaches a neighbor.
+const ATLAS_GAP: f32 = 3.;
+const ATLAS_COLUMNS: usize = 12;
+/// The atlas slot after every action's badge: the gate diamond.
+const DIAMOND: usize = TriggerAction::ALL.len();
+/// The diamond's half width in its atlas picture, as a share of the picture.
+const DIAMOND_REACH: f32 = 0.42;
+
+thread_local! {
+    /// Every action's badge and the gate diamond, drawn once.
+    static ATLAS: std::cell::RefCell<Option<RenderTarget>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Where atlas slot `slot` sits at size `size`, as drawn into the atlas.
+fn atlas_cell(slot: usize, size: usize) -> Rect {
+    let rows = (DIAMOND + 1).div_ceil(ATLAS_COLUMNS);
+    let top: f32 = ATLAS_SIZES[..size]
+        .iter()
+        .map(|s| (s + ATLAS_GAP * 2.) * rows as f32)
+        .sum();
+    let pitch = ATLAS_SIZES[size] + ATLAS_GAP * 2.;
+    Rect::new(
+        (slot % ATLAS_COLUMNS) as f32 * pitch + ATLAS_GAP,
+        top + (slot / ATLAS_COLUMNS) as f32 * pitch + ATLAS_GAP,
+        ATLAS_SIZES[size],
+        ATLAS_SIZES[size],
+    )
+}
+fn atlas_extent() -> (u32, u32) {
+    let rows = (DIAMOND + 1).div_ceil(ATLAS_COLUMNS) as f32;
+    let largest = ATLAS_SIZES[ATLAS_SIZES.len() - 1] + ATLAS_GAP * 2.;
+    let height: f32 = ATLAS_SIZES
+        .iter()
+        .map(|s| (s + ATLAS_GAP * 2.) * rows)
+        .sum();
+    (
+        (largest * ATLAS_COLUMNS as f32) as u32,
+        height.ceil() as u32,
+    )
+}
+/// The atlas, drawn on first use.
+fn atlas() -> Texture2D {
+    ATLAS.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if let Some(target) = slot.as_ref() {
+            return target.texture.clone();
+        }
+        let (w, h) = atlas_extent();
+        let target = render_target(w, h);
+        target.texture.set_filter(FilterMode::Linear);
+        crate::ui_layout::unclipped(|| {
+            push_camera_state();
+            // Drawn the way the light map is, so it reads back the same on
+            // OpenGL and Metal.
+            let mut camera = Camera2D::from_display_rect(Rect::new(0., 0., w as f32, h as f32));
+            if !crate::graphics::metal() {
+                camera.zoom.y = -camera.zoom.y;
+            }
+            set_camera(&camera);
+            unsafe {
+                get_internal_gl()
+                    .quad_gl
+                    .render_pass(Some(target.render_pass.raw_miniquad_id()));
+            }
+            clear_background(BLANK);
+            let dark = Color::new(0.13, 0.12, 0.10, 1.);
+            for size in 0..ATLAS_SIZES.len() {
+                for (slot, &action) in TriggerAction::ALL.iter().enumerate() {
+                    let r = atlas_cell(slot, size);
+                    // An opaque tile under the badge's own, so the picture
+                    // has no see-through parts; the canvas fades it whole.
+                    draw_rectangle(r.x, r.y, r.w, r.h, dark);
+                    trigger_badge(action, r, 0.);
+                }
+                let r = atlas_cell(DIAMOND, size);
+                let (c, reach) = (r.center(), r.w * DIAMOND_REACH);
+                draw_poly(c.x, c.y, 4, reach, 0., dark);
+                draw_poly_lines(c.x, c.y, 4, reach, 0., (reach * 0.25).max(1.), LOGIC);
+            }
+            pop_camera_state();
+        });
+        let texture = target.texture.clone();
+        *slot = Some(target);
+        texture
+    })
+}
+
+/// The badges of a canvas full of triggers, gathered while the canvas draws
+/// and drawn over it in three batches: atlas pictures, gate name boxes,
+/// then words. Drawing each badge as its shapes would cost tens of
+/// triangles apiece, and mixing in text would break the batch at each one.
+#[derive(Default)]
+pub struct Badges {
+    /// Atlas slot, where, and opacity.
+    pictures: Vec<(usize, Rect, f32)>,
+    boxes: Vec<(Rect, f32)>,
+    pub words: Vec<Word>,
+}
+impl Badges {
+    /// Trigger `trigger`'s badge at `r`. A lit badge is drawn as shapes
+    /// right away, since its colors change as it fades.
+    pub fn add(&mut self, trigger: &MapTrigger, r: Rect, lit: f32, opacity: f32) {
+        if lit > 0. {
+            trigger_badge(trigger.action, r, lit);
+            if trigger.only_if.is_some()
+                && let Some(word) = gate_mark(trigger, r, lit)
+            {
+                self.words.push(word);
+            }
+            return;
+        }
+        let slot = TriggerAction::ALL
+            .iter()
+            .position(|&action| action == trigger.action)
+            .unwrap_or(0);
+        self.pictures.push((slot, r, 0.88 * opacity));
+        if trigger.only_if.is_none() {
+            return;
+        }
+        let size = r.w.min(r.h) * 0.24;
+        let c = vec2(r.right(), r.y);
+        if let Some(name) = gate_name(trigger).filter(|_| r.w >= 30.) {
+            let text = (r.w * 0.24).clamp(8., 13.);
+            let w = label_width(name, text) + text * 0.6;
+            let h = text * 1.3;
+            let x = (c.x - w * 0.6).min(r.right() - w * 0.4);
+            self.boxes.push((Rect::new(x, c.y - h * 0.5, w, h), size));
+            self.words.push(Word {
+                text: name.into(),
+                x: x + w * 0.5,
+                y: c.y + text * 0.36,
+                size: text,
+                color: alpha(LOGIC, opacity),
+            });
+        } else {
+            let half = size / DIAMOND_REACH;
+            self.pictures.push((
+                DIAMOND,
+                Rect::new(c.x - half * 0.5, c.y - half * 0.5, half, half),
+                opacity,
+            ));
+        }
+    }
+    pub fn draw(&mut self) {
+        if !self.pictures.is_empty() {
+            let atlas = atlas();
+            let height = atlas_extent().1 as f32;
+            for &(slot, r, opacity) in &self.pictures {
+                let size = if r.w <= (ATLAS_SIZES[0] + ATLAS_SIZES[1]) * 0.5 {
+                    0
+                } else {
+                    1
+                };
+                let cell = atlas_cell(slot, size);
+                // The atlas is stored bottom-up; the flip turns it round.
+                draw_texture_ex(
+                    &atlas,
+                    r.x,
+                    r.y,
+                    Color::new(1., 1., 1., opacity),
+                    DrawTextureParams {
+                        dest_size: Some(vec2(r.w, r.h)),
+                        source: Some(Rect::new(cell.x, height - cell.bottom(), cell.w, cell.h)),
+                        flip_y: true,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        let dark = Color::new(0.13, 0.12, 0.10, 1.);
+        for &(r, size) in &self.boxes {
+            draw_rectangle(r.x, r.y, r.w, r.h, dark);
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, (size * 0.2).max(1.), LOGIC);
+        }
+        for word in &self.words {
+            word.draw();
+        }
+        self.pictures.clear();
+        self.boxes.clear();
+        self.words.clear();
+    }
 }
 
 /// A spawn region on the canvas and in the palette.
-pub fn spawn_mark(team: u8, r: Rect, s: f32) {
-    draw_rectangle(r.x, r.y, r.w, r.h, alpha(CYAN, 0.07));
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2., alpha(CYAN, 0.7));
+/// A spawn region's mark, at `fade` strength (1 in full).
+pub fn spawn_mark(team: u8, r: Rect, s: f32, fade: f32) {
+    draw_rectangle(r.x, r.y, r.w, r.h, alpha(CYAN, 0.07 * fade));
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2., alpha(CYAN, 0.7 * fade));
     let title = if team == 0 {
         "Spawn".to_owned()
     } else {
@@ -1837,21 +2196,27 @@ pub fn spawn_mark(team: u8, r: Rect, s: f32) {
         r.center().x,
         r.center().y + size * 0.35,
         size,
-        CYAN,
+        alpha(CYAN, fade),
     );
 }
-pub fn base_mark(team: u8, r: Rect) {
+pub fn base_mark(team: u8, r: Rect, fade: f32) {
     let c = r.center();
     let radius = r.w.min(r.h) * 0.5;
-    draw_circle(c.x, c.y, radius, alpha(CYAN, 0.18));
-    draw_circle_lines(c.x, c.y, radius, 2., CYAN);
+    draw_circle(c.x, c.y, radius, alpha(CYAN, 0.18 * fade));
+    draw_circle_lines(c.x, c.y, radius, 2., alpha(CYAN, fade));
     let size = (radius * 0.9).max(6.);
-    center_label(&team.to_string(), c.x, c.y + size * 0.35, size, CYAN);
+    center_label(
+        &team.to_string(),
+        c.x,
+        c.y + size * 0.35,
+        size,
+        alpha(CYAN, fade),
+    );
 }
-pub fn objective_mark(r: Rect) {
+pub fn objective_mark(r: Rect, fade: f32) {
     let c = r.center();
-    draw_poly(c.x, c.y, 4, r.w * 0.5, 0., alpha(AMBER, 0.25));
-    draw_poly_lines(c.x, c.y, 4, r.w * 0.5, 0., 2., AMBER);
+    draw_poly(c.x, c.y, 4, r.w * 0.5, 0., alpha(AMBER, 0.25 * fade));
+    draw_poly_lines(c.x, c.y, 4, r.w * 0.5, 0., 2., alpha(AMBER, fade));
 }
 
 /// The palette picture of a brush, drawn inside `r`.
@@ -1918,13 +2283,15 @@ pub fn thumbnail(brush: &Brush, r: Rect, map: &MapDef, settings: &Settings, time
             let c = inner.center();
             let badge = Rect::new(c.x - size * 0.5, c.y - size * 0.5, size, size);
             trigger_badge(t.action, badge, 0.);
-            if t.only_if.is_some() {
-                gate_mark(t, badge, 0.);
+            if t.only_if.is_some()
+                && let Some(word) = gate_mark(t, badge, 0.)
+            {
+                word.draw();
             }
         }
-        Object::Spawn(region) => spawn_mark(region.team, inner, inner.w / 44.),
-        Object::Base(base) => base_mark(base.team, point(inner)),
-        Object::Objective(_) => objective_mark(point(inner)),
+        Object::Spawn(region) => spawn_mark(region.team, inner, inner.w / 44., 1.),
+        Object::Base(base) => base_mark(base.team, point(inner), 1.),
+        Object::Objective(_) => objective_mark(point(inner), 1.),
     }
 }
 

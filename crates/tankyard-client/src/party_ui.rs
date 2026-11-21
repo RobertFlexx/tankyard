@@ -4,9 +4,41 @@ use crate::{
     ui::{ui_circle, ui_line as draw_line, ui_rectangle, ui_rectangle_lines, *},
 };
 use macroquad::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use tankyard_content::Content;
+use tankyard_core::{EntityId, Snapshot};
+use tankyard_protocol::PartyMember;
 use tankyard_server::NetworkClient;
+
+/// How long a "joined" or "left" line stays up, in seconds.
+const NOTICE_SECONDS: f64 = 5.;
+/// Below this share of its health, a member's bar turns red.
+const LOW_HEALTH: f32 = 0.3;
+
+/// A member's tank as the shared match sees it.
+#[derive(Clone, Copy)]
+struct Vitals {
+    level: u8,
+    health: f32,
+    alive: bool,
+}
+
+fn vitals(snapshot: Option<&Snapshot>, player: EntityId) -> Option<Vitals> {
+    let tank = snapshot?.tanks.iter().find(|tank| tank.id == player)?;
+    Some(Vitals {
+        level: tank.level,
+        health: (tank.health / tank.max_health.max(1.)).clamp(0., 1.),
+        alive: tank.alive,
+    })
+}
+
+fn health_color(health: f32) -> Color {
+    if health < LOW_HEALTH {
+        crate::ui::RED
+    } else {
+        accent_color()
+    }
+}
 
 #[derive(Default)]
 pub struct PartyUi {
@@ -22,6 +54,11 @@ pub struct PartyUi {
     scroll: usize,
     scroll_fraction: f32,
     confirming_leave: bool,
+    confirming_kick: Option<u64>,
+    /// The roster last seen, to tell who came and went. Empty until the
+    /// first one arrives, so joining a party announces nobody.
+    known: Vec<(u64, String)>,
+    arrivals: VecDeque<(String, f64)>,
     pub notice: String,
 }
 impl PartyUi {
@@ -32,6 +69,49 @@ impl PartyUi {
                 .iter()
                 .any(|member| member.client == *id)
         });
+        self.note_roster(&client.party_members, client.client_id(), get_time());
+    }
+    fn note_roster(&mut self, members: &[PartyMember], me: u64, now: f64) {
+        if self
+            .confirming_kick
+            .is_some_and(|id| !members.iter().any(|m| m.client == id))
+        {
+            self.confirming_kick = None;
+        }
+        if !self.known.is_empty() {
+            for member in members.iter().filter(|m| m.client != me) {
+                if !self.known.iter().any(|(id, _)| *id == member.client) {
+                    self.arrivals
+                        .push_back((format!("{} joined the party", member.name), now));
+                }
+            }
+            for (id, name) in &self.known {
+                if *id != me && !members.iter().any(|m| m.client == *id) {
+                    self.arrivals
+                        .push_back((format!("{name} left the party"), now));
+                }
+            }
+        }
+        if self.known.len() != members.len()
+            || self
+                .known
+                .iter()
+                .zip(members)
+                .any(|((id, name), member)| *id != member.client || *name != member.name)
+        {
+            self.known = members
+                .iter()
+                .map(|member| (member.client, member.name.clone()))
+                .collect();
+        }
+        while self.arrivals.len() > 3
+            || self
+                .arrivals
+                .front()
+                .is_some_and(|(_, at)| now - at > NOTICE_SECONDS)
+        {
+            self.arrivals.pop_front();
+        }
     }
     pub fn focus_chat(&mut self) {
         self.open = true;
@@ -44,6 +124,7 @@ impl PartyUi {
         self.open = false;
         self.typing = false;
         self.confirming_leave = false;
+        self.confirming_kick = None;
     }
     pub fn keys(&mut self) -> bool {
         if !self.open {
@@ -73,6 +154,76 @@ impl PartyUi {
                 dock_right,
             ))
     }
+    /// Arrows at the screen's edge toward allies out of view, so a party can
+    /// find each other. Opponents stay on the minimap only.
+    pub fn markers(
+        members: &[PartyMember],
+        local: EntityId,
+        snapshot: &Snapshot,
+        view: &render::View,
+        s: f32,
+    ) {
+        let Some(team) = snapshot
+            .tanks
+            .iter()
+            .find(|tank| tank.id == local)
+            .map(|tank| tank.team)
+            .filter(|team| *team != 0)
+        else {
+            return;
+        };
+        let (w, h) = (screen_width(), screen_height());
+        let center = vec2(w, h) * 0.5;
+        // Kept clear of the title above and the score bars below.
+        let (inset, top, bottom) = (44. * s, 92. * s, 150. * s);
+        for member in members.iter().filter(|member| member.player != local) {
+            let Some(tank) = snapshot
+                .tanks
+                .iter()
+                .find(|tank| tank.id == member.player && tank.tangible() && tank.team == team)
+            else {
+                continue;
+            };
+            if view.visible(tank.pos, tank.radius) {
+                continue;
+            }
+            let Some(d) = (view.screen(tank.pos) - center).try_normalize() else {
+                continue;
+            };
+            let edge = if d.y < 0. { top } else { bottom };
+            let reach = ((w * 0.5 - inset) / d.x.abs().max(0.001))
+                .min((h * 0.5 - edge) / d.y.abs().max(0.001));
+            let tip = center + d * reach;
+            let n = vec2(-d.y, d.x);
+            let size = 10. * s;
+            let health = (tank.health / tank.max_health.max(1.)).clamp(0., 1.);
+            let wing = |grow: f32, side: f32| {
+                tip - d * (size * 0.7 + grow) + n * side * (size * 0.8 + grow)
+            };
+            draw_triangle(
+                tip + d * (size + 2.5 * s),
+                wing(2. * s, 1.),
+                wing(2. * s, -1.),
+                alpha(tankyard_client::tank_model::OUTLINE, 0.85),
+            );
+            draw_triangle(
+                tip + d * size,
+                wing(0., 1.),
+                wing(0., -1.),
+                health_color(health),
+            );
+            let name = fitted_label(&member.name, 11. * s, 92. * s);
+            let at = tip - d * 24. * s;
+            let half = label_width(&name, 11. * s) * 0.5;
+            center_label(
+                &name,
+                at.x.clamp(half + 6. * s, w - half - 6. * s),
+                at.y.clamp(14. * s, h - 6. * s),
+                11. * s,
+                text_color(),
+            );
+        }
+    }
     pub fn rail(
         &mut self,
         client: &NetworkClient,
@@ -81,6 +232,7 @@ impl PartyUi {
         menu: bool,
         dock_right: bool,
     ) {
+        let snapshot = client.snapshot.as_ref();
         let (rect, s) = rail_geometry(
             screen_width(),
             screen_height(),
@@ -95,6 +247,7 @@ impl PartyUi {
             .filter(|message| message.id > self.last_seen)
             .count();
         let columns = rail_columns(client.party_members.len(), dock_right);
+        crate::ui_layout::cover(rect);
         if button(rect, "", false, true, s) {
             self.open = true;
             self.typing = false;
@@ -112,6 +265,8 @@ impl PartyUi {
                 rect.x + (22. + (index % columns) as f32 * 36.) * s,
                 rect.y + (43. + (index / columns) as f32 * 36.) * s,
             );
+            let state = vitals(snapshot, member.player);
+            let down = state.is_some_and(|state| !state.alive);
             if let Some(class) = content.class(&member.class) {
                 render::class_model(
                     class,
@@ -120,12 +275,23 @@ impl PartyUi {
                     -0.4,
                     0.,
                     0.,
-                    if self.muted.contains(&member.client) {
+                    if down || self.muted.contains(&member.client) {
                         muted_color()
                     } else {
                         player_color()
                     },
                     0.,
+                );
+            }
+            if let Some(state) = state.filter(|state| state.alive) {
+                let bar = Rect::new(center.x - 12. * s, center.y + 13. * s, 24. * s, 3. * s);
+                ui_rectangle(bar.x, bar.y, bar.w, bar.h, alpha(line_color(), 0.6));
+                ui_rectangle(
+                    bar.x,
+                    bar.y,
+                    bar.w * state.health,
+                    bar.h,
+                    health_color(state.health),
                 );
             }
             if member.leader {
@@ -141,11 +307,24 @@ impl PartyUi {
             if member.ready {
                 ui_circle(
                     center.x + 10. * s,
-                    center.y + 10. * s,
+                    center.y + 8. * s,
                     3. * s,
                     accent_color(),
                 );
             }
+        }
+        // Who just came or went, beside the rail.
+        for (index, (text, _)) in self.arrivals.iter().enumerate() {
+            let size = 11. * s;
+            let width = label_width(text, size) + 16. * s;
+            let x = if dock_right || menu {
+                rect.x - width - 6. * s
+            } else {
+                rect.right() + 6. * s
+            };
+            let y = rect.y + index as f32 * 24. * s;
+            ui_rectangle(x, y, width, 20. * s, alpha(line_color(), 0.92));
+            label(text, x + 8. * s, y + 14. * s, size, text_color());
         }
         if unread > 0 {
             let text = format!("{} new", unread.min(64));
@@ -186,12 +365,17 @@ impl PartyUi {
         if let Some(reason) = client.last_action.take() {
             self.notice = reason;
         }
+        let can_kick = client
+            .permissions
+            .contains(&tankyard_protocol::ServerPermission::Kick);
         let view = PartyView {
             members: &client.party_members,
             me: client.client_id(),
             messages: &client.chat_messages,
             revision: client.chat_revision,
             chat_enabled: client.chat_enabled,
+            snapshot: client.snapshot.as_ref(),
+            can_kick,
         };
         let (action, message) = self.panel_view(
             &view,
@@ -377,10 +561,19 @@ impl PartyUi {
             } else {
                 0.
             };
+            let host_tools = !me && view.can_kick && !member.leader;
             let name = fitted_label(
                 &name,
                 12. * s,
-                row.w - (if me { 58. } else { 122. }) * s - badge_width,
+                row.w
+                    - (if me {
+                        58.
+                    } else if host_tools {
+                        176.
+                    } else {
+                        122.
+                    }) * s
+                    - badge_width,
             );
             label(
                 &name,
@@ -401,20 +594,66 @@ impl PartyUi {
             let class_name = content
                 .class(&member.class)
                 .map_or(member.class.as_str(), |class| class.name.as_str());
+            let health = vitals(view.snapshot, member.player);
             let state = if member.ready {
                 "Ready"
             } else if member.in_menu {
                 "In menus"
+            } else if health.is_some_and(|health| !health.alive) {
+                "Down"
             } else {
                 "In match"
             };
+            let line = match health {
+                Some(health) => format!("Lv {} · {state} · {class_name}", health.level),
+                None => format!("{state} · {class_name}"),
+            };
             label(
-                &fitted_label(&format!("{state} · {class_name}"), 10. * s, 140. * s),
+                &fitted_label(
+                    &line,
+                    10. * s,
+                    row.w
+                        - (if me {
+                            54.
+                        } else if host_tools {
+                            172.
+                        } else {
+                            118.
+                        }) * s,
+                ),
                 row.x + 46. * s,
                 row.y + 28. * s,
                 10. * s,
                 muted_color(),
             );
+            if let Some(health) = health.filter(|health| health.alive) {
+                let bar = Rect::new(row.x, row.bottom() - 2. * s, row.w, 2. * s);
+                ui_rectangle(
+                    bar.x,
+                    bar.y,
+                    bar.w * health.health,
+                    bar.h,
+                    health_color(health.health),
+                );
+            }
+            if host_tools {
+                let confirming = self.confirming_kick == Some(member.client);
+                let kick = Rect::new(row.right() - 120. * s, row.y + 6. * s, 50. * s, 22. * s);
+                if button(
+                    kick,
+                    if confirming { "Sure?" } else { "Kick" },
+                    confirming,
+                    true,
+                    s * 0.58,
+                ) {
+                    if confirming {
+                        self.confirming_kick = None;
+                        action = Action::KickFromParty(member.player);
+                    } else {
+                        self.confirming_kick = Some(member.client);
+                    }
+                }
+            }
             if !me {
                 let muted = self.muted.contains(&member.client);
                 let toggle = Rect::new(row.right() - 66. * s, row.y + 6. * s, 60. * s, 22. * s);
@@ -660,11 +899,15 @@ impl PartyUi {
 
 /// Everything the party overlay shows, independent of the network client.
 pub struct PartyView<'a> {
-    pub members: &'a [tankyard_protocol::PartyMember],
+    pub members: &'a [PartyMember],
     pub me: u64,
     pub messages: &'a std::collections::VecDeque<tankyard_protocol::ChatMessage>,
     pub revision: u64,
     pub chat_enabled: bool,
+    /// The match the party shares, for each member's level and health.
+    pub snapshot: Option<&'a Snapshot>,
+    /// Whether this player may remove others, normally the host.
+    pub can_kick: bool,
 }
 
 fn panel_layout(width: f32, height: f32, requested: f32) -> (Rect, f32) {
@@ -742,6 +985,44 @@ fn rail_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn member(client: u64, name: &str) -> PartyMember {
+        PartyMember {
+            client,
+            player: client + 100,
+            name: name.into(),
+            class: "vector".into(),
+            leader: client == 1,
+            in_menu: false,
+            ready: false,
+        }
+    }
+
+    #[test]
+    fn the_roster_announces_who_came_and_went_but_not_the_first_one() {
+        let mut party = PartyUi::default();
+        let first = [member(1, "Host"), member(2, "Guest")];
+        party.note_roster(&first, 2, 0.);
+        assert!(party.arrivals.is_empty(), "joining announces nobody");
+        let more = [member(1, "Host"), member(2, "Guest"), member(3, "Friend")];
+        party.note_roster(&more, 2, 1.);
+        assert_eq!(party.arrivals.back().unwrap().0, "Friend joined the party");
+        party.note_roster(&first, 2, 2.);
+        assert_eq!(party.arrivals.back().unwrap().0, "Friend left the party");
+        party.note_roster(&first, 2, 2. + NOTICE_SECONDS + 1.);
+        assert!(party.arrivals.is_empty(), "notices fade");
+    }
+
+    #[test]
+    fn a_kick_awaiting_confirmation_is_dropped_when_that_member_leaves() {
+        let mut party = PartyUi::default();
+        let all = [member(1, "Host"), member(2, "Guest")];
+        party.note_roster(&all, 1, 0.);
+        party.confirming_kick = Some(2);
+        party.note_roster(&all[..1], 1, 1.);
+        assert_eq!(party.confirming_kick, None);
+    }
+
     #[test]
     fn panels_fit_small_windows_and_rail_stays_between_stats_and_header() {
         for (w, h) in [(640., 480.), (800., 600.), (1280., 800.), (2560., 1080.)] {

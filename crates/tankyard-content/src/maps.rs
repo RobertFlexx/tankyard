@@ -524,9 +524,13 @@ pub enum TriggerWhen {
     /// When the blocks of group `source` stop overlapping `rect`; `seconds`
     /// is the cooldown.
     Release,
+    // Added in 2.0.0.
+    /// Whenever a counter or group its conditions look at changes, and once
+    /// as the round starts, so a gate's result is right from the first tick.
+    Inputs,
 }
 impl TriggerWhen {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Every,
         Self::Enter,
         Self::Exit,
@@ -537,6 +541,7 @@ impl TriggerWhen {
         Self::Cleared,
         Self::Destroyed,
         Self::Changed,
+        Self::Inputs,
         Self::Shown,
         Self::Hidden,
         Self::Defeated,
@@ -562,6 +567,7 @@ impl TriggerWhen {
             Self::Arrived => "On arrive",
             Self::Touch => "On touch",
             Self::Release => "On release",
+            Self::Inputs => "On input change",
         }
     }
     /// Whether it watches a group's blocks over its rectangle.
@@ -582,6 +588,7 @@ impl TriggerWhen {
             Self::Signal
                 | Self::Counter
                 | Self::Changed
+                | Self::Inputs
                 | Self::Shown
                 | Self::Hidden
                 | Self::Defeated
@@ -684,9 +691,14 @@ pub enum TriggerAction {
     /// Takes slot `group`'s widget (every map widget for 0) off the screens
     /// its `ui` names, or everyone's without one.
     HideUi,
+    // Added in 2.0.0.
+    /// Sets counter `group` to `amount` while the gate is open and to 0
+    /// while it is shut: a logic gate whose result is a number. The gate
+    /// never stops it acting.
+    Output,
 }
 impl TriggerAction {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::Toggle,
         Self::Show,
         Self::Hide,
@@ -716,6 +728,7 @@ impl TriggerAction {
         Self::Count,
         Self::Set,
         Self::Calculate,
+        Self::Output,
         Self::Shapes,
         Self::Heal,
         Self::Hurt,
@@ -760,6 +773,7 @@ impl TriggerAction {
             Self::Path => "Play path",
             Self::Ui => "Show UI",
             Self::HideUi => "Hide UI",
+            Self::Output => "Gate to counter",
         }
     }
     /// Whether it shows or hides a widget, `group` naming its slot.
@@ -820,7 +834,10 @@ impl TriggerAction {
     }
     /// Whether `group` names a counter.
     pub fn targets_counter(self) -> bool {
-        matches!(self, Self::Count | Self::Set | Self::Calculate)
+        matches!(
+            self,
+            Self::Count | Self::Set | Self::Calculate | Self::Output
+        )
     }
     /// Whether it acts on the tanks standing in the trigger's area.
     pub fn affects_tanks(self) -> bool {
@@ -1136,9 +1153,25 @@ pub enum GateMode {
     NoneOf,
     /// Exactly one holds: XOR.
     One,
+    // Added in 2.0.0.
+    /// An even number hold, none included: XNOR. With one condition, NOT.
+    Even,
+    /// An odd number hold: parity, the XOR of every condition.
+    Odd,
+    /// More than half hold: majority.
+    Most,
 }
 impl GateMode {
-    pub const ALL: [Self; 5] = [Self::All, Self::Any, Self::NotAll, Self::NoneOf, Self::One];
+    pub const ALL: [Self; 8] = [
+        Self::All,
+        Self::Any,
+        Self::NotAll,
+        Self::NoneOf,
+        Self::One,
+        Self::Even,
+        Self::Odd,
+        Self::Most,
+    ];
     pub fn name(self) -> &'static str {
         match self {
             Self::All => "All (AND)",
@@ -1146,6 +1179,9 @@ impl GateMode {
             Self::NotAll => "Not all (NAND)",
             Self::NoneOf => "None (NOR)",
             Self::One => "Just one (XOR)",
+            Self::Even => "Even number (XNOR)",
+            Self::Odd => "Odd number (parity)",
+            Self::Most => "Most (majority)",
         }
     }
     /// The logic-gate name, for badges.
@@ -1156,6 +1192,9 @@ impl GateMode {
             Self::NotAll => "NAND",
             Self::NoneOf => "NOR",
             Self::One => "XOR",
+            Self::Even => "XNOR",
+            Self::Odd => "ODD",
+            Self::Most => "MAJ",
         }
     }
     /// Whether the gate opens when `passed` of `total` conditions hold.
@@ -1166,7 +1205,14 @@ impl GateMode {
             Self::NotAll => passed < total,
             Self::NoneOf => passed == 0,
             Self::One => passed == 1,
+            Self::Even => passed.is_multiple_of(2),
+            Self::Odd => passed % 2 == 1,
+            Self::Most => passed * 2 > total,
         }
+    }
+    /// Whether, over a single condition, it opens just when that fails: NOT.
+    pub fn inverts(self) -> bool {
+        !self.open(1, 1)
     }
 }
 
@@ -1183,7 +1229,7 @@ pub struct GateState<'a> {
 }
 
 /// Most conditions one trigger checks.
-pub const TRIGGER_CONDITIONS: usize = 4;
+pub const TRIGGER_CONDITIONS: usize = 8;
 
 /// A gate: when a trigger fires, it acts only if this holds at that moment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1728,7 +1774,7 @@ pub struct MapTrigger {
     #[serde(default, skip_serializing_if = "is_default")]
     pub operand: u8,
     // Added in 0.16.0, and likewise left out when unused.
-    /// More conditions after `only_if`, up to four in all.
+    /// More conditions after `only_if`, up to eight in all.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also_if: Vec<TriggerTest>,
     /// How the conditions combine.
@@ -1795,7 +1841,8 @@ pub struct MapTrigger {
 }
 impl MapTrigger {
     /// Every signal channel acting can send on: its action's, each choice's
-    /// and the otherwise channel's.
+    /// and each board button's. The otherwise channel, sent instead of
+    /// acting, is apart.
     pub fn sends(&self) -> impl Iterator<Item = u8> + '_ {
         let ui = match (&self.ui, self.action) {
             (Some(ui), TriggerAction::Ui) => Some(ui.as_ref()),
@@ -1899,6 +1946,28 @@ impl MapTrigger {
             self.otherwise = 0;
         }
     }
+    /// The counters (into `counters`, each once) and groups (as bits) its
+    /// conditions look at: what wakes an On input change trigger. Tanks
+    /// inside and the round time change without telling anyone, so they
+    /// only count through a counter they are compared with.
+    pub fn inputs(&self, counters: &mut Vec<u8>) -> u32 {
+        counters.clear();
+        let mut groups = 0;
+        for test in self.conditions() {
+            if !test.kind.compares() {
+                groups |= MapDef::group_bit(test.index);
+                continue;
+            }
+            if test.kind == TestKind::Counter {
+                counters.push(test.index);
+            }
+            counters.push(test.against);
+        }
+        counters.retain(|counter| (1..=MAP_COUNTERS).contains(counter));
+        counters.sort_unstable();
+        counters.dedup();
+        groups
+    }
     /// Whether the gate lets the trigger act in `state`. No conditions is open.
     pub fn gate_open(&self, state: &GateState) -> bool {
         let (mut passed, mut total) = (0, 0);
@@ -1914,6 +1983,8 @@ impl MapTrigger {
     }
 }
 
+/// The shortest period of an Every trigger, in seconds: three ticks.
+pub const EVERY_LEAST: f32 = 0.05;
 /// Counters triggers can add to and watch; labels show them as `{1}` to
 /// `{255}`.
 pub const MAP_COUNTERS: u8 = 255;
@@ -2688,14 +2759,14 @@ fn validate_ui(ui: &MapUi) -> Result<(), String> {
 pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
     validate_rect(trigger.rect)?;
     let seconds = match trigger.when {
-        TriggerWhen::Every => range(trigger.seconds, 0.5, 3600.),
+        TriggerWhen::Every => range(trigger.seconds, EVERY_LEAST, 3600.),
         TriggerWhen::Start => range(trigger.seconds, 0., 86400.),
         TriggerWhen::Occupied => range(trigger.seconds, 0.25, 3600.),
         _ => range(trigger.seconds, 0., 3600.),
     };
     if !seconds {
         return Err(match trigger.when {
-            TriggerWhen::Every => "repeat every 0.5 to 3600 seconds".into(),
+            TriggerWhen::Every => format!("repeat every {EVERY_LEAST} to 3600 seconds"),
             TriggerWhen::Start => "start within a day of the round".into(),
             TriggerWhen::Occupied => "repeat every 0.25 to 3600 seconds".into(),
             _ => "cooldown must be 0 to 3600 seconds".into(),
@@ -2719,6 +2790,14 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         }
         when if when.watches_group() && !(1..=MAP_GROUPS).contains(&trigger.source) => {
             return Err(format!("watch a group from 1 to {MAP_GROUPS}"));
+        }
+        TriggerWhen::Inputs
+            if {
+                let mut counters = Vec::new();
+                trigger.inputs(&mut counters) == 0 && counters.is_empty()
+            } =>
+        {
+            return Err("add a condition on a counter or group for it to watch".into());
         }
         TriggerWhen::Defeated if usize::from(trigger.source) > BOSS_IDS.len() => {
             return Err(format!(
@@ -2749,7 +2828,7 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
                 "add within ±{COUNTER_LIMIT} to a counter from 1 to {MAP_COUNTERS}"
             ));
         }
-        TriggerAction::Set
+        TriggerAction::Set | TriggerAction::Output
             if !(1..=MAP_COUNTERS).contains(&trigger.group)
                 || !(-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&trigger.amount) =>
         {
@@ -3389,6 +3468,9 @@ mod tests {
             (GateMode::NotAll, [true, true, true, false]),
             (GateMode::NoneOf, [true, false, false, false]),
             (GateMode::One, [false, true, true, false]),
+            (GateMode::Even, [true, false, false, true]),
+            (GateMode::Odd, [false, true, true, false]),
+            (GateMode::Most, [false, false, false, true]),
         ];
         for (mode, outputs) in table {
             for (inputs, expected) in [(0, 2), (1, 2), (1, 2), (2, 2)].iter().zip(outputs) {
@@ -3399,6 +3481,60 @@ mod tests {
                 );
             }
         }
+        // Over three: parity and majority make a full adder's sum and carry.
+        for passed in 0..=3 {
+            assert_eq!(GateMode::Odd.open(passed, 3), passed % 2 == 1);
+            assert_eq!(GateMode::Most.open(passed, 3), passed >= 2);
+        }
+        let not: Vec<GateMode> = GateMode::ALL.into_iter().filter(|g| g.inverts()).collect();
+        assert_eq!(not, [GateMode::NotAll, GateMode::NoneOf, GateMode::Even]);
+    }
+
+    #[test]
+    fn input_watchers_need_a_counter_or_group_to_watch() {
+        let mut t = MapTrigger {
+            when: TriggerWhen::Inputs,
+            action: TriggerAction::Output,
+            group: 3,
+            amount: 1,
+            ..Default::default()
+        };
+        assert!(validate_trigger(&t).is_err(), "nothing to watch");
+        t.set_conditions(vec![TriggerTest {
+            kind: TestKind::Time,
+            value: 5,
+            ..Default::default()
+        }]);
+        assert!(validate_trigger(&t).is_err(), "time changes unseen");
+        t.set_conditions(vec![TriggerTest {
+            kind: TestKind::Time,
+            against: 7,
+            ..Default::default()
+        }]);
+        validate_trigger(&t).unwrap();
+        let mut counters = Vec::new();
+        assert_eq!(t.inputs(&mut counters), 0);
+        assert_eq!(counters, [7]);
+        t.set_conditions(vec![
+            TriggerTest {
+                index: 4,
+                against: 2,
+                ..Default::default()
+            },
+            TriggerTest {
+                kind: TestKind::Hidden,
+                index: 3,
+                ..Default::default()
+            },
+            TriggerTest {
+                index: 2,
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(t.inputs(&mut counters), 0b100);
+        assert_eq!(counters, [2, 4], "each counter once, in order");
+        t.group = 0;
+        assert!(validate_trigger(&t).is_err(), "the result needs a counter");
     }
 
     #[test]

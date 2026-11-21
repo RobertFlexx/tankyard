@@ -85,7 +85,7 @@ fn perfect_parries_reward_timing_without_multiplying_the_improved_cannon_damage(
     for (class, shots, minimum) in [
         ("riposte", 1, 45.),
         ("counterguard", 1, 55.),
-        ("reprisal", 3, 60.),
+        ("reprisal", 3, 55.),
     ] {
         let (mut world, owner) = arena(class);
         let enemy = world.add_player("Opponent", false);

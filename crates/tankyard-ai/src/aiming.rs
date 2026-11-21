@@ -138,6 +138,31 @@ pub(super) fn use_ability(class: &ClassDef, tank: &Tank, brain: &Brain, distance
 
 /// Solve the intercept quadratic, including the nearly linear case. No client
 /// prediction or hidden bonuses are involved; bots estimate ordinary shot travel.
+/// The closest drone of a hostile boss in firing reach, and how far it is.
+pub(super) fn nearest_boss_drone(
+    world: &World,
+    perception: &Perception,
+    tank: &Tank,
+    seen: &mut Vec<Seen>,
+) -> Option<(V2, f32)> {
+    const REACH: f32 = 420.;
+    perception.query(tank.pos, REACH, seen);
+    seen.iter()
+        .filter_map(|item| match *item {
+            Seen::Projectile(index) => Some(&world.projectiles[index]),
+            _ => None,
+        })
+        .filter(|shot| {
+            shot.kind.is_drone()
+                && world
+                    .bosses
+                    .iter()
+                    .any(|boss| boss.id == shot.owner && hostile(tank.team, boss.team))
+        })
+        .map(|shot| (shot.pos, tank.pos.distance(shot.pos)))
+        .filter(|(_, distance)| *distance <= REACH)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+}
 pub(super) fn intercept(origin: V2, position: V2, velocity: V2, speed: f32) -> V2 {
     let delta = position - origin;
     let a = velocity.length_squared() - speed * speed;

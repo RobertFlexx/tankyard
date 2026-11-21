@@ -14,7 +14,7 @@ use crate::ui::{
 };
 use std::hash::{Hash, Hasher};
 use tankyard_client::editor_document::{
-    Document, Key, Object, defeated_boss, describe_trigger_named, map_id, trigger_tag,
+    Document, Key, LAYERS, Object, defeated_boss, describe_trigger_named, map_id, trigger_tag,
 };
 use tankyard_content::*;
 use tankyard_core::BossKind;
@@ -653,12 +653,20 @@ impl Editor {
                 let keys = editor.selection.clone();
                 editor.doc.match_size(&keys, axis);
             }),
+            // Both go to what they name, so they leave a layer that hides
+            // any of it for every layer.
             Request::Locate(key) => {
+                if !self.on_layer(key) {
+                    self.set_layer(None);
+                }
                 self.set_selection(vec![key]);
                 self.center_on(key);
             }
             Request::SelectGroup(group) => {
                 let keys = self.doc.in_group(group);
+                if keys.iter().any(|&key| !self.on_layer(key)) {
+                    self.set_layer(None);
+                }
                 if let Some(&first) = keys.first() {
                     self.center_on(first);
                 }
@@ -936,6 +944,7 @@ impl Editor {
             }
             _ => None,
         };
+        let mut layer = self.doc.layers.get(key);
         let mut f = self.form(x, y, w, s, salt);
         let title = match &object {
             Object::Block(b) => format!("{} block", b.style.name()),
@@ -983,6 +992,7 @@ impl Editor {
                 f.note("Hiding its own group switches this trigger off.");
             }
         }
+        f.stepper("Layer", &mut layer, [0, LAYERS - 1], None);
         f.heading("Place");
         let mut r = object.rect();
         if object.is_point() {
@@ -1165,6 +1175,13 @@ impl Editor {
             }
             self.edit_property(|doc| doc.replace(key, object));
         }
+        if layer != self.doc.layers.get(key) {
+            self.edit_property(|doc| doc.layers.set(key, layer));
+            if !self.on_layer(key) {
+                self.selection.clear();
+                return (end, Request::Notice(moved_to_layer(layer)));
+            }
+        }
         (end, request)
     }
 
@@ -1191,6 +1208,13 @@ impl Editor {
         let free = self.doc.next_free_group();
         let groupable: Vec<bool> = objects.iter().map(Object::groupable).collect();
         let groups: Vec<u8> = objects.iter().map(Object::group).collect();
+        let layers: Vec<u8> = self
+            .selection
+            .iter()
+            .map(|&key| self.doc.layers.get(key))
+            .collect();
+        let first_layer = layers.first().copied().unwrap_or(0);
+        let layer_mixed = layers.iter().any(|&l| l != first_layer);
         let mut request = Request::None;
         let mut f = self.form(x, y, w, s, 3);
         label(
@@ -1226,6 +1250,14 @@ impl Editor {
             );
             template.set_group(group);
         }
+        let mut layer = first_layer;
+        let mixed = layer_mixed;
+        f.stepper(
+            if mixed { "Layer (mixed)" } else { "Layer" },
+            &mut layer,
+            [0, LAYERS - 1],
+            None,
+        );
         if same {
             match &mut template {
                 Object::Block(b) => {
@@ -1292,6 +1324,18 @@ impl Editor {
                     }
                 }
             });
+        }
+        if layer != first_layer {
+            let keys = self.selection.clone();
+            self.edit_property(|doc| {
+                for key in keys {
+                    doc.layers.set(key, layer);
+                }
+            });
+            if self.layer.is_some_and(|edited| edited != layer) {
+                self.selection.clear();
+                return (end, Request::Notice(moved_to_layer(layer)));
+            }
         }
         (end, request)
     }
@@ -2034,6 +2078,10 @@ fn key_index(key: Key) -> usize {
     }
 }
 /// Keeps typed fields of different objects apart.
+/// What moving objects off the layer being edited says.
+fn moved_to_layer(layer: u8) -> String {
+    format!("Moved to layer {layer}. Press . and , or use the layer bar to edit another layer.")
+}
 fn key_salt(key: Key) -> u64 {
     let variant = match key {
         Key::Wall(_) => 0,
@@ -2122,8 +2170,13 @@ fn trigger_form(
     f.pick("", &mut t.when, &TriggerWhen::ALL, TriggerWhen::name, 3);
     match t.when {
         TriggerWhen::Every => {
-            t.seconds = t.seconds.max(0.5);
-            f.number("Every (s)", &mut t.seconds, [0.5, 3600.], 0.5);
+            t.seconds = t.seconds.max(EVERY_LEAST);
+            f.number(
+                "Every (s)",
+                &mut t.seconds,
+                [EVERY_LEAST, 3600.],
+                EVERY_LEAST,
+            );
             f.number("First wait (s)", &mut t.offset, [0., 3600.], 0.5);
         }
         TriggerWhen::Start => {
@@ -2162,6 +2215,13 @@ fn trigger_form(
             t.source = t.source.clamp(1, MAP_COUNTERS);
             f.stepper("Watch counter", &mut t.source, [1, MAP_COUNTERS], None);
             f.note("Acts every time the counter's value changes, up or down. Pair it with a gate to react to some values only.");
+        }
+        TriggerWhen::Inputs => {
+            // It watches its conditions, so it starts with one.
+            if t.only_if.is_none() {
+                t.set_conditions(vec![TriggerTest::default()]);
+            }
+            f.note("Acts whenever a counter or group its conditions read changes, and once as the round starts. With Gate to counter it is a live logic gate.");
         }
         TriggerWhen::Shown | TriggerWhen::Hidden => {
             t.source = t.source.clamp(1, MAP_GROUPS);
@@ -2255,6 +2315,21 @@ fn trigger_form(
             f.stepper("Counter", &mut t.group, [1, MAP_COUNTERS], None);
             t.amount = t.amount.clamp(-COUNTER_LIMIT, COUNTER_LIMIT);
             f.integer("Value", &mut t.amount, [-COUNTER_LIMIT, COUNTER_LIMIT]);
+        }
+        TriggerAction::Output => {
+            t.group = t.group.clamp(1, MAP_COUNTERS);
+            f.stepper("Counter", &mut t.group, [1, MAP_COUNTERS], None);
+            // 0 either way would store nothing.
+            t.amount = t.amount.clamp(-COUNTER_LIMIT, COUNTER_LIMIT);
+            if t.amount == 0 {
+                t.amount = 1;
+            }
+            f.integer(
+                "Value while open",
+                &mut t.amount,
+                [-COUNTER_LIMIT, COUNTER_LIMIT],
+            );
+            f.note("Sets the counter to this value while the gate under Only if is open, and to 0 while it's shut. The gate never stops it acting.");
         }
         TriggerAction::Random | TriggerAction::Sequence => {
             t.group = t.group.clamp(1, MAP_CHANNELS - 1);
@@ -3352,7 +3427,7 @@ fn curve_graph(f: &mut Form, easing: Easing) {
     f.y += r.h + 12. * s;
 }
 
-/// The gate: up to four conditions, how they combine and what a shut gate
+/// The gate: up to eight conditions, how they combine and what a shut gate
 /// sends instead, with what each one says in the preview right now.
 fn gate_form(f: &mut Form, t: &mut MapTrigger, live: Option<&GateView>, free_channel: Option<u8>) {
     let s = f.s;
@@ -3467,6 +3542,11 @@ fn gate_form(f: &mut Form, t: &mut MapTrigger, live: Option<&GateView>, free_cha
     if count >= 2 {
         f.y += 6. * s;
         f.pick("Combine", &mut t.gate, &GateMode::ALL, GateMode::name, 2);
+    } else if count == 1 {
+        let mut not = t.gate.inverts();
+        if f.toggle("Turn it around (NOT)", &mut not) {
+            t.gate = if not { GateMode::NoneOf } else { GateMode::All };
+        }
     }
     if count > 0 {
         if let Some(view) = live {
@@ -3513,15 +3593,20 @@ fn gate_form(f: &mut Form, t: &mut MapTrigger, live: Option<&GateView>, free_cha
             );
         }
         f.note(match t.gate {
+            _ if t.action == TriggerAction::Output => "Gate to counter stores whether the gate is open in its counter; the gate never stops it acting.",
+            gate if count == 1 && gate.inverts() => "Acts only while the condition fails: a NOT gate. While the gate is shut nothing happens, apart from the otherwise signal.",
             _ if count == 1 => "Checked when the trigger fires. While the gate is shut nothing happens, apart from the otherwise signal, and the trigger waits for its next chance.",
             GateMode::All => "Acts only while every condition holds: an AND gate.",
             GateMode::Any => "Acts while at least one condition holds: an OR gate.",
             GateMode::NotAll => "Acts unless every condition holds: a NAND gate.",
             GateMode::NoneOf => "Acts only while no condition holds: a NOR gate.",
             GateMode::One => "Acts while exactly one condition holds: an XOR gate.",
+            GateMode::Even => "Acts while an even number of conditions hold, none included: an XNOR gate.",
+            GateMode::Odd => "Acts while an odd number of conditions hold: parity, the XOR of them all.",
+            GateMode::Most => "Acts while more than half of the conditions hold: a majority gate.",
         });
     } else {
-        f.note("Conditions look at counters, groups, the tanks inside or the round time when the trigger fires. Several make AND, OR, NAND, NOR and XOR gates.");
+        f.note("Conditions look at counters, groups, the tanks inside or the round time when the trigger fires. Several make AND, OR, NAND, NOR, XOR, XNOR, parity and majority gates.");
     }
 }
 

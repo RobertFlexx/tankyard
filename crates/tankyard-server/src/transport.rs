@@ -1069,6 +1069,10 @@ impl UdpServer {
                 command,
                 signature,
             } => {
+                let applied = match command {
+                    ServerCommand::Kick { .. } => "Player removed.",
+                    _ => "Server command applied.",
+                };
                 let result =
                     self.signed_server_command(client, round, sequence, command, &signature);
                 match result {
@@ -1076,7 +1080,7 @@ impl UdpServer {
                         client,
                         &ServerControl::Action {
                             accepted: true,
-                            reason: "Server command applied.".into(),
+                            reason: applied.into(),
                         },
                     ),
                     Err(error) => self.community_result(client, Err(error)),

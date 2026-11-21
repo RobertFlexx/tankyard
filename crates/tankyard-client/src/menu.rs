@@ -76,6 +76,7 @@ pub enum Action {
     LeaveParty,
     OpenParty,
     PartyReady(bool),
+    KickFromParty(tankyard_core::EntityId),
     Join,
     Quit,
     Save,
@@ -950,9 +951,11 @@ fn bastion_badge(pane: Rect, lift: f32, time: f32, s: f32) {
         tankyard_core::BossKind::Bastion,
         crate::ui_layout::position(vec2(badge.x + 36.0 * s, badge.center().y)),
         17.0 * s,
-        -0.2,
-        crate::accessibility::motion_time(time),
-        0,
+        tankyard_client::boss_model::Pose {
+            aim: -0.2,
+            time: crate::accessibility::motion_time(time),
+            ..Default::default()
+        },
         None,
         &mut render::draw_model_primitive,
     );
@@ -1048,7 +1051,7 @@ fn splash_text(text: &str, x: f32, y: f32, s: f32, time: f32) {
 
 /// A compact on/off switch; returns true when clicked.
 fn toggle_switch(rect: Rect, on: &mut bool, s: f32) -> bool {
-    let clicked = contains(rect) && is_mouse_button_pressed(MouseButton::Left);
+    let clicked = contains(rect) && take_click();
     if clicked {
         *on = !*on;
     }
