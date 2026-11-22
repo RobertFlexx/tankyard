@@ -35,7 +35,7 @@ Everyone in a party hears each other at full volume, wherever they are: across t
 - A ring around a member's tank icon means they're talking. The button on their row mutes them for you only, and that mute follows them across respawns and rounds.
 - A server with voice turned off carries no party voice.
 
-The leader's game carries the voice, so the leader needs 2.0.1 or newer for this. A 2.0.0 leader still carries voice by distance, as in an ordinary match.
+The leader's game carries the voice, so the leader needs 2.0.2 or newer for this. A 2.0.0 leader still carries voice by distance, as in an ordinary match.
 
 ## Ready check
 

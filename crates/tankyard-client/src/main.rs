@@ -2141,13 +2141,11 @@ impl App {
                     engine: session::Engine::Online { client, .. },
                     ..
                 }) = &self.session
-            {
-                if self
+                && self
                     .party_ui
                     .rail(client, &self.content, self.voice.view(), s, true, false)
-                {
-                    self.voice.toggle();
-                }
+            {
+                self.voice.toggle();
             }
             return;
         }

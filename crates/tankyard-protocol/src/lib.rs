@@ -22,7 +22,7 @@ pub use status::*;
 /// Version 34 carries the Even, Odd and Most gates, eight conditions a
 /// trigger, On input change, Gate to counter and rift events that name their
 /// owner, which version 33 can't hold, so clients and servers update
-/// together. Tank Yard 2.0.0 and 2.0.1 use it; 1.7.0 used version 33, 1.6.0 version
+/// together. Tank Yard 2.0.0 and 2.0.2 use it; 1.7.0 used version 33, 1.6.0 version
 /// 32, 1.5.0 to 1.5.2 version 31, 1.4.0 version 30, 1.3.0 version 29, and
 /// 1.1.0 and 1.2.0 version 28.
 pub const PROTOCOL_VERSION: u32 = 34;

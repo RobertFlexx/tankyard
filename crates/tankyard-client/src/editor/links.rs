@@ -549,7 +549,7 @@ impl Editor {
         to.clear();
         to.extend(net.to.iter().map(|&key| self.link_end(key)));
         // Neighbors bow opposite ways, so wires between the same places part.
-        let bow = if index % 2 == 0 { 0.07 } else { -0.07 };
+        let bow = if index.is_multiple_of(2) { 0.07 } else { -0.07 };
         let thin = net.carrier == Carrier::Otherwise;
         if !net.hub() {
             let wire = Wire {
@@ -906,7 +906,7 @@ mod tests {
         assert_eq!(rest_strength(0), 1.);
         assert_eq!(rest_strength(40), 1.);
         let busy = rest_strength(1000);
-        assert!(busy < 0.5 && busy >= FAINTEST);
+        assert!((FAINTEST..0.5).contains(&busy));
         assert_eq!(rest_strength(1_000_000), FAINTEST);
         assert!(rest_strength(300) > rest_strength(600));
     }

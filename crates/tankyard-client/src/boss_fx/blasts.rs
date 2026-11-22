@@ -131,20 +131,16 @@ fn soot_rim(turn: f32, seed: f32) -> f32 {
     0.84 + 0.1 * (turn * 3. + seed).sin() + 0.06 * (turn * 7. - seed * 1.7).cos()
 }
 
-fn muzzle(
-    light: &mut Emission,
-    p: Vec2,
-    d: Vec2,
-    s: f32,
-    c: Color,
-    t: f32,
-    level: f32,
-    fuel: Fuel,
-) {
+fn muzzle(light: &mut Emission, p: Vec2, d: Vec2, burst: &Burst, s: f32, t: f32, level: f32) {
+    let fuel = burst.fuel;
     let fade = 1. - t;
     let n = perpendicular(d);
     let reach = s * (1.7 + 2.5 * ease_out(t));
-    let c = if fuel == Fuel::Fire { ramp(0.26) } else { c };
+    let c = if fuel == Fuel::Fire {
+        ramp(0.26)
+    } else {
+        burst.color
+    };
     light.spot(
         Layer::Wash,
         p + d * s * 0.9,
@@ -226,7 +222,7 @@ fn draw_burst(light: &mut Emission, view: &View, burst: &Burst, level: f32) {
     let fade = 1. - t;
     let level = level.min(1.);
     match burst.flash {
-        Flash::Muzzle(d) => muzzle(light, p, d, s, c, t, level, burst.fuel),
+        Flash::Muzzle(d) => muzzle(light, p, d, burst, s, t, level),
         Flash::Hit => {
             let grow = ease_out(t);
             light.spot(

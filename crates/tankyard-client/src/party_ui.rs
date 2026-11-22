@@ -457,6 +457,7 @@ impl PartyUi {
         }
         toggled
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn panel(
         &mut self,
         client: &mut NetworkClient,
