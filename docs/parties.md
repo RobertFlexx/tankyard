@@ -14,7 +14,7 @@ Use **Return to menu** to keep the party. Open **Party modes**, choose the next 
 
 Automatic address discovery uses fixed HTTPS services, and router mapping requests only a leased UDP entry that the game verifies and renews. Ending the party deletes only its own entry; a crash lets the lease expire. The game does not change your firewall. The preferred local port is 5000; an occupied port is replaced by an available port shown in the invite screen. The parser accepts IPv4 and bracketed IPv6 endpoints; the built-in host listens on IPv4.
 
-Party voice mutes follow the member's connection across respawns and rounds. Enter while alive or Slash opens party chat; new messages appear in the collapsed roster. The online match keeps running while you browse menus.
+Enter while alive or Slash opens party chat; new messages appear in the collapsed roster. The online match keeps running while you browse menus.
 
 The host role comes from a process-local channel. The invitation proves entry with a fresh signature bound to the connection, server and administration key. It stays out of saved server history and is never sent as a password. Relayed traffic uses TLS between each participant and the relay; the relay can observe forwarded game traffic. Direct UDP parties retain the regular unsecure netcode transport, so invitation proofs alone do not authenticate the server or encrypt chat/voice against an on-path observer. Creator and central-owner credentials remain separate.
 
@@ -25,6 +25,17 @@ The roster on your screen shows each member's tank, with a health bar that turns
 On a team, arrows at the edge of the screen point toward allies who are out of view, with their names. They're for allies only: opponents in your party still show up just on the minimap.
 
 The party panel lists each member's level, what they're doing, their tank and their health. The leader can remove a member with **Kick**, then **Sure?**. Nobody can kick the leader.
+
+## Voice
+
+Everyone in a party hears each other at full volume, wherever they are: across the arena, while down, in a menu or between rounds. Your microphone starts muted and stays as you set it from round to round in the same party.
+
+- **M** or the microphone button mutes and unmutes you. It's the same button as in a match, and it's also on the party roster at the side of the screen and on your own row in the party panel.
+- While your microphone is on behind a menu, a small marker at the corner of the screen says so.
+- A ring around a member's tank icon means they're talking. The button on their row mutes them for you only, and that mute follows them across respawns and rounds.
+- A server with voice turned off carries no party voice.
+
+The leader's game carries the voice, so the leader needs a version newer than 2.0.0 for this. A 2.0.0 leader still carries voice by distance, as in an ordinary match.
 
 ## Ready check
 

@@ -1,5 +1,6 @@
 mod sandbox;
 
+use crate::graphics::{draw_circle, draw_poly};
 use crate::ui::RED;
 use crate::{render, settings::Settings, ui::*};
 use macroquad::prelude::*;
@@ -614,6 +615,7 @@ impl Hud {
         if !available {
             self.offered_class.clear();
         }
+        let corner_text = text_after_shapes();
         if small_button(
             Rect::new(m, m, 110.0 * s, 26.0 * s),
             "Tanks [Tab]",
@@ -664,6 +666,7 @@ impl Hud {
                 actions.push(HudAction::Controls);
             }
         }
+        drop(corner_text);
         let header_width = (w - 548. * s).max(120. * s);
         let mode_name = if tank.pocket > 0. {
             "Backrooms"
@@ -776,6 +779,7 @@ impl Hud {
                         .iter()
                         .any(|card| contains(*card))
                 });
+            let _text = text_after_shapes();
             for (row, &index) in stat_order.iter().enumerate() {
                 let r = Rect::new(stats_x, stats_y + row as f32 * 26.0 * s, stat_w, 22.0 * s);
                 let hovered = contains(Rect::new(r.x, r.y, r.w, 25. * s))
@@ -890,6 +894,7 @@ impl Hud {
                 tank.xp.saturating_sub(prev) as f32 / (next - prev).max(1) as f32
             };
             let xp_y = h - 33.0 * s;
+            let bars_text = text_after_shapes();
             arcade_player_label(
                 tank,
                 "",
@@ -932,6 +937,7 @@ impl Hud {
                 xp_y + 17.0 * s,
                 16.0 * s,
             );
+            drop(bars_text);
             // Stack status lines above the name, clear of both progress bars.
             let mut status_y = xp_y - 74.0 * s;
             if let Some(class) = class
@@ -1207,6 +1213,7 @@ impl Hud {
             .ranking
             .first()
             .map_or(1, |&index| snapshot.tanks[index].score.max(1));
+        let text = text_after_shapes();
         for (row, &index) in self.ranking.iter().take(10).enumerate() {
             let tank = &snapshot.tanks[index];
             let by = y + 30.0 * s + row as f32 * 24.0 * s;
@@ -1225,6 +1232,7 @@ impl Hud {
                 12. * s,
             );
         }
+        drop(text);
         leading
     }
     fn minimap(
@@ -1784,6 +1792,61 @@ fn killer_name(snapshot: &Snapshot, content: &Content, id: EntityId) -> Option<S
         .iter()
         .find(|boss| boss.id == id)
         .map(|boss| format!("the {}", boss.kind.name()))
+}
+/// Where an arrow pointing `direction` from the middle of the screen meets its
+/// edge, kept clear of the title above and the score bars below.
+pub(crate) fn edge_point(direction: Vec2, s: f32) -> Vec2 {
+    let (w, h) = (screen_width(), screen_height());
+    let (inset, top, bottom) = (44. * s, 92. * s, 150. * s);
+    let edge = if direction.y < 0. { top } else { bottom };
+    let reach = ((w * 0.5 - inset) / direction.x.abs().max(0.001))
+        .min((h * 0.5 - edge) / direction.y.abs().max(0.001));
+    vec2(w, h) * 0.5 + direction * reach
+}
+/// The most bosses out of view that get an arrow, nearest first.
+const MOST_BOSS_ARROWS: usize = 4;
+/// Arrows at the screen's edge toward bosses out of view, each with its name
+/// and health, so a fight is easy to find again after a respawn.
+pub(crate) fn boss_arrows(snapshot: &Snapshot, view: &render::View, s: f32, colorblind: bool) {
+    let (w, h) = (screen_width(), screen_height());
+    let center = vec2(w, h) * 0.5;
+    let mut out_of_view: Vec<(&tankyard_core::Boss, Vec2, f32)> = snapshot
+        .bosses
+        .iter()
+        .filter(|boss| !boss.mothership && !view.visible(boss.pos, boss.radius))
+        .filter_map(|boss| {
+            let offset = view.screen(boss.pos) - center;
+            Some((boss, offset.try_normalize()?, offset.length_squared()))
+        })
+        .collect();
+    out_of_view.sort_unstable_by(|a, b| a.2.total_cmp(&b.2));
+    for &(boss, d, _) in out_of_view.iter().take(MOST_BOSS_ARROWS) {
+        let tip = edge_point(d, s);
+        let n = vec2(-d.y, d.x);
+        let size = 13. * s;
+        let tint = render::boss_tint(boss, colorblind);
+        let wing =
+            |grow: f32, side: f32| tip - d * (size * 0.75 + grow) + n * side * (size * 0.85 + grow);
+        let notch = tip - d * (size * 0.34);
+        let outline = alpha(tankyard_client::tank_model::OUTLINE, 0.9);
+        let reach = tip + d * (size + 3. * s);
+        draw_triangle(reach, wing(2.5 * s, 1.), notch, outline);
+        draw_triangle(reach, notch, wing(2.5 * s, -1.), outline);
+        let point = tip + d * size;
+        draw_triangle(point, wing(0., 1.), notch, tint);
+        draw_triangle(point, notch, wing(0., -1.), tint);
+        let name = fitted_label(boss.kind.name(), 11. * s, 104. * s);
+        let half = (label_width(&name, 11. * s) * 0.5).max(26. * s);
+        let at = tip - d * 34. * s;
+        let x = at.x.clamp(half + 6. * s, w - half - 6. * s);
+        let y = at.y.clamp(16. * s, h - 14. * s);
+        center_label(&name, x, y, 11. * s, text_color());
+        arcade_track(
+            Rect::new(x - 26. * s, y + 4. * s, 52. * s, 5. * s),
+            boss.health / boss.max_health.max(1.),
+            RED,
+        );
+    }
 }
 pub(crate) fn boss_banner_layout(width: f32, s: f32) -> Rect {
     let left = 320. * s;

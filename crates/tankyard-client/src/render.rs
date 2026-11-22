@@ -1,3 +1,4 @@
+use crate::graphics::draw_poly;
 use crate::ui::RED;
 use crate::ui::VIOLET;
 use crate::{effects::Effects, settings::Settings, ui::*};
@@ -544,6 +545,10 @@ pub fn world(
             .map(|tank| placed(tank.id, tank.pos)),
         fades: Default::default(),
     };
+    // Light is queued as the world is drawn and laid over it at the end. A
+    // pale floor takes it as tint, since adding light there only clips white.
+    let night = map.map_or(0., |map| shown.poses.lighting(&map.ambient)[3]);
+    let mut light = crate::emission::Emission::begin(!dark && night < 0.35, settings.shape_quality);
     if let Some(map) = map {
         crate::profile::phase("pads", || {
             crate::scenery::floor(map, &snapshot.config, &shown, view, animation_time)
@@ -680,6 +685,7 @@ pub fn world(
             }
         }
     });
+    effects.boss_fx.scars(view);
     crate::rifts::draw(
         snapshot,
         view,
@@ -687,18 +693,28 @@ pub fn world(
         local,
         animation_time,
         settings.reduced_motion,
+        &mut light,
     );
     if snapshot.config.mode == Mode::Survival {
         let p = view.screen(V2::new(
             snapshot.config.width * 0.5,
             snapshot.config.height * 0.5,
         ));
-        draw_circle_lines(
-            p.x,
-            p.y,
-            snapshot.match_state.safe_radius * z,
-            4.0,
-            alpha(RED, 0.6),
+        // The closing edge: a hard line with a glow leaning into the danger.
+        let radius = snapshot.match_state.safe_radius * z;
+        light.ring(
+            crate::emission::Layer::Wash,
+            p,
+            radius + 16. * z,
+            (28. * z).max(8.),
+            alpha(RED, 0.22),
+        );
+        light.ring(
+            crate::emission::Layer::Core,
+            p,
+            radius,
+            (2.4 * z).max(1.8),
+            alpha(light.hot(RED, 0.3), 0.92),
         );
     }
     for objective in &snapshot.objectives {
@@ -707,8 +723,21 @@ pub fn world(
         }
         let p = view.screen(objective.pos);
         let c = team_color(objective.team, true, settings.colorblind);
-        draw_circle(p.x, p.y, objective.radius * z, alpha(c, 0.07));
-        draw_circle_lines(p.x, p.y, objective.radius * z, 2.0, alpha(c, 0.45));
+        polygon(p, 0, objective.radius * z, 0., alpha(c, 0.07));
+        light.ring(
+            crate::emission::Layer::Wash,
+            p,
+            objective.radius * z,
+            (9. * z).max(3.),
+            alpha(c, 0.22),
+        );
+        light.ring(
+            crate::emission::Layer::Core,
+            p,
+            objective.radius * z,
+            (1.5 * z).max(1.1),
+            alpha(c, 0.7),
+        );
         draw_poly_lines(
             p.x,
             p.y,
@@ -818,11 +847,15 @@ pub fn world(
             polygon(p, 3, r + 2.0 * z, ghost.angle, alpha(OUTLINE, t * 0.6));
             polygon(p, 3, r, ghost.angle, alpha(c, t * 0.7));
         } else {
-            draw_circle(p.x, p.y, r + 2.0 * z, alpha(OUTLINE, t * 0.6));
-            draw_circle(p.x, p.y, r, alpha(c, t * 0.7));
+            polygon(p, 0, r + 2.0 * z, 0.0, alpha(OUTLINE, t * 0.6));
+            polygon(p, 0, r, 0.0, alpha(c, t * 0.7));
         }
     }
-    let mut boss_glows = Vec::new();
+    let light_level = if settings.reduced_motion {
+        0.
+    } else {
+        (settings.effects / 0.8).clamp(0., 1.25)
+    };
     for projectile in &snapshot.projectiles {
         // Fixed-step simulation / unlocked rendering: interpolate local bullets
         // between authoritative 60 Hz positions without altering collisions.
@@ -846,39 +879,59 @@ pub fn world(
                 )
             });
         if projectile.frozen.is_some() {
-            draw_circle_lines(p.x, p.y, r + 4. * z, 1.5 * z, alpha(CYAN, 0.8));
+            light.ring(
+                crate::emission::Layer::Wash,
+                p,
+                r + 4. * z,
+                (4. * z).max(1.5),
+                alpha(CYAN, 0.3),
+            );
+            light.ring(
+                crate::emission::Layer::Core,
+                p,
+                r + 4. * z,
+                (1.1 * z).max(0.8),
+                alpha(CYAN, 0.9),
+            );
             draw_line(p.x - r * 0.5, p.y, p.x + r * 0.5, p.y, z, WHITE);
         }
         // The lifetime field counts down on the authoritative simulation.
         let fade = (projectile.lifetime / 0.18).clamp(0.0, 1.0);
         let appear = (projectile.age / 0.045).clamp(0.45, 1.0);
         let opacity = fade * appear;
-        if boss.is_some()
-            && matches!(
-                projectile.kind,
-                ProjectileKind::Bullet
-                    | ProjectileKind::Shell
-                    | ProjectileKind::Piercing
-                    | ProjectileKind::Scatter
-                    | ProjectileKind::Explosive
-                    | ProjectileKind::Fragment
-                    | ProjectileKind::Homing
-            )
-            && projectile.frozen.is_none()
-        {
-            crate::boss_fx::shot(
-                p,
-                r,
-                vec2(projectile.vel.x, projectile.vel.y),
-                projectile.kind,
-                projectile.damage,
-                c,
-                opacity,
-                projectile.age,
-                z,
-                &mut boss_glows,
-            );
-            continue;
+        let round = crate::boss_fx::Round {
+            id: projectile.id,
+            owner: projectile.owner,
+            p,
+            r,
+            heading: vec2(projectile.vel.x, projectile.vel.y),
+            kind: projectile.kind,
+            damage: projectile.damage,
+            color: c,
+            opacity,
+            age: projectile.age,
+            z,
+        };
+        let gunfire = matches!(
+            projectile.kind,
+            ProjectileKind::Bullet
+                | ProjectileKind::Shell
+                | ProjectileKind::Piercing
+                | ProjectileKind::Scatter
+                | ProjectileKind::Explosive
+                | ProjectileKind::Fragment
+                | ProjectileKind::Homing
+        );
+        if projectile.frozen.is_none() {
+            if boss.is_some() && gunfire {
+                effects.boss_fx.round(&mut light, view, &round);
+                continue;
+            }
+            if boss.is_some() {
+                effects.boss_fx.craft(&mut light, view, &round);
+            } else if gunfire && light_level > 0. {
+                crate::boss_fx::tracer(&mut light, &round, light_level);
+            }
         }
         match projectile.kind {
             ProjectileKind::Minion => {
@@ -900,7 +953,13 @@ pub fn world(
                     3
                 };
                 if projectile.is_return_drone() {
-                    draw_circle_lines(p.x, p.y, r + 5.0 * z, 2.0 * z, alpha(CYAN, opacity * 0.7));
+                    light.ring(
+                        crate::emission::Layer::Core,
+                        p,
+                        r + 5. * z,
+                        (1.2 * z).max(0.8),
+                        alpha(CYAN, opacity * 0.8),
+                    );
                 }
                 if tankyard_core::base_guard_team(projectile.owner).is_some() {
                     // Base guardians: a heavier, darker sentry with a pale core.
@@ -926,28 +985,28 @@ pub fn world(
                 polygon(p, 3, r, projectile.age * 0.1, alpha(c, opacity));
             }
             ProjectileKind::Barrier => {
-                draw_circle(p.x, p.y, r, alpha(c, opacity * 0.10));
+                draw_poly(p.x, p.y, 6, r, 0.0, alpha(c, opacity * 0.10));
                 draw_poly_lines(p.x, p.y, 6, r, 0.0, 2.0 * z, alpha(c, opacity));
             }
             ProjectileKind::Turret => {
                 cannon(p, projectile.vel.angle(), r * 1.5, r * 0.5, c, 0.0);
-                draw_circle(p.x, p.y, r + 2.0 * z, alpha(OUTLINE, opacity));
-                draw_circle(p.x, p.y, r, alpha(c, opacity));
+                polygon(p, 0, r + 2.0 * z, 0.0, alpha(OUTLINE, opacity));
+                polygon(p, 0, r, 0.0, alpha(c, opacity));
             }
             _ => {
-                draw_circle(p.x, p.y, r + 2.0 * z, alpha(OUTLINE, opacity));
-                draw_circle(p.x, p.y, r, alpha(c, opacity));
+                polygon(p, 0, r + 2.0 * z, 0.0, alpha(OUTLINE, opacity));
+                polygon(p, 0, r, 0.0, alpha(c, opacity));
             }
         }
     }
-    crate::boss_fx::shot_glows(&mut boss_glows);
     crate::rifts::draw_shots(
         &snapshot.rift_shots,
         view,
         interpolation,
         (local, crate::rifts::team_of(snapshot, local)),
     );
-    let boss_time = crate::accessibility::motion_time(snapshot.tick as f32 / 60.);
+    // Carried between ticks, so spinning launchers don't step at 60 Hz.
+    let boss_time = crate::accessibility::motion_time(animation_time);
     for boss in &snapshot.bosses {
         let position = previous_positions
             .get(&boss.id)
@@ -957,49 +1016,70 @@ pub fn world(
         if !view.visible(position, boss.radius + 100.0) {
             continue;
         }
-        let p = view.screen(position);
+        let p = view.screen(position) + effects.boss_fx.kick(boss, z);
         let r = boss.radius * z;
-        let charge = if boss.attack_windup > 0. {
-            crate::boss_fx::warning(
+        let aim = effects.boss_fx.aim(boss);
+        if boss.attack_windup > 0. {
+            effects.boss_fx.warning(
+                &mut light,
                 view,
                 boss,
                 position,
                 snapshot.walls.iter().map(scaled),
                 boss_time,
             );
-            (1. - boss.attack_windup / boss.kind.windup()).clamp(0., 1.)
-        } else {
-            0.
-        };
-        crate::boss_fx::dash(view, boss, position, boss_time);
-        let color = if boss.mothership {
-            team_color(boss.team, false, settings.colorblind)
-        } else {
-            tankyard_client::boss_model::boss_color(boss.kind)
+        }
+        let charge = effects.boss_fx.charge(boss);
+        effects
+            .boss_fx
+            .dash(&mut light, view, boss, position, boss_time);
+        let color = boss_tint(boss, settings.colorblind);
+        let turn = (f64::from(animation_time) * f64::from(boss.kind.spin()))
+            .rem_euclid(std::f64::consts::TAU) as f32;
+        let armor = {
+            let (sides, size, angle) = tankyard_client::boss_model::armor(boss.kind, aim, turn);
+            crate::boss_fx::Armor { sides, size, angle }
         };
         tankyard_client::boss_model::boss_model_geometry(
             boss.kind,
             p,
             r,
             tankyard_client::boss_model::Pose {
-                aim: boss.aim,
-                turn: boss.kind.turn(snapshot.tick),
+                aim,
+                // The launchers are real, so they keep turning with motion
+                // reduced; rounds leave from where they are drawn.
+                turn,
                 time: boss_time,
                 phase: boss.phase,
                 charge,
+                lit: true,
             },
             boss.mothership.then_some(color),
             &mut draw_model_primitive,
         );
-        crate::boss_fx::core_glow(
-            tankyard_client::boss_model::core_position(boss.kind, p, r, boss.aim),
+        effects.boss_fx.glow(
+            &mut light,
+            boss,
+            p,
+            tankyard_client::boss_model::core_position(boss.kind, p, r, aim),
             r,
-            color,
-            charge,
-            boss.phase,
             boss_time,
+            armor,
         );
-        health_bar(p, r, boss.health / boss.max_health, z, RED);
+        boss_health_bar(
+            p,
+            r,
+            (
+                boss.health / boss.max_health,
+                effects.boss_fx.health_trail(boss),
+            ),
+            z,
+            if boss.mothership {
+                &[]
+            } else {
+                &tankyard_core::BOSS_PHASES
+            },
+        );
         center_label(
             if boss.mothership {
                 "MOTHERSHIP"
@@ -1015,12 +1095,12 @@ pub fn world(
     for tank in &snapshot.tanks {
         if tank.alive && tank.id != local && tank.pocket > 0. && tank.pocket < 0.8 {
             let p = view.screen(tank.pos);
-            draw_circle_lines(
-                p.x,
-                p.y,
+            light.ring(
+                crate::emission::Layer::Core,
+                p,
                 (tank.radius + 9.) * z,
-                2. * z,
-                alpha(AMBER, (0.8 - tank.pocket) * 0.7),
+                (1.3 * z).max(0.8),
+                alpha(AMBER, (0.8 - tank.pocket) * 0.85),
             );
         }
         let position = previous_positions
@@ -1056,28 +1136,43 @@ pub fn world(
         };
         if tank.stasis > 0. {
             let field = tankyard_core::STASIS_RADIUS * z;
-            draw_circle(p.x, p.y, field, alpha(CYAN, 0.035));
             let time = if settings.reduced_motion {
                 0.
             } else {
                 animation_time * 0.3
             };
-            for arc in 0..48 {
-                if arc % 6 == 0 {
-                    continue;
-                }
-                let a = time + arc as f32 * std::f32::consts::TAU / 48.;
-                let b = a + std::f32::consts::TAU / 56.;
-                draw_line(
-                    p.x + a.cos() * field,
-                    p.y + a.sin() * field,
-                    p.x + b.cos() * field,
-                    p.y + b.sin() * field,
-                    1.7 * z,
-                    alpha(CYAN, 0.38),
+            light.spot(
+                crate::emission::Layer::Wash,
+                p,
+                field * 1.08,
+                alpha(CYAN, 0.1),
+            );
+            light.ring(
+                crate::emission::Layer::Wash,
+                p,
+                field,
+                (6. * z).max(2.),
+                alpha(CYAN, 0.16),
+            );
+            // Eight soft arcs, turning slowly, mark the field's edge.
+            for arc in 0..8 {
+                light.arc(
+                    crate::emission::Layer::Core,
+                    p,
+                    field,
+                    (1.2 * z).max(0.9),
+                    time + arc as f32 * std::f32::consts::TAU / 8.,
+                    std::f32::consts::TAU / 8. * 0.84,
+                    alpha(CYAN, 0.62),
                 );
             }
-            draw_circle_lines(p.x, p.y, r * 1.55, 2. * z, alpha(WHITE, 0.7));
+            light.ring(
+                crate::emission::Layer::Core,
+                p,
+                r * 1.55,
+                (1.2 * z).max(0.8),
+                alpha(light.hot(CYAN, 0.65), 0.8),
+            );
         }
         let parrying = class.ability.is_parry() && tank.shield > 0.0;
         if tank.protection > 0.0 || tank.shield > 0.0 {
@@ -1088,25 +1183,31 @@ pub fn world(
             } else {
                 color
             };
-            draw_circle(
-                p.x,
-                p.y,
+            polygon(
+                p,
+                0,
                 r * 1.35,
-                alpha(aura, if parrying { 0.16 } else { 0.04 }),
+                0.,
+                alpha(aura, if parrying { 0.14 } else { 0.04 }),
             );
-            draw_circle_lines(
-                p.x,
-                p.y,
+            let beat = if settings.reduced_motion {
+                0.5
+            } else {
+                0.5 + (get_time() as f32 * 4.0).sin() * 0.12
+            };
+            light.ring(
+                crate::emission::Layer::Wash,
+                p,
                 r * 1.35,
-                if parrying { 3.5 * z } else { 1.5 * z },
-                alpha(
-                    aura,
-                    if settings.reduced_motion {
-                        0.45
-                    } else {
-                        0.45 + (get_time() as f32 * 4.0).sin() * 0.1
-                    },
-                ),
+                (if parrying { 7. } else { 4. } * z).max(2.),
+                alpha(aura, beat * if parrying { 0.62 } else { 0.42 }),
+            );
+            light.ring(
+                crate::emission::Layer::Core,
+                p,
+                r * 1.35,
+                (if parrying { 1.9 } else { 1. } * z).max(0.8),
+                alpha(light.hot(aura, 0.3), (beat + 0.3).min(1.)),
             );
         }
         if tank.creator_boss {
@@ -1211,29 +1312,42 @@ pub fn world(
         let p = view.screen(particle.pos);
         let c = crate::accessibility::palette(Effects::particle_color(particle));
         if particle.ring {
-            draw_circle_lines(
-                p.x,
-                p.y,
-                (particle.size + (1.0 - particle.life / particle.total) * 60.0) * z,
-                2.0 * z,
-                c,
+            // A soft shock ring that races out and slows as it fades.
+            let t = (1.0 - particle.life / particle.total).clamp(0., 1.);
+            let grow = 1. - (1. - t) * (1. - t) * (1. - t);
+            let radius = (particle.size + grow * 64.0) * z;
+            light.ring(
+                crate::emission::Layer::Wash,
+                p,
+                radius,
+                (6.5 * (1. - t * 0.5) * z).max(2.),
+                alpha(c, c.a * 0.34),
+            );
+            light.ring(
+                crate::emission::Layer::Core,
+                p,
+                radius,
+                (1.9 * (1. - t * 0.5) * z).max(1.),
+                alpha(light.hot(c, 0.4), c.a),
             );
         } else if particle.spark {
             let direction = particle.vel.normalized();
-            let length = (particle.vel.length() * 0.035).clamp(4., 24.) * z;
-            draw_line(
-                p.x,
-                p.y,
-                p.x - direction.x * length,
-                p.y - direction.y * length,
-                (particle.size * 0.4 * z).max(0.6),
-                c,
+            let length = (particle.vel.length() * 0.04).clamp(4., 26.) * z;
+            let tail = vec2(p.x - direction.x * length, p.y - direction.y * length);
+            let half = (particle.size * 0.42 * z).max(0.8);
+            light.streak(
+                crate::emission::Layer::Core,
+                tail,
+                p,
+                half,
+                alpha(c, 0.),
+                alpha(light.hot(c, 0.55), c.a),
             );
-            draw_circle(
-                p.x,
-                p.y,
-                (particle.size * 0.32 * z).max(0.5),
-                alpha(WHITE, c.a),
+            light.spot(
+                crate::emission::Layer::Wash,
+                p,
+                half * 3.6,
+                alpha(c, c.a * 0.22),
             );
         } else {
             draw_poly(
@@ -1243,6 +1357,12 @@ pub fn world(
                 particle.size * z,
                 particle.spin.to_degrees(),
                 c,
+            );
+            light.spot(
+                crate::emission::Layer::Wash,
+                p,
+                particle.size * 2.6 * z,
+                alpha(c, c.a * 0.18),
             );
         }
     }
@@ -1272,7 +1392,15 @@ pub fn world(
                 &mut lights,
             );
             let map_lights = lights.len();
-            arena_lights(snapshot, local, view, interpolation, &placed, &mut lights);
+            arena_lights(
+                snapshot,
+                local,
+                view,
+                interpolation,
+                &placed,
+                &effects.boss_fx,
+                &mut lights,
+            );
             crate::profile::phase("darkness", || {
                 crate::lighting::darken(lighting, &lights, None)
             });
@@ -1337,6 +1465,11 @@ pub fn world(
             }
         }
     }
+    // Everything that glows, over the finished and darkened arena.
+    crate::profile::phase("effects light", || {
+        effects.boss_fx.aftermath(&mut light, view);
+        light.flush();
+    });
     for popup in &effects.popups {
         let p = view.screen(popup.pos);
         center_label(
@@ -1356,6 +1489,7 @@ fn arena_lights(
     view: &View,
     interpolation: f32,
     placed: &dyn Fn(EntityId, V2) -> V2,
+    boss_fx: &crate::boss_fx::BossFx,
     out: &mut Vec<crate::lighting::Light>,
 ) {
     use crate::lighting::{Light, MOST_LIGHTS};
@@ -1395,6 +1529,7 @@ fn arena_lights(
             },
         );
     }
+    boss_fx.lights(view, out);
     let local_team = crate::rifts::team_of(snapshot, local);
     for rift in &snapshot.rifts {
         if !view.visible(rift.pos, tankyard_core::RIFT_RADIUS * 3.) {
@@ -1426,7 +1561,14 @@ fn arena_lights(
                 radius: (projectile.radius * 4. + 36.) * z,
                 color: alpha(
                     mix(
-                        team_color(projectile.team, projectile.owner == local, false),
+                        snapshot
+                            .bosses
+                            .iter()
+                            .find(|boss| boss.id == projectile.owner)
+                            .map_or_else(
+                                || team_color(projectile.team, projectile.owner == local, false),
+                                |boss| boss_tint(boss, false),
+                            ),
                         WHITE,
                         0.5,
                     ),
@@ -1434,6 +1576,16 @@ fn arena_lights(
                 ),
             },
         );
+    }
+}
+
+/// The color a boss and its light are drawn in: its own, or its team's for
+/// a mothership.
+pub(crate) fn boss_tint(boss: &tankyard_core::Boss, colorblind: bool) -> Color {
+    if boss.mothership {
+        team_color(boss.team, false, colorblind)
+    } else {
+        crate::accessibility::palette(tankyard_client::boss_model::boss_color(boss.kind))
     }
 }
 
@@ -1447,6 +1599,23 @@ pub(crate) fn health_bar(p: Vec2, r: f32, ratio: f32, z: f32, color: Color) {
         Rect::new(p.x - w * 0.5, p.y + r + 8.0 * z, w, h),
         ratio,
         color,
+    );
+}
+
+/// A boss's health, with a notch where each phase begins and a pale stretch
+/// for what it has just lost.
+fn boss_health_bar(p: Vec2, r: f32, (ratio, lost): (f32, f32), z: f32, marks: &[f32]) {
+    if ratio >= 0.999 && lost <= ratio {
+        return;
+    }
+    let w = (r * 1.8).max(28.0 * z);
+    let h = (7.0 * z).max(4.);
+    marked_track(
+        Rect::new(p.x - w * 0.5, p.y + r + 8.0 * z, w, h),
+        ratio,
+        lost,
+        RED,
+        marks,
     );
 }
 

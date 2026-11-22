@@ -689,6 +689,9 @@ impl UdpServer {
         // Who hears this speaker, and how loudly: positions hold still for
         // every frame that arrived together, so it is worked out once.
         let mut heard_by: Option<Vec<(u64, u8)>> = None;
+        // A party talks like a call: its members hear each other at full
+        // volume wherever they are, down or alive, in menus and between rounds.
+        let party = self.settings.party.is_some();
         for _ in 0..16 {
             let Some(bytes) = self.server.receive_message(client, VOICE_CHANNEL) else {
                 break;
@@ -709,7 +712,7 @@ impl UdpServer {
             let world = &self.arenas[arena].session.world;
             if !self.settings.voice_enabled
                 || peer.disconnect_at.is_some()
-                || world.match_state.finished
+                || (world.match_state.finished && !party)
                 || frame.round != world.match_state.round
                 || peer
                     .last_voice_sequence
@@ -723,6 +726,16 @@ impl UdpServer {
                 continue;
             }
             let recipients = heard_by.get_or_insert_with(|| {
+                if party {
+                    return self
+                        .peers
+                        .iter()
+                        .filter(|&(&id, peer)| {
+                            id != client && peer.disconnect_at.is_none() && peer.entity.is_some()
+                        })
+                        .map(|(&id, _)| (id, u8::MAX))
+                        .collect();
+                }
                 let world = &self.arenas[arena].session.world;
                 let alive = |id: EntityId| {
                     world

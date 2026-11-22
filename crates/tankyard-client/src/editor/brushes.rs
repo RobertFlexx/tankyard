@@ -1,5 +1,10 @@
 //! The build palette: every placeable object with sensible defaults, and the
 //! small pictures the dock shows for them.
+use super::{
+    ink::Ink,
+    symbols::{self, Symbol},
+};
+use crate::graphics::{draw_circle, draw_poly};
 use crate::{
     scenery,
     settings::Settings,
@@ -16,6 +21,8 @@ pub struct Brush {
     pub size: [f32; 2],
     /// What it does, shown when the pointer rests on it; empty for none.
     pub hint: &'static str,
+    /// The picture a logic piece shows in the palette, and whether it's live.
+    pub symbol: Option<(Symbol, bool)>,
 }
 impl Brush {
     fn hint(mut self, hint: &'static str) -> Self {
@@ -40,6 +47,7 @@ fn block(name: &'static str, style: BlockStyle) -> Brush {
         }),
         size: [0., 0.],
         hint: "",
+        symbol: None,
     }
 }
 fn pad(kind: ZoneKind) -> Brush {
@@ -66,6 +74,7 @@ fn pad(kind: ZoneKind) -> Brush {
             ZoneKind::Pull => "Draws tanks toward its middle",
             ZoneKind::Ice => "Slippery: slow to start, turn and stop",
         },
+        symbol: None,
     }
 }
 fn decor(name: &'static str, kind: DecorKind, size: [f32; 2]) -> Brush {
@@ -100,6 +109,7 @@ fn decor(name: &'static str, kind: DecorKind, size: [f32; 2]) -> Brush {
         }),
         size,
         hint: "",
+        symbol: None,
     }
 }
 /// A light of `color` that wavers by `flicker`.
@@ -158,6 +168,7 @@ fn logic(name: &'static str, size: [f32; 2], trigger: MapTrigger) -> Brush {
         object: Object::Trigger(trigger),
         size,
         hint: "",
+        symbol: None,
     }
 }
 fn marker(name: &'static str, object: Object, size: [f32; 2]) -> Brush {
@@ -166,6 +177,7 @@ fn marker(name: &'static str, object: Object, size: [f32; 2]) -> Brush {
         object,
         size,
         hint: "",
+        symbol: None,
     }
 }
 /// A signal relay whose conditions combine with `gate`, from channel 1 to 3.
@@ -365,7 +377,20 @@ pub fn effect_preset(index: usize) -> ParticleEffect {
     }
 }
 
+/// Every palette, with the Gates and Circuits pieces wearing their symbols.
 pub fn catalog() -> Vec<Vec<Brush>> {
+    let mut palettes = palettes();
+    for name in ["Gates", "Circuits"] {
+        if let Some(at) = CATEGORIES.iter().position(|&category| category == name) {
+            for brush in &mut palettes[at] {
+                brush.symbol = symbols::of_piece(brush.name);
+            }
+        }
+    }
+    palettes
+}
+
+fn palettes() -> Vec<Vec<Brush>> {
     let small = [80., 80.];
     let area = [240., 240.];
     vec![
@@ -2220,6 +2245,44 @@ pub fn objective_mark(r: Rect, fade: f32) {
 }
 
 /// The palette picture of a brush, drawn inside `r`.
+/// A Gates or Circuits piece on its palette tile: its symbol on a dark plate.
+/// A live piece, which keeps its output up to date by itself, has a lit lamp.
+fn piece_tile(symbol: Symbol, live: bool, r: Rect) {
+    thread_local! {
+        static INK: std::cell::RefCell<Ink> = std::cell::RefCell::default();
+    }
+    const LAMP: Color = Color::new(0.36, 0.92, 0.58, 1.);
+    let size = r.h.min(r.w) * 0.8;
+    let c = r.center();
+    let plate = Rect::new(c.x - size * 0.5, c.y - size * 0.5, size, size);
+    draw_rectangle(
+        plate.x,
+        plate.y,
+        plate.w,
+        plate.h,
+        Color::new(0.13, 0.12, 0.10, 0.88),
+    );
+    draw_rectangle_lines(
+        plate.x,
+        plate.y,
+        plate.w,
+        plate.h,
+        (size * 0.035).max(1.),
+        alpha(LOGIC, 0.5),
+    );
+    let room = size * 0.84;
+    let picture = Rect::new(c.x - room * 0.5, c.y - room * 0.5, room, room);
+    INK.with_borrow_mut(|ink| {
+        symbols::draw(ink, symbol, picture, LOGIC);
+        if live {
+            let at = vec2(plate.right() - size * 0.13, plate.y + size * 0.13);
+            ink.disc(at, size * 0.13, alpha(LAMP, 0.2));
+            ink.disc(at, size * 0.06, LAMP);
+        }
+        ink.flush();
+    });
+}
+
 pub fn thumbnail(brush: &Brush, r: Rect, map: &MapDef, settings: &Settings, time: f32) {
     let inner = Rect::new(r.x + r.w * 0.16, r.y + r.h * 0.16, r.w * 0.68, r.h * 0.68);
     let point = |r: Rect| {
@@ -2277,6 +2340,11 @@ pub fn thumbnail(brush: &Brush, r: Rect, map: &MapDef, settings: &Settings, time
                 &[0; MAP_COUNTERS as usize],
                 scenery::Look::default(),
             );
+        }
+        Object::Trigger(_) if brush.symbol.is_some() => {
+            if let Some((symbol, live)) = brush.symbol {
+                piece_tile(symbol, live, r);
+            }
         }
         Object::Trigger(t) => {
             let size = inner.w.min(inner.h) * 0.8;
@@ -2547,6 +2615,23 @@ mod tests {
                     panic!("{tab} / {}: {error}", brush.name);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn every_gate_and_circuit_piece_wears_a_symbol() {
+        let palettes = catalog();
+        let mut pieces = Vec::new();
+        for tab in ["Gates", "Circuits"] {
+            let at = CATEGORIES.iter().position(|&t| t == tab).unwrap();
+            for brush in &palettes[at] {
+                assert!(brush.symbol.is_some(), "{tab} / {} has none", brush.name);
+                pieces.push(brush.name);
+            }
+        }
+        // And no symbol is left over for a piece that's gone.
+        for (name, ..) in symbols::PIECES {
+            assert!(pieces.contains(&name), "{name} isn't on a palette");
         }
     }
 

@@ -4,6 +4,7 @@
 //! the heart and exits pour it out; a rift still waiting for its other end
 //! shows a broken rim. Each player sees their own side's rifts in violet and
 //! teal and an opponent's in crimson and amber, ringed with thorns.
+use crate::graphics::draw_circle;
 use crate::render::View;
 use crate::ui::mix;
 use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation};
@@ -371,6 +372,7 @@ fn deep(view: &View, pos: V2, (follow, cells): (f32, f32), drift: f32) -> Vec2 {
 }
 
 /// Draw every rift in view, on the floor under tanks and shots.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     snapshot: &Snapshot,
     view: &View,
@@ -378,6 +380,7 @@ pub fn draw(
     local: EntityId,
     time: f32,
     reduced_motion: bool,
+    light: &mut crate::emission::Emission,
 ) {
     if snapshot.rifts.is_empty() {
         return;
@@ -479,14 +482,25 @@ pub fn draw(
         // The rim forming: a bright ring springs out as a rift opens.
         if age < 0.4 {
             let fade = 1. - age / 0.4;
-            draw_circle_lines(
-                at.x,
-                at.y,
-                RIFT_RADIUS * view.zoom * (1. + age * 2.2),
-                3. * fade + 1.,
+            let rim = RIFT_RADIUS * view.zoom * (1. + age * 2.2);
+            light.ring(
+                crate::emission::Layer::Wash,
+                at,
+                rim,
+                (9. * fade + 2.) * view.zoom,
                 Color {
-                    a: 0.85 * fade,
-                    ..mix(tint, WHITE, 0.5)
+                    a: 0.4 * fade,
+                    ..tint
+                },
+            );
+            light.ring(
+                crate::emission::Layer::Core,
+                at,
+                rim,
+                (1.6 * fade + 0.7) * view.zoom,
+                Color {
+                    a: 0.9 * fade,
+                    ..light.hot(tint, 0.55)
                 },
             );
         }
@@ -495,8 +509,8 @@ pub fn draw(
 
 /// Without shaders: a dark disc, a few fixed stars and a solid rim.
 fn flat(at: Vec2, radius: f32, tint: Color, linked: bool, end: RiftEnd, t: f32) {
-    draw_circle(at.x, at.y, radius, Color::new(0.03, 0.02, 0.08, 1.));
-    draw_circle(at.x, at.y, radius * 0.55, Color { a: 0.22, ..tint });
+    crate::render::polygon(at, 0, radius, 0., Color::new(0.03, 0.02, 0.08, 1.));
+    crate::render::polygon(at, 0, radius * 0.55, 0., Color { a: 0.22, ..tint });
     let turn = if end == RiftEnd::Entry { t } else { -t } * 0.3;
     for star in 0..14 {
         let angle = star as f32 * 2.399_963 + turn;
@@ -508,10 +522,12 @@ fn flat(at: Vec2, radius: f32, tint: Color, linked: bool, end: RiftEnd, t: f32) 
             Color::new(0.9, 0.92, 1., 0.85),
         );
     }
-    draw_circle_lines(
+    draw_poly_lines(
         at.x,
         at.y,
+        crate::graphics::circle_sides(radius),
         radius,
+        0.,
         (radius * 0.07).max(1.5),
         if linked {
             mix(tint, WHITE, 0.4)
@@ -643,7 +659,15 @@ pub fn armed(
     }
     draw_circle(lens.x, lens.y, 4.5 * zoom, mix(tint, WHITE, 0.45));
     draw_circle(core.x, core.y, radius * 0.13, mix(tint, WHITE, 0.3));
-    draw_circle_lines(core.x, core.y, radius * 0.46, 1.8 * zoom, tint);
+    draw_poly_lines(
+        core.x,
+        core.y,
+        crate::graphics::circle_sides(radius * 0.46),
+        radius * 0.46,
+        0.,
+        1.8 * zoom,
+        tint,
+    );
 }
 
 /// Rift shots in flight: bright bolts with a short tail. `viewer` is the

@@ -164,6 +164,7 @@ fn export_bosses(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                 time: args.time,
                 phase: args.phase,
                 charge: 0.,
+                lit: false,
             },
             None,
             &mut |primitive| write_primitive(&mut svg, primitive),

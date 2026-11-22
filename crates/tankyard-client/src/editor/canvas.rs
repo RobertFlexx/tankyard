@@ -1,18 +1,18 @@
 //! The canvas: navigation, pointer gestures for the editor modes, and the
 //! arena drawn with the editor's overlays.
 use super::{Editor, Layout, Mode, Tab, alt, brushes, command, shift};
+use crate::graphics::{draw_circle, draw_poly};
 use crate::{
     profile, scenery,
     settings::Settings,
-    ui::{AMBER, CYAN, RED, VIOLET, *},
+    ui::{CYAN, RED, VIOLET, *},
     ui_layout,
 };
 use macroquad::prelude::*;
 use std::collections::{HashMap, HashSet};
 use tankyard_client::editor_document::{
-    Key, Link, Object, describe_trigger_named, trigger_badge_tag,
+    Key, LAYERS, Object, describe_trigger_named, trigger_badge_tag,
 };
-use tankyard_client::editor_wiring::{Carrier, Net};
 use tankyard_content::*;
 use tankyard_core::{V2, WorldConfig};
 
@@ -57,11 +57,14 @@ pub enum Gesture {
 
 /// How near, in pixels, the pointer must be to grab a handle.
 const HANDLE_REACH: f32 = 11.;
-/// The most watched triggers whose links are drawn one by one; past it the
-/// nets they touch are drawn whole, through hubs where busy.
-const LINK_FOCUS: usize = 48;
-/// The least distance, in pixels, between two hubs' middles.
-const HUB_GAP: f32 = 24.;
+/// The smallest a crowded trigger's badge gets on screen, in pixels.
+const LEAST_BADGE: f32 = 9.;
+/// How much of the gap to its nearest neighbor a crowded badge fills.
+const BADGE_FILL: f32 = 0.94;
+/// How many layer shortcuts the strip above the layer bar shows at most,
+/// and how wide each one is.
+const MOST_LAYER_CHIPS: usize = 16;
+const LAYER_CHIP: f32 = 34.;
 /// How strongly objects on layers other than the one being edited show.
 const FADED: f32 = 0.3;
 /// A selection side shorter than this on screen has the handles across it
@@ -127,6 +130,12 @@ fn resized(
         }
     }
     [lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]]
+}
+
+/// Which size step an object's area on screen falls in, each step half as
+/// big again as the last, so objects of about one size count as equal.
+fn pick_size(area: Rect) -> i32 {
+    ((area.w * area.h).max(1.).log2() / 0.585).floor() as i32
 }
 
 fn overlaps(a: Rect, b: Rect) -> bool {
@@ -210,90 +219,6 @@ impl Cells {
         })
     }
 }
-/// Whether a line from `a` to `b` can cross the screen.
-fn on_screen_line(a: Vec2, b: Vec2) -> bool {
-    a.x.max(b.x) >= 0.
-        && a.y.max(b.y) >= 0.
-        && a.x.min(b.x) <= screen_width()
-        && a.y.min(b.y) <= screen_height()
-}
-/// A link's arrow, unless it is off screen.
-fn link_arrow(from: Vec2, to: Vec2, thickness: f32, color: Color) {
-    if on_screen_line(from, to) {
-        arrow(from, to, thickness, color);
-    }
-}
-/// A link's line into a hub, unless it is off screen.
-fn link_line(from: Vec2, to: Vec2, thickness: f32, color: Color) {
-    if on_screen_line(from, to) && from.distance_squared(to) > 1. {
-        draw_line(from.x, from.y, to.x, to.y, thickness, color);
-    }
-}
-/// The Links view's hubs, kept apart and drawn over the lines.
-#[derive(Default)]
-struct Hubs {
-    placed: Vec<(Vec2, String, Color, f32)>,
-    /// Placed hubs by `HUB_GAP` cell, as indexes into `placed`.
-    cells: HashMap<(i32, i32), Vec<usize>>,
-}
-impl Hubs {
-    /// Puts a hub as near `want` as it can without crowding another, and
-    /// returns where.
-    fn place(&mut self, want: Vec2, label: String, color: Color, fade: f32) -> Vec2 {
-        let cell = |p: Vec2| {
-            (
-                (p.x / HUB_GAP).floor() as i32,
-                (p.y / HUB_GAP).floor() as i32,
-            )
-        };
-        let crowded = |cells: &HashMap<(i32, i32), Vec<usize>>, p: Vec2| {
-            let (cx, cy) = cell(p);
-            (cx - 1..=cx + 1).any(|x| {
-                (cy - 1..=cy + 1).any(|y| {
-                    cells.get(&(x, y)).is_some_and(|list| {
-                        list.iter().any(|&i| self.placed[i].0.distance(p) < HUB_GAP)
-                    })
-                })
-            })
-        };
-        // Out along a spiral, which fills the space around the middle
-        // evenly; past its last turn the hub stays crowded rather than wander.
-        let spot = (0..48)
-            .map(|step| {
-                let turn = step as f32 * 2.399_963;
-                want + vec2(turn.cos(), turn.sin()) * HUB_GAP * 0.75 * (step as f32).sqrt()
-            })
-            .find(|&p| !crowded(&self.cells, p))
-            .unwrap_or(want);
-        self.cells
-            .entry(cell(spot))
-            .or_default()
-            .push(self.placed.len());
-        self.placed.push((spot, label, color, fade));
-        spot
-    }
-    /// Every hub: the dots first and then the numbers, so each kind draws
-    /// in one batch.
-    fn draw(&self) {
-        let screen = Rect::new(-40., -40., screen_width() + 80., screen_height() + 80.);
-        let shown = || self.placed.iter().filter(|(p, ..)| screen.contains(*p));
-        for &(p, _, color, fade) in shown() {
-            draw_poly(
-                p.x,
-                p.y,
-                12,
-                9.5,
-                0.,
-                alpha(Color::new(0.1, 0.09, 0.08, 1.), 0.9 * fade),
-            );
-            draw_poly_lines(p.x, p.y, 12, 9.5, 0., 2., alpha(color, fade));
-        }
-        for (p, text, color, fade) in shown() {
-            let size = if text.len() > 3 { 9. } else { 11. };
-            center_label(text, p.x, p.y + size * 0.36, size, alpha(*color, *fade));
-        }
-    }
-}
 fn arrow(from: Vec2, to: Vec2, thickness: f32, color: Color) {
     let d = to - from;
     let length = d.length();
@@ -331,7 +256,12 @@ impl Editor {
     pub(super) fn hit_area(&self, key: Key, r: [f32; 4]) -> Rect {
         let mut a = self.on_screen(r);
         let least = match key {
-            Key::Trigger(_) => 28.,
+            // A crowded badge answers only for its own spot, so each of a
+            // tight row can be picked.
+            Key::Trigger(index) => self
+                .badge_room
+                .get(index)
+                .map_or(28., |room| (room * self.view.zoom).clamp(LEAST_BADGE, 28.)),
             Key::Base(_) | Key::Objective(_) => 20.,
             _ => 10.,
         };
@@ -385,26 +315,36 @@ impl Editor {
         self.layer
             .is_none_or(|layer| self.doc.layers.get(key) == layer)
     }
+    /// What a click at `p` selects: the smallest thing there, so a trigger
+    /// on a wide spawn region or floor tile can be reached directly. Among
+    /// things of about one size, the one on top.
     pub(super) fn pick(&self, p: Vec2) -> Option<Key> {
-        self.doc
-            .items_from_top()
-            .find(|&(key, r, group)| self.pickable(key, group) && self.hit_area(key, r).contains(p))
-            .map(|(key, _, _)| key)
-    }
-    /// Every object a click at `p` could select, from the top down.
-    pub(super) fn stack(&self, p: Vec2) -> Vec<Key> {
         self.doc
             .items_from_top()
             .filter(|&(key, r, group)| {
                 self.pickable(key, group) && self.hit_area(key, r).contains(p)
             })
+            .min_by_key(|&(key, r, _)| pick_size(self.hit_area(key, r)))
             .map(|(key, _, _)| key)
-            .collect()
+    }
+    /// Every object a click at `p` could select, in the order clicking goes
+    /// through them: smallest first, and from the top down within a size.
+    pub(super) fn stack(&self, p: Vec2) -> Vec<Key> {
+        let mut hits: Vec<(i32, Key)> = self
+            .doc
+            .items_from_top()
+            .filter_map(|(key, r, group)| {
+                let area = self.hit_area(key, r);
+                (self.pickable(key, group) && area.contains(p)).then(|| (pick_size(area), key))
+            })
+            .collect();
+        hits.sort_by_key(|&(size, _)| size);
+        hits.into_iter().map(|(_, key)| key).collect()
     }
 
     /// A click that ended where it began, on `clicked` in the selection:
     /// several selected narrow to it; with `cycle`, one selected over
-    /// others gives way to the next one down, and past the bottom, the top.
+    /// others gives way to the next in the stack, and past the last, the first.
     fn click_selection(&mut self, clicked: Key, pointer: Vec2, cycle: bool) {
         if self.selection.len() > 1 {
             self.set_selection(vec![clicked]);
@@ -704,7 +644,11 @@ impl Editor {
         let canvas = layout.canvas;
         let inside = canvas.contains(pointer)
             && !self.help
-            && !self.layer_bar_rect(layout).contains(pointer);
+            && !self.layer_bar_rect(layout).contains(pointer)
+            && !(self.layer_strip && self.layer_strip_rect(layout).contains(pointer))
+            && !self
+                .legend_rect(layout)
+                .is_some_and(|legend| legend.contains(pointer));
         // The preview's widgets sit over the arena: a click on one of their
         // choices or board buttons picks it, and a click elsewhere on them
         // does nothing.
@@ -770,12 +714,25 @@ impl Editor {
                 self.panning = Some(pointer);
             }
             self.hover = None;
+            self.hub_hover = None;
             return;
         }
         self.panning = None;
         self.hover = (inside && self.gesture.is_none())
             .then(|| self.pick(pointer))
             .flatten();
+        // A hub sits over whatever is beneath it.
+        self.hub_hover =
+            (inside && self.show_links && self.mode == Mode::Edit && self.gesture.is_none())
+                .then(|| self.hub_at(pointer))
+                .flatten();
+        if let Some(net) = self.hub_hover {
+            self.hover = None;
+            if is_mouse_button_pressed(MouseButton::Left) {
+                self.select_net(net as usize, shift());
+                return;
+            }
+        }
         if inside
             && self.mode != Mode::Pan
             && self.gesture.is_none()
@@ -1298,14 +1255,21 @@ impl Editor {
             draw_line(left, p, right, p, 1., line(y));
         }
     }
-    /// Where a trigger's badge sits: the corner of an area trigger, or the
-    /// whole of a point trigger.
-    fn badge_rect(trigger: &MapTrigger, rect: Rect) -> Rect {
+    /// Where trigger `index`'s badge sits: the corner of an area trigger,
+    /// or the whole of a point trigger, which shrinks in a tight cluster so
+    /// each one stays visible beside its neighbors.
+    pub(super) fn badge_rect(&self, index: usize, trigger: &MapTrigger, rect: Rect) -> Rect {
         if brushes::trigger_area(trigger) {
             let size = (rect.w.min(rect.h) * 0.3).clamp(18., 34.);
             Rect::new(rect.x + 3., rect.y + 3., size, size)
         } else {
-            let size = rect.w.min(rect.h).clamp(26., 52.);
+            let room = self.badge_room.get(index).copied().unwrap_or(f32::MAX);
+            let size = rect
+                .w
+                .min(rect.h)
+                .clamp(26., 52.)
+                .min(room * self.view.zoom * BADGE_FILL)
+                .max(LEAST_BADGE);
             let c = rect.center();
             Rect::new(c.x - size * 0.5, c.y - size * 0.5, size, size)
         }
@@ -1332,7 +1296,7 @@ impl Editor {
             );
             dashed_rect(rect, 2., 7., alpha(brushes::LOGIC, 0.85 * fade));
         }
-        let badge = Self::badge_rect(trigger, rect);
+        let badge = self.badge_rect(index, trigger, rect);
         if lit > 0. {
             let c = badge.center();
             draw_circle(
@@ -1377,6 +1341,87 @@ impl Editor {
             h,
         )
     }
+    /// The layers worth offering as shortcuts: those holding something and
+    /// the one being edited, nearest the current one when there are many.
+    fn layer_chips(&self) -> Vec<u8> {
+        let mut chips: Vec<u8> = (0..LAYERS)
+            .filter(|&layer| self.layer == Some(layer) || self.layer_counts[usize::from(layer)] > 0)
+            .collect();
+        if chips.len() > MOST_LAYER_CHIPS {
+            let middle = i32::from(self.layer.unwrap_or(self.last_layer));
+            chips.sort_by_key(|&layer| (i32::from(layer) - middle).abs());
+            chips.truncate(MOST_LAYER_CHIPS);
+            chips.sort_unstable();
+        }
+        chips
+    }
+    /// The strip of layer shortcuts that opens above the layer bar, with
+    /// the gap under it, so the pointer can cross from one to the other.
+    fn layer_strip_rect(&self, layout: &Layout) -> Rect {
+        let bar = self.layer_bar_rect(layout);
+        let s = layout.s;
+        let h = 24. * s;
+        let chips = self.layer_chips().len() + 1;
+        let w = (chips as f32 * LAYER_CHIP * s + 6. * s).min(layout.canvas.w - 20. * s);
+        Rect::new(bar.x, bar.y - h - 8. * s, w, h + 8. * s)
+    }
+    /// Layer shortcuts: every layer in use, one click each, with a thin bar
+    /// showing how much each holds.
+    fn layer_strip(&mut self, layout: &Layout) {
+        let pointer = ui_layout::pointer();
+        let bar = self.layer_bar_rect(layout);
+        let strip = self.layer_strip_rect(layout);
+        let chips = self.layer_chips();
+        let useful = chips.len() > 1 || self.layer.is_some();
+        self.layer_strip = useful
+            && interactive()
+            && (bar.contains(pointer) || (self.layer_strip && strip.contains(pointer)));
+        if !self.layer_strip {
+            return;
+        }
+        let s = layout.s;
+        let h = strip.h - 8. * s;
+        draw_rectangle(strip.x, strip.y, strip.w, h, alpha(surface_color(), 0.94));
+        draw_rectangle_lines(strip.x, strip.y, strip.w, h, 1., line_color());
+        let most = chips
+            .iter()
+            .map(|&layer| self.layer_counts[usize::from(layer)])
+            .max()
+            .unwrap_or(1)
+            .max(1) as f32;
+        let width = LAYER_CHIP * s;
+        let mut chosen = None;
+        for (i, layer) in std::iter::once(None)
+            .chain(chips.iter().map(|&layer| Some(layer)))
+            .enumerate()
+        {
+            let x = strip.x + 3. * s + i as f32 * width;
+            if x + width > strip.right() {
+                break;
+            }
+            let chip = Rect::new(x + 1. * s, strip.y + 2. * s, width - 2. * s, h - 4. * s);
+            let name = layer.map_or_else(|| "All".to_owned(), |layer| layer.to_string());
+            if small_button(chip, &name, s * 0.68) {
+                chosen = Some(layer);
+            }
+            if layer == self.layer {
+                draw_rectangle_lines(chip.x, chip.y, chip.w, chip.h, 1.5, accent_color());
+            }
+            if let Some(layer) = layer {
+                let share = self.layer_counts[usize::from(layer)] as f32 / most;
+                draw_rectangle(
+                    chip.x + 2. * s,
+                    chip.bottom() - 2.5 * s,
+                    (chip.w - 4. * s) * share,
+                    1.5 * s,
+                    alpha(accent_color(), 0.8),
+                );
+            }
+        }
+        if let Some(layer) = chosen {
+            self.set_layer(layer);
+        }
+    }
     /// The layer bar: the layer being edited, or every layer, between
     /// arrows that step through them; Shift skips empty layers. Clicking
     /// the name switches between every layer and the last one edited.
@@ -1402,6 +1447,7 @@ impl Editor {
         if small_button(Rect::new(r.right() - arrow, r.y, arrow, r.h), "›", s * 0.8) {
             self.step_layer(true, shift());
         }
+        self.layer_strip(layout);
     }
     /// Each trigger's tag under its badge, or above it when that spot is
     /// taken. A tag that fits neither is left out; the pointer shows it.
@@ -1421,7 +1467,7 @@ impl Editor {
                 let rect = self.on_screen(t.rect);
                 let shown = (self.show_hidden || MapDef::group_bit(t.member) & ghost == 0)
                     && self.on_layer(Key::Trigger(index));
-                (shown && overlaps(view, rect)).then(|| Self::badge_rect(t, rect))
+                (shown && overlaps(view, rect)).then(|| self.badge_rect(index, t, rect))
             })
             .collect();
         let first = |index: &usize| {
@@ -1442,19 +1488,23 @@ impl Editor {
             }
         }
         let mut placed: Vec<Rect> = Vec::new();
-        let mut tags: Vec<(Rect, String, Vec2)> = Vec::new();
+        let mut tags: Vec<(Rect, String)> = Vec::new();
         for index in order {
             let Some(badge) = badges[index] else {
                 continue;
             };
-            if badge.w < 26. {
+            // A crowded badge has no room for a tag unless it's being looked at.
+            if badge.w < 26. && first(&index) {
                 continue;
             }
             let tag = trigger_badge_tag(&map.triggers[index]);
             let width = label_width(&tag, size) + 8.;
             let c = badge.center();
-            let below = Rect::new(c.x - width * 0.5, badge.bottom() + 3., width, height);
-            let above = Rect::new(c.x - width * 0.5, badge.y - 3. - height, width, height);
+            // Kept on the canvas, however near its edge the badge is.
+            let left = (c.x - width * 0.5)
+                .clamp(view.x + 2., (view.right() - width - 2.).max(view.x + 2.));
+            let below = Rect::new(left, badge.bottom() + 3., width, height);
+            let above = Rect::new(left, badge.y - 3. - height, width, height);
             let free = |spot: &Rect| {
                 !cells.any(*spot, |mark| match mark {
                     Mark::Badge(other) => {
@@ -1474,7 +1524,7 @@ impl Editor {
             };
             cells.add(spot, Mark::Tag(placed.len()));
             placed.push(spot);
-            tags.push((spot, tag, c));
+            tags.push((spot, tag));
         }
         for (spot, ..) in &tags {
             draw_rectangle(
@@ -1485,183 +1535,10 @@ impl Editor {
                 Color::new(0.13, 0.12, 0.10, 0.82),
             );
         }
-        for (spot, tag, c) in &tags {
-            center_label(tag, c.x, spot.y + size, size, brushes::LOGIC);
+        for (spot, tag) in &tags {
+            center_label(tag, spot.center().x, spot.y + size, size, brushes::LOGIC);
         }
         placed
-    }
-    fn trigger_point(&self, index: usize) -> Vec2 {
-        let trigger = &self.doc.map.triggers[index];
-        Self::badge_rect(trigger, self.on_screen(trigger.rect)).center()
-    }
-    /// Where a link meets `key`: a trigger's badge or the middle of
-    /// anything else, or `None` for a key a gesture just removed.
-    fn link_point(&self, key: Key) -> Option<Vec2> {
-        match key {
-            Key::Trigger(index) if index < self.doc.map.triggers.len() => {
-                Some(self.trigger_point(index))
-            }
-            Key::Trigger(_) => None,
-            _ => self.doc.rect(key).map(|r| self.on_screen(r).center()),
-        }
-    }
-    fn link_color(link: Link) -> Color {
-        match link {
-            Link::Signal | Link::Otherwise => VIOLET,
-            Link::Counter => AMBER,
-            Link::Group => mix(accent_color(), CYAN, 0.4),
-            Link::Reset => RED,
-        }
-    }
-    /// Links between triggers and what they act on. With Links on, every
-    /// net, busy ones through a hub; otherwise, and on top of that, the
-    /// links of the selected or hovered triggers, and the triggers that act
-    /// on a selected or hovered object's group.
-    fn draw_links(&self) {
-        let wiring = &self.wiring;
-        if wiring.nets.is_empty() {
-            return;
-        }
-        let triggers = self.doc.map.triggers.len();
-        let mut watched: Vec<usize> = self
-            .selection
-            .iter()
-            .chain(self.hover.iter())
-            .filter_map(|&key| match key {
-                Key::Trigger(index) if index < triggers => Some(index),
-                _ => None,
-            })
-            .collect();
-        watched.sort_unstable();
-        watched.dedup();
-        let mut watched_groups = 0u32;
-        for &key in self.selection.iter().chain(self.hover.iter()) {
-            if !matches!(key, Key::Trigger(_))
-                && let Some(object) = self.doc.object(key)
-            {
-                watched_groups |= MapDef::group_bit(object.group());
-            }
-        }
-        let mut hubs = Hubs::default();
-        let focused = watched.len() <= LINK_FOCUS;
-        if self.show_links {
-            // A selection dims the rest, so its own links stand out.
-            let selected = self
-                .selection
-                .iter()
-                .any(|key| matches!(key, Key::Trigger(_)));
-            let fade = if selected && focused { 0.3 } else { 1. };
-            for net in &wiring.nets {
-                self.draw_net(net, fade, &mut hubs);
-            }
-        } else {
-            let mut nets: Vec<u32> = Vec::new();
-            if !focused {
-                for &at in &watched {
-                    nets.extend_from_slice(wiring.acts(at));
-                    nets.extend_from_slice(wiring.reached(at));
-                }
-            }
-            for group in 1..=MAP_GROUPS {
-                if MapDef::group_bit(group) & watched_groups != 0
-                    && let Some(net) = wiring.members(group)
-                {
-                    self.draw_net(net, 1., &mut hubs);
-                }
-            }
-            nets.sort_unstable();
-            nets.dedup();
-            for index in nets {
-                self.draw_net(&wiring.nets[index as usize], 1., &mut hubs);
-            }
-        }
-        if focused {
-            let mut found = Vec::new();
-            for &at in &watched {
-                self.draw_trigger_links(at, &mut found);
-            }
-        }
-        hubs.draw();
-    }
-    /// One net: a line from each trigger acting on it to each thing it
-    /// reaches, or through a hub when that draws fewer lines.
-    fn draw_net(&self, net: &Net, fade: f32, hubs: &mut Hubs) {
-        let color = Self::link_color(net.carrier.link());
-        let width = if net.carrier == Carrier::Otherwise {
-            1.3
-        } else {
-            2.
-        };
-        let from: Vec<(usize, Vec2)> = net
-            .from
-            .iter()
-            .filter_map(|&at| Some((at, self.link_point(Key::Trigger(at))?)))
-            .collect();
-        let to: Vec<(Key, Vec2)> = net
-            .to
-            .iter()
-            .filter_map(|&key| Some((key, self.link_point(key)?)))
-            .collect();
-        if from.is_empty() || to.is_empty() {
-            return;
-        }
-        if !net.hub() {
-            for &(at, a) in &from {
-                for &(key, b) in &to {
-                    if key != Key::Trigger(at) {
-                        link_arrow(a, b, width, alpha(color, 0.85 * fade));
-                    }
-                }
-            }
-            return;
-        }
-        let count = (from.len() + to.len()) as f32;
-        let middle = from
-            .iter()
-            .map(|&(_, p)| p)
-            .chain(to.iter().map(|&(_, p)| p))
-            .fold(Vec2::ZERO, |sum, p| sum + p)
-            / count;
-        let hub = hubs.place(middle, net.carrier.label(net.slot), color, fade);
-        for &(_, a) in &from {
-            link_line(a, hub, 1.5, alpha(color, 0.6 * fade));
-        }
-        for &(_, b) in &to {
-            link_arrow(hub, b, 1.5, alpha(color, 0.8 * fade));
-        }
-    }
-    /// Trigger `at`'s own links, both ways, each once: what it sets off and
-    /// acts on, and, fainter, what sets it off.
-    fn draw_trigger_links(&self, at: usize, found: &mut Vec<(usize, Link)>) {
-        let wiring = &self.wiring;
-        let from = self.trigger_point(at);
-        let group_color = Self::link_color(Link::Group);
-        for &index in wiring.acts(at) {
-            let net = &wiring.nets[index as usize];
-            if net.carrier != Carrier::Members {
-                continue;
-            }
-            for &key in &net.to {
-                if key != Key::Trigger(at)
-                    && let Some(to) = self.link_point(key)
-                {
-                    link_arrow(from, to, 2., alpha(group_color, 0.8));
-                }
-            }
-        }
-        wiring.links_from(at, found);
-        for &(other, kind) in found.iter() {
-            let width = if kind == Link::Otherwise { 1.3 } else { 2. };
-            if let Some(to) = self.link_point(Key::Trigger(other)) {
-                link_arrow(from, to, width, alpha(Self::link_color(kind), 0.9));
-            }
-        }
-        wiring.links_into(at, found);
-        for &(other, kind) in found.iter() {
-            if let Some(source) = self.link_point(Key::Trigger(other)) {
-                link_arrow(source, from, 1.5, alpha(Self::link_color(kind), 0.55));
-            }
-        }
     }
     /// Each grouped object's group number at its corner. Where badges
     /// would pile up, one of the same group stands for the rest and another
@@ -2189,13 +2066,17 @@ impl Editor {
         {
             self.draw_tooltip(key, pointer, layout);
         }
+        if let Some(net) = self.hub_hover
+            && self.gesture.is_none()
+            && let Some((title, detail)) = self.hub_words(net as usize)
+        {
+            Self::tooltip_box(&title, Some(&detail), pointer, layout);
+        }
     }
     fn draw_tooltip(&self, key: Key, pointer: Vec2, layout: &Layout) {
         let Some(object) = self.doc.object(key) else {
             return;
         };
-        let s = layout.s;
-        let size = 12. * s;
         let mut title = object.name().to_owned();
         if let Object::Block(b) = &object {
             title = format!("{} block", b.style.name());
@@ -2216,8 +2097,28 @@ impl Editor {
             }
             _ => None,
         };
+        // Say so when there's more under the pointer than the top object.
+        let stack = if self.mode == Mode::Edit {
+            self.stack(pointer)
+        } else {
+            Vec::new()
+        };
+        let pile = (stack.len() > 1).then(|| {
+            let at = stack.iter().position(|&other| other == key).unwrap_or(0) + 1;
+            format!("{at} of {} here. Click again for the next.", stack.len())
+        });
+        let detail = match (detail, pile) {
+            (Some(detail), Some(pile)) => Some(format!("{detail} {pile}")),
+            (detail, pile) => detail.or(pile),
+        };
+        Self::tooltip_box(&title, detail.as_deref(), pointer, layout);
+    }
+    /// A small box by the pointer with a title and, under it, wrapped words.
+    fn tooltip_box(title: &str, detail: Option<&str>, pointer: Vec2, layout: &Layout) {
+        let s = layout.s;
+        let size = 12. * s;
         // Wide enough for its title, and for a description to wrap in.
-        let fits = label_width(&title, size) + 16. * s;
+        let fits = label_width(title, size) + 16. * s;
         let width = if detail.is_some() {
             fits.max(260. * s)
         } else {
@@ -2225,7 +2126,6 @@ impl Editor {
         }
         .min(layout.canvas.w - 8.);
         let lines = detail
-            .as_deref()
             .map(|text| wrapped_lines(text, width - 16. * s, size))
             .unwrap_or_default();
         let height = size + 14. * s + lines.len() as f32 * (size + 4. * s);
@@ -2233,7 +2133,7 @@ impl Editor {
         let y = (pointer.y + 18.).min(layout.canvas.bottom() - height - 4.);
         draw_rectangle(x, y, width, height, alpha(surface_color(), 0.96));
         draw_rectangle_lines(x, y, width, height, 1., line_color());
-        label(&title, x + 8. * s, y + size + 5. * s, size, text_color());
+        label(title, x + 8. * s, y + size + 5. * s, size, text_color());
         for (i, line) in lines.iter().enumerate() {
             label(
                 line,
@@ -2249,6 +2149,16 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_much_smaller_object_counts_as_smaller_and_a_like_sized_one_as_equal() {
+        let square = |side: f32| Rect::new(0., 0., side, side);
+        assert!(pick_size(square(28.)) < pick_size(square(600.)));
+        assert!(pick_size(square(10.)) < pick_size(square(28.)));
+        assert_eq!(pick_size(square(100.)), pick_size(square(101.)));
+        // A sliver or an empty area never breaks the ordering.
+        assert_eq!(pick_size(square(0.)), pick_size(square(0.5)));
+    }
 
     #[test]
     fn small_scroll_deltas_zoom_proportionally_without_frame_rate_dependence() {

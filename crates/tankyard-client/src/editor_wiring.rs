@@ -6,9 +6,25 @@
 //! line in from each trigger and an arrow out to each thing it reaches,
 //! where a line for every pair would bury the map.
 use crate::editor_document::{Document, Key, Link, counters_read, groups_watched};
+use std::collections::HashMap;
 use tankyard_content::{
     MAP_CHANNELS, MAP_COUNTERS, MAP_GROUPS, TriggerAction, TriggerWhen, counters_named,
 };
+
+/// How many kinds of link the Links view can show or hide.
+pub const LINK_KINDS: usize = 4;
+/// Each kind's name, in the order [`Carrier::kind`] and [`link_kind`] count.
+pub const LINK_KIND_NAMES: [&str; LINK_KINDS] = ["Signals", "Counters", "Groups", "Resets"];
+
+/// Which of the Links view's kinds a link is.
+pub fn link_kind(link: Link) -> usize {
+    match link {
+        Link::Signal | Link::Otherwise => 0,
+        Link::Counter => 1,
+        Link::Group => 2,
+        Link::Reset => 3,
+    }
+}
 
 /// What a net carries, strongest link first: where two triggers are joined
 /// more than one way, the first carrier names the link.
@@ -53,6 +69,122 @@ impl Carrier {
             Self::Visibility | Self::Motion | Self::Reset | Self::Members => format!("G{slot}"),
         }
     }
+    /// Which of the Links view's kinds it is.
+    pub fn kind(self) -> usize {
+        link_kind(self.link())
+    }
+    /// What a net of this carrier is, in words.
+    pub fn title(self, slot: u8) -> String {
+        match self {
+            Self::Signal => format!("Signal {slot}"),
+            Self::Otherwise => format!("Signal {slot}, sent otherwise"),
+            Self::Counter => format!("Counter {slot}"),
+            Self::Visibility => format!("Group {slot}, shown or hidden"),
+            Self::Motion => format!("Group {slot}, moving"),
+            Self::Reset if slot == 0 => "Reset of every trigger".into(),
+            Self::Reset => format!("Reset of group {slot}"),
+            Self::Members => format!("Group {slot}'s objects"),
+        }
+    }
+    /// What the ends on each side of a net do: its triggers, then what
+    /// they reach.
+    pub fn roles(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Signal | Self::Otherwise => ("sending", "listening"),
+            Self::Counter => ("changing it", "reading it"),
+            Self::Visibility => ("switching it", "watching it"),
+            Self::Motion => ("moving it", "waiting for it"),
+            Self::Reset => ("resetting", "reset"),
+            Self::Members => ("acting on it", "in it"),
+        }
+    }
+}
+
+/// Splits `points` into bundles of near neighbors, each point within `reach`
+/// of the first in its bundle, so the wires to them can share one trunk.
+/// Every point lands in exactly one bundle, and the result depends only on
+/// the points and their order, so the picture holds still from frame to frame.
+pub fn bundles(points: &[[f32; 2]], reach: f32) -> Vec<Vec<u32>> {
+    let reach = reach.max(1.);
+    let cell = |value: f32| (value / reach).floor() as i32;
+    let mut starts: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
+    let mut found: Vec<Vec<u32>> = Vec::new();
+    for (index, point) in points.iter().enumerate() {
+        let (cx, cy) = (cell(point[0]), cell(point[1]));
+        let mut nearest: Option<(f32, u32)> = None;
+        for x in cx.saturating_sub(1)..=cx.saturating_add(1) {
+            for y in cy.saturating_sub(1)..=cy.saturating_add(1) {
+                for &bundle in starts.get(&(x, y)).map_or(&[][..], Vec::as_slice) {
+                    let first = points[found[bundle as usize][0] as usize];
+                    let distance = (first[0] - point[0]).powi(2) + (first[1] - point[1]).powi(2);
+                    if distance <= reach * reach && nearest.is_none_or(|(best, _)| distance < best)
+                    {
+                        nearest = Some((distance, bundle));
+                    }
+                }
+            }
+        }
+        match nearest {
+            Some((_, bundle)) => found[bundle as usize].push(index as u32),
+            None => {
+                starts.entry((cx, cy)).or_default().push(found.len() as u32);
+                found.push(vec![index as u32]);
+            }
+        }
+    }
+    found
+}
+
+/// How far each point is from its nearest neighbor, up to `reach`, which is
+/// also what a point with none in range gets. Points less than a unit apart
+/// count as one spot, so a stack of objects doesn't crowd itself.
+pub fn room(points: &[[f32; 2]], reach: f32) -> Vec<f32> {
+    let reach = reach.max(1.);
+    let size = (reach / 6.).max(1.);
+    let cell = |value: f32| (value / size).floor() as i32;
+    let mut cells: HashMap<(i32, i32), Vec<u32>> = HashMap::with_capacity(points.len());
+    for (index, point) in points.iter().enumerate() {
+        cells
+            .entry((cell(point[0]), cell(point[1])))
+            .or_default()
+            .push(index as u32);
+    }
+    let rings = (reach / size).ceil() as i32 + 1;
+    points
+        .iter()
+        .map(|point| {
+            let (cx, cy) = (cell(point[0]), cell(point[1]));
+            let mut best = reach * reach;
+            let check = |x: i32, y: i32, best: &mut f32| {
+                for &other in cells.get(&(x, y)).map_or(&[][..], Vec::as_slice) {
+                    let other = points[other as usize];
+                    let distance = (other[0] - point[0]).powi(2) + (other[1] - point[1]).powi(2);
+                    if distance >= 1. && distance < *best {
+                        *best = distance;
+                    }
+                }
+            };
+            // Outward ring by ring, stopping once no farther ring can hold
+            // anything nearer than what's been found.
+            for ring in 0..=rings {
+                let closest = (ring - 1).max(0) as f32 * size;
+                if closest * closest >= best {
+                    break;
+                }
+                for x in -ring..=ring {
+                    check(cx + x, cy - ring, &mut best);
+                    if ring > 0 {
+                        check(cx + x, cy + ring, &mut best);
+                    }
+                }
+                for y in 1 - ring..ring {
+                    check(cx - ring, cy + y, &mut best);
+                    check(cx + ring, cy + y, &mut best);
+                }
+            }
+            best.sqrt()
+        })
+        .collect()
 }
 
 /// One channel, counter or group, and what it joins.
@@ -252,10 +384,10 @@ impl Wiring {
     pub fn reached(&self, at: usize) -> &[u32] {
         self.reached.get(at).map_or(&[], Vec::as_slice)
     }
-    /// The net of triggers acting on group `group`'s objects, if any.
-    pub fn members(&self, group: u8) -> Option<&Net> {
-        let index = (*self.members.get(usize::from(group))?)?;
-        self.nets.get(index as usize)
+    /// The net of triggers acting on group `group`'s objects, if any, as an
+    /// index into `nets`.
+    pub fn members_net(&self, group: u8) -> Option<u32> {
+        *self.members.get(usize::from(group))?
     }
 
     /// The other triggers trigger `at` reaches, each once with its
@@ -301,5 +433,90 @@ impl Wiring {
                 .into_iter()
                 .map(|(other, carrier)| (other, carrier.link())),
         );
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn every_point_lands_in_one_bundle_near_its_first() {
+        let points: Vec<[f32; 2]> = (0..200)
+            .map(|i| {
+                let i = i as f32;
+                [(i * 37.).rem_euclid(1000.), (i * 53.).rem_euclid(700.)]
+            })
+            .collect();
+        let found = bundles(&points, 90.);
+        let mut seen = vec![0; points.len()];
+        for bundle in &found {
+            let first = points[bundle[0] as usize];
+            for &index in bundle {
+                seen[index as usize] += 1;
+                let point = points[index as usize];
+                let distance =
+                    ((point[0] - first[0]).powi(2) + (point[1] - first[1]).powi(2)).sqrt();
+                assert!(distance <= 90.001);
+            }
+        }
+        assert!(seen.iter().all(|&count| count == 1));
+        assert!(found.len() < points.len(), "nothing shared a trunk");
+        assert_eq!(found, bundles(&points, 90.), "the same input moved");
+    }
+
+    #[test]
+    fn far_apart_points_keep_their_own_bundles() {
+        let points = [[0., 0.], [10., 0.], [500., 0.], [500., 12.], [-900., 40.]];
+        assert_eq!(bundles(&points, 40.), vec![vec![0, 1], vec![2, 3], vec![4]]);
+        assert!(bundles(&[], 40.).is_empty());
+    }
+
+    #[test]
+    fn room_is_the_distance_to_the_nearest_other_spot() {
+        let points = [[0., 0.], [30., 0.], [30., 18.], [400., 400.]];
+        let found = room(&points, 120.);
+        assert!((found[0] - 30.).abs() < 0.01);
+        assert!((found[1] - 18.).abs() < 0.01);
+        assert!((found[2] - 18.).abs() < 0.01);
+        assert!((found[3] - 120.).abs() < 0.01, "a lone point has full room");
+    }
+
+    #[test]
+    fn a_stack_on_one_spot_does_not_crowd_itself() {
+        let points = [[50., 50.], [50., 50.], [50.2, 50.1], [90., 50.]];
+        let found = room(&points, 200.);
+        assert!((found[0] - 40.).abs() < 0.01);
+        assert!((found[2] - 39.8).abs() < 0.02);
+    }
+
+    #[test]
+    fn room_finds_a_neighbor_in_a_far_ring() {
+        // Past the first rings of the search grid, yet within reach.
+        let points = [[0., 0.], [0., 101.]];
+        let found = room(&points, 120.);
+        assert!((found[0] - 101.).abs() < 0.01);
+        assert!((found[1] - 101.).abs() < 0.01);
+    }
+
+    #[test]
+    fn each_carrier_names_itself_and_counts_as_its_kind() {
+        for (carrier, kind) in [
+            (Carrier::Signal, 0),
+            (Carrier::Otherwise, 0),
+            (Carrier::Counter, 1),
+            (Carrier::Visibility, 2),
+            (Carrier::Motion, 2),
+            (Carrier::Members, 2),
+            (Carrier::Reset, 3),
+        ] {
+            assert_eq!(carrier.kind(), kind);
+            assert_eq!(link_kind(carrier.link()), kind);
+            assert!(!carrier.title(3).is_empty());
+            let (from, to) = carrier.roles();
+            assert!(!from.is_empty() && !to.is_empty());
+        }
+        assert_eq!(Carrier::Reset.title(0), "Reset of every trigger");
+        assert_eq!(Carrier::Counter.title(7), "Counter 7");
     }
 }

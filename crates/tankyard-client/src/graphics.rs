@@ -99,6 +99,53 @@ pub fn metal() -> bool {
 pub fn set_quality(quality: u8) {
     QUALITY.with(|q| q.set(quality.min(2)));
 }
+/// Macroquad's `draw_poly`, point for point, minus the two vectors it
+/// allocates for every shape. A busy frame draws hundreds of shapes.
+pub fn draw_poly(x: f32, y: f32, sides: u8, radius: f32, rotation: f32, color: Color) {
+    thread_local! {
+        static SHAPE: RefCell<(Vec<macroquad::models::Vertex>, Vec<u16>)> =
+            const { RefCell::new((Vec::new(), Vec::new())) };
+    }
+    SHAPE.with(|shape| {
+        let (vertices, indices) = &mut *shape.borrow_mut();
+        poly_into(vertices, indices, (x, y), sides, radius, rotation, color);
+        crate::lighting::geometry(vertices, indices);
+    });
+}
+/// Macroquad's `draw_circle`: a 20-sided polygon.
+pub fn draw_circle(x: f32, y: f32, radius: f32, color: Color) {
+    draw_poly(x, y, 20, radius, 0., color);
+}
+fn poly_into(
+    vertices: &mut Vec<macroquad::models::Vertex>,
+    indices: &mut Vec<u16>,
+    (x, y): (f32, f32),
+    sides: u8,
+    radius: f32,
+    rotation: f32,
+    color: Color,
+) {
+    vertices.clear();
+    indices.clear();
+    let turned = rotation.to_radians();
+    vertices.push(macroquad::models::Vertex::new(x, y, 0., 0., 0., color));
+    for i in 0..=sides {
+        let angle = f32::from(i) / f32::from(sides) * std::f32::consts::PI * 2. + turned;
+        let (rx, ry) = (angle.cos(), angle.sin());
+        vertices.push(macroquad::models::Vertex::new(
+            x + radius * rx,
+            y + radius * ry,
+            0.,
+            rx,
+            ry,
+            color,
+        ));
+        if i != sides {
+            let i = u16::from(i);
+            indices.extend_from_slice(&[0, i + 1, i + 2]);
+        }
+    }
+}
 pub fn circle_sides(radius: f32) -> u8 {
     QUALITY.with(|q| sides_for(radius, q.get()))
 }
@@ -365,5 +412,37 @@ mod tests {
             assert!((24..=128).contains(&sides));
             assert!(sides_for(radius, 0) <= sides);
         }
+    }
+}
+
+#[cfg(test)]
+mod polygon_tests {
+    use super::*;
+
+    #[test]
+    fn a_polygon_laps_back_to_its_first_point_and_reuses_its_buffers() {
+        let (mut vertices, mut indices) = (Vec::new(), Vec::new());
+        poly_into(&mut vertices, &mut indices, (10., 20.), 20, 5., 0., WHITE);
+        // One center, then every corner with the first repeated to close it.
+        assert_eq!(vertices.len(), 22);
+        assert_eq!(indices.len(), 60);
+        assert_eq!(indices[57..], [0, 20, 21]);
+        assert!(vertices[1].position.distance(vertices[21].position) < 1e-3);
+        assert_eq!(vertices[0].position, vec3(10., 20., 0.));
+        // A smaller shape leaves nothing of the last one behind.
+        poly_into(&mut vertices, &mut indices, (0., 0.), 3, 1., 90., WHITE);
+        assert_eq!((vertices.len(), indices.len()), (5, 9));
+        assert!(vertices[1].position.distance(vec3(0., 1., 0.)) < 1e-5);
+        // The largest shape still indexes inside its own vertices.
+        poly_into(
+            &mut vertices,
+            &mut indices,
+            (0., 0.),
+            u8::MAX,
+            1.,
+            0.,
+            WHITE,
+        );
+        assert!(indices.iter().all(|&i| usize::from(i) < vertices.len()));
     }
 }

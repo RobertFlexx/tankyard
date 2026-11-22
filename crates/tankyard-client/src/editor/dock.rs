@@ -332,8 +332,11 @@ impl Editor {
             brushes::thumbnail(brush, picture, &self.doc.map, settings, self.time);
             // Two rows of smaller tiles get a smaller name to fit it whole.
             let size = if rows > 1 { 8.8 * s } else { 10. * s };
+            // A long name eases down a little before it would be cut short.
+            let room = t.w - 4. * s;
+            let size = size * (room / label_width(brush.name, size)).clamp(0.82, 1.);
             center_label(
-                &fitted_label(brush.name, size, t.w - 4. * s),
+                &fitted_label(brush.name, size, room),
                 t.center().x,
                 t.bottom() - 4. * s,
                 size,

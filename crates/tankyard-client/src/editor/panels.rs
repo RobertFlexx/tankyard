@@ -25,6 +25,8 @@ pub struct Prefs {
     pub step: usize,
     pub show_groups: bool,
     pub show_links: bool,
+    /// Kinds of link hidden from the Links view, as bits.
+    pub link_hidden: u8,
     /// Plugins whose tools are put away in the Tools tab, by pack id.
     pub folded: Vec<String>,
     /// What scrolling over the canvas does.
@@ -97,6 +99,7 @@ impl Default for Prefs {
             step: 2,
             show_groups: true,
             show_links: false,
+            link_hidden: 0,
             folded: Vec::new(),
             scroll: ScrollMode::Auto,
             pan_speed: 1.,
@@ -353,6 +356,7 @@ impl Editor {
             step: self.step,
             show_groups: self.show_groups,
             show_links: self.show_links,
+            link_hidden: self.link_hidden,
             palette: self.category,
             brush: self.brush,
             inspector_tab: super::Tab::ALL

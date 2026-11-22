@@ -123,11 +123,14 @@ pub struct Pose {
     pub phase: u8,
     /// How far its special attack has charged, 0 to 1.
     pub charge: f32,
+    /// The game draws a wounded hull's heat as real light, so the flat heat
+    /// plates that stand in for it on model sheets are left out.
+    pub lit: bool,
 }
 
 /// Each boss's main armor: its sides, its size against the boss radius and
 /// its angle, matching the hulls drawn below.
-fn armor(kind: BossKind, aim: f32, turn: f32) -> (u8, f32, f32) {
+pub fn armor(kind: BossKind, aim: f32, turn: f32) -> (u8, f32, f32) {
     match kind {
         BossKind::Guardian | BossKind::Tempest | BossKind::Skirmisher => (3, 1., aim),
         BossKind::Defender | BossKind::Prism => (3, 1., turn),
@@ -170,6 +173,7 @@ pub fn boss_model_geometry(
         time,
         phase,
         charge,
+        lit,
     } = pose;
     if !r.is_finite() || r <= 0. || !aim.is_finite() || !turn.is_finite() || !time.is_finite() {
         return;
@@ -178,7 +182,7 @@ pub fn boss_model_geometry(
     let edge = (r * 0.045).max(0.6);
     // A wounded boss burns: amber at its second phase, a pulsing red at its
     // last, glowing around its armor in the armor's own shape.
-    if phase >= 2 {
+    if phase >= 2 && !lit {
         let (sides, size, angle) = armor(kind, aim, turn);
         let (heat, pulse) = if phase >= 3 {
             (
@@ -696,6 +700,7 @@ mod tests {
                     time: 2.,
                     phase: 2,
                     charge: 0.5,
+                    lit: false,
                 },
                 None,
                 &mut |primitive| {

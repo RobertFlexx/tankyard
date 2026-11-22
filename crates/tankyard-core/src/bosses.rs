@@ -3,7 +3,26 @@ use crate::world::drone_phase;
 use crate::*;
 use tankyard_content::ProjectileKind;
 
-fn boss_clear_steering(pos: V2, desired: V2, radius: f32, bounds: Rect, walls: &[Rect]) -> V2 {
+/// How strongly a boss prefers the way it's already moving when picking a
+/// clear path, so it commits to one side of an obstacle instead of hunting
+/// between two that score about the same.
+const KEEP_HEADING: f32 = 0.14;
+/// How far past the edge of its range a target must be before a boss starts
+/// to close in or back off. It stops at the edge itself, so a target standing
+/// on the line can't flip it every tick and no boss comes any closer for it.
+const TACTIC_MARGIN: f32 = 36.;
+/// How quickly a boss's sidestep follows the rounds it's reading.
+const DODGE_RATE: f32 = 14.;
+
+fn boss_clear_steering(
+    pos: V2,
+    desired: V2,
+    current: V2,
+    radius: f32,
+    bounds: Rect,
+    walls: &[Rect],
+) -> V2 {
+    let heading = current.normalized();
     let mut best = V2::ZERO;
     let mut best_score = f32::NEG_INFINITY;
     for angle in [0., 0.35, -0.35, 0.7, -0.7, 1.2, -1.2, 1.8, -1.8, 2.6, -2.6] {
@@ -20,14 +39,53 @@ fn boss_clear_steering(pos: V2, desired: V2, radius: f32, bounds: Rect, walls: &
             .min(next.y - bounds.y)
             .min(bounds.x + bounds.w - next.x)
             .min(bounds.y + bounds.h - next.y);
-        let score =
-            velocity.normalized().dot(desired.normalized()) + (border / 300.).min(1.) * 0.25;
+        let way = velocity.normalized();
+        let score = way.dot(desired.normalized())
+            + (border / 300.).min(1.) * 0.25
+            + way.dot(heading) * KEEP_HEADING;
         if score > best_score {
             best = velocity;
             best_score = score;
         }
     }
     best
+}
+
+/// Where a boss moving by `step` ends up, and its velocity after: a move into
+/// a wall keeps the part that runs along it, so the hull glides past corners
+/// instead of stopping dead.
+fn boss_glide(pos: V2, step: V2, vel: V2, radius: f32, bounds: Rect, walls: &[Rect]) -> (V2, V2) {
+    let clear = |at: V2| walls.iter().all(|&w| circle_rect(at, radius, w).is_none());
+    let next = pos + step;
+    let (mut at, mut vel) = if clear(next) {
+        (next, vel)
+    } else {
+        // Try the longer part of the move first.
+        let along_x = (V2::new(next.x, pos.y), V2::new(vel.x, vel.y * 0.25));
+        let along_y = (V2::new(pos.x, next.y), V2::new(vel.x * 0.25, vel.y));
+        let (first, second) = if step.x.abs() >= step.y.abs() {
+            (along_x, along_y)
+        } else {
+            (along_y, along_x)
+        };
+        if clear(first.0) {
+            first
+        } else if clear(second.0) {
+            second
+        } else {
+            (pos, vel * 0.6)
+        }
+    };
+    // Don't keep pushing into the arena's edge.
+    let kept = bounds.clamp_circle(at, radius);
+    if kept.x != at.x {
+        vel.x = 0.;
+    }
+    if kept.y != at.y {
+        vel.y = 0.;
+    }
+    at = kept;
+    (at, vel)
 }
 
 /// One round of a boss's volley.
@@ -432,6 +490,7 @@ impl World {
             attack_timer: 7.,
             attack: 0,
             attack_windup: 0.,
+            dodge: V2::ZERO,
         });
         self.event(EventKind::BossSpawn, pos, id, kind as u32, 0);
         id
@@ -504,9 +563,9 @@ impl World {
             let bounds = self.config.bounds();
             let b = &mut self.bosses[i];
             b.arrival = (b.arrival - DT).max(0.);
-            b.phase = if b.health < b.max_health * 0.3 {
+            b.phase = if b.health < b.max_health * BOSS_PHASES[1] {
                 3
-            } else if b.health < b.max_health * 0.65 {
+            } else if b.health < b.max_health * BOSS_PHASES[0] {
                 2
             } else {
                 1
@@ -572,6 +631,9 @@ impl World {
             };
             let drone_limit = (b.kind.drone_limit() as f32 * swarm).ceil() as usize;
             let depleted = drone_limit > 0 && owned < drone_limit / 3;
+            let range = to.length();
+            let too_close = preferred * if depleted || b.phase == 3 { 1.15 } else { 0.7 };
+            let too_far = preferred + 130.;
             let mut desired = if target.is_none() {
                 b.tactic = BossTactic::Patrol;
                 to.normalized() * speed * 0.45
@@ -583,10 +645,14 @@ impl World {
                 V2::from_angle(b.aim) * speed * 2.2
             } else if b.tactic == BossTactic::Charge && b.tactic_time > 0. {
                 V2::from_angle(b.aim) * speed * 2.2
-            } else if to.length() < preferred * if depleted || b.phase == 3 { 1.15 } else { 0.7 } {
+            } else if range < too_close
+                && (b.tactic == BossTactic::Retreat || range < too_close - TACTIC_MARGIN)
+            {
                 b.tactic = BossTactic::Retreat;
                 to.normalized() * -speed
-            } else if to.length() > preferred + 130. {
+            } else if range > too_far
+                && (b.tactic == BossTactic::Advance || range > too_far + TACTIC_MARGIN)
+            {
                 b.tactic = BossTactic::Advance;
                 to.normalized() * speed
             } else {
@@ -614,27 +680,23 @@ impl World {
                     evasion += side * if delta.dot(side) < 0. { -1. } else { 1. };
                 }
             }
+            // Rounds come and go tick to tick, so the sidestep eases toward
+            // what they call for rather than snapping between directions.
+            b.dodge = b
+                .dodge
+                .lerp(evasion.clamp_length(1.), 1. - (-DT * DODGE_RATE).exp());
             if b.tactic != BossTactic::Charge
                 && b.tactic != BossTactic::Windup
                 && b.attack_windup <= 0.
             {
-                desired += evasion.clamp_length(1.) * speed * 0.7;
+                desired += b.dodge * speed * 0.7;
             }
-            desired = boss_clear_steering(b.pos, desired, b.radius, bounds, &self.walls);
+            desired = boss_clear_steering(b.pos, desired, b.vel, b.radius, bounds, &self.walls);
             if b.arrival > 0. || b.attack_windup > 0. {
                 desired = V2::ZERO;
             }
             b.vel = b.vel.lerp(desired, 1. - (-DT * 3.5).exp());
-            let next = b.pos + b.vel * DT;
-            if self
-                .walls
-                .iter()
-                .all(|&w| circle_rect(next, b.radius, w).is_none())
-            {
-                b.pos = bounds.clamp_circle(next, b.radius);
-            } else {
-                b.vel *= 0.6;
-            }
+            (b.pos, b.vel) = boss_glide(b.pos, b.vel * DT, b.vel, b.radius, bounds, &self.walls);
             b.timer -= DT;
             let primary_due = b.timer <= 0. && b.arrival <= 0.;
             let previous_windup = b.attack_windup;
@@ -984,6 +1046,127 @@ mod tests {
     use super::*;
     use crate::world::BOSS_CREDIT_TICKS;
     use tankyard_content::Content;
+
+    #[test]
+    fn a_boss_glides_along_a_wall_and_stops_only_when_boxed_in() {
+        let bounds = Rect {
+            x: 0.,
+            y: 0.,
+            w: 4000.,
+            h: 4000.,
+        };
+        let wall = Rect {
+            x: 1000.,
+            y: 0.,
+            w: 100.,
+            h: 4000.,
+        };
+        let radius = 80.;
+        let pos = V2::new(1000. - radius - 0.5, 2000.);
+        let vel = V2::new(60., 40.);
+        let (at, after) = boss_glide(pos, vel * DT, vel, radius, bounds, &[wall]);
+        assert_eq!(at.x, pos.x, "held off the wall");
+        assert!(at.y > pos.y, "keeps moving along it");
+        assert_eq!(after.y, vel.y, "at full speed along it");
+        assert!(after.x.abs() < vel.x, "and no longer pushing into it");
+
+        // Into a corner of two walls it has nowhere to go and slows.
+        let floor = Rect {
+            x: 0.,
+            y: pos.y + radius + 0.5,
+            w: 4000.,
+            h: 100.,
+        };
+        let (at, after) = boss_glide(pos, vel * DT, vel, radius, bounds, &[wall, floor]);
+        assert_eq!(at, pos);
+        assert!(after.length() < vel.length());
+
+        // At the arena's edge it stops pushing outward.
+        let edge = V2::new(radius + 0.2, 2000.);
+        let out = V2::new(-90., 30.);
+        let (at, after) = boss_glide(edge, out * DT, out, radius, bounds, &[]);
+        assert_eq!(at.x, radius);
+        assert_eq!(after.x, 0.);
+        assert_eq!(after.y, 30.);
+    }
+
+    #[test]
+    fn steering_commits_to_a_side_of_an_obstacle() {
+        let bounds = Rect {
+            x: 0.,
+            y: 0.,
+            w: 4000.,
+            h: 4000.,
+        };
+        // A wall dead ahead, centered, so both ways around score the same.
+        let wall = Rect {
+            x: 2100.,
+            y: 1900.,
+            w: 60.,
+            h: 200.,
+        };
+        let (pos, desired) = (V2::new(2000., 2000.), V2::new(120., 0.));
+        let up = boss_clear_steering(pos, desired, V2::new(60., -60.), 40., bounds, &[wall]);
+        let down = boss_clear_steering(pos, desired, V2::new(60., 60.), 40., bounds, &[wall]);
+        assert!(up.y < 0., "already heading up, it goes up: {up:?}");
+        assert!(down.y > 0., "already heading down, it goes down: {down:?}");
+    }
+
+    #[test]
+    fn a_boss_on_the_edge_of_its_range_does_not_flip_tactics() {
+        let mut world = arena();
+        world.tanks[0].max_health = 1e9;
+        world.tanks[0].health = 1e9;
+        assert_ne!(world.spawn_boss(BossKind::Guardian), 0);
+        let boss = world.bosses[0].id;
+        world.bosses[0].arrival = 0.;
+        world.bosses[0].attack_timer = 1e6;
+        let mut last = None;
+        let mut flips = 0;
+        for _ in 0..1200 {
+            // Hold the pilot on the line between retreating and orbiting.
+            let b = world.bosses.iter().find(|b| b.id == boss).unwrap();
+            let (at, edge) = (b.pos, 330. * 0.7);
+            world.tanks[0].pos = at + V2::new(edge + 1., 0.);
+            world.tanks[0].vel = V2::ZERO;
+            world.tanks[0].health = 1e9;
+            world.projectiles.clear();
+            world.update_bosses();
+            world.tick += 1;
+            let tactic = world.bosses.iter().find(|b| b.id == boss).unwrap().tactic;
+            if last.is_some_and(|before| before != tactic) {
+                flips += 1;
+            }
+            last = Some(tactic);
+        }
+        assert!(flips <= 4, "{flips} changes of tactic in twenty seconds");
+    }
+
+    #[test]
+    fn a_chasing_boss_stops_at_its_range_and_starts_again_past_the_margin() {
+        let mut world = arena();
+        world.tanks[0].max_health = 1e9;
+        assert_ne!(world.spawn_boss(BossKind::FallenBooster), 0);
+        world.bosses[0].arrival = 0.;
+        world.bosses[0].attack_timer = 1e6;
+        let mut tactic_at = |range: f32| {
+            let at = world.bosses[0].pos;
+            world.tanks[0].pos = at + V2::new(range, 0.);
+            world.tanks[0].vel = V2::ZERO;
+            world.tanks[0].health = 1e9;
+            world.projectiles.clear();
+            world.update_bosses();
+            world.bosses[0].tactic
+        };
+        assert_eq!(tactic_at(400.), BossTactic::Advance);
+        // Still closing while it's outside its range.
+        assert_eq!(tactic_at(140.), BossTactic::Advance);
+        // The edge stops it, exactly as near as it would have come.
+        assert_eq!(tactic_at(125.), BossTactic::Orbit);
+        // Just past the edge isn't enough to set it off again.
+        assert_eq!(tactic_at(150.), BossTactic::Orbit);
+        assert_eq!(tactic_at(175.), BossTactic::Advance);
+    }
 
     fn arena() -> World {
         let mut world = World::new(

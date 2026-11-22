@@ -3,6 +3,7 @@
 //! additive blends brighten what lies under them the way light does. Each
 //! blend needs one shader; when shaders are unavailable `begin` returns
 //! false and callers draw flat shapes instead.
+use crate::graphics::draw_circle;
 use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation};
 use macroquad::prelude::*;
 

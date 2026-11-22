@@ -1,6 +1,24 @@
 //! Display, graphics, audio and accessibility settings.
 use super::*;
 
+/// The upscaler row's DLAA button. DLAA is DLSS at full resolution, so it
+/// shares DLSS's setting and never appears in a saved file.
+const DLAA_CHOICE: u8 = u8::MAX;
+/// Where DLSS's button moves a full-resolution render scale: its Quality mode.
+const DLSS_QUALITY_SCALE: f32 = 0.67;
+
+/// What a click on an upscaler button sets: the upscaler and the render scale.
+fn upscaler_choice(button: u8, scale: f32) -> (u8, f32) {
+    use crate::dlss::Mode;
+    match button {
+        DLAA_CHOICE => (crate::upscale::DLSS, 1.),
+        crate::upscale::DLSS if Mode::for_scale(scale) == Mode::Dlaa => {
+            (crate::upscale::DLSS, DLSS_QUALITY_SCALE)
+        }
+        other => (other, scale),
+    }
+}
+
 impl Menu {
     pub(super) fn accessibility_preview(&self, r: Rect, settings: &Settings, s: f32) {
         panel(r);
@@ -208,12 +226,19 @@ impl Menu {
         }
         if dlss_offered {
             names.push((crate::upscale::DLSS, "NVIDIA DLSS"));
+            names.push((DLAA_CHOICE, "NVIDIA DLAA"));
         }
         // An upscaler this system lacks (a copied settings file) runs as
         // FSR 1 here.
         let current = match settings.upscaler {
             crate::upscale::METALFX if !metalfx => 1,
             crate::upscale::DLSS if !dlss_offered => 1,
+            crate::upscale::DLSS
+                if crate::dlss::Mode::for_scale(settings.render_scale)
+                    == crate::dlss::Mode::Dlaa =>
+            {
+                DLAA_CHOICE
+            }
             upscaler => upscaler,
         };
         let width = col / names.len() as f32;
@@ -230,8 +255,10 @@ impl Menu {
                 true,
                 s * 0.72,
             ) {
-                settings.upscaler = index;
-                if index == crate::upscale::DLSS && !dlss_ready {
+                let (upscaler, scale) = upscaler_choice(index, settings.render_scale);
+                settings.upscaler = upscaler;
+                settings.render_scale = scale;
+                if upscaler == crate::upscale::DLSS && !dlss_ready {
                     crate::dlss::start_runtime_download();
                 }
             }
@@ -1010,5 +1037,32 @@ impl Menu {
             }
         }
         Action::None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dlss::Mode;
+
+    #[test]
+    fn dlaa_and_dlss_each_get_the_mode_their_button_names() {
+        // DLAA runs DLSS at full resolution, from any scale.
+        for scale in [0.5, 0.67, 1., 1.5] {
+            let (upscaler, scale) = upscaler_choice(DLAA_CHOICE, scale);
+            assert_eq!(upscaler, crate::upscale::DLSS);
+            assert_eq!(Mode::for_scale(scale), Mode::Dlaa);
+        }
+        // DLSS from full resolution really upscales; a lower scale is kept.
+        let (upscaler, scale) = upscaler_choice(crate::upscale::DLSS, 1.);
+        assert_eq!(upscaler, crate::upscale::DLSS);
+        assert_eq!(Mode::for_scale(scale), Mode::Quality);
+        assert_eq!(
+            upscaler_choice(crate::upscale::DLSS, 0.5),
+            (crate::upscale::DLSS, 0.5)
+        );
+        // Other upscalers leave the scale alone.
+        assert_eq!(upscaler_choice(1, 1.), (1, 1.));
+        assert_eq!(upscaler_choice(0, 0.8), (0, 0.8));
     }
 }

@@ -2,6 +2,7 @@
 //! only the wallpaper, carpet, ceiling fixtures and atmosphere live here.
 mod ceiling;
 
+use crate::graphics::draw_circle;
 use crate::{
     render::{self, View},
     settings::Settings,

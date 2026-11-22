@@ -107,6 +107,11 @@ struct LastProjectile {
     angle: f32,
     shots: u32,
     recoil: f32,
+    /// Seconds it had left when last seen. A round gone with time to spare
+    /// hit something; one at the end of its life just burned out.
+    lifetime: f32,
+    vel: V2,
+    damage: f32,
 }
 
 pub struct ProjectileFade {
@@ -190,6 +195,8 @@ pub struct Effects {
     bosses: HashMap<EntityId, &'static str>,
     /// Rifts' ages and time left, run on between snapshots.
     pub rift_clocks: crate::rifts::Clocks,
+    /// How bosses and their rounds are being drawn from frame to frame.
+    pub boss_fx: crate::boss_fx::BossFx,
     last_tick: u64,
     random: u64,
 }
@@ -222,6 +229,7 @@ impl Effects {
             boss_defeat: None,
             bosses: HashMap::new(),
             rift_clocks: Default::default(),
+            boss_fx: Default::default(),
             last_tick: 0,
             random: 7919,
         }
@@ -422,6 +430,14 @@ impl Effects {
                     spark: false,
                 });
             }
+            // A boss is also the subject of each explosion it sets off; only
+            // its own death carries the reward.
+            if matches!(event.kind, EventKind::Destroy)
+                && event.value == tankyard_core::BOSS_REWARD
+                && self.bosses.contains_key(&event.subject)
+            {
+                self.boss_fx.defeated(event.subject, event.pos);
+            }
             if matches!(event.kind, EventKind::Kill)
                 && event
                     .elimination
@@ -546,6 +562,29 @@ impl Effects {
                 ProjectileKind::Trap | ProjectileKind::Mine => projectile.age * 0.1,
                 _ => 0.0,
             };
+            let shown = projectile
+                .previous
+                .lerp(projectile.pos, fraction.clamp(0.0, 1.0));
+            if self.boss_fx.is_boss(projectile.owner) {
+                let flight = crate::boss_fx::Flight {
+                    id: projectile.id,
+                    owner: projectile.owner,
+                    at: shown,
+                    vel: projectile.vel,
+                    radius: projectile.radius,
+                    kind: projectile.kind,
+                    damage: projectile.damage,
+                };
+                // Only a round seen as it leaves the gun gets a muzzle flash:
+                // joining a fight doesn't set them all off at once.
+                if !self.tracked_projectiles.contains_key(&projectile.id)
+                    && projectile.age < 0.12
+                    && self.boss_fx.launched(&flight)
+                {
+                    self.shake = (self.shake + 2.2).min(4.);
+                }
+                self.boss_fx.track(&flight);
+            }
             let shots = projectile.gun.map_or(0, |gun| gun.shots);
             let recoil = if reduced_motion {
                 0.0
@@ -563,9 +602,7 @@ impl Effects {
             self.tracked_projectiles.insert(
                 projectile.id,
                 LastProjectile {
-                    pos: projectile
-                        .previous
-                        .lerp(projectile.pos, fraction.clamp(0.0, 1.0)),
+                    pos: shown,
                     radius: projectile.radius,
                     team: projectile.team,
                     owner: projectile.owner,
@@ -574,6 +611,9 @@ impl Effects {
                     angle,
                     shots,
                     recoil,
+                    lifetime: projectile.lifetime,
+                    vel: projectile.vel,
+                    damage: projectile.damage,
                 },
             );
         }
@@ -582,9 +622,25 @@ impl Effects {
         }
         self.projectile_tick = Some(tick);
         let fades = &mut self.projectile_fades;
-        self.tracked_projectiles.retain(|_, prior| {
+        let boss_fx = &mut self.boss_fx;
+        self.tracked_projectiles.retain(|&id, prior| {
             if prior.seen_at == tick {
                 return true;
+            }
+            if boss_fx.is_boss(prior.owner) {
+                boss_fx.landed(
+                    &crate::boss_fx::Flight {
+                        id,
+                        owner: prior.owner,
+                        at: prior.pos,
+                        vel: prior.vel,
+                        radius: prior.radius,
+                        kind: prior.kind,
+                        damage: prior.damage,
+                    },
+                    prior.lifetime > 0.05,
+                );
+                return false;
             }
             // Avoid explosive allocation spikes when a server resets a match.
             if fades.len() < 1024 {
@@ -699,6 +755,7 @@ impl Effects {
                 self.boss_defeat = None;
             }
         }
+        self.boss_fx.update(dt);
         for p in &mut self.projectile_fades {
             p.life -= dt;
         }
@@ -897,6 +954,46 @@ mod tests {
         assert_eq!((effects.deaths, effects.killed_by), (1, Some(7)));
         effects.update(5.1, false);
         assert!(!effects.boss_banner());
+    }
+
+    #[test]
+    fn only_a_bosss_death_sets_off_its_defeat_blast() {
+        let mut world = tankyard_core::World::new(
+            tankyard_core::WorldConfig {
+                target_count: 0,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            tankyard_content::Content::builtin(),
+        );
+        world.add_player("Pilot", false);
+        assert_ne!(world.spawn_boss(tankyard_core::BossKind::Foundry), 0);
+        let boss = world.bosses.remove(0);
+        let destroy = |tick, value| GameEvent {
+            tick,
+            kind: EventKind::Destroy,
+            pos: V2::ZERO,
+            subject: boss.id,
+            value,
+            team: 0,
+            elimination: None,
+        };
+        let mut effects = Effects::new();
+        effects.note_bosses(std::slice::from_ref(&boss));
+        effects.boss_fx.sync(
+            std::iter::once(crate::boss_fx::Shown {
+                boss: &boss,
+                pos: boss.pos,
+                aim: boss.aim,
+                color: WHITE,
+            }),
+            1. / 60.,
+        );
+        // Its own explosive going off has it as the subject too.
+        effects.ingest(&[destroy(5, 80)], (1, 0), 1.);
+        assert!(effects.boss_fx.is_boss(boss.id), "still alive and tracked");
+        effects.ingest(&[destroy(6, tankyard_core::BOSS_REWARD)], (1, 0), 1.);
+        assert!(!effects.boss_fx.is_boss(boss.id), "its death ends it");
     }
 
     #[test]

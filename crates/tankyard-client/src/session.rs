@@ -91,6 +91,11 @@ pub struct Session {
     /// drawn between ticks like tanks.
     bodies_before: (u32, Vec<tankyard_content::BodyPose>),
     pub previous_positions: HashMap<EntityId, (V2, f32)>,
+    /// How far from its true place each boss was drawn when the latest
+    /// snapshot arrived, eased away rather than jumped.
+    boss_error: HashMap<EntityId, V2>,
+    /// Where bosses were on screen as the latest snapshot arrived.
+    boss_drawn: Vec<(EntityId, V2)>,
     pub ticks: u64,
     pub dropped_ticks: u64,
     pub achievement_tracker: Tracker,
@@ -475,6 +480,8 @@ impl Session {
             pushing: 0,
             bodies_before: (0, Vec::new()),
             previous_positions: HashMap::new(),
+            boss_error: HashMap::new(),
+            boss_drawn: Vec::new(),
             ticks: 0,
             dropped_ticks: 0,
             achievement_tracker,
@@ -683,6 +690,19 @@ impl Session {
             self.received_at = now;
             self.poses_now = tankyard_core::snapshot_poses(snapshot, snapshot.match_state.elapsed);
             tankyard_core::place_walls(snapshot, &self.poses_now, &mut self.walls_now);
+            // Where each boss is on screen right now, to compare with where
+            // this snapshot first draws it.
+            self.boss_drawn.clear();
+            if let Some(display) = self
+                .display
+                .as_ref()
+                .filter(|display| display.match_state.round == snapshot.match_state.round)
+            {
+                self.boss_drawn
+                    .extend(display.bosses.iter().map(|boss| (boss.id, boss.pos)));
+            }
+            self.boss_error
+                .retain(|id, _| snapshot.bosses.iter().any(|boss| boss.id == *id));
             self.previous_positions.clear();
             if let Some(previous) = &client.previous_snapshot
                 && previous.match_state.round == snapshot.match_state.round
@@ -867,7 +887,7 @@ impl Session {
             }
         }
         for (boss, latest) in display.bosses.iter_mut().zip(&snapshot.bosses) {
-            if let Some((previous, _)) = self.previous_positions.get(&boss.id) {
+            if let Some((previous, angle)) = self.previous_positions.get(&boss.id) {
                 boss.pos = extrapolate_position(
                     interpolate_position(*previous, latest.pos, alpha),
                     latest.vel,
@@ -876,7 +896,14 @@ impl Session {
                     &snapshot.config,
                     &self.walls_now,
                 );
+                boss.aim = lerp_angle(*angle, latest.aim, alpha);
             }
+            ease_boss_error(
+                boss,
+                &mut self.boss_drawn,
+                &mut self.boss_error,
+                (-BOSS_EASE * dt).exp(),
+            );
         }
         // Map groups glide by the round clock, so draw them at the moment
         // the rest of the display shows rather than at the packet's.
@@ -1574,6 +1601,35 @@ pub fn shown_round(
         exit.lerp(pos, (travelled - into) / out)
     } else {
         pos
+    }
+}
+
+/// How fast a boss's drawn place closes on its true one, per second.
+const BOSS_EASE: f32 = 14.;
+/// A gap this wide is a teleport, not jitter, and is crossed at once.
+const BOSS_SNAP: f32 = 140.;
+
+/// Packets don't arrive evenly, so each one can move a boss a little from
+/// where it was being drawn. Take that step up as an error that fades, with
+/// no lag once it has. `decay` is what remains of the error after this frame.
+fn ease_boss_error(
+    boss: &mut tankyard_core::Boss,
+    drawn: &mut Vec<(EntityId, V2)>,
+    errors: &mut HashMap<EntityId, V2>,
+    decay: f32,
+) {
+    if let Some(at) = drawn.iter().position(|(id, _)| *id == boss.id) {
+        let (_, place) = drawn.swap_remove(at);
+        let error = place - boss.pos;
+        if error.length() < BOSS_SNAP {
+            errors.insert(boss.id, error);
+        } else {
+            errors.remove(&boss.id);
+        }
+    }
+    if let Some(error) = errors.get_mut(&boss.id) {
+        *error *= decay;
+        boss.pos += *error;
     }
 }
 

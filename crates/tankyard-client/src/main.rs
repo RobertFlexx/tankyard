@@ -14,6 +14,7 @@ mod credentials;
 mod dlss;
 mod editor;
 mod effects;
+mod emission;
 mod file_dialog;
 mod first_run;
 mod glow;
@@ -541,6 +542,7 @@ impl App {
                 self.party_ui.open = self.active_party();
                 self.menu.clear_focus();
             }
+            Action::ToggleMic => self.voice.toggle(),
             Action::PartyReady(ready) => {
                 if let Some(Session {
                     engine: session::Engine::Online { client, .. },
@@ -1033,6 +1035,7 @@ impl App {
         let action = self.party_ui.panel(
             client,
             &self.content,
+            self.voice.view(),
             &network,
             !self.menu.party_address.is_empty(),
             self.menu_over_game,
@@ -1347,6 +1350,9 @@ impl App {
         }
         self.dropped_files();
         let party_key = self.party_ui.keys();
+        if self.party_ui.open && !self.party_ui.typing() && is_key_pressed(KeyCode::M) {
+            self.voice.toggle();
+        }
         if let Some(result) = self.party_copy.as_ref().and_then(|request| request.poll()) {
             self.party_copy = None;
             self.party_ui.notice = match &result {
@@ -1584,6 +1590,15 @@ impl App {
                     self.paused = !self.paused;
                     self.hud.evolution = false;
                 }
+            }
+            // A party's call carries on behind the pause menu, so its mute
+            // key has to work there too.
+            if self.paused
+                && self.active_party()
+                && !ui::numeric_active()
+                && is_key_pressed(KeyCode::M)
+            {
+                self.voice.toggle();
             }
             if !self.paused
                 && !community_key
@@ -1847,6 +1862,34 @@ impl App {
                     .display_aim
                     .insert(tank.id, (self.view.world(vec2(mx, my)) - position).angle());
             }
+            // Bosses first, so this frame's rounds know who fired them.
+            self.effects.boss_fx.set_look(boss_fx::Look::of(
+                self.settings.effects,
+                self.settings.reduced_motion,
+            ));
+            let boss_fraction = session.render_fraction(self.accumulator / DT);
+            let colorblind = self.settings.colorblind;
+            let previous = &session.previous_positions;
+            self.effects.boss_fx.sync(
+                snapshot.bosses.iter().map(|boss| {
+                    let (pos, aim) =
+                        previous
+                            .get(&boss.id)
+                            .map_or((boss.pos, boss.aim), |&(place, angle)| {
+                                (
+                                    session::interpolate_position(place, boss.pos, boss_fraction),
+                                    session::lerp_angle(angle, boss.aim, boss_fraction),
+                                )
+                            });
+                    boss_fx::Shown {
+                        boss,
+                        pos,
+                        aim,
+                        color: render::boss_tint(boss, colorblind),
+                    }
+                }),
+                dt,
+            );
             self.effects.sync_projectiles(
                 snapshot.tick,
                 &snapshot.projectiles,
@@ -1999,6 +2042,7 @@ impl App {
                 chat_enabled: true,
                 snapshot: None,
                 can_kick: true,
+                voice: self.voice.view(),
             };
             let _ = self.party_ui.panel_view(
                 &view,
@@ -2098,7 +2142,12 @@ impl App {
                     ..
                 }) = &self.session
             {
-                self.party_ui.rail(client, &self.content, s, true, false);
+                if self
+                    .party_ui
+                    .rail(client, &self.content, self.voice.view(), s, true, false)
+                {
+                    self.voice.toggle();
+                }
             }
             return;
         }
@@ -2200,6 +2249,7 @@ impl App {
                         session.player,
                         &self.view,
                         &session.previous_positions,
+                        &self.effects.boss_fx,
                         fraction,
                         render,
                     )
@@ -2245,6 +2295,9 @@ impl App {
                         .find(|map| map.id == snapshot.config.map)
                         .map_or("slate", |map| map.background.as_str()),
                 );
+                if !self.hud.sandbox {
+                    hud::boss_arrows(snapshot, &self.view, s, self.settings.colorblind);
+                }
                 if let session::Engine::Online { client, .. } = &session.engine
                     && !self.hud.sandbox
                 {
@@ -2514,8 +2567,17 @@ impl App {
                 ..
             }) = &self.session
         {
-            self.party_ui
-                .rail(client, &self.content, s, false, self.hud.evolution);
+            let evolution = self.hud.evolution;
+            if self.party_ui.rail(
+                client,
+                &self.content,
+                self.voice.view(),
+                s,
+                false,
+                evolution,
+            ) {
+                self.voice.toggle();
+            }
         }
         if !self.paused
             && !self.menu_over_game
@@ -2936,6 +2998,15 @@ async fn run(cli: Cli) {
         }
         app.presentation.begin(&app.settings);
         profile::phase("draw", || app.draw(s));
+        // The usual microphone button is hidden behind menus and the pause
+        // screen, but a party's call is still live there.
+        if app.editor.is_none()
+            && (app.paused || app.menu_over_game)
+            && app.active_party()
+            && !app.party_ui.open
+        {
+            app.voice.draw_live_marker(s);
+        }
         profile::phase("present", || app.presentation.finish());
         ui::end_frame();
         // Discard characters that no field consumed this frame.

@@ -100,6 +100,7 @@ The **Grid** switch cycles through 10, 20, 40, 80, 160 and 320 world units; Shif
 Layers keep a busy map workable. Every object sits on a layer from 0 to 99, and new objects land on the layer you're editing.
 
 - The **layer bar** at the lower left of the canvas shows the current layer. Its arrows step through the layers, and clicking its name switches between that layer and **All layers**.
+- Point at the layer bar to open a strip of every layer in use, each with a small bar showing how much it holds. Click one to go straight there.
 - **,** and **.** go down and up a layer. Hold Shift to skip layers with nothing on them.
 - While you edit one layer, everything else fades and can't be selected, so you can reach what's underneath without moving what's on top.
 - The **Layer** field in the Object tab moves the selection to another layer.
@@ -107,7 +108,7 @@ Layers keep a busy map workable. Every object sits on a layer from 0 to 99, and 
 
 Layers are only for the workshop. They're saved in your project, never change how a map plays, and don't affect draw order. Use **[** and **]** for that.
 
-To reach an object under another without layers, click it. Clicking the one selected object again selects the next object under the pointer, top to bottom, and wraps round. A click and a drag stay separate, so dragging still moves what you selected.
+To reach an object under another without layers, click it. A click takes the smallest object under the pointer, so a trigger sitting on a spawn region or a floor tile is one click away. Clicking the selected object again moves to the next one there, smallest to largest, and wraps round. The tooltip says how many are stacked. A click and a drag stay separate, so dragging still moves what you selected.
 
 ## Inspector
 
@@ -120,7 +121,7 @@ Group and team numbers have the same entry boxes. Color controls accept `#RGB` o
 With several objects selected, a change applies to every object that has that setting. **Space X evenly / Space Y evenly** spreads their centers between the two outermost objects. **Match widest / Match tallest** copies the largest selected dimension to the other rectangles. Each arrangement is one undo step; fixed-size point markers keep their size. Each committed numeric edit also undoes separately; a continuous slider drag remains one step.
 
 - **Map:** name, id, description, size, recommended players, wall style, floor, [lighting](#darkness-and-light), [paths](#paths) and the group list. Objects keep their relative place when the size changes. The group list shows every group in use with its name and what it holds (blocks, pads, decor, triggers, and whether tanks can push it). **Hidden** makes a group start the round out of sight, **Lock** stops it being selected on the canvas while you work around it, and **Select** selects the whole group and centers the view on it.
-- **Object:** position, size, group and the settings for the selected kind. A group's *starts hidden* switch is available here, so a gate needs no trip to Map.
+- **Object:** position, size, group and the settings for the selected kind. A group's *starts hidden* switch is available here, so a gate needs no trip to Map. A trigger also lists its **Connections**: what it sets off and what sets it off. Click a row to select that trigger and center on it.
 - **Logic:** preview controls, the test tank's team, the counters, the groups the logic uses, a panel to send signals and defeat bosses by hand, a log of what happened, and every trigger with its summary and live state. Click a trigger to find it, or press its **Fire** button to make it act once right now, as if its moment had come. See [Logic preview](#logic-preview).
 - **Check:** runs the map checks. Red items stop playtests and exports; amber items are advice, such as a signal nobody listens to, a group with no objects, or a note from a plugin. Click an item to select it. **Room left** shows how much of each object budget the map uses.
 - **Rules:** the movement, damage, health and score multipliers used by the playtest and the exported pack.
@@ -484,6 +485,10 @@ With **L** on, the canvas draws every connection in the map, between linked trig
 - **The group's color:** a group one trigger switches and another watches or checks, or the group's objects.
 - **Red:** a Reset triggers action and the triggers it rearms.
 
+Point at a hub to lift its wires out of the rest and see how many triggers send and listen on it. Click it to select them all; Shift-click adds them to the selection. Selecting or pointing at a trigger lifts its own wires the same way.
+
+The key at the upper right of the canvas counts each kind of link. Click a kind to hide or show it, which the workshop remembers. On a large map, wires heading to one part of the map run together as a cable and fan out when they arrive, and hubs rest as small dots until the pointer comes near.
+
 ### Logic preview
 
 Press **P** to run the map's triggers in the editor with the same engine servers use. Timers count, groups switch on the canvas, and triggers flash when they act. The Logic tab shows everything:
@@ -501,7 +506,7 @@ Press **P** to run the map's triggers in the editor with the same engine servers
 
 ### The Gates palette
 
-The **Gates** tab in Build holds ready-made logic. Each piece starts on counters 1 and 2, signal 1 and group 1; change them in the Object tab, or pick a group in the dock first. Hover a tile to see what it does.
+The **Gates** tab in Build holds ready-made logic, each piece drawn with its own symbol. Each one starts on counters 1 and 2, signal 1 and group 1; change them in the Object tab, or pick a group in the dock first. Hover a tile to see what it does.
 
 | Piece | What it does |
 | --- | --- |
@@ -528,7 +533,7 @@ The **Logic** tab keeps the single-step pieces: Timer, Plate, Exit pad, Start, S
 
 ### The Circuits palette
 
-The **Circuits** tab holds [live gates](#live-gates) and the parts of a computer. Live pieces keep their output counter up to date with no signal.
+The **Circuits** tab holds [live gates](#live-gates) and the parts of a computer. Live pieces, marked with a green lamp on their tile, keep their output counter up to date with no signal.
 
 | Piece | What it does |
 | --- | --- |

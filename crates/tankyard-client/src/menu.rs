@@ -76,6 +76,8 @@ pub enum Action {
     LeaveParty,
     OpenParty,
     PartyReady(bool),
+    /// Open or close this player's microphone.
+    ToggleMic,
     KickFromParty(tankyard_core::EntityId),
     Join,
     Quit,

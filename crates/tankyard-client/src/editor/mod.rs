@@ -5,10 +5,13 @@ mod board_design;
 mod brushes;
 mod canvas;
 mod dock;
+mod ink;
 mod inspector;
+mod links;
 mod panels;
 mod plugins;
 mod preview;
+mod symbols;
 
 use crate::{
     profile,
@@ -22,7 +25,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use tankyard_client::editor_document::{Document, Key, LAYERS, Object, Problem, Transform};
-use tankyard_client::editor_wiring::Wiring;
+use tankyard_client::editor_wiring::{Wiring, room};
 use tankyard_content::*;
 use tankyard_core::{V2, WorldConfig};
 
@@ -212,6 +215,22 @@ pub struct Editor {
     wiring: Wiring,
     /// The revision and object count `wiring` was found for.
     wiring_stamp: Option<(u64, usize)>,
+    /// Which ends of the map's nets share a trunk at this zoom.
+    routes: links::Routes,
+    /// What the Links view reuses from frame to frame.
+    link_drawing: std::cell::RefCell<links::LinkDrawing>,
+    /// The net whose hub is under the pointer.
+    hub_hover: Option<u32>,
+    /// Kinds of link hidden from the Links view, as bits.
+    link_hidden: u8,
+    /// Whether the strip of layer shortcuts is open.
+    layer_strip: bool,
+    /// What the Object tab last showed, to tell an edit from a look.
+    form_shown: inspector::FormShown<Object>,
+    /// How far the Links view has eased the other wires back, from 0 to 1.
+    link_lift: f32,
+    /// By trigger: how far its nearest neighbor is, in world units.
+    badge_room: Vec<f32>,
 }
 
 impl Editor {
@@ -271,6 +290,7 @@ impl Editor {
             show_hidden: prefs.show_hidden,
             show_groups: prefs.show_groups,
             show_links: prefs.show_links,
+            link_hidden: prefs.link_hidden,
             focus: None,
             layer: None,
             last_layer: 1,
@@ -325,6 +345,13 @@ impl Editor {
             canvas_area: Rect::default(),
             path_pick: (0, 0),
             wiring: Wiring::default(),
+            routes: links::Routes::default(),
+            link_drawing: Default::default(),
+            hub_hover: None,
+            layer_strip: false,
+            form_shown: Default::default(),
+            link_lift: 0.,
+            badge_room: Vec::new(),
             wiring_stamp: None,
         };
         editor.say(if restored {
@@ -421,8 +448,35 @@ impl Editor {
             for (key, _, _) in self.doc.items() {
                 self.layer_counts[usize::from(self.doc.layers.get(key))] += 1;
             }
+            self.badge_room = self.trigger_room();
             self.wiring_stamp = stamp;
         }
+    }
+
+    /// By trigger, how far the nearest other point trigger is, in world
+    /// units. An area trigger's badge sits in its corner, so it has no limit.
+    fn trigger_room(&self) -> Vec<f32> {
+        /// Past this, no badge at any useful zoom would meet its neighbor.
+        const REACH: f32 = 220.;
+        let map = &self.doc.map;
+        let (mut points, mut owners) = (Vec::new(), Vec::new());
+        for (index, trigger) in map.triggers.iter().enumerate() {
+            if !brushes::trigger_area(trigger) {
+                let r = trigger.rect;
+                points.push([
+                    (r[0] + r[2] * 0.5) * map.width,
+                    (r[1] + r[3] * 0.5) * map.height,
+                ]);
+                owners.push(index);
+            }
+        }
+        let mut found = vec![f32::MAX; map.triggers.len()];
+        for (gap, index) in room(&points, REACH).into_iter().zip(owners) {
+            if gap < REACH {
+                found[index] = gap;
+            }
+        }
+        found
     }
 
     /// Edits `layer` alone, or every layer for None. The selection keeps
@@ -863,6 +917,8 @@ impl Editor {
         self.canvas_area = layout.canvas;
         profile::phase("editor preview", || self.run_preview(&layout, dt));
         self.refresh_wiring();
+        self.refresh_routes();
+        self.ease_links(dt);
         let config = self.config();
         clear_background(bg_color());
         profile::phase("editor canvas", || {
@@ -872,6 +928,7 @@ impl Editor {
             set_interactive(false);
         }
         self.layer_bar(&layout);
+        self.link_legend(&layout);
         if let Some(chosen) = profile::phase("editor bar", || self.top_bar(&layout)) {
             action = chosen;
         }

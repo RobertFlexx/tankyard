@@ -1,6 +1,7 @@
 //! Map art and effects. Particles are reconstructed from their birth time;
 //! there is no particle allocation, network traffic or simulation work here.
 use crate::glow::{self, Blend};
+use crate::graphics::{draw_circle, draw_poly};
 use crate::{
     render::{self, View},
     settings::Settings,
@@ -1239,7 +1240,15 @@ pub fn particles(
             ParticleShape::Square => draw_poly(p.x, p.y, 4, radius, rotation + 45., c),
             ParticleShape::Triangle => draw_poly(p.x, p.y, 3, radius, rotation, c),
             ParticleShape::Star => star(p, radius * 1.3, rotation, c),
-            ParticleShape::Ring => draw_circle_lines(p.x, p.y, radius, (zoom * 2.).max(1.), c),
+            ParticleShape::Ring => draw_poly_lines(
+                p.x,
+                p.y,
+                crate::graphics::circle_sides(radius),
+                radius,
+                0.,
+                (zoom * 2.).max(1.),
+                c,
+            ),
             ParticleShape::Spark => {
                 let d = heading * radius;
                 draw_line(

@@ -762,6 +762,12 @@ impl BossKind {
 /// Damage that destroys any tank outright, as the Siege Engine's cannon
 /// deals. Other bosses and the staff's own boss take [`LETHAL_CAP`].
 pub const LETHAL_DAMAGE: f32 = 1.0e6;
+/// What a defeated boss pays out. Its `Destroy` event carries this as its
+/// value, which is how a boss's death differs from one of its explosions: the
+/// same event with the boss as subject, carrying the blast radius instead.
+pub const BOSS_REWARD: u32 = 12_000;
+/// The shares of its health at which a boss enters its second and third phase.
+pub const BOSS_PHASES: [f32; 2] = [0.65, 0.3];
 /// What a lethal round deals to a boss.
 pub const LETHAL_CAP: f32 = 1500.;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -800,6 +806,10 @@ pub struct Boss {
     pub attack: u8,
     #[serde(default)]
     pub attack_windup: f32,
+    /// Its sidestep from incoming rounds, eased. Only the host steers with
+    /// it, so it never travels in a snapshot.
+    #[serde(skip)]
+    pub dodge: V2,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Objective {

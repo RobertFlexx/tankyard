@@ -55,7 +55,7 @@ pub(crate) fn ui_circle(x: f32, y: f32, radius: f32, color: Color) {
 }
 fn draw_circle(x: f32, y: f32, radius: f32, color: Color) {
     let p = crate::ui_layout::position(vec2(x, y));
-    macroquad::shapes::draw_circle(p.x, p.y, radius, color);
+    crate::graphics::draw_circle(p.x, p.y, radius, color);
 }
 pub(crate) fn ui_triangle(a: Vec2, b: Vec2, c: Vec2, color: Color) {
     draw_triangle(a, b, c, color);
@@ -79,7 +79,7 @@ pub(crate) fn ui_texture(texture: &Texture2D, x: f32, y: f32, params: DrawTextur
 }
 fn draw_poly(x: f32, y: f32, sides: u8, radius: f32, rotation: f32, color: Color) {
     let p = crate::ui_layout::position(vec2(x, y));
-    macroquad::shapes::draw_poly(p.x, p.y, sides, radius, rotation, color);
+    crate::graphics::draw_poly(p.x, p.y, sides, radius, rotation, color);
 }
 
 // Shared colors for the light arcade theme.
@@ -442,10 +442,86 @@ pub fn prepare_label(value: &str, size: f32) {
         });
     }
 }
+/// Text kept back until the shapes around it are drawn.
+#[derive(Default)]
+struct HeldText {
+    open: bool,
+    /// Every held label's words, one after another.
+    words: String,
+    labels: Vec<HeldLabel>,
+}
+struct HeldLabel {
+    end: usize,
+    at: Vec2,
+    size: f32,
+    color: Color,
+}
+thread_local! {
+    static HELD_TEXT: std::cell::RefCell<HeldText> = std::cell::RefCell::new(HeldText::default());
+}
+/// Keeps text back until the shapes around it are drawn, for as long as it's
+/// alive. Text draws from the font's texture and shapes from none, so a row of
+/// bars with words on them otherwise changes texture, and starts a new draw
+/// call, at every step.
+///
+/// Use it where no shape lies over text drawn earlier in its span, as with
+/// separate rows. The picture is then exactly the same.
+pub struct TextAfterShapes {
+    nested: bool,
+}
+pub fn text_after_shapes() -> TextAfterShapes {
+    TextAfterShapes {
+        nested: HELD_TEXT.with(|held| std::mem::replace(&mut held.borrow_mut().open, true)),
+    }
+}
+impl Drop for TextAfterShapes {
+    fn drop(&mut self) {
+        if self.nested {
+            return;
+        }
+        let mut held = HELD_TEXT.with(|held| std::mem::take(&mut *held.borrow_mut()));
+        let mut from = 0;
+        for label in &held.labels {
+            put_label(
+                &held.words[from..label.end],
+                label.at,
+                label.size,
+                label.color,
+            );
+            from = label.end;
+        }
+        // Hand the buffers back so the next frame needn't allocate them.
+        held.open = false;
+        held.words.clear();
+        held.labels.clear();
+        HELD_TEXT.with(|slot| *slot.borrow_mut() = held);
+    }
+}
 fn raw_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
-    let pixels = crate::ui_text::raster_size(size);
     let p = crate::ui_layout::position(vec2(x, y));
+    // Loaded now even if it's held: a new glyph replaces the font's texture,
+    // which must not happen between drawing text and showing it.
     prepare_label(value, size);
+    let held = HELD_TEXT.with(|held| {
+        let mut held = held.borrow_mut();
+        if held.open {
+            held.words.push_str(value);
+            let end = held.words.len();
+            held.labels.push(HeldLabel {
+                end,
+                at: p,
+                size,
+                color,
+            });
+        }
+        held.open
+    });
+    if !held {
+        put_label(value, p, size, color);
+    }
+}
+fn put_label(value: &str, p: Vec2, size: f32, color: Color) {
+    let pixels = crate::ui_text::raster_size(size);
     UI_FONT.with(|font| {
         let rendered = draw_text_ex(
             value,
@@ -1450,6 +1526,11 @@ pub fn arcade_track(rect: Rect, ratio: f32, fill: Color) {
     arcade_track_tinted(rect, ratio, fill, Color::new(0.40, 0.40, 0.40, 1.0));
 }
 pub fn arcade_track_tinted(rect: Rect, ratio: f32, fill: Color, back: Color) {
+    let inner = track_frame(rect, back);
+    track_fill(inner, ratio, fill);
+}
+/// A track's border and back, returning the part left to fill.
+fn track_frame(rect: Rect, back: Color) -> Rect {
     let edge = (rect.h * 0.16).clamp(0.7, 3.0);
     capsule(rect, Color::new(0.333, 0.333, 0.333, 1.0));
     let inner = Rect::new(
@@ -1459,12 +1540,35 @@ pub fn arcade_track_tinted(rect: Rect, ratio: f32, fill: Color, back: Color) {
         (rect.h - edge * 2.0).max(0.0),
     );
     capsule(inner, back);
+    inner
+}
+fn track_fill(inner: Rect, ratio: f32, color: Color) {
     let width = inner.w * ratio.clamp(0.0, 1.0);
     if width > 0.1 {
         capsule(
             Rect::new(inner.x, inner.y, width.max(inner.h).min(inner.w), inner.h),
-            fill,
+            color,
         );
+    }
+}
+/// A health track with a pale stretch for what was just lost and a notch at
+/// each of `marks`, given as shares of the whole.
+pub fn marked_track(rect: Rect, ratio: f32, lost: f32, fill: Color, marks: &[f32]) {
+    let inner = track_frame(rect, Color::new(0.40, 0.40, 0.40, 1.0));
+    if lost > ratio {
+        let pale = Color::new(
+            fill.r + (1. - fill.r) * 0.62,
+            fill.g + (1. - fill.g) * 0.62,
+            fill.b + (1. - fill.b) * 0.62,
+            fill.a,
+        );
+        track_fill(inner, lost, pale);
+    }
+    track_fill(inner, ratio, fill);
+    let width = (inner.h * 0.28).max(1.);
+    for mark in marks {
+        let x = (inner.x + inner.w * mark - width * 0.5).round();
+        draw_rectangle(x, inner.y, width, inner.h, Color::new(0.1, 0.1, 0.12, 0.85));
     }
 }
 

@@ -37,6 +37,11 @@ const HANGOVER: u8 = 15;
 const HIGH_PASS: f32 = 0.99;
 /// Where mixed voices start being compressed instead of clipped.
 const KNEE: f32 = 0.8;
+/// How long after their last packet someone still shows as talking.
+const TALKING: Duration = Duration::from_millis(260);
+/// Stands in for the round in a party's session: a party's call carries on
+/// from one round to the next, so a new round doesn't close the microphone.
+const PARTY_SESSION: u32 = u32::MAX;
 
 pub struct VoiceChat {
     muted: bool,
@@ -56,8 +61,37 @@ pub struct VoiceChat {
     error: Option<String>,
     output_retry: Option<Instant>,
     speaking: Option<Instant>,
+    /// Whether this is a party's call rather than proximity voice.
+    party: bool,
+    /// When each player's voice last arrived, to show who is talking.
+    heard: HashMap<u64, Instant>,
     microphone: Texture2D,
     microphone_off: Texture2D,
+}
+
+/// What the party overlay needs to show about voice.
+#[derive(Clone, Copy)]
+pub struct VoiceView<'a> {
+    pub microphone: &'a Texture2D,
+    pub microphone_off: &'a Texture2D,
+    /// Whether this player's microphone is open.
+    pub open: bool,
+    /// Whether it can be opened at all right now.
+    pub available: bool,
+    /// Whether this player is being heard this moment.
+    pub talking: bool,
+    /// Why it can't be opened, or the last error.
+    pub problem: Option<&'a str>,
+    heard: &'a HashMap<u64, Instant>,
+}
+
+impl VoiceView<'_> {
+    /// Whether `player` is being heard this moment.
+    pub fn talking(&self, player: u64) -> bool {
+        self.heard
+            .get(&player)
+            .is_some_and(|at| at.elapsed() < TALKING)
+    }
 }
 
 enum DeviceError {
@@ -99,9 +133,32 @@ impl VoiceChat {
             error: None,
             output_retry: None,
             speaking: None,
+            party: false,
+            heard: HashMap::new(),
             microphone,
             microphone_off,
         }
+    }
+
+    /// The state the party overlay draws.
+    pub fn view(&self) -> VoiceView<'_> {
+        VoiceView {
+            microphone: &self.microphone,
+            microphone_off: &self.microphone_off,
+            open: self.active && !self.muted,
+            available: !self.disabled && self.active,
+            talking: self.active
+                && !self.muted
+                && self.speaking.is_some_and(|at| at.elapsed() < TALKING),
+            problem: self.error.as_deref(),
+            heard: &self.heard,
+        }
+    }
+
+    /// Whether a party's call is carrying this player's microphone, for the
+    /// marker shown while menus cover the usual button.
+    pub fn live_in_party(&self) -> bool {
+        self.party && self.active && !self.muted
     }
 
     pub fn reset(&mut self) {
@@ -112,6 +169,8 @@ impl VoiceChat {
         self.sequence = 0;
         self.output_retry = None;
         self.error = None;
+        self.party = false;
+        self.heard.clear();
         self.decoders.clear();
         if let Ok(mut mixer) = self.mixer.lock() {
             *mixer = Mixer::default();
@@ -154,16 +213,26 @@ impl VoiceChat {
         volume: f32,
         muted_players: &std::collections::HashSet<u64>,
     ) {
-        let session = client.player_round.map(|round| (client.client_id(), round));
+        let party = !client.party_members.is_empty();
+        let session = client.player_round.map(|round| {
+            (
+                client.client_id(),
+                if party { PARTY_SESSION } else { round },
+            )
+        });
         if session != self.session {
             self.reset();
             self.session = session;
         }
+        self.party = party;
+        // A party's call runs through menus, deaths and the gaps between
+        // rounds. Proximity voice is only for players out on the field.
+        let in_call = party || playing;
         self.active = !self.disabled
             && client.is_ready()
             && client.voice_enabled
             && !client.voice_muted
-            && playing;
+            && in_call;
         self.poll_errors();
         if !client.voice_enabled || client.voice_muted || !client.is_ready() {
             self.mute();
@@ -201,9 +270,10 @@ impl VoiceChat {
                 }
             }
         }
-        // Muting a microphone never disables hearing nearby players. Playback
-        // is unavailable while dead, paused, disconnected, or audio is disabled.
-        let listening = !self.disabled && client.voice_enabled && client.is_ready() && playing;
+        // Muting a microphone never disables hearing others. Outside a party,
+        // playback stops while dead, paused, disconnected or with audio off.
+        let listening = !self.disabled && client.voice_enabled && client.is_ready() && in_call;
+        self.heard.retain(|_, at| at.elapsed() < TALKING);
         if !listening {
             client.voice_packets.clear();
             self.decoders.clear();
@@ -247,6 +317,7 @@ impl VoiceChat {
                 .get_mut(&packet.player)
                 .and_then(|voice| voice.decode(&packet))
             {
+                self.heard.insert(packet.player, Instant::now());
                 decoded.push((packet.player, samples));
             }
         }
@@ -532,6 +603,32 @@ impl VoiceChat {
         contains(Self::rect(s))
     }
 
+    /// A small marker that the microphone is live, for screens that cover
+    /// the usual button. It takes no clicks.
+    pub fn draw_live_marker(&self, s: f32) {
+        if !self.live_in_party() {
+            return;
+        }
+        let talking = self.speaking.is_some_and(|at| at.elapsed() < TALKING);
+        let color = if talking { GREEN } else { CYAN };
+        let text = "Mic on";
+        let size = 12. * s;
+        let width = label_width(text, size) + 34. * s;
+        let r = Rect::new(screen_width() - width - 14. * s, 14. * s, width, 26. * s);
+        panel(r);
+        draw_texture_ex(
+            &self.microphone,
+            r.x + 6. * s,
+            r.y + 4. * s,
+            color,
+            DrawTextureParams {
+                dest_size: Some(vec2(18. * s, 18. * s)),
+                ..Default::default()
+            },
+        );
+        label(text, r.x + 27. * s, r.y + 18. * s, size, color);
+    }
+
     pub fn draw(&mut self, s: f32, online: bool, server_muted: bool) {
         let r = Self::rect(s);
         let hovered = contains(r);
@@ -574,7 +671,13 @@ impl VoiceChat {
         } else if !self.active {
             "Voice paused"
         } else if transmitting {
-            "Mic on [M]"
+            if self.party {
+                "Party mic on [M]"
+            } else {
+                "Mic on [M]"
+            }
+        } else if self.party {
+            "Party muted [M]"
         } else {
             "Mic muted [M]"
         };
@@ -591,6 +694,10 @@ impl VoiceChat {
                 "A server moderator muted your microphone."
             } else if !self.active {
                 "Voice resumes when you are alive and playing."
+            } else if self.party && transmitting {
+                "Click or M to mute. Everyone in your party can hear you, wherever they are."
+            } else if self.party {
+                "Click or M to unmute. Everyone in your party will hear you. Use headphones."
             } else if transmitting {
                 "Click or M to mute. Nearby players can hear you."
             } else {

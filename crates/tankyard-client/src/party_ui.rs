@@ -1,7 +1,8 @@
 use crate::{
     menu::Action,
     render,
-    ui::{ui_circle, ui_line as draw_line, ui_rectangle, ui_rectangle_lines, *},
+    ui::{ui_circle, ui_circle_lines, ui_line as draw_line, ui_rectangle, ui_rectangle_lines, *},
+    voice::VoiceView,
 };
 use macroquad::prelude::*;
 use std::collections::{HashSet, VecDeque};
@@ -14,6 +15,10 @@ use tankyard_server::NetworkClient;
 const NOTICE_SECONDS: f64 = 5.;
 /// Below this share of its health, a member's bar turns red.
 const LOW_HEALTH: f32 = 0.3;
+/// The rail's row for the microphone, in its units.
+const RAIL_MIC: f32 = 25.;
+/// The ring around someone who is talking.
+const TALKING_RING: Color = Color::new(0.3, 0.9, 0.46, 1.);
 
 /// A member's tank as the shared match sees it.
 #[derive(Clone, Copy)]
@@ -30,6 +35,61 @@ fn vitals(snapshot: Option<&Snapshot>, player: EntityId) -> Option<Vitals> {
         health: (tank.health / tank.max_health.max(1.)).clamp(0., 1.),
         alive: tank.alive,
     })
+}
+
+/// The icon, tint and words for this player's own microphone.
+fn mic_face<'a>(voice: &VoiceView<'a>) -> (&'a Texture2D, Color, &'static str) {
+    if voice.open {
+        (
+            voice.microphone,
+            if voice.talking {
+                TALKING_RING
+            } else {
+                accent_color()
+            },
+            "Mic on",
+        )
+    } else if voice.available {
+        (voice.microphone_off, text_color(), "Muted")
+    } else {
+        (voice.microphone_off, muted_color(), "No mic")
+    }
+}
+
+fn draw_icon(icon: &Texture2D, at: Vec2, size: f32, tint: Color) {
+    let p = crate::ui_layout::position(at);
+    draw_texture_ex(
+        icon,
+        p.x,
+        p.y,
+        tint,
+        DrawTextureParams {
+            dest_size: Some(Vec2::splat(size)),
+            ..Default::default()
+        },
+    );
+}
+
+/// A button with a microphone icon and a word beside it.
+fn voice_button(
+    rect: Rect,
+    (icon, tint, text): (&Texture2D, Color, &str),
+    selected: bool,
+    enabled: bool,
+    s: f32,
+) -> bool {
+    let pressed = button(rect, "", selected, enabled, s * 0.58);
+    let size = rect.h - 7. * s;
+    draw_icon(icon, vec2(rect.x + 4. * s, rect.y + 3.5 * s), size, tint);
+    let x = rect.x + size + 7. * s;
+    label(
+        &fitted_label(text, 11. * s, rect.right() - x - 3. * s),
+        x,
+        rect.center().y + 4. * s,
+        11. * s,
+        if enabled { text_color() } else { muted_color() },
+    );
+    pressed
 }
 
 fn health_color(health: f32) -> Color {
@@ -126,6 +186,10 @@ impl PartyUi {
         self.confirming_leave = false;
         self.confirming_kick = None;
     }
+    /// Whether the chat box has the keyboard.
+    pub fn typing(&self) -> bool {
+        self.typing
+    }
     pub fn keys(&mut self) -> bool {
         if !self.open {
             return false;
@@ -174,8 +238,6 @@ impl PartyUi {
         };
         let (w, h) = (screen_width(), screen_height());
         let center = vec2(w, h) * 0.5;
-        // Kept clear of the title above and the score bars below.
-        let (inset, top, bottom) = (44. * s, 92. * s, 150. * s);
         for member in members.iter().filter(|member| member.player != local) {
             let Some(tank) = snapshot
                 .tanks
@@ -190,10 +252,7 @@ impl PartyUi {
             let Some(d) = (view.screen(tank.pos) - center).try_normalize() else {
                 continue;
             };
-            let edge = if d.y < 0. { top } else { bottom };
-            let reach = ((w * 0.5 - inset) / d.x.abs().max(0.001))
-                .min((h * 0.5 - edge) / d.y.abs().max(0.001));
-            let tip = center + d * reach;
+            let tip = crate::hud::edge_point(d, s);
             let n = vec2(-d.y, d.x);
             let size = 10. * s;
             let health = (tank.health / tank.max_health.max(1.)).clamp(0., 1.);
@@ -224,14 +283,16 @@ impl PartyUi {
             );
         }
     }
+    /// Draw the party rail. True when its microphone button was pressed.
     pub fn rail(
         &mut self,
         client: &NetworkClient,
         content: &Content,
+        voice: VoiceView<'_>,
         requested: f32,
         menu: bool,
         dock_right: bool,
-    ) {
+    ) -> bool {
         let snapshot = client.snapshot.as_ref();
         let (rect, s) = rail_geometry(
             screen_width(),
@@ -248,7 +309,18 @@ impl PartyUi {
             .count();
         let columns = rail_columns(client.party_members.len(), dock_right);
         crate::ui_layout::cover(rect);
-        if button(rect, "", false, true, s) {
+        // Asked before the rail's own button, which would otherwise take the
+        // click and open the panel instead of muting.
+        let mic = rail_mic(rect, s);
+        let mic_hovered = voice.available && crate::ui::contains(mic);
+        let toggled = mic_hovered && crate::ui::take_click();
+        // Over the microphone, only the microphone lights up.
+        let pointer = mic_hovered.then(|| crate::ui::set_interactive(false));
+        let opened = button(rect, "", false, true, s);
+        if let Some(was) = pointer {
+            crate::ui::set_interactive(was);
+        }
+        if opened {
             self.open = true;
             self.typing = false;
             self.notice.clear();
@@ -267,6 +339,14 @@ impl PartyUi {
             );
             let state = vitals(snapshot, member.player);
             let down = state.is_some_and(|state| !state.alive);
+            let talking = if member.client == client.client_id() {
+                voice.talking
+            } else {
+                voice.talking(member.player) && !self.muted.contains(&member.client)
+            };
+            if talking {
+                ui_circle_lines(center.x, center.y, 14.5 * s, 2. * s, TALKING_RING);
+            }
             if let Some(class) = content.class(&member.class) {
                 render::class_model(
                     class,
@@ -313,6 +393,29 @@ impl PartyUi {
                 );
             }
         }
+        let (icon, tint, word) = mic_face(&voice);
+        ui_rectangle(
+            mic.x,
+            mic.y,
+            mic.w,
+            mic.h,
+            alpha(
+                if voice.open { accent() } else { line_color() },
+                if mic_hovered { 0.5 } else { 0.22 },
+            ),
+        );
+        draw_icon(icon, vec2(mic.x + 3. * s, mic.y + 1.5 * s), 17. * s, tint);
+        label(
+            &fitted_label(word, 10. * s, mic.w - 25. * s),
+            mic.x + 23. * s,
+            mic.y + 14. * s,
+            10. * s,
+            if voice.available {
+                text_color()
+            } else {
+                muted_color()
+            },
+        );
         // Who just came or went, beside the rail.
         for (index, (text, _)) in self.arrivals.iter().enumerate() {
             let size = 11. * s;
@@ -352,11 +455,13 @@ impl PartyUi {
                 muted_color(),
             );
         }
+        toggled
     }
     pub fn panel(
         &mut self,
         client: &mut NetworkClient,
         content: &Content,
+        voice: VoiceView<'_>,
         network: &str,
         has_public_invite: bool,
         in_menu: bool,
@@ -376,6 +481,7 @@ impl PartyUi {
             chat_enabled: client.chat_enabled,
             snapshot: client.snapshot.as_ref(),
             can_kick,
+            voice,
         };
         let (action, message) = self.panel_view(
             &view,
@@ -539,6 +645,20 @@ impl PartyUi {
                     if me { 0.10 } else { 0.16 },
                 ),
             );
+            let talking = if me {
+                view.voice.talking
+            } else {
+                view.voice.talking(member.player) && !self.muted.contains(&member.client)
+            };
+            if talking {
+                ui_circle_lines(
+                    row.x + 18. * s,
+                    row.center().y,
+                    13. * s,
+                    2. * s,
+                    TALKING_RING,
+                );
+            }
             if let Some(class) = content.class(&member.class) {
                 render::class_model(
                     class,
@@ -567,11 +687,11 @@ impl PartyUi {
                 12. * s,
                 row.w
                     - (if me {
-                        58.
+                        132.
                     } else if host_tools {
-                        176.
+                        186.
                     } else {
-                        122.
+                        132.
                     }) * s
                     - badge_width,
             );
@@ -614,11 +734,11 @@ impl PartyUi {
                     10. * s,
                     row.w
                         - (if me {
-                            54.
+                            128.
                         } else if host_tools {
-                            172.
+                            182.
                         } else {
-                            118.
+                            128.
                         }) * s,
                 ),
                 row.x + 46. * s,
@@ -638,7 +758,7 @@ impl PartyUi {
             }
             if host_tools {
                 let confirming = self.confirming_kick == Some(member.client);
-                let kick = Rect::new(row.right() - 120. * s, row.y + 6. * s, 50. * s, 22. * s);
+                let kick = Rect::new(row.right() - 130. * s, row.y + 6. * s, 50. * s, 22. * s);
                 if button(
                     kick,
                     if confirming { "Sure?" } else { "Kick" },
@@ -654,16 +774,22 @@ impl PartyUi {
                     }
                 }
             }
-            if !me {
+            let toggle = Rect::new(row.right() - 76. * s, row.y + 6. * s, 70. * s, 22. * s);
+            if me {
+                let face = mic_face(&view.voice);
+                if voice_button(toggle, face, view.voice.open, view.voice.available, s) {
+                    action = Action::ToggleMic;
+                }
+            } else {
                 let muted = self.muted.contains(&member.client);
-                let toggle = Rect::new(row.right() - 66. * s, row.y + 6. * s, 60. * s, 22. * s);
-                if button(
-                    toggle,
-                    if muted { "Muted" } else { "Mute" },
-                    muted,
-                    true,
-                    s * 0.58,
-                ) && !self.muted.remove(&member.client)
+                let face = if muted {
+                    (view.voice.microphone_off, muted_color(), "Muted")
+                } else if talking {
+                    (view.voice.microphone, TALKING_RING, "Mute")
+                } else {
+                    (view.voice.microphone, text_color(), "Mute")
+                };
+                if voice_button(toggle, face, muted, true, s) && !self.muted.remove(&member.client)
                 {
                     self.muted.insert(member.client);
                 }
@@ -800,7 +926,11 @@ impl PartyUi {
         );
         self.just_opened = false;
         // Status and actions.
-        let status = if self.notice.is_empty() {
+        // A microphone that failed says why here, beside its button.
+        let voice_problem = view.voice.problem.filter(|_| self.notice.is_empty());
+        let status = if let Some(problem) = voice_problem {
+            problem
+        } else if self.notice.is_empty() {
             if network.is_empty() {
                 "Invite-only party. The match keeps running while you browse menus."
             } else {
@@ -819,7 +949,7 @@ impl PartyUi {
                 x,
                 y + (448. + index as f32 * 16.) * s,
                 12. * s,
-                if self.notice.is_empty() {
+                if self.notice.is_empty() && voice_problem.is_none() {
                     muted_color()
                 } else {
                     text_color()
@@ -908,6 +1038,8 @@ pub struct PartyView<'a> {
     pub snapshot: Option<&'a Snapshot>,
     /// Whether this player may remove others, normally the host.
     pub can_kick: bool,
+    /// Who's talking, and this player's microphone.
+    pub voice: VoiceView<'a>,
 }
 
 fn panel_layout(width: f32, height: f32, requested: f32) -> (Rect, f32) {
@@ -938,7 +1070,7 @@ fn rail_geometry(
     let columns = rail_columns(members, dock_right);
     let rows = members.min(8).div_ceil(columns).max(1);
     let width_units = 8. + 36. * columns as f32;
-    let units = 43. + rows as f32 * 36.;
+    let units = 43. + rows as f32 * 36. + RAIL_MIC;
     let s = if menu {
         requested
     } else if dock_right {
@@ -969,6 +1101,15 @@ fn rail_geometry(
             h,
         ),
         s,
+    )
+}
+/// The microphone button in a rail drawn at `rect`, just above its hint.
+fn rail_mic(rect: Rect, s: f32) -> Rect {
+    Rect::new(
+        rect.x + 6. * s,
+        rect.bottom() - (RAIL_MIC + 19.) * s,
+        rect.w - 12. * s,
+        20. * s,
     )
 }
 fn rail_layout(
@@ -1043,6 +1184,13 @@ mod tests {
                     assert!(
                         rail.bottom() <= crate::ui_layout::staff_button(w, h, s).y - 8. * s + 0.1
                     );
+                    // Its microphone sits inside it, clear of the last row.
+                    let rows = members.min(8).div_ceil(rail_columns(members, true)).max(1);
+                    let scale = rail.h / (43. + rows as f32 * 36. + RAIL_MIC);
+                    let mic = rail_mic(rail, scale);
+                    assert!(mic.x >= rail.x && mic.right() <= rail.right());
+                    assert!(mic.y >= rail.y + (43. + (rows - 1) as f32 * 36. + 16.) * scale - 0.01);
+                    assert!(mic.bottom() <= rail.bottom());
                 }
             }
         }

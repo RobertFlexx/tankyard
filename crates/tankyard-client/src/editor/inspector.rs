@@ -14,7 +14,7 @@ use crate::ui::{
 };
 use std::hash::{Hash, Hasher};
 use tankyard_client::editor_document::{
-    Document, Key, LAYERS, Object, defeated_boss, describe_trigger_named, map_id, trigger_tag,
+    Document, Key, LAYERS, Link, Object, defeated_boss, describe_trigger_named, map_id, trigger_tag,
 };
 use tankyard_content::*;
 use tankyard_core::BossKind;
@@ -479,6 +479,39 @@ impl Form<'_> {
 }
 
 /// What the inspector asks of the editor once its form is done.
+/// What the form last made of one object. A form keeps values in range as it
+/// draws, so an object from a hand-written pack can come out a little different
+/// just by being looked at. Only a change from what it first showed is an edit,
+/// so selecting something never marks the map unsaved.
+pub(super) struct FormShown<T> {
+    seen: Option<(Key, T, T)>,
+}
+
+impl<T> Default for FormShown<T> {
+    fn default() -> Self {
+        Self { seen: None }
+    }
+}
+
+impl<T: Clone + PartialEq> FormShown<T> {
+    /// Whether `drawn`, what the form made of `stored` this frame, is an edit.
+    fn edited(&mut self, key: Key, stored: &T, drawn: &T) -> bool {
+        match &self.seen {
+            Some((at, was, shown)) if *at == key && was == stored => {
+                if shown == drawn {
+                    return false;
+                }
+                self.seen = Some((key, drawn.clone(), drawn.clone()));
+                true
+            }
+            _ => {
+                self.seen = Some((key, stored.clone(), drawn.clone()));
+                false
+            }
+        }
+    }
+}
+
 enum Request {
     None,
     Locate(Key),
@@ -945,6 +978,10 @@ impl Editor {
             _ => None,
         };
         let mut layer = self.doc.layers.get(key);
+        let connections = match key {
+            Key::Trigger(index) => self.connections(index),
+            _ => Connections::default(),
+        };
         let mut f = self.form(x, y, w, s, salt);
         let title = match &object {
             Object::Block(b) => format!("{} block", b.style.name()),
@@ -1120,14 +1157,19 @@ impl Editor {
                     f.color(&mut d.color);
                 }
             }
-            Object::Trigger(t) => trigger_form(
-                &mut f,
-                t,
-                live.as_ref(),
-                (free_channel, &used_channels),
-                map_paths,
-                &names,
-            ),
+            Object::Trigger(t) => {
+                if let Some(other) = trigger_form(
+                    &mut f,
+                    t,
+                    live.as_ref(),
+                    (free_channel, &used_channels),
+                    map_paths,
+                    &names,
+                    &connections,
+                ) {
+                    request = Request::Locate(Key::Trigger(other));
+                }
+            }
             Object::Spawn(region) => {
                 f.heading("Spawn region");
                 f.stepper("Team (0 for any)", &mut region.team, [0, 4], None);
@@ -1158,7 +1200,7 @@ impl Editor {
                 );
             }
         }
-        if object != before {
+        if self.form_shown.edited(key, &before, &object) {
             if let (Object::Base(a), Object::Base(b)) = (&object, &before)
                 && a.team != b.team
                 && self
@@ -2142,6 +2184,111 @@ fn status_pill(text: &str, right: f32, y: f32, ok: bool, s: f32) {
     );
 }
 
+/// The most connected triggers listed each way; a note counts the rest.
+const MOST_CONNECTIONS: usize = 6;
+
+/// One trigger joined to the one being edited: its index, how they're
+/// joined, and what it does.
+type Connection = (usize, Link, String);
+
+/// What the trigger being edited sets off and what sets it off.
+#[derive(Default)]
+struct Connections {
+    sets_off: Vec<Connection>,
+    sets_off_total: usize,
+    set_off_by: Vec<Connection>,
+    set_off_by_total: usize,
+}
+
+impl Editor {
+    fn connections(&self, at: usize) -> Connections {
+        let names = &self.doc.map.group_names;
+        let triggers = &self.doc.map.triggers;
+        let list = |found: &[(usize, Link)]| -> Vec<Connection> {
+            found
+                .iter()
+                .take(MOST_CONNECTIONS)
+                .filter_map(|&(other, link)| {
+                    let trigger = triggers.get(other)?;
+                    Some((other, link, describe_trigger_named(trigger, names)))
+                })
+                .collect()
+        };
+        let mut found = Vec::new();
+        self.wiring.links_from(at, &mut found);
+        let (sets_off, sets_off_total) = (list(&found), found.len());
+        self.wiring.links_into(at, &mut found);
+        Connections {
+            sets_off,
+            sets_off_total,
+            set_off_by: list(&found),
+            set_off_by_total: found.len(),
+        }
+    }
+}
+
+/// One way's list of connected triggers. Returns the one clicked.
+fn connection_rows(f: &mut Form, title: &str, rows: &[Connection], total: usize) -> Option<usize> {
+    if rows.is_empty() {
+        return None;
+    }
+    let s = f.s;
+    let mut picked = None;
+    label(
+        &format!("{title} · {total}"),
+        f.x,
+        f.y + 12. * s,
+        12. * s,
+        muted_color(),
+    );
+    f.y += 18. * s;
+    let size = 11.5 * s;
+    for (other, link, text) in rows {
+        let row = Rect::new(f.x, f.y, f.w, 22. * s);
+        let over = contains(row);
+        draw_rectangle(
+            row.x,
+            row.y,
+            row.w,
+            row.h,
+            alpha(line_color(), if over { 0.5 } else { 0.16 }),
+        );
+        draw_rectangle(row.x, row.y, 3. * s, row.h, Editor::link_color(*link));
+        let number = (other + 1).to_string();
+        let tag = label_width(&number, size) + 8. * s;
+        label(
+            &number,
+            row.x + 9. * s,
+            row.y + 15.5 * s,
+            size,
+            text_color(),
+        );
+        label(
+            &fitted_label(text, size, row.w - tag - 15. * s),
+            row.x + 9. * s + tag,
+            row.y + 15.5 * s,
+            size,
+            muted_color(),
+        );
+        if over && is_mouse_button_pressed(MouseButton::Left) {
+            picked = Some(*other);
+        }
+        f.y += 24. * s;
+    }
+    if total > rows.len() {
+        label(
+            &format!("and {} more", total - rows.len()),
+            f.x + 9. * s,
+            f.y + 11. * s,
+            size,
+            muted_color(),
+        );
+        f.y += 17. * s;
+    }
+    f.y += 5. * s;
+    picked
+}
+
 fn trigger_form(
     f: &mut Form,
     t: &mut MapTrigger,
@@ -2149,7 +2296,8 @@ fn trigger_form(
     (free_channel, used_channels): (Option<u8>, &[bool]),
     map_paths: usize,
     names: &[GroupName],
-) {
+    connections: &Connections,
+) -> Option<usize> {
     let s = f.s;
     let summary = describe_trigger_named(t, names);
     let lines = wrapped_lines(&summary, f.w - 18. * s, 13. * s);
@@ -2166,6 +2314,23 @@ fn trigger_form(
         );
     }
     f.y += h + 10. * s;
+    let mut picked = None;
+    if !connections.sets_off.is_empty() || !connections.set_off_by.is_empty() {
+        f.heading("Connections");
+        picked = connection_rows(
+            f,
+            "Sets off",
+            &connections.sets_off,
+            connections.sets_off_total,
+        );
+        picked = connection_rows(
+            f,
+            "Set off by",
+            &connections.set_off_by,
+            connections.set_off_by_total,
+        )
+        .or(picked);
+    }
     f.heading("When");
     f.pick("", &mut t.when, &TriggerWhen::ALL, TriggerWhen::name, 3);
     match t.when {
@@ -2631,6 +2796,7 @@ fn trigger_form(
     f.integer("Chance %", &mut chance, [1, 100]);
     t.chance = chance as u8;
     f.toggle("Once per round", &mut t.once);
+    picked
 }
 
 thread_local! {
@@ -3670,4 +3836,28 @@ fn effect_form(f: &mut Form, e: &mut ParticleEffect) {
     f.color(&mut e.color);
     f.heading("End colour");
     f.color(&mut e.end_color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_change_from_what_the_form_first_showed_is_an_edit() {
+        let key = Key::Trigger(3);
+        let mut shown = FormShown::default();
+        // A stored 0 the form shows as 1 is not an edit, however long it's open.
+        assert!(!shown.edited(key, &0, &1));
+        assert!(!shown.edited(key, &0, &1));
+        // Stepping it is, and the next frame starts from the new value.
+        assert!(shown.edited(key, &0, &2));
+        assert!(!shown.edited(key, &2, &2));
+        // Stepping back to the value it first showed still counts.
+        assert!(shown.edited(key, &2, &1));
+        assert!(!shown.edited(key, &1, &1));
+        // Undo, or another object, starts over without writing anything.
+        assert!(!shown.edited(key, &7, &7));
+        assert!(!shown.edited(Key::Trigger(4), &0, &1));
+        assert!(shown.edited(Key::Trigger(4), &0, &5));
+    }
 }

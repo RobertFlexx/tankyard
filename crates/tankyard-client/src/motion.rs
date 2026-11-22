@@ -8,6 +8,7 @@
 //! keeps its own motion. Motion travels through vertex colors, 16 bits per
 //! axis, so the world draws in a handful of batches and the shader writes it
 //! out as floats.
+use crate::graphics::{draw_circle, draw_poly};
 use crate::{render::View, tank_model::Primitive};
 use macroquad::prelude::*;
 use std::collections::HashMap;
@@ -116,6 +117,7 @@ impl History {
         local: EntityId,
         view: &View,
         previous_positions: &HashMap<EntityId, (V2, f32)>,
+        boss_fx: &crate::boss_fx::BossFx,
         interpolation: f32,
         render: Vec2,
     ) -> bool {
@@ -206,7 +208,11 @@ impl History {
             }
             for boss in &snapshot.bosses {
                 let radius = boss.radius * 1.7;
-                if let Some((here, color)) = motion(2, boss.id, at(boss.id, boss.pos), radius) {
+                // A hull shoved back by its own shot is drawn there, so its
+                // motion includes the shove.
+                let kick = boss_fx.kick(boss, 1.);
+                let place = at(boss.id, boss.pos) + V2::new(kick.x, kick.y);
+                if let Some((here, color)) = motion(2, boss.id, place, radius) {
                     draw_circle(here.x, here.y, radius * now.zoom, color);
                 }
             }

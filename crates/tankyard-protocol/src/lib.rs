@@ -757,6 +757,27 @@ mod tests {
     use tankyard_core::V2;
 
     #[test]
+    fn a_bosss_host_only_steering_never_travels_in_a_snapshot() {
+        let mut world = tankyard_core::World::new(
+            tankyard_core::WorldConfig {
+                target_count: 0,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            tankyard_content::Content::builtin(),
+        );
+        world.add_player("Pilot", false);
+        assert_ne!(world.spawn_boss(tankyard_core::BossKind::Sentinel), 0);
+        let boss = world.bosses.remove(0);
+        let plain = postcard::to_stdvec(&boss).unwrap();
+        let mut steering = boss;
+        steering.dodge = V2::new(0.7, -0.4);
+        assert_eq!(postcard::to_stdvec(&steering).unwrap(), plain);
+        let decoded: tankyard_core::Boss = postcard::from_bytes(&plain).unwrap();
+        assert_eq!(decoded.dodge, V2::ZERO);
+    }
+
+    #[test]
     fn input_history_recovers_taps_across_wrap_and_rejects_malformed_bundles() {
         let mut history = InputBundle::default();
         for sequence in [u32::MAX - 1, u32::MAX, 0, 1] {

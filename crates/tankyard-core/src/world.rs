@@ -1482,7 +1482,7 @@ impl World {
                 .map_or(0, |c| c.0);
             // A boss fight runs for a minute or more, so everyone who helped
             // in the last one counts, not only the last few seconds.
-            self.reward_within(id, killer, 12000, 12000, BOSS_CREDIT_TICKS);
+            self.reward_within(id, killer, BOSS_REWARD, BOSS_REWARD, BOSS_CREDIT_TICKS);
             if self.config.mode == Mode::BossRush {
                 let allies: Vec<_> = self.tanks.iter().map(|t| t.id).collect();
                 for ally in allies {
@@ -1493,7 +1493,7 @@ impl World {
             if mother && self.config.mode == Mode::Mothership {
                 self.finish(Some(if team == 1 { 2 } else { 1 }), "Mothership destroyed");
             }
-            self.event(EventKind::Destroy, pos, id, 12000, team);
+            self.event(EventKind::Destroy, pos, id, BOSS_REWARD, team);
             // Credit the player who did the most damage, so everyone can see
             // who brought the boss down. Older clients show it as a normal kill.
             if let Some(hunter) = self.tanks.iter().find(|t| t.id == killer) {
@@ -1508,7 +1508,7 @@ impl World {
                     EventKind::Kill,
                     pos,
                     killer,
-                    12000,
+                    BOSS_REWARD,
                     hunter_team,
                     Some(elimination),
                 );

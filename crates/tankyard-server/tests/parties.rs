@@ -121,6 +121,92 @@ fn roster_contains_every_party_member_independent_of_snapshot_interest() {
             .any(|member| member.client == second.client_id())
     );
 }
+fn voice(client: &NetworkClient, sequence: u32) -> tankyard_protocol::VoiceFrame {
+    tankyard_protocol::VoiceFrame {
+        round: client.player_round.unwrap(),
+        sequence,
+        // The transport treats codec payloads as opaque bounded packets.
+        samples: vec![0xf8; 240],
+    }
+}
+
+#[test]
+fn a_party_hears_each_other_anywhere_down_or_alive_and_between_rounds() {
+    let (mut server, invite) = arena(Mode::Ffa);
+    let mut speaker = NetworkClient::connect(&invite.link(), "Speaker", "").unwrap();
+    let mut far = NetworkClient::connect(&invite.link(), "Far", "").unwrap();
+    let mut down = NetworkClient::connect(&invite.link(), "Down", "").unwrap();
+    ready(&mut server, &mut [&mut speaker, &mut far, &mut down]);
+    pump(&mut server, &mut [&mut speaker, &mut far, &mut down], 65);
+    assert!(speaker.voice_enabled);
+    assert_eq!(speaker.party_members.len(), 3);
+    let (a, b, c) = (
+        speaker.player_id.unwrap(),
+        far.player_id.unwrap(),
+        down.player_id.unwrap(),
+    );
+    for tank in &mut server.arenas[0].session.world.tanks {
+        if tank.id == a {
+            tank.pos = tankyard_core::V2::new(-1500., -1000.);
+        } else if tank.id == b {
+            tank.pos = tankyard_core::V2::new(1500., 1000.);
+        } else if tank.id == c {
+            tank.alive = false;
+        }
+    }
+    // Far apart, and to someone who is down, at full volume.
+    assert!(speaker.send_voice(voice(&speaker, 1)));
+    pump(&mut server, &mut [&mut speaker, &mut far, &mut down], 6);
+    for listener in [&mut far, &mut down] {
+        let packet = listener.voice_packets.pop_front().expect("heard");
+        assert_eq!((packet.player, packet.volume), (a, u8::MAX));
+    }
+    assert!(speaker.voice_packets.is_empty(), "never hears itself");
+
+    // Someone who is down can still talk to the party.
+    assert!(down.send_voice(voice(&down, 1)));
+    pump(&mut server, &mut [&mut speaker, &mut far, &mut down], 6);
+    assert_eq!(speaker.voice_packets.pop_front().unwrap().player, c);
+    assert_eq!(far.voice_packets.pop_front().unwrap().player, c);
+
+    // A finished round doesn't end the conversation.
+    server.arenas[0].session.world.match_state.finished = true;
+    assert!(speaker.send_voice(voice(&speaker, 2)));
+    pump(&mut server, &mut [&mut speaker, &mut far, &mut down], 6);
+    assert_eq!(far.voice_packets.pop_front().unwrap().frame.sequence, 2);
+    far.voice_packets.clear();
+    down.voice_packets.clear();
+
+    // Nor does the next one, and replays are still dropped.
+    assert!(
+        !server
+            .admin_command("restart")
+            .message
+            .starts_with("Error:")
+    );
+    pump(&mut server, &mut [&mut speaker, &mut far, &mut down], 65);
+    far.voice_packets.clear();
+    assert!(speaker.send_voice(voice(&speaker, 5)));
+    pump(&mut server, &mut [&mut speaker, &mut far, &mut down], 6);
+    assert_eq!(far.voice_packets.pop_front().unwrap().frame.sequence, 5);
+    assert!(speaker.send_voice(voice(&speaker, 5)));
+    pump(&mut server, &mut [&mut speaker, &mut far, &mut down], 6);
+    assert!(far.voice_packets.is_empty(), "a replayed frame is dropped");
+}
+
+#[test]
+fn a_server_with_voice_off_carries_no_party_voice() {
+    let (mut server, invite) = arena(Mode::Ffa);
+    let mut speaker = NetworkClient::connect(&invite.link(), "Speaker", "").unwrap();
+    let mut listener = NetworkClient::connect(&invite.link(), "Listener", "").unwrap();
+    ready(&mut server, &mut [&mut speaker, &mut listener]);
+    pump(&mut server, &mut [&mut speaker, &mut listener], 65);
+    server.settings.voice_enabled = false;
+    assert!(speaker.send_voice(voice(&speaker, 1)));
+    pump(&mut server, &mut [&mut speaker, &mut listener], 6);
+    assert!(listener.voice_packets.is_empty());
+}
+
 fn pump(server: &mut UdpServer, clients: &mut [&mut NetworkClient], ticks: usize) {
     for _ in 0..ticks {
         for client in clients.iter_mut() {
