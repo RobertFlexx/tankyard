@@ -695,9 +695,9 @@ impl VoiceChat {
             } else if !self.active {
                 "Voice resumes when you are alive and playing."
             } else if self.party && transmitting {
-                "Click or M to mute. Everyone in your party can hear you, wherever they are."
+                "Click or M to mute. Your party can hear you anywhere, snacks included."
             } else if self.party {
-                "Click or M to unmute. Everyone in your party will hear you. Use headphones."
+                "Click or M to unmute. Your whole party will hear you. Headphones, please."
             } else if transmitting {
                 "Click or M to mute. Nearby players can hear you."
             } else {

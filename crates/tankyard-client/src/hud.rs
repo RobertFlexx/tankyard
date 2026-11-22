@@ -399,6 +399,8 @@ pub struct Hud {
     cards_shown: u32,
     /// The killer card on screen: who, and when it started.
     card: Option<(EntityId, f64)>,
+    /// When the local tank last died.
+    died_at: f64,
     /// The current map's palette accent, which tints minimap cover.
     pub palette: Color,
     pub practice: bool,
@@ -441,6 +443,7 @@ impl Hud {
             deaths: 0,
             cards_shown: 0,
             card: None,
+            died_at: 0.,
             palette: tankyard_client::map_model::palette("slate"),
             practice: false,
             editor_playtest: false,
@@ -1117,6 +1120,7 @@ impl Hud {
             self.card = None;
         } else if self.deaths != self.cards_shown {
             self.cards_shown = self.deaths;
+            self.died_at = get_time();
             self.card = self
                 .killed_by
                 .filter(|&killer| killer != local && snapshot.tanks.iter().any(|t| t.id == killer))
@@ -1144,6 +1148,7 @@ impl Hud {
                 .find(|t| Some(t.id) == self.spectating && t.alive)
             {
                 self.spectator_bar(tank, watched, snapshot.config.mode, &mut actions, s);
+                self.gloat(snapshot, content, s);
             } else {
                 self.death(tank, snapshot, content, &mut actions, s);
             }
@@ -1495,6 +1500,9 @@ impl Hud {
                 muted_color(),
             );
         }
+        if let Some(line) = self.killed_by.and_then(|id| parting_shot(snapshot, id)) {
+            center_label(line, x, y + 21.0 * s, 13.0 * s, muted_color());
+        }
         center_label(
             &format!("Score: {}    Kills: {}", tank.score, tank.kills),
             x,
@@ -1548,6 +1556,39 @@ impl Hud {
         ) {
             actions.push(HudAction::Menu);
         }
+    }
+    /// A boss gets no killer card, and the camera moves on to someone else
+    /// right away, so it says its piece over the spectator bar instead.
+    fn gloat(&self, snapshot: &Snapshot, content: &Content, s: f32) {
+        let age = (get_time() - self.died_at) as f32;
+        let Some(id) = self.killed_by.filter(|_| age < GLOAT_SECONDS) else {
+            return;
+        };
+        let (Some(line), Some(killer)) = (
+            parting_shot(snapshot, id),
+            killer_name(snapshot, content, id),
+        ) else {
+            return;
+        };
+        let fade = ((GLOAT_SECONDS - age) / 0.4).min(1.);
+        let width = 440. * s;
+        let x = (screen_width() - width) * 0.5;
+        let y = screen_height() - 194. * s;
+        draw_rectangle(x, y, width, 47. * s, alpha(bg_color(), 0.84 * fade));
+        center_label(
+            &fitted_label(&format!("Destroyed by {killer}"), 13. * s, width - 24. * s),
+            x + width * 0.5,
+            y + 19. * s,
+            13. * s,
+            alpha(RED, fade),
+        );
+        center_label(
+            line,
+            x + width * 0.5,
+            y + 38. * s,
+            13. * s,
+            alpha(text_color(), fade),
+        );
     }
     fn spectator_bar(
         &self,
@@ -1793,6 +1834,34 @@ fn killer_name(snapshot: &Snapshot, content: &Content, id: EntityId) -> Option<S
         .find(|boss| boss.id == id)
         .map(|boss| format!("the {}", boss.kind.name()))
 }
+/// How long a boss's last word stays up over the spectator bar.
+const GLOAT_SECONDS: f32 = 6.;
+/// The last word, for whoever just lost to a boss or wandered into a base.
+fn parting_shot(snapshot: &Snapshot, id: EntityId) -> Option<&'static str> {
+    if id != 0 && tankyard_core::base_guard_team(id).is_some() {
+        return Some("They did ask you to leave.");
+    }
+    let boss = snapshot.bosses.iter().find(|boss| boss.id == id)?;
+    Some(boss_gloat(boss.kind))
+}
+fn boss_gloat(kind: BossKind) -> &'static str {
+    match kind {
+        BossKind::Sentinel => "It saw you first. It always does.",
+        BossKind::Prism => "Pretty, though.",
+        BossKind::Foundry => "You have been recycled.",
+        BossKind::Tempest => "Should have brought an umbrella.",
+        BossKind::Bastion => "The wall won.",
+        BossKind::Eclipse => "Lights out.",
+        BossKind::Guardian => "The pentagons thank you for visiting.",
+        BossKind::Summoner => "It brought friends. You brought a cannon.",
+        BossKind::Defender => "To be fair, you started it.",
+        BossKind::FallenOverlord => "Fallen, but not far enough.",
+        BossKind::FallenBooster => "It has never once used the brakes.",
+        BossKind::SiegeEngine => "There was a big red line. We did draw it.",
+        BossKind::Skirmisher => "Hit and run. Mostly hit.",
+        BossKind::Trapper => "It put those there on purpose.",
+    }
+}
 /// Where an arrow pointing `direction` from the middle of the screen meets its
 /// edge, kept clear of the title above and the score bars below.
 pub(crate) fn edge_point(direction: Vec2, s: f32) -> Vec2 {
@@ -1902,6 +1971,14 @@ fn evolution_cards(count: usize, width: f32, height: f32, requested: f32) -> Vec
 mod tests {
     use super::*;
     use tankyard_core::{World, WorldConfig};
+
+    #[test]
+    fn every_boss_gloats_in_its_own_words_on_one_line() {
+        let lines: std::collections::HashSet<_> =
+            BossKind::ALL.iter().map(|&kind| boss_gloat(kind)).collect();
+        assert_eq!(lines.len(), BossKind::ALL.len());
+        assert!(lines.iter().all(|line| line.len() <= 44), "{lines:?}");
+    }
 
     #[test]
     fn killer_card_easing_and_score_grouping() {

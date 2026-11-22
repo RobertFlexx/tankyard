@@ -1633,7 +1633,7 @@ impl Editor {
         }
         f.heading("What happened");
         if events.is_empty() {
-            f.note("Nothing yet. Press Play to run the arena's triggers.");
+            f.note("All quiet. Press Play to find out what you built.");
         }
         for event in &events {
             f.note(event);
@@ -1767,7 +1767,7 @@ impl Editor {
             f.note("Checks look for unfinished triggers, missing spawn regions, blocked portal exits and logic that nothing uses.");
         } else if problems.is_empty() {
             f.heading("Ready to play");
-            f.note("No problems found. Playtest with F5, or test from the pointer with Shift+F5.");
+            f.note("No problems found, which is suspicious. Playtest with F5, or test from the pointer with Shift+F5.");
         }
         for problem in &problems {
             let lines = wrapped_lines(&problem.text, w - 22. * s, 12.5 * s);

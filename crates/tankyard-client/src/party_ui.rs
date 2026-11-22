@@ -865,7 +865,7 @@ impl PartyUi {
         let end = self.lines.len().saturating_sub(self.scroll);
         if self.lines.is_empty() {
             label(
-                "Say hello to your party.",
+                "Say hello. Their drones are friendly, mostly.",
                 transcript.x + 10. * s,
                 transcript.y + 24. * s,
                 12. * s,
