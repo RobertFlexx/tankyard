@@ -163,10 +163,10 @@ fn creator_index(session: &LocalSession, player: EntityId) -> Result<usize, Stri
         .ok_or_else(|| "Verified creator player was not found.".into())
 }
 
-/// Trusted offline entry point; the network always uses the signed transport.
 /// What the server answers when a creator command has gone through.
 pub const APPLIED: &str = "Creator command applied.";
 
+/// Trusted offline entry point; the network always uses the signed transport.
 pub fn apply(
     session: &mut LocalSession,
     player: EntityId,

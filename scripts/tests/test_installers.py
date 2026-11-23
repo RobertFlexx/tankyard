@@ -40,6 +40,10 @@ from pathlib import Path
 args = sys.argv[1:]
 assert "--proto" in args and "=https" in args
 url = args[-1]
+output = Path(args[args.index("--output") + 1])
+if os.environ.get("TANKYARD_DOWNLOAD_LOG"):
+    with open(os.environ["TANKYARD_DOWNLOAD_LOG"], "a") as log:
+        print(output, file=log)
 failures = os.environ.get("TANKYARD_FAILURES")
 if failures:
     counter = Path(failures)
@@ -53,7 +57,6 @@ if url.startswith("https://api.github.com/"):
     if os.environ.get("TANKYARD_REQUIRE_TOKEN"):
         assert "Authorization: Bearer test-token" in args
     names = sorted(path.name for path in fixtures.iterdir())
-    output = Path(args[args.index("--output") + 1])
     if "/releases/assets/" in url:
         assert "Accept: application/octet-stream" in args
         source = fixtures / names[int(url.rsplit("/", 1)[-1])]
@@ -84,6 +87,9 @@ case "$1" in -s) printf '%s\\n' "${TANKYARD_TEST_SYSTEM:-Linux}" ;; -m) printenv
         self.env = dict(os.environ,
             PATH=str(self.shims) + os.pathsep + os.environ["PATH"],
             TANKYARD_FIXTURES=str(self.release), TANKYARD_TEST_ARCH="x86_64",
+            HOME=str(self.root / "home"), TMPDIR="",
+            XDG_CACHE_HOME=str(self.root / 'cache "with spaces"'),
+            TANKYARD_DOWNLOAD_LOG=str(self.root / "downloads.log"),
             XDG_DATA_HOME=str(self.root / "data"))
 
     def use_freebsd(self):
@@ -165,6 +171,62 @@ printf '%b' "${TANKYARD_TEST_LDD:-\\tlibc.so.7 => /lib/libc.so.7 (0x1)\\n}"
         else:
             self.assertNotEqual(result.returncode, 0, result.stdout)
         return result
+
+    def assert_workspace_cleaned(self, parent):
+        downloads = (self.root / "downloads.log").read_text().splitlines()
+        self.assertTrue(downloads)
+        for download in downloads:
+            workspace = Path(download).parent
+            self.assertEqual(workspace.parent, parent)
+            self.assertFalse(workspace.exists(), workspace)
+
+    def test_install_works_when_system_temporary_storage_is_full(self):
+        self.env["XDG_CACHE_HOME"] = ""
+        mktemp = self.shims / "mktemp"
+        mktemp.write_text(f"""#!/usr/bin/env python3
+import os, sys
+if sys.argv[1:] == ["-d"]:
+    print("mktemp: /tmp: No space left on device", file=sys.stderr)
+    sys.exit(1)
+os.execv({shutil.which("mktemp")!r}, [{shutil.which("mktemp")!r}, *sys.argv[1:]])
+""")
+        mktemp.chmod(0o755)
+        self.run_installer("--no-desktop")
+        self.assertTrue((self.destination / "tankyard").is_file())
+        self.assert_workspace_cleaned(Path(self.env["HOME"]) / ".cache/tankyard")
+
+    def test_install_uses_the_custom_cache_directory(self):
+        self.run_installer("--no-desktop")
+        self.assert_workspace_cleaned(Path(self.env["XDG_CACHE_HOME"]) / "tankyard")
+
+    def test_explicit_tmpdir_overrides_the_cache_directory(self):
+        temporary = self.root / "custom temporary directory"
+        temporary.mkdir()
+        cache = Path(self.env["XDG_CACHE_HOME"])
+        cache.write_text("unusable cache directory")
+        self.env["TMPDIR"] = str(temporary)
+        self.run_installer("--no-desktop")
+        self.assert_workspace_cleaned(temporary)
+        self.assertEqual(cache.read_text(), "unusable cache directory")
+
+    def test_extraction_failure_keeps_the_existing_install_and_cleans_up(self):
+        self.destination.mkdir()
+        current = self.destination / "tankyard"
+        current.write_text("old working game")
+        tar = self.shims / "tar"
+        tar.write_text(f"""#!/usr/bin/env python3
+import os, sys
+if "-xzf" in sys.argv:
+    print("tar: Cannot write: No space left on device", file=sys.stderr)
+    sys.exit(2)
+os.execv({shutil.which("tar")!r}, [{shutil.which("tar")!r}, *sys.argv[1:]])
+""")
+        tar.chmod(0o755)
+        result = self.run_installer("--no-desktop", success=False)
+        self.assertIn("Could not extract", result.stderr)
+        self.assertIn("TMPDIR", result.stderr)
+        self.assertEqual(current.read_text(), "old working game")
+        self.assert_workspace_cleaned(Path(self.env["XDG_CACHE_HOME"]) / "tankyard")
 
     def test_latest_installs_and_reinstalls_without_touching_settings(self):
         self.destination.mkdir()

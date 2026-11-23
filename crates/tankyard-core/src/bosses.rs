@@ -1800,6 +1800,88 @@ mod tests {
     }
 
     #[test]
+    fn every_boss_keeps_its_footing_through_a_long_messy_fight() {
+        // A small cheap generator, so a failure is the same failure next time.
+        let mut seed = 0x2F6E_2B17_u32;
+        let mut roll = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as f32 / u32::MAX as f32
+        };
+        for (width, height) in [(3200., 2600.), (700., 520.)] {
+            for kind in BossKind::ALL {
+                let mut world = arena();
+                world.config.width = width;
+                world.config.height = height;
+                let bounds = world.config.bounds();
+                world.walls = vec![
+                    Rect {
+                        x: bounds.x + bounds.w * 0.3,
+                        y: bounds.y + bounds.h * 0.2,
+                        w: bounds.w * 0.05,
+                        h: bounds.h * 0.45,
+                    },
+                    Rect {
+                        x: bounds.x + bounds.w * 0.62,
+                        y: bounds.y + bounds.h * 0.55,
+                        w: bounds.w * 0.2,
+                        h: bounds.h * 0.06,
+                    },
+                ];
+                world.tanks[0].max_health = 1e9;
+                world.spawn_boss(kind);
+                world.bosses[0].arrival = 0.;
+                let top = world.bosses[0].max_health;
+                for tick in 0..2400 {
+                    let tank = &mut world.tanks[0];
+                    tank.health = 1e9;
+                    if tick % 37 == 0 {
+                        // Teleports, corners and standing on the boss itself.
+                        tank.pos = match tick % 4 {
+                            0 => world.bosses[0].pos,
+                            1 => V2::new(bounds.x, bounds.y + bounds.h),
+                            _ => {
+                                V2::new(bounds.x + roll() * bounds.w, bounds.y + roll() * bounds.h)
+                            }
+                        };
+                        tank.vel =
+                            V2::from_angle(roll() * std::f32::consts::TAU) * (roll() * 2400.);
+                    }
+                    if tick % 600 == 0 {
+                        world.bosses[0].health = top * (1. - tick as f32 / 2600.);
+                    }
+                    world.update_bosses();
+                    let boss = &world.bosses[0];
+                    assert!(
+                        boss.pos.finite()
+                            && boss.vel.finite()
+                            && boss.leg.finite()
+                            && boss.read.finite()
+                            && boss.aim.is_finite(),
+                        "{kind:?} at tick {tick} in {width}x{height}"
+                    );
+                    assert!(
+                        boss.pos.x >= bounds.x
+                            && boss.pos.y >= bounds.y
+                            && boss.pos.x <= bounds.x + bounds.w
+                            && boss.pos.y <= bounds.y + bounds.h,
+                        "{kind:?} left the arena at tick {tick}: {:?}",
+                        boss.pos
+                    );
+                    assert!(
+                        world
+                            .projectiles
+                            .iter()
+                            .all(|p| p.pos.finite() && p.vel.finite())
+                    );
+                    world.projectiles.clear();
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_bosses_health_follows_the_arena_and_keeps_how_hurt_it_is() {
         let mut world = arena();
         world.tanks[0].pos = V2::new(2450., 1300.);

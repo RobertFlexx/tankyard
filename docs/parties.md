@@ -33,6 +33,7 @@ Everyone in a party hears each other at full volume, wherever they are: across t
 - **M** or the microphone button mutes and unmutes you. It's the same button as in a match, and it's also on the party roster at the side of the screen and on your own row in the party panel.
 - While your microphone is on behind a menu, a small marker at the corner of the screen says so.
 - A ring around a member's tank icon means they're talking. The button on their row mutes them for you only, and that mute follows them across respawns and rounds.
+- A crossed-out microphone on a member's icon means their mic is off, so you can stop wondering why nobody answered. It shows for members on 2.0.3 or newer.
 - A server with voice turned off carries no party voice.
 
 The leader's game carries the voice, so the leader needs 2.0.2 or newer for this. A 2.0.0 leader still carries voice by distance, as in an ordinary match.

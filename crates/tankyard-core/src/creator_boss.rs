@@ -245,7 +245,8 @@ impl World {
         let reach = tank
             .input
             .aim_distance
-            .clamp(radius * 1.6, GUN_SPEED * GUN_LIFETIME);
+            .max(radius * 1.6)
+            .min(GUN_SPEED * GUN_LIFETIME);
         let damage = GUN_DAMAGE * rules * tank.damage_scale.clamp(0.25, 8.);
         let mouth = muzzle(center, aim, step, radius);
         // A cannon pressed against cover holds fire rather than shoot through.

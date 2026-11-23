@@ -195,7 +195,13 @@ release_file() {
 case "$version" in latest|v[0-9]*) ;; *) die "Use a release tag such as v0.2.8." ;; esac
 case "$version" in *[!a-zA-Z0-9.-]*) die "Invalid release tag." ;; esac
 
-work_dir=$(mktemp -d)
+# /tmp can be a small RAM-backed filesystem. Stage on the user's disk by
+# default, while honoring an explicitly chosen temporary directory.
+temp_root=${TMPDIR:-${XDG_CACHE_HOME:-$HOME/.cache}/tankyard}
+mkdir -p "$temp_root" \
+    || die "Could not create $temp_root. Set TMPDIR to a writable directory with enough disk space."
+work_dir=$(mktemp -d "$temp_root/tankyard-install.XXXXXXXX") \
+    || die "Could not create an installer workspace in $temp_root. Set TMPDIR to a writable directory with enough disk space."
 pending_file=
 app_stage=
 cleanup() {
@@ -240,7 +246,8 @@ while IFS= read -r member; do
     case "$member" in /*|../*|*/../*) die "Invalid archive path." ;; esac
     case "$member" in "$root_name"|"$root_name/"*) ;; *) die "Unexpected archive contents." ;; esac
 done < "$work_dir/files"
-tar -xzf "$work_dir/$archive" -C "$work_dir"
+tar -xzf "$work_dir/$archive" -C "$work_dir" \
+    || die "Could not extract the release in $work_dir. Free disk space or set TMPDIR to a directory on a larger disk, then retry; the existing installation was kept."
 payload="$work_dir/$root_name"
 if [ "$component" = server ]; then
     binaries='tankyard-server tankyard-relay'

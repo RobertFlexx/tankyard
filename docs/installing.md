@@ -49,6 +49,13 @@ sh install.sh --server
 
 The installers retry busy-server answers from GitHub (502, 503, 504, 429 and dropped connections) with growing pauses, resume interrupted downloads, and stop at once on a missing release. When github.com's download links keep failing, the installers fetch the same files through the GitHub API instead; checksums are verified either way. Set `TANKYARD_GITHUB_TOKEN` to a GitHub token to raise the API's rate limit. Set `TANKYARD_DOWNLOAD_ATTEMPTS` to change the number of tries (6 by default). Nothing is replaced until the download is verified, so it is always safe to run the command again.
 
+The Unix shell installer stages downloads and extracted files in `${XDG_CACHE_HOME:-$HOME/.cache}/tankyard` and removes its temporary workspace on exit. Set `TMPDIR` to use another directory. If an older installer reports **No space left on device** while your main disk still has space, `/tmp` may be a small RAM-backed filesystem. Retry with a temporary directory on your home disk:
+
+~~~sh
+mkdir -p "$HOME/.cache/tankyard"
+curl -fsSL https://github.com/RobertFlexx/tankyard/releases/latest/download/install.sh | TMPDIR="$HOME/.cache/tankyard" sh
+~~~
+
 Use --server to install the dedicated server and WebSocket relay; it prints the next steps. [Hosting](hosting.md#a-dedicated-server) walks through writing a configuration, opening the port and running it as a service. Updates do not replace your server configuration.
 
 PowerShell accepts -Version, -InstallDir, -NoShortcut, -NoPath, and -Server.
