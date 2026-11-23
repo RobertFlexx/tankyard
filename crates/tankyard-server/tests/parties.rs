@@ -246,6 +246,68 @@ fn arena(mode: Mode) -> (UdpServer, Invite) {
     invite.address = server.address;
     (server, invite)
 }
+
+#[test]
+fn boss_special_aim_holds_and_long_warnings_keep_both_party_clients_connected() {
+    use tankyard_core::{BossKind, DT, V2};
+    let (mut server, invite) = arena(Mode::BossRush);
+    let mut leader = NetworkClient::connect(&invite.link(), "Leader", "").unwrap();
+    let mut friend = NetworkClient::connect(&invite.link(), "Friend", "").unwrap();
+    ready(&mut server, &mut [&mut leader, &mut friend]);
+    for kind in [
+        BossKind::FallenOverlord,
+        BossKind::SiegeEngine,
+        BossKind::Bastion,
+    ] {
+        let world = &mut server.arenas[0].session.world;
+        world.config.dynamic_arena = false;
+        world.projectiles.clear();
+        for (index, tank) in world.tanks.iter_mut().enumerate() {
+            tank.pos = V2::new(1800. + index as f32 * 60., 1600.);
+            tank.vel = V2::ZERO;
+            tank.protection = 0.;
+            tank.level = 45;
+        }
+        world.bosses.clear();
+        let boss_id = world.spawn_boss(kind);
+        assert_ne!(boss_id, 0);
+        let boss = &mut world.bosses[0];
+        boss.pos = V2::new(1800., 1000.);
+        boss.aim = -std::f32::consts::FRAC_PI_2;
+        boss.arrival = 0.;
+        boss.attack_timer = DT;
+        let mut waited = [false; 2];
+        let mut warned = [false; 2];
+        let mut fired = false;
+        for _ in 0..270 {
+            for tank in &mut server.arenas[0].session.world.tanks {
+                tank.health = tank.max_health;
+            }
+            pump(&mut server, &mut [&mut leader, &mut friend], 1);
+            for (index, client) in [&leader, &friend].into_iter().enumerate() {
+                if let Some(boss) = client
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.bosses.iter().find(|boss| boss.id == boss_id))
+                {
+                    waited[index] |= boss.attack_timer < 0.;
+                    warned[index] |= boss.attack_windup > kind.windup() - 0.1;
+                }
+            }
+            let boss = &server.arenas[0].session.world.bosses[0];
+            fired |= warned.iter().all(|&seen| seen) && boss.attack_windup == 0.;
+        }
+        assert_eq!(waited, [true; 2], "{kind:?} aim hold reached both clients");
+        assert_eq!(
+            warned, [true; 2],
+            "{kind:?} full warning reached both clients"
+        );
+        assert!(fired, "{kind:?} finished its special attack");
+        assert!(leader.is_ready() && friend.is_ready());
+        assert_eq!(server.player_count(), 2);
+    }
+}
+
 #[test]
 fn friends_replace_only_allied_bots_stay_together_after_changes_and_never_claim_host() {
     for mode in [

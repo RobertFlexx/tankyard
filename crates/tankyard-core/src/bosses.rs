@@ -22,8 +22,6 @@ const MOST_LEAD: f32 = 1.4;
 const LINING_UP: f32 = 0.6;
 /// How close its aim must be, in radians, before it locks a special.
 const LINED_UP: f32 = 0.1;
-/// The longest a ready special waits for the gun to come round, in seconds.
-const MOST_HOLD: f32 = 1.2;
 /// How far around its target one leg takes a circling boss, in radians.
 const LEG_TURN: f32 = 0.62;
 /// About how far a boss drives in a straight line before it picks a new one.
@@ -914,7 +912,7 @@ impl World {
                 b.attack_timer -= DT;
                 // A ready special waits a moment for the gun to come round,
                 // so its warning points at something.
-                if b.attack_timer <= 0. && (lined_up || b.attack_timer < -MOST_HOLD) {
+                if b.attack_timer <= 0. && (lined_up || b.attack_timer < -BOSS_AIM_HOLD) {
                     b.attack = (b.attack + 1) % 3;
                     b.attack_windup = b.kind.windup();
                     b.attack_timer = 9.5 - f32::from(b.phase) * 1.5;
@@ -1546,7 +1544,7 @@ mod tests {
         boss.arrival = 0.;
         boss.timer = 1000.;
         // Past the longest it waits, so it locks onto this exact line.
-        boss.attack_timer = -MOST_HOLD;
+        boss.attack_timer = -BOSS_AIM_HOLD;
         let id = boss.id;
         world.update_bosses();
         assert_eq!(
@@ -1758,7 +1756,7 @@ mod tests {
         boss.attack_timer = DT;
         world.update_bosses();
         assert_eq!(world.bosses[0].attack_windup, 0., "still pointing away");
-        for _ in 0..((MOST_HOLD + 0.1) / DT) as usize {
+        for _ in 0..((BOSS_AIM_HOLD + 0.1) / DT) as usize {
             world.tanks[0].health = 1e9;
             world.update_bosses();
         }
@@ -1797,7 +1795,7 @@ mod tests {
         boss.pos = V2::new(900., 1300.);
         boss.arrival = 0.;
         boss.timer = 1e6;
-        boss.attack_timer = -MOST_HOLD;
+        boss.attack_timer = -BOSS_AIM_HOLD;
         for _ in 0..(BossKind::Bastion.windup() / DT) as usize + 50 {
             world.bosses[0].pos = V2::new(900., 1300.);
             world.bosses[0].timer = 1e6;

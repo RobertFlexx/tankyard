@@ -675,8 +675,8 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && vector(b.goal)
                 && scalar(b.tactic_time)
                 && scalar(b.arrival)
-                && (0.0..=30.).contains(&b.attack_timer)
-                && (0.0..=0.91).contains(&b.attack_windup)
+                && (-tankyard_core::BOSS_AIM_HOLD..=30.).contains(&b.attack_timer)
+                && (0.0..=b.kind.windup()).contains(&b.attack_windup)
                 && b.attack <= 2
                 && (1..=3).contains(&b.phase)
                 && b.team <= 4
@@ -755,6 +755,172 @@ mod name_hardening_tests {
 mod tests {
     use super::*;
     use tankyard_core::V2;
+
+    #[test]
+    fn fallen_overlords_ready_special_survives_the_wire_while_turning() {
+        use tankyard_core::{BossKind, DT, Mode, World, WorldConfig};
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::BossRush,
+                boss_rush: vec![BossKind::FallenOverlord],
+                target_count: 0,
+                spawn_protection: 0.,
+                dynamic_arena: false,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        for (name, x) in [("Leader", 1800.), ("Friend", 1850.)] {
+            world.add_player(name, false);
+            let tank = world.tanks.last_mut().unwrap();
+            tank.pos = V2::new(x, 1600.);
+            tank.level = 45;
+        }
+        let boss = &mut world.bosses[0];
+        boss.pos = V2::new(1800., 1000.);
+        boss.aim = -std::f32::consts::FRAC_PI_2;
+        boss.arrival = 0.;
+        boss.attack_timer = DT;
+        let mut waited_for_aim = false;
+        let mut warned = false;
+        let mut fired = false;
+        for tick in 0..240 {
+            for tank in &mut world.tanks {
+                tank.health = tank.max_health;
+            }
+            world.step();
+            let snapshot = world.snapshot();
+            let boss = &snapshot.bosses[0];
+            waited_for_aim |= boss.attack_timer < 0.;
+            fired |= warned && boss.attack_windup == 0.;
+            warned |= boss.attack_windup > 0.;
+            let restored = decode_snapshot(&encode_snapshot(&snapshot).unwrap());
+            assert!(
+                restored.is_ok(),
+                "Fallen Overlord tick {tick}, timer {}, warning {}: {restored:?}",
+                boss.attack_timer,
+                boss.attack_windup,
+            );
+        }
+        assert!(waited_for_aim && warned && fired);
+    }
+
+    #[test]
+    fn every_boss_warning_survives_the_wire_and_invalid_timers_do_not() {
+        use tankyard_core::{BOSS_AIM_HOLD, BossKind, DT, World, WorldConfig};
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        world.add_player("Pilot", false);
+        for kind in BossKind::ALL {
+            world.bosses.clear();
+            assert_ne!(world.spawn_boss(kind), 0);
+            let mut snapshot = world.snapshot();
+            for phase in 1..=3 {
+                snapshot.bosses[0].phase = phase;
+                snapshot.bosses[0].attack = phase - 1;
+                snapshot.bosses[0].attack_windup = kind.windup();
+                for timer in [-BOSS_AIM_HOLD, -DT, 0., 7., 30.] {
+                    snapshot.bosses[0].attack_timer = timer;
+                    let restored = decode_snapshot(&encode_snapshot(&snapshot).unwrap());
+                    assert!(restored.is_ok(), "{kind:?}, phase {phase}: {restored:?}");
+                }
+            }
+            for timer in [
+                -BOSS_AIM_HOLD - DT,
+                30. + DT,
+                f32::NAN,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+            ] {
+                snapshot.bosses[0].attack_timer = timer;
+                assert!(
+                    decode_snapshot(&encode_snapshot(&snapshot).unwrap()).is_err(),
+                    "{kind:?} accepted invalid attack timer {timer}",
+                );
+            }
+            snapshot.bosses[0].attack_timer = 7.;
+            for windup in [
+                -DT,
+                kind.windup() + DT,
+                f32::NAN,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+            ] {
+                snapshot.bosses[0].attack_windup = windup;
+                assert!(
+                    decode_snapshot(&encode_snapshot(&snapshot).unwrap()).is_err(),
+                    "{kind:?} accepted invalid warning timer {windup}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_boss_phases_remain_decodable_in_moving_two_player_fights() {
+        use tankyard_core::{BossKind, DT, Mode, World, WorldConfig};
+        for kind in BossKind::ALL {
+            let mut world = World::new(
+                WorldConfig {
+                    mode: Mode::BossRush,
+                    boss_rush: vec![kind],
+                    target_count: 0,
+                    spawn_protection: 0.,
+                    dynamic_arena: false,
+                    ..Default::default()
+                },
+                Content::builtin(),
+            );
+            for name in ["Leader", "Friend"] {
+                world.add_player(name, false);
+                let tank = world.tanks.last_mut().unwrap();
+                tank.pos = V2::new(1800., 1600.);
+                tank.level = 45;
+                // Keep targets alive through lethal rounds so every phase
+                // exercises a full attack cycle rather than an empty arena.
+                tank.max_health = 1e9;
+                tank.health = tank.max_health;
+            }
+            world.bosses[0].pos = V2::new(1800., 1000.);
+            world.bosses[0].arrival = 0.;
+            for (phase, fraction) in [(1, 1.), (2, 0.5), (3, 0.2)] {
+                let boss = &mut world.bosses[0];
+                boss.health = boss.max_health * fraction;
+                boss.attack_timer = 0.;
+                let mut warned = false;
+                let mut fired = false;
+                for tick in 0..720 {
+                    for (index, tank) in world.tanks.iter_mut().enumerate() {
+                        tank.health = tank.max_health;
+                        tank.input.movement =
+                            V2::from_angle(tick as f32 * DT * 1.7 + index as f32 * 3.);
+                    }
+                    world.step();
+                    let boss = &world.bosses[0];
+                    assert_eq!(boss.phase, phase, "{kind:?}");
+                    fired |= warned && boss.attack_windup == 0.;
+                    warned |= boss.attack_windup > 0.;
+                    // The host sends snapshots at 20 Hz while simulating at 60.
+                    if tick % 3 == 0 {
+                        let restored =
+                            decode_snapshot(&encode_snapshot(&world.snapshot()).unwrap());
+                        assert!(
+                            restored.is_ok(),
+                            "{kind:?}, phase {phase}, tick {tick}: {restored:?}",
+                        );
+                    }
+                }
+                assert!(
+                    warned && fired,
+                    "{kind:?}, phase {phase} exercised its special"
+                );
+            }
+        }
+    }
 
     #[test]
     fn a_bosss_host_only_steering_never_travels_in_a_snapshot() {

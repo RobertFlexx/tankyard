@@ -807,6 +807,9 @@ pub const LETHAL_DAMAGE: f32 = 1.0e6;
 pub const BOSS_REWARD: u32 = 12_000;
 /// The shares of its health at which a boss enters its second and third phase.
 pub const BOSS_PHASES: [f32; 2] = [0.65, 0.3];
+/// The longest a ready special waits for the gun to face its target, in
+/// seconds. Its attack timer counts below zero during this hold.
+pub const BOSS_AIM_HOLD: f32 = 1.2;
 /// What a lethal round deals to a boss.
 pub const LETHAL_CAP: f32 = 1500.;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -839,6 +842,7 @@ pub struct Boss {
     pub tactic_time: f32,
     pub last_attacker: EntityId,
     pub arrival: f32,
+    /// Time until a special is ready; down to `-BOSS_AIM_HOLD` while aiming.
     #[serde(default)]
     pub attack_timer: f32,
     #[serde(default)]
