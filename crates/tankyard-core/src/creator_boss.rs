@@ -7,6 +7,28 @@ pub const HEALTH: f32 = 120_000.;
 pub const RADIUS: f32 = 180.;
 pub const ATTACK_COUNT: usize = 12;
 pub const MAX_COOLDOWN: f32 = 30.;
+/// Axiom's cannons, counted around the hull from the one on its aim.
+pub const CANNONS: usize = 6;
+/// How far from its center a cannon's mouth is, in hull radii.
+pub const MUZZLE: f32 = 1.42;
+/// How far from Axiom's center Repulse clears hostile shots.
+pub const REPULSE_REACH: f32 = 360.;
+/// How far from Axiom's center Gravity Well bends them.
+pub const GRAVITY_REACH: f32 = 900.;
+/// The forward cannons' turns while fire is held, as steps from the aim.
+const GUN_ORDER: [i8; 4] = [0, 1, 0, -1];
+const GUN_INTERVAL: f32 = 0.13;
+const GUN_SPEED: f32 = 860.;
+const GUN_DAMAGE: f32 = 22.;
+const GUN_RADIUS: f32 = 11.;
+const GUN_LIFETIME: f32 = 1.6;
+const GUN_PENETRATION: f32 = 3.;
+
+/// Where the mouth of the cannon `step` places around from the aim is.
+pub fn muzzle(center: V2, aim: f32, step: i8, radius: f32) -> V2 {
+    let angle = aim + f32::from(step) * std::f32::consts::TAU / CANNONS as f32;
+    center + V2::from_angle(angle) * radius * MUZZLE
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Attack {
@@ -58,6 +80,10 @@ impl Attack {
             Self::Reforge,
         ],
     ];
+    /// The attacks in the order the panel and the number row lay them out.
+    pub fn bar() -> &'static [Self] {
+        Self::GROUPS.as_flattened()
+    }
     pub fn index(self) -> usize {
         self as usize
     }
@@ -92,6 +118,33 @@ impl Attack {
             8.,
             MAX_COOLDOWN,
         ][self.index()]
+    }
+    /// Shots, speed, damage, radius, lifetime and kind.
+    fn stats(self) -> (usize, f32, f32, f32, f32, ProjectileKind) {
+        match self {
+            Self::Starfall => (9, 760., 36., 9., 2.5, ProjectileKind::Piercing),
+            Self::Sunburst => (24, 350., 28., 13., 3.2, ProjectileKind::Shell),
+            Self::Constellation => (12, 230., 24., 11., 4., ProjectileKind::Homing),
+            Self::Repulse => (32, 460., 20., 10., 1.2, ProjectileKind::Bullet),
+            Self::MeteorShower => (7, 310., 70., 16., 3.5, ProjectileKind::Explosive),
+            Self::CometLance => (1, 1050., 180., 25., 2.5, ProjectileKind::Piercing),
+            Self::NovaMines => (12, 120., 45., 14., 10., ProjectileKind::Mine),
+            Self::StarLattice => (8, 0., 12., 30., 8., ProjectileKind::Barrier),
+            Self::SolarTurrets => (6, 0., 30., 20., 12., ProjectileKind::Turret),
+            Self::GravityWell => (12, 180., 18., 12., 4., ProjectileKind::Homing),
+            Self::RiftDash | Self::Reforge => (0, 0., 0., 0., 0., ProjectileKind::Bullet),
+        }
+    }
+    /// How far from the center of a hull of radius `hull` this attack's shots
+    /// appear.
+    pub fn spawn_reach(self, hull: f32) -> f32 {
+        let offset = match self {
+            Self::NovaMines => 100.,
+            Self::StarLattice => 60.,
+            Self::SolarTurrets => 180.,
+            _ => 8.,
+        };
+        hull + self.stats().3 + offset
     }
     pub fn description(self) -> &'static str {
         [
@@ -150,6 +203,10 @@ impl World {
         tank.terrain = 1.;
         tank.push = V2::ZERO;
         tank.grip = 1.;
+        tank.rift_shots = 0;
+        tank.rift_armed = 0.;
+        tank.creator_reload = 0.;
+        tank.creator_turn = 0;
         self.tanks[index].creator_boss = enabled;
         self.tanks[index].creator_attacks = [0.; ATTACK_COUNT];
         self.tanks[index].pos = pos;
@@ -157,6 +214,71 @@ impl World {
         self.refresh_stats(player, true);
         self.config.modded = true;
         Ok(())
+    }
+    /// One tick of Axiom's own guns. While fire is held its forward cannons
+    /// take turns, each angled so the stream meets at the cursor.
+    pub(crate) fn creator_guns(&mut self, index: usize) {
+        let room = self.projectiles.len() < self.config.max_projectiles;
+        let rules = self.config.rules.damage_multiplier;
+        let tank = &mut self.tanks[index];
+        tank.charge = 0.;
+        tank.creator_reload = (tank.creator_reload - DT).max(0.);
+        if !tank.input.fire || (tank.spawn_immunity && tank.protection > 0.) {
+            return;
+        }
+        tank.protection = 0.;
+        tank.spawn_immunity = false;
+        if tank.creator_reload > 0. || !room {
+            return;
+        }
+        let step = GUN_ORDER[usize::from(tank.creator_turn) % GUN_ORDER.len()];
+        tank.creator_turn = (tank.creator_turn + 1) % GUN_ORDER.len() as u8;
+        tank.creator_reload = GUN_INTERVAL / tank.reload_scale.clamp(0.25, 6.);
+        let (id, team, center, aim, drift, radius) = (
+            tank.id,
+            tank.team,
+            tank.pos,
+            tank.aim,
+            tank.vel,
+            tank.radius,
+        );
+        let reach = tank
+            .input
+            .aim_distance
+            .clamp(radius * 1.6, GUN_SPEED * GUN_LIFETIME);
+        let damage = GUN_DAMAGE * rules * tank.damage_scale.clamp(0.25, 8.);
+        let mouth = muzzle(center, aim, step, radius);
+        // A cannon pressed against cover holds fire rather than shoot through.
+        if !self.position_clear(mouth, GUN_RADIUS)
+            || self
+                .walls
+                .iter()
+                .any(|&wall| physics::sweep_rect(center, mouth, GUN_RADIUS, wall).is_some())
+        {
+            return;
+        }
+        let heading = (center + V2::from_angle(aim) * reach - mouth).normalized();
+        let shot = self.simple_projectile(
+            id,
+            team,
+            mouth,
+            heading * GUN_SPEED + drift * 0.16,
+            ProjectileKind::Shell,
+            damage,
+            GUN_RADIUS,
+            GUN_LIFETIME,
+            GUN_PENETRATION,
+        );
+        self.projectiles.push(shot);
+        let tank = &mut self.tanks[index];
+        tank.shot_count = tank.shot_count.wrapping_add(1);
+        self.event(
+            EventKind::Shot,
+            mouth,
+            id,
+            ProjectileKind::Shell as u32,
+            team,
+        );
     }
     pub fn creator_attack(&mut self, player: EntityId, attack: Attack) -> Result<(), String> {
         let index = self
@@ -167,19 +289,7 @@ impl World {
         if self.tanks[index].creator_attacks[attack.index()] > 0. {
             return Err("Attack is recharging.".into());
         }
-        let (count, speed, damage, radius, lifetime, kind) = match attack {
-            Attack::Starfall => (9, 760., 36., 9., 2.5, ProjectileKind::Piercing),
-            Attack::Sunburst => (24, 350., 28., 13., 3.2, ProjectileKind::Shell),
-            Attack::Constellation => (12, 230., 24., 11., 4., ProjectileKind::Homing),
-            Attack::Repulse => (32, 460., 20., 10., 1.2, ProjectileKind::Bullet),
-            Attack::MeteorShower => (7, 310., 70., 16., 3.5, ProjectileKind::Explosive),
-            Attack::CometLance => (1, 1050., 180., 25., 2.5, ProjectileKind::Piercing),
-            Attack::NovaMines => (12, 120., 45., 14., 10., ProjectileKind::Mine),
-            Attack::StarLattice => (8, 0., 12., 30., 8., ProjectileKind::Barrier),
-            Attack::SolarTurrets => (6, 0., 30., 20., 12., ProjectileKind::Turret),
-            Attack::GravityWell => (12, 180., 18., 12., 4., ProjectileKind::Homing),
-            Attack::RiftDash | Attack::Reforge => (0, 0., 0., 0., 0., ProjectileKind::Bullet),
-        };
+        let (count, speed, damage, radius, lifetime, kind) = attack.stats();
         let tank = &self.tanks[index];
         let (origin, aim, team, radius_tank) = (tank.pos, tank.aim, tank.team, tank.radius);
         if attack == Attack::Reforge && tank.health >= tank.max_health {
@@ -193,13 +303,7 @@ impl World {
                 aim + i as f32 * std::f32::consts::TAU / count as f32
             };
             let direction = V2::from_angle(angle);
-            let offset = match attack {
-                Attack::NovaMines => 100.,
-                Attack::StarLattice => 60.,
-                Attack::SolarTurrets => 180.,
-                _ => 8.,
-            };
-            let pos = origin + direction * (radius_tank + radius + offset);
+            let pos = origin + direction * attack.spawn_reach(radius_tank);
             if self.position_clear(pos, radius) {
                 shots.push((pos, direction));
             }
@@ -210,7 +314,7 @@ impl World {
                 .filter(|p| {
                     p.owner == player
                         || (team > 0 && p.team == team)
-                        || p.pos.distance(origin) > 360.
+                        || p.pos.distance(origin) > REPULSE_REACH
                 })
                 .count()
         } else {
@@ -227,7 +331,9 @@ impl World {
         }
         if matches!(attack, Attack::Repulse) {
             self.projectiles.retain(|p| {
-                p.owner == player || (team > 0 && p.team == team) || p.pos.distance(origin) > 360.
+                p.owner == player
+                    || (team > 0 && p.team == team)
+                    || p.pos.distance(origin) > REPULSE_REACH
             });
         }
         if attack == Attack::GravityWell {
@@ -237,7 +343,7 @@ impl World {
                     && (team == 0 || shot.team != team)
                     && !shot.kind.is_drone()
                     && shot.frozen.is_none()
-                    && (radius_tank..900.).contains(&distance)
+                    && (radius_tank..GRAVITY_REACH).contains(&distance)
                 {
                     let inward = (origin - shot.pos).normalized() * shot.vel.length();
                     shot.vel = shot.vel.lerp(inward, 0.7);
@@ -350,6 +456,78 @@ mod tests {
         world.creator_form(id, true).unwrap();
         world.tanks[0].pos = world.config.bounds().center();
         (world, id)
+    }
+    #[test]
+    fn the_number_row_covers_every_attack_once() {
+        let bar = Attack::bar();
+        assert_eq!(bar.len(), ATTACK_COUNT);
+        for attack in Attack::ALL {
+            assert_eq!(
+                bar.iter().filter(|a| **a == attack).count(),
+                1,
+                "{attack:?}"
+            );
+        }
+    }
+    #[test]
+    fn holding_fire_runs_axioms_cannons_and_not_the_tank_underneath() {
+        let (mut world, id) = event_world();
+        world.tanks[0].aim = 0.;
+        world.tanks[0].input.aim = 0.;
+        world.tanks[0].input.aim_distance = 900.;
+        world.tanks[0].input.fire = true;
+        let center = world.tanks[0].pos;
+        let mut mouths = Vec::new();
+        for _ in 0..40 {
+            let known: Vec<_> = world.projectiles.iter().map(|p| p.id).collect();
+            world.step();
+            for shot in world.projectiles.iter().filter(|p| !known.contains(&p.id)) {
+                assert_eq!(shot.owner, id);
+                assert_eq!(shot.kind, ProjectileKind::Shell);
+                assert!(shot.damage >= GUN_DAMAGE * 0.99, "{}", shot.damage);
+                let reach = shot.pos.distance(center);
+                assert!((reach - RADIUS * MUZZLE).abs() < 24., "{reach}");
+                // Every stream leans in toward the cursor, ahead of the hull.
+                assert!(shot.vel.x > 0.);
+                mouths.push(shot.pos.y - center.y);
+            }
+        }
+        // 40 ticks at 60 Hz, one shot each 0.13 s.
+        assert!((4..=6).contains(&mouths.len()), "{}", mouths.len());
+        assert!(mouths.iter().any(|y| *y > 100.) && mouths.iter().any(|y| *y < -100.));
+        assert!(mouths.iter().any(|y| y.abs() < 20.));
+        assert!(world.tanks[0].vel.length() < 1., "firing doesn't shove it");
+    }
+    #[test]
+    fn axioms_cannons_respect_cover_the_shot_budget_and_their_reload() {
+        let (mut world, _) = event_world();
+        world.tanks[0].aim = 0.;
+        world.tanks[0].input.fire = true;
+        world.config.max_projectiles = 0;
+        for _ in 0..30 {
+            world.step();
+        }
+        assert!(world.projectiles.is_empty(), "no room, no shot");
+        world.config.max_projectiles = 256;
+        // Walls are rebuilt from the map each tick, so this drives the guns alone.
+        let center = world.tanks[0].pos;
+        world.walls = vec![Rect {
+            x: center.x + RADIUS + 4.,
+            y: center.y - 600.,
+            w: 20.,
+            h: 1200.,
+        }];
+        world.tanks[0].creator_turn = 0;
+        world.tanks[0].creator_reload = 0.;
+        world.creator_guns(0);
+        assert!(world.projectiles.is_empty(), "the wall stops the muzzle");
+        world.walls.clear();
+        world.tanks[0].creator_turn = 0;
+        world.tanks[0].creator_reload = 0.;
+        world.tanks[0].reload_scale = 2.;
+        world.creator_guns(0);
+        assert_eq!(world.projectiles.len(), 1);
+        assert!(world.tanks[0].creator_reload <= GUN_INTERVAL / 2. + 0.001);
     }
     #[test]
     fn form_changes_clear_class_effects_and_disable_the_underlying_ability() {

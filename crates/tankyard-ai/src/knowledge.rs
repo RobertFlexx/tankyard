@@ -14,6 +14,41 @@ use tankyard_core::{EntityId, EventKind, Mode, World};
 
 use crate::neural::{MotionNet, Network};
 
+/// A pair of class names, owned as a matchup's key or borrowed to look one
+/// up. Bots ask about matchups constantly and shouldn't copy names to do it.
+trait ClassPair {
+    fn names(&self) -> (&str, &str);
+}
+impl ClassPair for (String, String) {
+    fn names(&self) -> (&str, &str) {
+        (&self.0, &self.1)
+    }
+}
+impl ClassPair for (&str, &str) {
+    fn names(&self) -> (&str, &str) {
+        *self
+    }
+}
+impl<'a> std::borrow::Borrow<dyn ClassPair + 'a> for (String, String) {
+    fn borrow(&self) -> &(dyn ClassPair + 'a) {
+        self
+    }
+}
+impl std::hash::Hash for dyn ClassPair + '_ {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // As the tuple of strings hashes, which a borrowed key has to match.
+        let (a, b) = self.names();
+        a.hash(state);
+        b.hash(state);
+    }
+}
+impl PartialEq for dyn ClassPair + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        self.names() == other.names()
+    }
+}
+impl Eq for dyn ClassPair + '_ {}
+
 /// Bot memory shared by every arena of a server, or every match of a game.
 pub type SharedKnowledge = Arc<Mutex<Knowledge>>;
 
@@ -401,11 +436,11 @@ impl Knowledge {
     /// them all) to 1 (it wins them all); 0 without evidence.
     pub fn matchup(&self, mine: &str, theirs: &str) -> f32 {
         let (key, flip) = if mine < theirs {
-            ((mine.to_owned(), theirs.to_owned()), false)
+            ((mine, theirs), false)
         } else {
-            ((theirs.to_owned(), mine.to_owned()), true)
+            ((theirs, mine), true)
         };
-        let Some(entry) = self.matchups.get(&key) else {
+        let Some(entry) = self.matchups.get(&key as &dyn ClassPair) else {
             return 0.0;
         };
         let lead = (entry.wins - entry.losses) / (entry.wins + entry.losses + 4.0);
@@ -583,6 +618,28 @@ mod tests {
         world.tick += 60;
         knowledge.observe(&world);
         assert_eq!(knowledge.lives(), 16);
+    }
+
+    #[test]
+    fn a_borrowed_pair_of_names_finds_the_owned_matchup() {
+        let mut knowledge = Knowledge::default();
+        knowledge.matchups.insert(
+            ("alpha".to_owned(), "beta".to_owned()),
+            Matchup {
+                wins: 6.,
+                losses: 1.,
+            },
+        );
+        let lead = knowledge.matchup("alpha", "beta");
+        assert!(lead > 0.);
+        assert_eq!(
+            knowledge.matchup("beta", "alpha"),
+            -lead,
+            "and the other way"
+        );
+        assert_eq!(knowledge.matchup("alpha", "gamma"), 0.);
+        // Where one name ends is part of the key.
+        assert_eq!(knowledge.matchup("alph", "abeta"), 0.);
     }
 
     #[test]

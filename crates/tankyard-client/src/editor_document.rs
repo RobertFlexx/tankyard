@@ -1157,6 +1157,7 @@ impl Document {
     /// Specific problems with keys to show them, blocking ones first.
     pub fn problems(&self) -> Vec<Problem> {
         let m = &self.map;
+        let census = Census::of(self);
         let mut problems = Vec::new();
         let mut note = |key: Option<Key>, text: String, blocking: bool| {
             problems.push(Problem {
@@ -1172,7 +1173,7 @@ impl Document {
                 note(key, format!("{name}: {error}."), true);
                 continue;
             }
-            let members = |group: u8| self.items().any(|(_, _, g)| g == group);
+            let members = |group: u8| census.occupied[usize::from(group)];
             if trigger.action.targets_group() && !members(trigger.group) {
                 note(
                     key,
@@ -1207,29 +1208,12 @@ impl Document {
                     false,
                 );
             }
-            let senders = |channel: u8| {
-                m.triggers.iter().any(|t| {
-                    t.sends().any(|sent| sent == channel)
-                        || (t.otherwise == channel && t.only_if.is_some())
-                })
-            };
-            let counted = |counter: u8| {
-                m.triggers
-                    .iter()
-                    .any(|t| t.action.targets_counter() && t.group == counter)
-            };
+            let senders = |channel: u8| census.sent[usize::from(channel)];
+            let counted = |counter: u8| census.counted[usize::from(counter)];
             // Groups that can change during a round: what triggers show, hide,
             // toggle or animate. Scripts can too, so these stay notes.
-            let switched = |group: u8| {
-                m.triggers
-                    .iter()
-                    .any(|t| t.action.switches_group() && t.group == group)
-            };
-            let animated = |group: u8| {
-                m.triggers.iter().any(|t| {
-                    (t.action.animates() || t.action == TriggerAction::Path) && t.group == group
-                })
-            };
+            let switched = |group: u8| census.switched[usize::from(group)];
+            let animated = |group: u8| census.animated[usize::from(group)];
             match trigger.when {
                 TriggerWhen::Signal if !senders(trigger.source) => note(
                     key,
@@ -1293,11 +1277,7 @@ impl Document {
                     false,
                 );
             }
-            let receives = |channel: u8| {
-                m.triggers
-                    .iter()
-                    .any(|t| t.when == TriggerWhen::Signal && t.source == channel)
-            };
+            let receives = |channel: u8| census.heard[usize::from(channel)];
             let mut unheard: Vec<u8> = trigger
                 .sends()
                 .filter(|&channel| !receives(channel))
@@ -1367,7 +1347,7 @@ impl Document {
             }
             if trigger.action == TriggerAction::Reset
                 && trigger.group > 0
-                && !m.triggers.iter().any(|t| t.member == trigger.group)
+                && !census.members[usize::from(trigger.group)]
             {
                 note(
                     key,
@@ -1426,6 +1406,83 @@ impl Document {
         }
         problems.sort_by_key(|p| !p.blocking);
         problems
+    }
+    /// The objects whose name, group or job holds every word of `query`, in
+    /// drawing order. A word of digits has to be a whole number, so "group 5"
+    /// doesn't turn up group 15 as well.
+    pub fn find(&self, query: &str) -> Vec<Key> {
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        if words.is_empty() {
+            return Vec::new();
+        }
+        let mut text = String::new();
+        self.items()
+            .filter(|&(key, _, group)| {
+                text.clear();
+                self.search_text(key, group, &mut text);
+                let text = text.to_lowercase();
+                words.iter().all(|word| holds_word(&text, word))
+            })
+            .map(|(key, _, _)| key)
+            .collect()
+    }
+    /// Everything about an object that someone might search for.
+    fn search_text(&self, key: Key, group: u8, text: &mut String) {
+        use std::fmt::Write;
+        let m = &self.map;
+        match key {
+            Key::Wall(_) => text.push_str("wall"),
+            Key::Block(index) => {
+                let _ = write!(text, "{} block", m.blocks[index].style.name());
+            }
+            Key::Zone(index) => text.push_str(m.zones[index].kind.name()),
+            Key::Decor(index) => {
+                let decor = &m.decor[index];
+                let _ = write!(text, "{} {}", decor.kind.name(), decor.text);
+            }
+            Key::Trigger(index) => {
+                let trigger = &m.triggers[index];
+                let _ = write!(
+                    text,
+                    "trigger {} {}",
+                    index + 1,
+                    describe_trigger_named(trigger, &m.group_names)
+                );
+                if let Some(ui) = &trigger.ui {
+                    let _ = write!(text, " {} {}", ui.widget.title, ui.widget.text);
+                }
+            }
+            Key::Spawn(_) => text.push_str("spawn region"),
+            Key::Base(_) => text.push_str("team base"),
+            Key::Objective(_) => text.push_str("objective"),
+        }
+        if group > 0 {
+            let _ = write!(text, " group {group}");
+            if let Some(name) = m.group_name(group) {
+                let _ = write!(text, " {name}");
+            }
+        }
+    }
+    /// What separates this version from `before`, for telling someone what
+    /// an undo or redo just did.
+    pub fn change_from(&self, before: &Self) -> Change {
+        let (now, then) = (&self.map, &before.map);
+        let moved = |key: Key| self.layers.get(key) != before.layers.get(key);
+        let mut change = Change::default();
+        change.tally(&now.walls, &then.walls, Key::Wall, moved);
+        change.tally(&now.blocks, &then.blocks, Key::Block, moved);
+        change.tally(&now.zones, &then.zones, Key::Zone, moved);
+        change.tally(&now.decor, &then.decor, Key::Decor, moved);
+        change.tally(&now.triggers, &then.triggers, Key::Trigger, moved);
+        change.tally(&now.spawn_regions, &then.spawn_regions, Key::Spawn, moved);
+        change.tally(&now.team_bases, &then.team_bases, Key::Base, moved);
+        change.tally(
+            &now.objective_positions,
+            &then.objective_positions,
+            Key::Objective,
+            moved,
+        );
+        change
     }
     pub fn object(&self, key: Key) -> Option<Object> {
         let m = &self.map;
@@ -2478,9 +2535,305 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
     tag
 }
 
+/// Whether `text` holds `word`. A run of digits has to be a whole number.
+fn holds_word(text: &str, word: &str) -> bool {
+    if word.bytes().all(|byte| byte.is_ascii_digit()) {
+        text.split(|c: char| !c.is_alphanumeric())
+            .any(|token| token == word)
+    } else {
+        text.contains(word)
+    }
+}
+
+/// What the map's triggers do, by number, so the checks on each trigger look
+/// an answer up instead of walking all the others again. At the trigger
+/// limit that's the difference between a hitch and nothing.
+struct Census {
+    /// Groups holding an object.
+    occupied: [bool; 256],
+    /// Channels something sends on.
+    sent: [bool; 256],
+    /// Channels something listens to.
+    heard: [bool; 256],
+    /// Counters something changes.
+    counted: [bool; 256],
+    /// Groups something shows, hides or toggles.
+    switched: [bool; 256],
+    /// Groups something moves, turns, fades or sends along a path.
+    animated: [bool; 256],
+    /// Groups with a trigger among their members.
+    members: [bool; 256],
+}
+
+impl Census {
+    fn of(doc: &Document) -> Self {
+        let mut census = Self {
+            occupied: [false; 256],
+            sent: [false; 256],
+            heard: [false; 256],
+            counted: [false; 256],
+            switched: [false; 256],
+            animated: [false; 256],
+            members: [false; 256],
+        };
+        for (_, _, group) in doc.items() {
+            census.occupied[usize::from(group)] = true;
+        }
+        for t in &doc.map.triggers {
+            for channel in t.sends() {
+                census.sent[usize::from(channel)] = true;
+            }
+            if t.only_if.is_some() {
+                census.sent[usize::from(t.otherwise)] = true;
+            }
+            if t.when == TriggerWhen::Signal {
+                census.heard[usize::from(t.source)] = true;
+            }
+            let group = usize::from(t.group);
+            census.counted[group] |= t.action.targets_counter();
+            census.switched[group] |= t.action.switches_group();
+            census.animated[group] |= t.action.animates() || t.action == TriggerAction::Path;
+            census.members[usize::from(t.member)] = true;
+        }
+        census
+    }
+}
+
+/// What separates two versions of a document.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Change {
+    /// Objects in the newer version that are new or not as they were.
+    pub touched: Vec<Key>,
+    pub gained: usize,
+    pub lost: usize,
+    pub altered: usize,
+}
+
+impl Change {
+    /// One kind of object, old list against new. A list that kept its length
+    /// compares place by place; one that grew is the old list with things
+    /// put in, so what doesn't line up with it is what's new.
+    fn tally<T: PartialEq>(
+        &mut self,
+        now: &[T],
+        then: &[T],
+        key: fn(usize) -> Key,
+        moved: impl Fn(Key) -> bool,
+    ) {
+        use std::cmp::Ordering;
+        match now.len().cmp(&then.len()) {
+            Ordering::Equal => {
+                for (index, (new, old)) in now.iter().zip(then).enumerate() {
+                    let key = key(index);
+                    if new != old || moved(key) {
+                        self.altered += 1;
+                        self.touched.push(key);
+                    }
+                }
+            }
+            Ordering::Greater => {
+                self.gained += now.len() - then.len();
+                let mut older = then.iter().peekable();
+                for (index, new) in now.iter().enumerate() {
+                    if older.peek().is_some_and(|&old| old == new) {
+                        older.next();
+                    } else {
+                        self.touched.push(key(index));
+                    }
+                }
+            }
+            Ordering::Less => self.lost += then.len() - now.len(),
+        }
+    }
+    /// What happened, in a line. `verb` is "Undo" or "Redo".
+    pub fn words(&self, verb: &str) -> String {
+        let count = |n: usize| {
+            if n == 1 {
+                "1 object".to_owned()
+            } else {
+                format!("{n} objects")
+            }
+        };
+        match (self.gained, self.lost, self.altered) {
+            (0, 0, 0) => format!("{verb} changed the map's settings."),
+            (n, 0, 0) => format!("{verb} brought back {}.", count(n)),
+            (0, n, 0) => format!("{verb} removed {}.", count(n)),
+            (0, 0, n) => format!("{verb} changed {}.", count(n)),
+            (back, gone, changed) => {
+                format!("{verb}: {back} back, {gone} gone, {changed} changed.")
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A map of triggers with their numbers shuffled about by a small
+    /// generator, so the census meets every combination.
+    fn shuffled_triggers(seed: u64) -> Vec<MapTrigger> {
+        let mut state = seed;
+        let mut roll = move |range: u64| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 33) % range) as u8
+        };
+        let actions = [
+            TriggerAction::Signal,
+            TriggerAction::Random,
+            TriggerAction::Sequence,
+            TriggerAction::Toggle,
+            TriggerAction::Show,
+            TriggerAction::Hide,
+            TriggerAction::Path,
+            TriggerAction::Reset,
+            TriggerAction::Shove,
+        ];
+        let whens = [
+            TriggerWhen::Signal,
+            TriggerWhen::Start,
+            TriggerWhen::Every,
+            TriggerWhen::Counter,
+            TriggerWhen::Shown,
+            TriggerWhen::Arrived,
+        ];
+        (0..60)
+            .map(|_| MapTrigger {
+                action: actions[usize::from(roll(actions.len() as u64))],
+                when: whens[usize::from(roll(whens.len() as u64))],
+                group: roll(12),
+                source: roll(12),
+                member: roll(12),
+                otherwise: roll(12),
+                amount: i32::from(roll(4)),
+                only_if: (roll(3) == 0).then(TriggerTest::default),
+                ..MapTrigger::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_census_says_what_walking_the_triggers_would() {
+        for seed in 0..40 {
+            let mut doc = Document::default();
+            doc.map.triggers = shuffled_triggers(seed);
+            let census = Census::of(&doc);
+            let m = &doc.map;
+            for n in 0..=255u8 {
+                let i = usize::from(n);
+                assert_eq!(
+                    census.occupied[i],
+                    doc.items().any(|(_, _, group)| group == n),
+                    "occupied {n}"
+                );
+                assert_eq!(
+                    census.sent[i],
+                    m.triggers.iter().any(|t| t.sends().any(|sent| sent == n)
+                        || (t.otherwise == n && t.only_if.is_some())),
+                    "sent {n}"
+                );
+                assert_eq!(
+                    census.heard[i],
+                    m.triggers
+                        .iter()
+                        .any(|t| t.when == TriggerWhen::Signal && t.source == n),
+                    "heard {n}"
+                );
+                assert_eq!(
+                    census.counted[i],
+                    m.triggers
+                        .iter()
+                        .any(|t| t.action.targets_counter() && t.group == n),
+                    "counted {n}"
+                );
+                assert_eq!(
+                    census.switched[i],
+                    m.triggers
+                        .iter()
+                        .any(|t| t.action.switches_group() && t.group == n),
+                    "switched {n}"
+                );
+                assert_eq!(
+                    census.animated[i],
+                    m.triggers.iter().any(|t| {
+                        (t.action.animates() || t.action == TriggerAction::Path) && t.group == n
+                    }),
+                    "animated {n}"
+                );
+                assert_eq!(
+                    census.members[i],
+                    m.triggers.iter().any(|t| t.member == n),
+                    "members {n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_change_says_what_came_back_went_away_or_moved() {
+        let mut old = Document::default();
+        old.map.walls = vec![
+            [0.1, 0.1, 0.1, 0.1],
+            [0.2, 0.2, 0.1, 0.1],
+            [0.3, 0.3, 0.1, 0.1],
+        ];
+        // Two walls deleted from either side of one that stays.
+        let mut less = old.clone();
+        less.delete(&[Key::Wall(0), Key::Wall(2)]);
+        let change = less.change_from(&old);
+        assert_eq!((change.lost, change.gained, change.altered), (2, 0, 0));
+        assert!(change.touched.is_empty(), "nothing left to point at");
+        assert_eq!(change.words("Redo"), "Redo removed 2 objects.");
+        // Undoing it brings back exactly those two, not the one between.
+        let change = old.change_from(&less);
+        assert_eq!(change.gained, 2);
+        assert_eq!(change.touched, [Key::Wall(0), Key::Wall(2)]);
+        assert_eq!(change.words("Undo"), "Undo brought back 2 objects.");
+        let mut moved = old.clone();
+        moved.map.walls[1][0] = 0.25;
+        let change = moved.change_from(&old);
+        assert_eq!(change.touched, [Key::Wall(1)]);
+        assert_eq!(change.words("Undo"), "Undo changed 1 object.");
+        // Another layer counts as a change to that object.
+        let mut layered = old.clone();
+        layered.layers.set(Key::Wall(2), 7);
+        assert_eq!(layered.change_from(&old).touched, [Key::Wall(2)]);
+        // A rename touches no object at all.
+        let mut named = old.clone();
+        named.map.name = "Elsewhere".into();
+        let change = named.change_from(&old);
+        assert!(change.touched.is_empty());
+        assert_eq!(change.words("Undo"), "Undo changed the map's settings.");
+    }
+
+    #[test]
+    fn find_matches_every_word_and_whole_numbers() {
+        let mut doc = Document::default();
+        let block = |group| MapBlock {
+            rect: [0.2, 0.2, 0.1, 0.1],
+            style: BlockStyle::Map,
+            color: None,
+            group,
+        };
+        doc.map.blocks = vec![block(5), block(15)];
+        doc.map.walls = vec![[0.1, 0.1, 0.1, 0.1]];
+        doc.map.group_names = vec![GroupName {
+            group: 5,
+            name: "Drawbridge".into(),
+        }];
+        assert_eq!(doc.find("wall"), [Key::Wall(0)]);
+        assert_eq!(doc.find("WALL"), [Key::Wall(0)], "any case");
+        assert_eq!(doc.find("group 5"), [Key::Block(0)], "not group 15");
+        assert_eq!(doc.find("group 15"), [Key::Block(1)]);
+        assert_eq!(doc.find("drawbridge block"), [Key::Block(0)]);
+        assert_eq!(doc.find("block"), [Key::Block(0), Key::Block(1)]);
+        assert!(doc.find("wall group").is_empty(), "both words must hold");
+        assert!(doc.find("   ").is_empty(), "blank finds nothing");
+        assert!(doc.find("nonsense").is_empty());
+    }
+
     #[test]
     fn spacing_keeps_the_end_centers_and_drawing_order_with_unequal_sizes() {
         let mut doc = Document::default();

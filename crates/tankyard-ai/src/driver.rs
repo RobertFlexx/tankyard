@@ -87,8 +87,21 @@ fn clearance(world: &World, cover: &Navigation, pos: V2, radius: f32, dir: V2) -
         .clamp(0., 1.)
 }
 
+thread_local! {
+    /// The shots a decision weighs, kept between decisions for the space.
+    static SHOTS: std::cell::RefCell<Vec<(V2, V2, f32, f32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// What the driver sees along each direction.
 pub(super) fn sense(s: &Situation) -> [[f32; FEATURES]; DIRECTIONS] {
+    SHOTS.with_borrow_mut(|shots| {
+        shots.clear();
+        sense_with(s, shots)
+    })
+}
+
+fn sense_with(s: &Situation, shots: &mut Vec<(V2, V2, f32, f32)>) -> [[f32; FEATURES]; DIRECTIONS] {
     let (world, tank) = (s.world, s.tank);
     let speed = physics::tank_speed(tank, &world.content).max(60.);
     let radius = tank.radius * 0.8;
@@ -96,7 +109,6 @@ pub(super) fn sense(s: &Situation) -> [[f32; FEATURES]; DIRECTIONS] {
         std::array::from_fn(|i| clearance(world, s.cover, tank.pos, radius, direction(i)));
     let mut threat = V2::ZERO;
     let mut allies = V2::ZERO;
-    let mut shots: Vec<(V2, V2, f32, f32)> = Vec::new();
     for &item in s.seen {
         match item {
             Seen::Tank(index) => {
@@ -152,7 +164,7 @@ pub(super) fn sense(s: &Situation) -> [[f32; FEATURES]; DIRECTIONS] {
     std::array::from_fn(|i| {
         let dir = direction(i);
         let mut risk = 0.;
-        for &(pos, vel, shot_radius, severity) in &shots {
+        for &(pos, vel, shot_radius, severity) in shots.iter() {
             let relative = pos - tank.pos;
             let closing = vel - dir * speed;
             let speed_sq = closing.length_squared().max(1.);

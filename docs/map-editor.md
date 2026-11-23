@@ -73,6 +73,7 @@ Press **F1** for the in-editor list. Ctrl means Cmd on a Mac.
 | Ctrl+A, Ctrl+Shift+A | Select everything shown, or everything like the selection (every light, every speed pad) |
 | Ctrl+Z, Ctrl+Y (or Ctrl+Shift+Z) | Undo, redo (48 steps) |
 | Ctrl+S | Save the project |
+| Ctrl+F | Find objects by name, group, number or what a trigger does |
 | Ctrl+R | Run the last plugin tool again |
 | Click a selected object again | Select the next object under the pointer, wrapping round to the top |
 | Tab, Shift+Tab | Cycle overlapping objects under the pointer |
@@ -91,7 +92,9 @@ Press **F1** for the in-editor list. Ctrl means Cmd on a Mac.
 | Hold T | Test tank at the pointer for the preview |
 | F5, Shift+F5 | Playtest, or start at the pointer |
 
-Shortcuts pause while a text box has focus. Holding a nudge key repeats it, and the whole hold undoes as one step.
+Shortcuts pause while a text box has focus. Holding a nudge key repeats it, and the whole hold undoes as one step. Undo and redo say what they changed and light it up for a moment, so a change off to one side doesn't look like nothing happened.
+
+**Ctrl+F** opens a find bar. Type a kind of object, a group's number or name, a trigger's number, or a word from what a trigger does or a widget says. Every word has to match, and a number has to match whole, so `group 5` skips group 15. Enter and the arrows step through the matches, Shift+Enter goes back, and **All** selects the lot.
 
 The **Grid** switch cycles through 10, 20, 40, 80, 160 and 320 world units; Shift-click steps back. With **Snap** off, objects follow the pointer exactly. The step button sets the nudge distance: one unit, half a cell, one cell or four cells.
 
@@ -608,7 +611,7 @@ The Check tab notes logic that can never work as built:
 - a timer or At start trigger reaches the tank that set it off, which a timer never has;
 - a widget that stays until hidden shows `{left}` or a time-left bar, which only work with *Hide after*.
 
-Notes never block a playtest; scripts can send signals and change counters and groups the checks can't see.
+Notes never block a playtest; scripts can send signals and change counters and groups the checks can't see. The list keeps itself up to date while the tab is open, so a fixed problem leaves it on its own.
 
 ## Workshop plugins
 

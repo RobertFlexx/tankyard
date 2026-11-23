@@ -5,6 +5,7 @@ mod board_design;
 mod brushes;
 mod canvas;
 mod dock;
+mod find;
 mod ink;
 mod inspector;
 mod links;
@@ -24,7 +25,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
-use tankyard_client::editor_document::{Document, Key, LAYERS, Object, Problem, Transform};
+use tankyard_client::editor_document::{Change, Document, Key, LAYERS, Object, Problem, Transform};
 use tankyard_client::editor_wiring::{Wiring, room};
 use tankyard_content::*;
 use tankyard_core::{V2, WorldConfig};
@@ -79,6 +80,10 @@ struct Layout {
 }
 /// Undo steps kept; each holds a whole document.
 const HISTORY: usize = 48;
+/// The most objects an undo lights up.
+const MOST_FLASHED: usize = 512;
+/// How long the Check tab lets an edit settle before checking the map again.
+const CHECK_SETTLE: f64 = 0.3;
 
 fn shift() -> bool {
     is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift)
@@ -231,6 +236,15 @@ pub struct Editor {
     link_lift: f32,
     /// By trigger: how far its nearest neighbor is, in world units.
     badge_room: Vec<f32>,
+    find: find::Find,
+    /// The revision the Check tab's list was made for.
+    problems_revision: u64,
+    /// The last edit seen while waiting to check again, and when to.
+    problems_wait: (u64, f64),
+    /// What the last undo or redo changed, lit up for a moment.
+    flash: Vec<Key>,
+    flash_at: f64,
+    flash_revision: u64,
 }
 
 impl Editor {
@@ -352,6 +366,12 @@ impl Editor {
             form_shown: Default::default(),
             link_lift: 0.,
             badge_room: Vec::new(),
+            find: find::Find::default(),
+            problems_revision: 0,
+            problems_wait: (0, 0.),
+            flash: Vec::new(),
+            flash_at: 0.,
+            flash_revision: 0,
             wiring_stamp: None,
         };
         editor.say(if restored {
@@ -435,6 +455,30 @@ impl Editor {
         let doc = &self.doc;
         self.selection.retain(|&key| doc.rect(key).is_some());
         self.touch();
+        let before = if redo { &self.undo } else { &self.redo };
+        if let Some(change) = before.last().map(|before| self.doc.change_from(before)) {
+            self.show_change(if redo { "Redo" } else { "Undo" }, change);
+        }
+    }
+    /// Says what an undo or redo did and lights it up, so a change out of
+    /// sight or too small to notice doesn't look like nothing happened.
+    fn show_change(&mut self, verb: &str, mut change: Change) {
+        let mut words = change.words(verb);
+        let canvas = self.canvas_area;
+        let seen = change.touched.iter().any(|&key| {
+            self.doc
+                .rect(key)
+                .is_some_and(|r| canvas.overlaps(&self.on_screen(r)))
+        });
+        if !seen && !change.touched.is_empty() {
+            words.pop();
+            words.push_str(", out of view.");
+        }
+        change.touched.truncate(MOST_FLASHED);
+        self.flash = change.touched;
+        self.flash_at = get_time();
+        self.flash_revision = self.revision;
+        self.say(words);
     }
 
     /// Finds the map's nets and counts its layers again after an edit. A
@@ -539,7 +583,7 @@ impl Editor {
         self.notice_at = get_time();
     }
     fn typing(&self) -> bool {
-        self.text_focus.is_some() || numeric_active()
+        self.text_focus.is_some() || numeric_active() || self.find.typing
     }
     fn set_selection(&mut self, mut keys: Vec<Key>) {
         keys.sort_unstable();
@@ -591,6 +635,10 @@ impl Editor {
         });
     }
     fn copy(&mut self) {
+        // Nothing selected leaves what was copied before where it is.
+        if self.selection.is_empty() {
+            return;
+        }
         (self.clipboard, self.clipboard_layers) = self.copies(&self.selection);
         if !self.clipboard.is_empty() {
             self.say(format!("Copied {}.", objects(self.clipboard.len())));
@@ -798,9 +846,34 @@ impl Editor {
         let keys = std::mem::take(&mut self.selection);
         self.apply(|editor| editor.doc.delete(&keys));
     }
-    fn check(&mut self) {
+    fn find_problems(&mut self) -> Vec<Problem> {
         let mut problems = self.doc.problems();
         problems.extend(self.plugin_problems());
+        problems
+    }
+    /// Keeps the Check tab true to the map while it's open, once an edit has
+    /// settled. Its items point at objects by place, so a stale list could
+    /// send a click to the wrong one.
+    fn refresh_problems(&mut self) {
+        if self.tab != Tab::Check
+            || self.problems.is_none()
+            || self.problems_revision == self.revision
+            || self.gesture.is_some()
+            || self.pending.is_some()
+        {
+            return;
+        }
+        let now = get_time();
+        if self.problems_wait.0 != self.revision {
+            self.problems_wait = (self.revision, now + CHECK_SETTLE);
+        }
+        if now >= self.problems_wait.1 {
+            self.problems = Some(self.find_problems());
+            self.problems_revision = self.revision;
+        }
+    }
+    fn check(&mut self) {
+        let problems = self.find_problems();
         self.say(match problems.iter().filter(|p| p.blocking).count() {
             0 if problems.is_empty() => "No problems found.".to_owned(),
             0 if problems.len() == 1 => "1 note, nothing blocking.".to_owned(),
@@ -809,8 +882,18 @@ impl Editor {
             n => format!("{n} problems to fix before playing."),
         });
         self.problems = Some(problems);
+        self.problems_revision = self.revision;
         self.tab = Tab::Check;
         self.scroll = 0.;
+    }
+    /// Goes to the object at `key`, leaving a layer that hides it for every
+    /// layer.
+    fn locate(&mut self, key: Key) {
+        if !self.on_layer(key) {
+            self.set_layer(None);
+        }
+        self.set_selection(vec![key]);
+        self.center_on(key);
     }
     fn center_on(&mut self, key: Key) {
         if let Some(r) = self.doc.rect(key) {
@@ -919,6 +1002,8 @@ impl Editor {
         self.refresh_wiring();
         self.refresh_routes();
         self.ease_links(dt);
+        self.refresh_problems();
+        self.refresh_find();
         let config = self.config();
         clear_background(bg_color());
         profile::phase("editor canvas", || {
@@ -929,6 +1014,7 @@ impl Editor {
         }
         self.layer_bar(&layout);
         self.link_legend(&layout);
+        self.find_bar(&layout);
         if let Some(chosen) = profile::phase("editor bar", || self.top_bar(&layout)) {
             action = chosen;
         }
@@ -1010,9 +1096,14 @@ impl Editor {
         }
         if pressed(KeyCode::Escape) {
             if self.gesture.take().is_some() {
-                // Escape mid-drag puts everything back.
-                if let Some(before) = self.pending.take() {
+                // Escape mid-drag puts everything back, and an Alt-drag's
+                // copies go with it, so the selection can't keep them.
+                if let Some(before) = self.pending.take()
+                    && before != self.doc
+                {
                     self.doc = before;
+                    let doc = &self.doc;
+                    self.selection.retain(|&key| doc.rect(key).is_some());
                     self.touch();
                 }
             } else if self.stamp.is_some() {
@@ -1090,6 +1181,9 @@ impl Editor {
             if pressed(KeyCode::R) {
                 let at = over_canvas.then(|| self.view.world(pointer));
                 self.repeat_tool(at);
+            }
+            if pressed(KeyCode::F) {
+                self.open_find();
             }
             return Action::None;
         }
@@ -1391,6 +1485,7 @@ impl Editor {
                 ("Ctrl A,  Shift A", "Select everything shown, or alike"),
                 ("Ctrl Z  Y", "Undo, redo"),
                 ("Ctrl S", "Save the project"),
+                ("Ctrl F", "Find objects by name, group or job"),
                 ("Enter / Esc", "Apply a number, cancel its edit"),
                 ("Tab / Shift Tab", "Next / previous numeric field"),
                 ("Up / Down in field", "Adjust; Shift larger, Alt finer"),

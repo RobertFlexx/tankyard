@@ -1,17 +1,22 @@
 //! Creator interface. Server signatures and host policy authorize every online action.
 use crate::{
+    axiom_dock::{self, AxiomDock, Form},
     session::{Engine, Session},
     ui::*,
 };
 use macroquad::prelude::*;
 use ring::signature::Ed25519KeyPair;
+use tankyard_core::creator_boss::Attack;
 use tankyard_core::{BossKind, V2};
 use tankyard_server::creator::{Command, apply};
 
 pub struct CreatorUi {
     pub open: bool,
     in_form: bool,
-    attack_group: usize,
+    dock: AxiomDock,
+    /// The ability key's name, and the bar's hint that names it.
+    dash_key: String,
+    dock_hint: String,
     key: Option<Ed25519KeyPair>,
     tab: usize,
     page: usize,
@@ -42,7 +47,9 @@ impl CreatorUi {
         Self {
             open: false,
             in_form: false,
-            attack_group: 0,
+            dock: AxiomDock::default(),
+            dash_key: String::new(),
+            dock_hint: "Number row casts".into(),
             key,
             tab: 0,
             page: 0,
@@ -169,83 +176,73 @@ impl CreatorUi {
         }
         self.authenticate(session);
     }
-    fn attack_rect(s: f32) -> Rect {
-        Rect::new(22. * s, screen_height() - 328. * s, 246. * s, 302. * s)
+    /// What the attack bar needs, while this player is Axiom.
+    fn form(session: &Session) -> Option<Form> {
+        let tank = session
+            .display
+            .as_ref()?
+            .tanks
+            .iter()
+            .find(|t| t.id == session.player && t.alive && t.creator_boss)?;
+        Some(Form {
+            cooldowns: tank.creator_attacks,
+            hull_full: tank.health >= tank.max_health,
+        })
     }
-    fn attack_panel(&mut self, session: &mut Session, s: f32) {
-        let Some(tank) = session.display.as_ref().and_then(|s| {
-            s.tanks
-                .iter()
-                .find(|t| t.id == session.player && t.alive && t.creator_boss)
-        }) else {
+    /// Whether this player is Axiom right now.
+    pub fn in_form(session: &Session) -> bool {
+        Self::form(session).is_some()
+    }
+    /// The number row and the ability key, while this player is Axiom. A key
+    /// the player has bound to something else keeps doing that.
+    pub fn attack_keys(&mut self, session: &mut Session, settings: &crate::settings::Settings) {
+        if !self.enabled() {
+            return;
+        }
+        let Some(form) = Self::form(session) else {
             return;
         };
-        let cooldowns = tank.creator_attacks;
-        let r = Self::attack_rect(s);
-        panel(r);
-        label(
-            "AXIOM · ATTACKS",
-            r.x + 12. * s,
-            r.y + 24. * s,
-            15. * s,
-            AMBER,
-        );
-        for (group, title) in ["Offense", "Control", "Fortress"].into_iter().enumerate() {
-            if button(
-                Rect::new(
-                    r.x + (10. + group as f32 * 77.) * s,
-                    r.y + 35. * s,
-                    72. * s,
-                    26. * s,
-                ),
-                title,
-                group == self.attack_group,
-                true,
-                s * 0.6,
-            ) {
-                self.attack_group = group;
+        if settings.bindings[4] != self.dash_key {
+            self.dash_key.clone_from(&settings.bindings[4]);
+            self.dock_hint = format!("Number row casts · {} dashes", self.dash_key);
+        }
+        for (slot, &(key, _)) in axiom_dock::KEYS.iter().enumerate() {
+            if is_key_pressed(key) && (0..6).all(|index| settings.key(index) != key) {
+                self.cast(session, Attack::bar()[slot], &form);
             }
         }
-        let mut command = None;
-        let mut hint = "Hover over an attack for its effect.";
-        for (row, attack) in tankyard_core::creator_boss::Attack::GROUPS[self.attack_group]
-            .into_iter()
-            .enumerate()
-        {
-            let remaining = cooldowns[attack.index()];
-            let full = attack == tankyard_core::creator_boss::Attack::Reforge
-                && tank.health >= tank.max_health;
-            let ready = remaining <= 0. && !full;
-            let text = if full {
-                "Reforge · hull full".to_owned()
-            } else if ready {
-                attack.name().to_owned()
-            } else {
-                format!("{} · {:.1}s", attack.name(), remaining)
-            };
-            let button_rect = Rect::new(
-                r.x + 10. * s,
-                r.y + (75. + row as f32 * 43.) * s,
-                r.w - 20. * s,
-                34. * s,
-            );
-            if contains(button_rect) {
-                hint = attack.description();
-            }
-            if button(button_rect, &text, ready, ready, s * 0.8) {
-                command = Some(Command::Attack { kind: attack });
-            }
+        if is_key_pressed(settings.key(4)) {
+            self.cast(session, Attack::RiftDash, &form);
         }
-        wrap(
-            hint,
-            r.x + 12. * s,
-            r.y + 260. * s,
-            r.w - 24. * s,
-            12. * s,
-            muted_color(),
-        );
-        if let Some(command) = command {
-            self.send(session, command);
+    }
+    fn cast(&mut self, session: &mut Session, attack: Attack, form: &Form) {
+        if self.dock.press(attack, form, get_time()) {
+            self.send_attack(session, attack);
+        }
+    }
+    fn send_attack(&mut self, session: &mut Session, attack: Attack) {
+        if self.send(session, Command::Attack { kind: attack }) {
+            if matches!(session.engine, Engine::Online { .. }) {
+                self.dock.sent();
+            }
+        } else {
+            self.dock.tell(&self.notice);
+        }
+    }
+    /// A message from the server. True if it only confirms an attack and
+    /// nothing else needs to show it.
+    pub fn heard(&mut self, message: &str) -> bool {
+        self.dock.heard(message)
+    }
+    fn attack_panel(&mut self, session: &mut Session, s: f32) {
+        let Some(form) = Self::form(session) else {
+            self.dock.rest();
+            return;
+        };
+        let timing = (s, get_frame_time(), get_time());
+        let calm = crate::accessibility::reduced_motion();
+        if let Some(attack) = self.dock.draw(&form, &self.dock_hint, timing, calm) {
+            self.send_attack(session, attack);
         }
     }
     fn button_rect(s: f32) -> Rect {
@@ -255,43 +252,49 @@ impl CreatorUi {
         self.enabled()
             && (self.open
                 || contains(Self::button_rect(s))
-                || (self.in_form && contains(Self::attack_rect(s))))
+                || (self.in_form && contains(AxiomDock::rect(s))))
     }
-    fn send(&mut self, session: &mut Session, command: Command) {
+    /// Run or queue a command. False if it was refused here and now, with
+    /// the reason in `notice`.
+    fn send(&mut self, session: &mut Session, command: Command) -> bool {
         if !self.enabled() {
-            return;
+            return false;
         }
         match &mut session.engine {
             Engine::Offline(local) => {
-                match apply(local, session.player, command) {
-                    Ok(text) => self.notice = text,
-                    Err(text) => self.notice = text,
-                }
+                let result = apply(local, session.player, command);
+                let accepted = result.is_ok();
+                self.notice = match result {
+                    Ok(text) | Err(text) => text,
+                };
                 session.events.append(&mut local.world.events);
                 session.display = Some(local.world.snapshot());
+                accepted
             }
             Engine::Online { client, .. } => {
                 if !client.owner_extension_available {
                     self.notice = "This host has disabled creator administration. Your badge remains available.".into();
-                    return;
+                    return false;
                 }
                 let Ok(payload) = serde_json::to_vec(&command) else {
-                    return;
+                    return false;
                 };
                 let Some(message) = client.owner_command_to_sign(&payload) else {
                     self.notice = "Reconnect before using owner tools.".into();
-                    return;
+                    return false;
                 };
                 let Some(key) = &self.key else {
-                    return;
+                    return false;
                 };
                 let signature = key.sign(&message).as_ref().to_vec();
-                self.notice = if client.owner_extension(payload, signature) {
+                let queued = client.owner_extension(payload, signature);
+                self.notice = if queued {
                     "Command queued for the server."
                 } else {
                     "Command could not be queued."
                 }
                 .into();
+                queued
             }
         }
     }
@@ -500,14 +503,14 @@ impl CreatorUi {
                     AMBER,
                 );
                 tankyard_client::boss_model::axiom_geometry(
-                    vec2(r.center().x, y + 125. * s),
-                    67. * s,
+                    vec2(r.center().x, y + 123. * s),
+                    60. * s,
                     -0.45,
                     crate::accessibility::motion_time(get_time() as f32),
                     &mut crate::render::draw_model_primitive,
                 );
                 wrap(
-                    "A player-controlled celestial event boss. 120,000 health, twelve attacks, a colossal body, and a shared health bar. Players keep their spawn protection. This marks the round as modified.",
+                    "A player-controlled celestial event boss. 120,000 health, six cannons that converge where you aim, twelve attacks on the number row, and a shared health bar. Players keep their spawn protection. This marks the round as modified.",
                     x,
                     y + 225. * s,
                     width,
@@ -533,7 +536,7 @@ impl CreatorUi {
                     );
                 }
                 wrap(
-                    "Collapse the console to use the attack panel while moving. Each attack recharges on the server. Reset, death, a new round, or revoked authority restores your normal tank.",
+                    "Collapse the console to fight. Hold fire for the cannons, press 1 through = for attacks, and your ability key dashes. Each attack recharges on the server. Reset, death, a new round, or revoked authority restores your normal tank.",
                     x,
                     y + 389. * s,
                     width,

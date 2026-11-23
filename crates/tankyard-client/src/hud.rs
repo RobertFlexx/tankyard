@@ -4,6 +4,7 @@ use crate::graphics::{draw_circle, draw_poly};
 use crate::ui::RED;
 use crate::{render, settings::Settings, ui::*};
 use macroquad::prelude::*;
+use std::fmt::Write as _;
 use tankyard_content::{Ability, ClassDef, Content, ProjectileKind};
 use tankyard_core::{BossKind, EntityId, Mode, Snapshot, Tank, xp_for_level};
 
@@ -388,7 +389,95 @@ pub enum HudAction {
     Boss(BossKind),
     Invulnerable(bool),
     Speed(f32),
+    ToggleBoard,
 }
+
+/// How much of a scoreboard row its little tank takes, at scale 1.
+const BOARD_ICON: f32 = 24.;
+/// Scoreboard rows that clear what the tank menu docks under the board.
+const DOCKED_ROWS: usize = 9;
+
+/// One line of the scoreboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BoardRow {
+    /// Place in the standings, from 0.
+    place: usize,
+    /// Index into the snapshot's tanks.
+    tank: usize,
+    /// Index into the content's classes, looked up once per tick.
+    class: Option<usize>,
+}
+
+/// Where the scoreboard and the tab that folds it away sit. At `fold` 1 the
+/// board has gone past the right edge and only the tab is left on screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BoardLayout {
+    x: f32,
+    y: f32,
+    width: f32,
+    tab: Rect,
+}
+
+fn board_layout(screen: f32, s: f32, fold: f32) -> BoardLayout {
+    let open = screen - 242. * s;
+    let x = open + (screen - open) * fold.clamp(0., 1.);
+    let y = 22. * s;
+    let (tab_width, tab_height) = (20. * s, 28. * s);
+    BoardLayout {
+        x,
+        y,
+        width: 220. * s,
+        tab: Rect::new(x - tab_width - 6. * s, y + s, tab_width, tab_height),
+    }
+}
+
+/// The top of scoreboard row `row`. The eleventh row is the local player's
+/// when they're outside the top ten, set slightly apart from it.
+fn board_row_y(y: f32, row: usize, s: f32) -> f32 {
+    y + (30. + row as f32 * 24. + if row >= 10 { 5. } else { 0. }) * s
+}
+
+/// Who gets a line: the top ten, plus you if you're further down.
+fn board_rows(
+    ranking: &[usize],
+    is_local: impl Fn(usize) -> bool,
+    class: impl Fn(usize) -> Option<usize>,
+    rows: &mut Vec<BoardRow>,
+) {
+    rows.clear();
+    let row = |(place, &tank): (usize, &usize)| BoardRow {
+        place,
+        tank,
+        class: class(tank),
+    };
+    rows.extend(ranking.iter().enumerate().take(10).map(row));
+    rows.extend(
+        ranking
+            .iter()
+            .enumerate()
+            .skip(10)
+            .find(|(_, tank)| is_local(**tank))
+            .map(row),
+    );
+}
+
+/// The lines to draw with `room` of them to spare, in order: the top of the
+/// board and always your own. The tank menu leaves room for fewer, because it
+/// docks the chat and party rail right under the board.
+fn shown_rows(
+    rows: &[BoardRow],
+    room: usize,
+    is_local: impl Fn(&BoardRow) -> bool,
+) -> impl Iterator<Item = &BoardRow> {
+    let own = rows.iter().skip(room).find(|line| is_local(line));
+    let top = if own.is_some() {
+        room.saturating_sub(1)
+    } else {
+        room
+    };
+    rows.iter().take(top).chain(own)
+}
+
 pub struct Hud {
     pub spectating: Option<EntityId>,
     /// The local tank's most recent killer, from reliable kill events.
@@ -423,6 +512,14 @@ pub struct Hud {
     offered_class: String,
     ranking_tick: Option<(u64, usize)>,
     ranking: Vec<usize>,
+    /// The lines the scoreboard is showing.
+    board: Vec<BoardRow>,
+    /// How far the scoreboard is folded away, 0 to 1. Unset until the first
+    /// frame, so that a board hidden last session doesn't slide out on load.
+    board_fold: Option<f32>,
+    /// How many of its lines the board drew last frame.
+    board_shown: usize,
+    board_tab_glow: f32,
 }
 impl Hud {
     /// A fresh HUD for new content mid-game, which still remembers the
@@ -433,6 +530,8 @@ impl Hud {
             cards_shown: self.cards_shown,
             card: self.card,
             editor_playtest: self.editor_playtest,
+            board_fold: self.board_fold,
+            board_shown: 0,
             ..Self::new()
         }
     }
@@ -465,6 +564,10 @@ impl Hud {
             offered_class: String::new(),
             ranking_tick: None,
             ranking: Vec::with_capacity(256),
+            board: Vec::with_capacity(11),
+            board_fold: None,
+            board_shown: 0,
+            board_tab_glow: 0.,
         }
     }
     pub fn captures_pointer(
@@ -519,12 +622,16 @@ impl Hud {
                 return true;
             }
         }
-        contains(Rect::new(
-            screen_width() - 242.0 * s,
-            m,
-            220.0 * s,
-            270.0 * s,
-        )) || contains(Rect::new(
+        let board = board_layout(screen_width(), s, self.board_fold.unwrap_or(0.));
+        contains(board.tab)
+            // Only as tall as the rows it has, so empty arena stays shootable.
+            || contains(Rect::new(
+                board.x,
+                board.y,
+                board.width,
+                board_row_y(board.y, self.board_shown, s) - board.y,
+            ))
+            || contains(Rect::new(
             screen_width() - 206.0 * s,
             screen_height() - 154.0 * s,
             184.0 * s,
@@ -884,7 +991,10 @@ impl Hud {
                 muted_color(),
             );
         }
-        let leader_score = self.leaderboard(snapshot, local, settings, s);
+        let leader_score = self.leaderboard(snapshot, content, local, settings, s);
+        if self.board_tab(snapshot, local, settings, s) {
+            actions.push(HudAction::ToggleBoard);
+        }
         self.minimap(snapshot, local, settings, s, view);
         if tank.alive && !self.sandbox {
             let xp_width = (w * 0.36).min(430.0 * s);
@@ -1181,20 +1291,12 @@ impl Hud {
     fn leaderboard(
         &mut self,
         snapshot: &Snapshot,
+        content: &Content,
         local: EntityId,
         settings: &Settings,
         s: f32,
     ) -> u32 {
-        let x = screen_width() - 242.0 * s;
-        let y = 22.0 * s;
-        let width = 220.0 * s;
         let coop = snapshot.config.mode == Mode::CoopPve;
-        arcade_center(
-            if coop { "Squad" } else { "Leaderboard" },
-            x + width * 0.5,
-            y + 18.0 * s,
-            19.0 * s,
-        );
         let revision = (snapshot.tick, snapshot.tanks.len());
         if self.ranking_tick != Some(revision) {
             self.ranking.clear();
@@ -1212,33 +1314,169 @@ impl Hud {
                     .cmp(&snapshot.tanks[a].score)
                     .then_with(|| snapshot.tanks[a].id.cmp(&snapshot.tanks[b].id))
             });
+            board_rows(
+                &self.ranking,
+                |index| snapshot.tanks[index].id == local,
+                |index| {
+                    content
+                        .classes
+                        .iter()
+                        .position(|class| class.id == snapshot.tanks[index].class)
+                },
+                &mut self.board,
+            );
             self.ranking_tick = Some(revision);
         }
         let leading = self
             .ranking
             .first()
             .map_or(1, |&index| snapshot.tanks[index].score.max(1));
+        let target = if settings.leaderboard_hidden { 1. } else { 0. };
+        let fold = self.board_fold.get_or_insert(target);
+        ease_toward(fold, target, 15.);
+        let fold = *fold;
+        if fold >= 1. {
+            return leading;
+        }
+        let BoardLayout { x, y, width, .. } = board_layout(screen_width(), s, fold);
+        arcade_center(
+            if coop { "Squad" } else { "Leaderboard" },
+            x + width * 0.5,
+            y + 18.0 * s,
+            19.0 * s,
+        );
         let text = text_after_shapes();
-        for (row, &index) in self.ranking.iter().take(10).enumerate() {
-            let tank = &snapshot.tanks[index];
-            let by = y + 30.0 * s + row as f32 * 24.0 * s;
+        let mut score = String::with_capacity(24);
+        let room = if self.evolution || self.sandbox {
+            DOCKED_ROWS
+        } else {
+            self.board.len()
+        };
+        let lines = shown_rows(&self.board, room, |line| {
+            snapshot.tanks[line.tank].id == local
+        });
+        let mut drawn = 0;
+        for (row, line) in lines.enumerate() {
+            drawn = row + 1;
+            let tank = &snapshot.tanks[line.tank];
+            let by = board_row_y(y, row, s);
             let color = render::team_color(tank.team, tank.id == local, settings.colorblind);
+            // The tank itself sits ahead of its bar, on the arena it plays on.
+            let bar_x = x + BOARD_ICON * s;
+            let bar_width = width - BOARD_ICON * s;
             arcade_track(
-                Rect::new(x, by, width, 20.0 * s),
+                Rect::new(bar_x, by, bar_width, 20.0 * s),
                 tank.score as f32 / leading as f32,
                 color,
             );
-            let score = format!(" - {}", tank.score);
+            let icon = vec2(x + 9.5 * s, by + 10.5 * s);
+            let body = if tank.alive { color } else { muted_color() };
+            if tank.creator_boss {
+                tankyard_client::boss_model::axiom_geometry(
+                    icon,
+                    6.4 * s,
+                    -0.5,
+                    0.,
+                    &mut render::draw_model_primitive,
+                );
+            } else if let Some(class) = line.class.and_then(|class| content.classes.get(class)) {
+                render::class_model(class, icon, 7. * s, -0.5, 0., 0., body, 0.);
+            }
+            score.clear();
+            let _ = if line.place >= 10 {
+                write!(score, " - {} (#{})", tank.score, line.place + 1)
+            } else {
+                write!(score, " - {}", tank.score)
+            };
             arcade_player_label(
                 tank,
                 &score,
-                vec2(x + width * 0.5, by + 14. * s),
-                width - 12. * s,
+                vec2(bar_x + bar_width * 0.5, by + 14. * s),
+                bar_width - 12. * s,
                 12. * s,
             );
         }
         drop(text);
+        self.board_shown = drawn;
         leading
+    }
+    /// The little tab with the arrow that folds the scoreboard away. Returns
+    /// true when clicked.
+    fn board_tab(
+        &mut self,
+        snapshot: &Snapshot,
+        local: EntityId,
+        settings: &Settings,
+        s: f32,
+    ) -> bool {
+        let fold = self.board_fold.unwrap_or(0.);
+        let rect = board_layout(screen_width(), s, fold).tab;
+        let hovered = contains(rect);
+        ease_toward(&mut self.board_tab_glow, f32::from(u8::from(hovered)), 18.);
+        let glow = self.board_tab_glow;
+        crate::hud_widgets::rounded(rect, 7. * s, Color::new(0.333, 0.333, 0.333, 1.));
+        let edge = (2.4 * s).max(1.);
+        crate::hud_widgets::rounded(
+            Rect::new(
+                rect.x + edge,
+                rect.y + edge,
+                rect.w - edge * 2.,
+                rect.h - edge * 2.,
+            ),
+            5. * s,
+            mix(Color::new(0.40, 0.40, 0.40, 1.), accent(), glow * 0.75),
+        );
+        // It points where the board will go: right to put it away, left to
+        // fetch it back, and turns over on the way.
+        let heading = fold * std::f32::consts::PI;
+        let way = vec2(heading.cos(), heading.sin());
+        let side = vec2(-way.y, way.x);
+        let size = (5.6 + 0.9 * glow) * s;
+        let nudge = rect.center() + way * (0.7 + 0.7 * glow) * s;
+        let corner = |reach: f32| {
+            [
+                nudge + way * reach,
+                nudge - way * reach * 0.72 + side * reach * 0.94,
+                nudge - way * reach * 0.72 - side * reach * 0.94,
+            ]
+        };
+        if !crate::accessibility::contrast() {
+            let [a, b, c] = corner(size + 2.3 * s);
+            draw_triangle(a, b, c, Color::new(0.15, 0.15, 0.16, 1.));
+        }
+        let [a, b, c] = corner(size);
+        draw_triangle(a, b, c, WHITE);
+        // The arrow alone doesn't say what it does, or where you stand.
+        let free = (0..6).all(|index| settings.key(index) != KeyCode::L);
+        let note = if hovered {
+            let word = if settings.leaderboard_hidden {
+                "Show"
+            } else {
+                "Hide"
+            };
+            Some(if free {
+                format!("{word} [L]")
+            } else {
+                word.to_owned()
+            })
+        } else if fold > 0.6 && snapshot.config.mode != Mode::CoopPve {
+            self.ranking
+                .iter()
+                .position(|&index| snapshot.tanks[index].id == local)
+                .map(|place| format!("#{}", place + 1))
+        } else {
+            None
+        };
+        if let Some(note) = note {
+            let size = 15. * s;
+            arcade_label(
+                &note,
+                rect.x - 7. * s - label_width(&note, size),
+                rect.y + rect.h * 0.5 + 5.5 * s,
+                size,
+            );
+        }
+        hovered && take_click()
     }
     fn minimap(
         &self,
@@ -1802,7 +2040,7 @@ fn ease_out_back(t: f32) -> f32 {
 }
 
 /// 12345 as "12,345".
-fn grouped(value: u64) -> String {
+pub(crate) fn grouped(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::new();
     for (index, digit) in digits.chars().enumerate() {
@@ -1970,6 +2208,78 @@ fn evolution_cards(count: usize, width: f32, height: f32, requested: f32) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_scoreboard_folds_clean_off_screen_and_leaves_its_tab() {
+        for s in [0.7, 1., 1.6] {
+            let screen = 1600.;
+            let open = board_layout(screen, s, 0.);
+            assert!(
+                (open.x - (screen - 242. * s)).abs() < 0.01,
+                "opens where it always was"
+            );
+            assert!(
+                open.tab.x + open.tab.w <= open.x,
+                "the tab doesn't cover a row"
+            );
+            let shut = board_layout(screen, s, 1.);
+            assert!(shut.x >= screen, "nothing of the board is left");
+            for fold in [0., 0.25, 0.5, 0.9, 1., 7., -1.] {
+                let tab = board_layout(screen, s, fold).tab;
+                assert!(tab.x >= 0. && tab.x + tab.w <= screen, "{fold}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_board_lists_the_top_ten_and_you_if_you_are_further_down() {
+        let ranking: Vec<_> = (0..14).collect();
+        let mut rows = Vec::new();
+        board_rows(&ranking, |tank| tank == 3, |_| None, &mut rows);
+        assert_eq!(rows.len(), 10, "already on it");
+        board_rows(
+            &ranking,
+            |tank| tank == 12,
+            |tank| Some(tank + 100),
+            &mut rows,
+        );
+        assert_eq!(rows.len(), 11);
+        assert_eq!(
+            rows[10],
+            BoardRow {
+                place: 12,
+                tank: 12,
+                class: Some(112)
+            }
+        );
+        board_rows(&ranking[..2], |_| false, |_| None, &mut rows);
+        assert_eq!(rows.len(), 2);
+        assert!(
+            board_row_y(0., 10, 1.) > board_row_y(0., 9, 1.) + 24.,
+            "set apart"
+        );
+    }
+
+    #[test]
+    fn with_the_tank_menu_open_the_board_clears_the_dock_and_keeps_you() {
+        let ranking: Vec<_> = (0..14).collect();
+        let mut rows = Vec::new();
+        board_rows(&ranking, |tank| tank == 12, |_| None, &mut rows);
+        let shown = |own: usize, room: usize| -> Vec<usize> {
+            shown_rows(&rows, room, |line| line.tank == own)
+                .map(|line| line.tank)
+                .collect()
+        };
+        let docked = shown(12, DOCKED_ROWS);
+        assert_eq!(docked.len(), DOCKED_ROWS);
+        assert_eq!(docked[..8], [0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(docked[8], 12, "you stay on it");
+        assert_eq!(shown(3, DOCKED_ROWS), (0..9).collect::<Vec<_>>());
+        assert_eq!(shown(12, rows.len()).len(), 11, "the whole board");
+        let bottom = board_row_y(22., DOCKED_ROWS - 1, 1.) + 20.;
+        assert!(bottom <= 270., "the dock starts at 270: {bottom}");
+    }
+
     use tankyard_core::{World, WorldConfig};
 
     #[test]

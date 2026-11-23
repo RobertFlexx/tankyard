@@ -3,6 +3,7 @@ use crate::tank_model::{OUTLINE, Primitive, cannon_profile};
 use macroquad::prelude::{Color, Vec2, vec2};
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 use tankyard_core::BossKind;
+use tankyard_core::creator_boss::{CANNONS, MUZZLE};
 
 pub fn boss_color(kind: BossKind) -> Color {
     match kind {
@@ -623,68 +624,218 @@ pub fn boss_model_geometry(
     }
 }
 
-/// Axiom: six articulated cannon petals around an armored geometric astrolabe.
+/// Axiom's gold.
+pub const AXIOM_GOLD: Color = Color::new(1., 0.79, 0.34, 1.);
+/// The teal of Axiom's rings.
+pub const AXIOM_TEAL: Color = Color::new(0.20, 0.80, 0.87, 1.);
+const AXIOM_ARMOR: Color = Color::new(0.23, 0.31, 0.39, 1.);
+const AXIOM_PALE: Color = Color::new(1., 0.96, 0.78, 1.);
+/// How fast Axiom's rings turn, in radians a second.
+pub const AXIOM_TURN: f32 = 0.17;
+/// How far a firing cannon is thrown back, in hull radii.
+pub const AXIOM_RECOIL: f32 = 0.1;
+/// Below this radius Axiom is an icon, and fine detail would only be noise.
+const AXIOM_FINE: f32 = 24.;
+
+/// How Axiom is posed when drawn.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AxiomPose {
+    /// Where its forward cannon points.
+    pub aim: f32,
+    /// Seconds, for its turning rings; held still when motion is reduced.
+    pub time: f32,
+    /// How far back each cannon is, 0 to 1, from the one on its aim.
+    pub recoil: [f32; CANNONS],
+}
+
+/// Axiom at rest: six articulated cannon petals around an armored astrolabe.
 pub fn axiom_geometry(p: Vec2, r: f32, aim: f32, time: f32, emit: &mut impl FnMut(Primitive)) {
-    let gold = Color::new(1., 0.79, 0.34, 1.);
-    let teal = Color::new(0.20, 0.80, 0.87, 1.);
-    let armor = Color::new(0.23, 0.31, 0.39, 1.);
+    axiom_model(
+        p,
+        r,
+        AxiomPose {
+            aim,
+            time,
+            ..AxiomPose::default()
+        },
+        emit,
+    );
+}
+
+/// Axiom in a pose. The game lays its light over this with
+/// `BossFx::axiom_glow`, which follows the same rings at the same angles.
+pub fn axiom_model(p: Vec2, r: f32, pose: AxiomPose, emit: &mut impl FnMut(Primitive)) {
+    let AxiomPose { aim, time, recoil } = pose;
     let edge = (r * 0.035).max(0.7);
-    let phase = time * 0.17;
-    for i in 0..6 {
-        let a = aim + i as f32 * TAU / 6.;
+    let turn = time * AXIOM_TURN;
+    let fine = r >= AXIOM_FINE;
+    let step = TAU / CANNONS as f32;
+    if fine {
+        // Slim fins between the cannons, so the outline reads as a star.
+        for i in 0..CANNONS {
+            let a = aim + (i as f32 + 0.5) * step;
+            let d = vec2(a.cos(), a.sin());
+            let n = vec2(-d.y, d.x);
+            shard(
+                emit,
+                [
+                    p + d * r * 0.86 + n * r * 0.1,
+                    p + d * r * 1.14,
+                    p + d * r * 0.86 - n * r * 0.1,
+                ],
+                tint(AXIOM_GOLD, 0.86),
+                edge * 0.8,
+            );
+        }
+    }
+    for (i, &kick) in recoil.iter().enumerate() {
+        let a = aim + i as f32 * step;
         let d = vec2(a.cos(), a.sin());
+        let thrown = if kick.is_finite() {
+            kick.clamp(0., 1.) * r * AXIOM_RECOIL
+        } else {
+            0.
+        };
         cannon_profile(
             emit,
-            p + d * r * 0.47,
+            p + d * r * 0.6,
             a,
-            r * 0.82,
-            r * 0.20,
-            armor,
-            0.,
-            1.25,
+            r * (MUZZLE - 0.6),
+            r * 0.25,
+            AXIOM_ARMOR,
+            thrown,
+            1.16,
             Some(edge),
         );
-        hull(
+        if fine {
+            // A teal seam down the barrel and a gold band at its mouth.
+            plate(
+                emit,
+                p + d * (r * (MUZZLE + 0.92) * 0.5 - thrown),
+                vec2(r * (MUZZLE - 1.12), r * 0.034),
+                a,
+                AXIOM_TEAL,
+            );
+            let band = p + d * (r * (MUZZLE - 0.045) - thrown);
+            plate(
+                emit,
+                band,
+                vec2(r * 0.09 + edge * 2., r * 0.33 + edge * 2.),
+                a,
+                OUTLINE,
+            );
+            plate(emit, band, vec2(r * 0.09, r * 0.33), a, AXIOM_GOLD);
+        }
+        // The shoulder it recoils into.
+        let shoulder = p + d * (r * 0.96 - thrown * 0.3);
+        plate(
             emit,
-            p + d * r * 0.91,
-            4,
-            r * 0.16,
-            a + FRAC_PI_4,
-            gold,
-            edge * 0.6,
+            shoulder,
+            vec2(r * 0.13 + edge * 2., r * 0.37 + edge * 2.),
+            a,
+            OUTLINE,
+        );
+        plate(
+            emit,
+            shoulder,
+            vec2(r * 0.13, r * 0.37),
+            a,
+            tint(AXIOM_GOLD, 0.78),
         );
     }
-    hull(emit, p, 12, r * 0.94, phase, armor, edge);
-    hull(emit, p, 6, r * 0.78, -phase, gold, edge);
-    hull(emit, p, 6, r * 0.66, -phase, armor, edge * 0.6);
-    for i in 0..6 {
-        let a = phase + i as f32 * TAU / 6.;
+    hull(emit, p, 12, r * 0.94, turn, AXIOM_ARMOR, edge);
+    hull(emit, p, 6, r * 0.78, -turn, tint(AXIOM_GOLD, 0.88), edge);
+    hull(emit, p, 6, r * 0.66, -turn, AXIOM_ARMOR, edge * 0.6);
+    for i in 0..CANNONS {
+        let a = turn + i as f32 * step;
         hull(
             emit,
             p + vec2(a.cos(), a.sin()) * r * 0.84,
             4,
             r * 0.08,
             a + FRAC_PI_4,
-            teal,
+            AXIOM_TEAL,
             edge * 0.5,
         );
     }
-    hull(emit, p, 6, r * 0.47, phase, teal, edge);
-    hull(emit, p, 6, r * 0.34, -phase, armor, edge * 0.7);
-    hull(emit, p, 4, r * 0.23, phase + FRAC_PI_4, gold, edge * 0.6);
-    poly(
+    if fine {
+        // Two small worlds riding the astrolabe's inner track.
+        for (lead, color) in [(0., AXIOM_GOLD), (PI, AXIOM_TEAL)] {
+            let a = -turn * 2.4 + lead;
+            hull(
+                emit,
+                p + vec2(a.cos(), a.sin()) * r * 0.565,
+                0,
+                r * 0.06,
+                0.,
+                color,
+                edge * 0.5,
+            );
+        }
+    }
+    hull(emit, p, 6, r * 0.47, turn, tint(AXIOM_TEAL, 0.56), edge);
+    hull(emit, p, 6, r * 0.34, -turn, AXIOM_ARMOR, edge * 0.7);
+    if fine {
+        // The astrolabe's needle, which always shows where it's aiming.
+        let d = vec2(aim.cos(), aim.sin());
+        let n = vec2(-d.y, d.x);
+        shard(
+            emit,
+            [p + d * r * 0.58, p + n * r * 0.075, p - n * r * 0.075],
+            lighten(AXIOM_GOLD, 0.2),
+            edge * 0.7,
+        );
+        shard(
+            emit,
+            [p - d * r * 0.34, p - n * r * 0.075, p + n * r * 0.075],
+            AXIOM_ARMOR,
+            edge * 0.7,
+        );
+    }
+    hull(
         emit,
         p,
         4,
-        r * 0.12,
-        phase + FRAC_PI_4,
-        Color::new(1., 0.96, 0.78, 1.),
+        r * 0.23,
+        turn + FRAC_PI_4,
+        AXIOM_GOLD,
+        edge * 0.6,
     );
+    poly(emit, p, 4, r * 0.12, turn + FRAC_PI_4, AXIOM_PALE);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn axiom_stays_in_its_bounds_in_any_pose_and_simplifies_at_icon_size() {
+        let count = |r: f32, pose: AxiomPose| {
+            let mut pieces = 0;
+            axiom_model(Vec2::ZERO, r, pose, &mut |primitive| {
+                pieces += 1;
+                let points = match primitive {
+                    Primitive::Polygon { center, radius, .. } => {
+                        vec![center - Vec2::splat(radius), center + Vec2::splat(radius)]
+                    }
+                    Primitive::Triangle { vertices, .. } => vertices.to_vec(),
+                    Primitive::Quad { vertices, .. } => vertices.to_vec(),
+                };
+                for point in points {
+                    assert!(point.is_finite() && point.length() < r * 2.);
+                }
+            });
+            pieces
+        };
+        let thrown = AxiomPose {
+            aim: 1.3,
+            time: 900.,
+            recoil: [1., 0., 0.5, 7., -3., f32::NAN],
+        };
+        let full = count(180., thrown);
+        assert!(count(180., AxiomPose::default()) == full);
+        assert!(count(7., thrown) < full, "an icon draws less");
+    }
+
     #[test]
     fn all_boss_silhouettes_are_finite_bounded_and_distinct() {
         let mut signatures = std::collections::HashSet::new();

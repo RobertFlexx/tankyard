@@ -19,6 +19,8 @@ const LOW_HEALTH: f32 = 0.3;
 const RAIL_MIC: f32 = 25.;
 /// The ring around someone who is talking.
 const TALKING_RING: Color = Color::new(0.3, 0.9, 0.46, 1.);
+/// The badge on someone whose microphone is off.
+const MIC_OFF: Color = Color::new(1., 0.46, 0.42, 1.);
 
 /// A member's tank as the shared match sees it.
 #[derive(Clone, Copy)]
@@ -92,6 +94,23 @@ fn voice_button(
     pressed
 }
 
+/// The little crossed-out microphone on the avatar of someone with theirs off.
+fn mic_off_badge(icon: &Texture2D, at: Vec2, s: f32) {
+    let size = 11. * s;
+    ui_circle(
+        at.x,
+        at.y,
+        size * 0.62,
+        alpha(tankyard_client::tank_model::OUTLINE, 0.92),
+    );
+    draw_icon(icon, at - Vec2::splat(size * 0.5), size, MIC_OFF);
+}
+
+/// A member's microphone in words, for their line in the party panel.
+fn mic_word(mic: Option<bool>) -> Option<&'static str> {
+    mic.map(|open| if open { "Mic on" } else { "Mic off" })
+}
+
 fn health_color(health: f32) -> Color {
     if health < LOW_HEALTH {
         crate::ui::RED
@@ -105,6 +124,7 @@ pub struct PartyUi {
     pub open: bool,
     muted: HashSet<u64>,
     draft: String,
+    recall: crate::chat_recall::ChatRecall,
     typing: bool,
     just_opened: bool,
     last_seen: u64,
@@ -183,6 +203,7 @@ impl PartyUi {
     pub fn close(&mut self) {
         self.open = false;
         self.typing = false;
+        self.recall.stop();
         self.confirming_leave = false;
         self.confirming_kick = None;
     }
@@ -196,6 +217,9 @@ impl PartyUi {
         }
         if is_key_pressed(KeyCode::Escape) {
             self.close();
+        }
+        if self.typing {
+            self.recall.keys(&mut self.draft);
         }
         true
     }
@@ -363,6 +387,14 @@ impl PartyUi {
                     0.,
                 );
             }
+            let mic = if member.client == client.client_id() {
+                Some(voice.open)
+            } else {
+                voice.mic(member.player)
+            };
+            if mic == Some(false) {
+                mic_off_badge(voice.microphone_off, center + vec2(-11., -10.) * s, s);
+            }
             if let Some(state) = state.filter(|state| state.alive) {
                 let bar = Rect::new(center.x - 12. * s, center.y + 13. * s, 24. * s, 3. * s);
                 ui_rectangle(bar.x, bar.y, bar.w, bar.h, alpha(line_color(), 0.6));
@@ -494,6 +526,7 @@ impl PartyUi {
         );
         if let Some(text) = message {
             if client.send_chat("lobby", &text) {
+                self.recall.note(&text);
                 self.draft.clear();
                 self.scroll = 0;
                 self.typing = true;
@@ -676,6 +709,18 @@ impl PartyUi {
                     0.,
                 );
             }
+            let mic = if me {
+                Some(view.voice.open)
+            } else {
+                view.voice.mic(member.player)
+            };
+            if mic == Some(false) {
+                mic_off_badge(
+                    view.voice.microphone_off,
+                    vec2(row.x + 9. * s, row.y + 9. * s),
+                    s,
+                );
+            }
             let name = format!("{}{}", member.name, if me { " (you)" } else { "" });
             let badge_width = if member.leader {
                 label_width("LEADER", 9. * s) + 8. * s
@@ -725,9 +770,12 @@ impl PartyUi {
             } else {
                 "In match"
             };
+            // Your own microphone has its button right there.
+            let heard =
+                mic_word(mic.filter(|_| !me)).map_or_else(String::new, |word| format!("{word} · "));
             let line = match health {
-                Some(health) => format!("Lv {} · {state} · {class_name}", health.level),
-                None => format!("{state} · {class_name}"),
+                Some(health) => format!("{heard}Lv {} · {state} · {class_name}", health.level),
+                None => format!("{heard}{state} · {class_name}"),
             };
             label(
                 &fitted_label(
@@ -1153,6 +1201,13 @@ mod tests {
         assert_eq!(party.arrivals.back().unwrap().0, "Friend left the party");
         party.note_roster(&first, 2, 2. + NOTICE_SECONDS + 1.);
         assert!(party.arrivals.is_empty(), "notices fade");
+    }
+
+    #[test]
+    fn a_members_microphone_reads_as_on_off_or_nothing_yet() {
+        assert_eq!(mic_word(Some(true)), Some("Mic on"));
+        assert_eq!(mic_word(Some(false)), Some("Mic off"));
+        assert_eq!(mic_word(None), None, "an older version never reports");
     }
 
     #[test]

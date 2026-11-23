@@ -63,6 +63,20 @@ pub(super) struct Plume {
     pub burn: Burn,
 }
 
+/// The color of Bastion's cannon `t` of the way from its heart to its edge. It
+/// runs hot without burning: white, ice, then a deep steel blue.
+pub(super) fn steel(t: f32) -> Color {
+    let t = if t.is_finite() { t.clamp(0., 1.) } else { 1. };
+    let white = Color::new(0.93, 0.98, 1., 1.);
+    let ice = Color::new(0.46, 0.78, 1., 1.);
+    let deep = Color::new(0.1, 0.34, 0.92, 1.);
+    if t < 0.3 {
+        crate::ui::mix(white, ice, t / 0.3)
+    } else {
+        crate::ui::mix(ice, deep, (t - 0.3) / 0.7)
+    }
+}
+
 /// The color of burning gas `t` of the way through its life: white, yellow,
 /// orange, then a red that dies away.
 pub(super) fn ramp(t: f32) -> Color {

@@ -420,6 +420,8 @@ impl World {
             game_creator: false,
             creator_boss: false,
             creator_attacks: [0.; crate::creator_boss::ATTACK_COUNT],
+            creator_reload: 0.,
+            creator_turn: 0,
             server_badge: Default::default(),
         });
         if matches!(

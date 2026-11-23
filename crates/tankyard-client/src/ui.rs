@@ -498,10 +498,14 @@ impl Drop for TextAfterShapes {
     }
 }
 fn raw_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
-    let p = crate::ui_layout::position(vec2(x, y));
     // Loaded now even if it's held: a new glyph replaces the font's texture,
     // which must not happen between drawing text and showing it.
     prepare_label(value, size);
+    placed_label(value, x, y, size, color);
+}
+/// A label whose glyphs are already loaded.
+fn placed_label(value: &str, x: f32, y: f32, size: f32, color: Color) {
+    let p = crate::ui_layout::position(vec2(x, y));
     let held = HELD_TEXT.with(|held| {
         let mut held = held.borrow_mut();
         if held.open {
@@ -1104,6 +1108,21 @@ pub fn select_field_all(value: &mut String) {
         field.dragging = false;
     });
 }
+/// Put a field's caret after its last character, for when something other
+/// than typing has just replaced its text. A field is known by its string's
+/// address, which is why this takes the `String` itself.
+#[allow(clippy::ptr_arg)]
+pub fn caret_to_end(value: &String) {
+    FIELDS.with(|fields| {
+        if let Some(field) = fields
+            .borrow_mut()
+            .get_mut(&(value as *const String as usize))
+        {
+            field.editor.place(value, value.len(), false);
+        }
+    });
+}
+
 pub fn text_field(
     rect: Rect,
     value: &mut String,
@@ -1481,10 +1500,11 @@ pub fn arcade_label(value: &str, x: f32, y: f32, size: f32) {
     }
     let ink = Color::new(0.15, 0.15, 0.16, 1.);
     let edge = (size * 0.06).clamp(1., 2.3);
+    prepare_label(value, size);
     for (dx, dy) in [(-edge, 0.), (edge, 0.), (0., -edge), (0., edge)] {
-        raw_label(value, x + dx, y + dy, size, ink);
+        placed_label(value, x + dx, y + dy, size, ink);
     }
-    raw_label(value, x, y, size, WHITE);
+    placed_label(value, x, y, size, WHITE);
 }
 
 pub fn capsule(rect: Rect, color: Color) {

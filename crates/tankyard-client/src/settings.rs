@@ -93,6 +93,8 @@ pub struct Settings {
     pub auto_fire: bool,
     pub bot_difficulty: usize,
     pub show_fps: bool,
+    /// The scoreboard is folded away behind its tab.
+    pub leaderboard_hidden: bool,
     pub bindings: [String; 6],
     pub games_played: u32,
     pub total_kills: u32,
@@ -212,6 +214,7 @@ impl Default for Settings {
             auto_fire: false,
             bot_difficulty: 1,
             show_fps: false,
+            leaderboard_hidden: false,
             bindings: ["W", "S", "A", "D", "Space", "E"].map(str::to_owned),
             games_played: 0,
             total_kills: 0,

@@ -48,6 +48,15 @@ impl V2 {
     pub fn lerp(self, b: Self, t: f32) -> Self {
         self + (b - self) * t
     }
+    /// This vector moved toward `to` by at most `step`, at a steady rate.
+    pub fn toward(self, to: Self, step: f32) -> Self {
+        let gap = to - self;
+        if gap.length_squared() <= step * step {
+            to
+        } else {
+            self + gap.normalized() * step
+        }
+    }
     pub fn finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite()
     }

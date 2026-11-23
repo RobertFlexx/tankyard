@@ -42,6 +42,15 @@ const TALKING: Duration = Duration::from_millis(260);
 /// Stands in for the round in a party's session: a party's call carries on
 /// from one round to the next, so a new round doesn't close the microphone.
 const PARTY_SESSION: u32 = u32::MAX;
+/// How often a party member repeats whether their microphone is on. Voice
+/// frames can be lost, so it is said again rather than said once.
+const MIC_REPEAT: Duration = Duration::from_secs(1);
+/// How long a member's last report holds without a newer one.
+const MIC_REPORT_LIFE: Duration = Duration::from_millis(3500);
+/// How long after speech a report may go out. Reports share the speech
+/// stream's numbering, and a gap inside speech would play as a lost frame.
+/// By this point the decoder treats the next word as a fresh start.
+const MIC_QUIET: Duration = Duration::from_millis(400);
 
 pub struct VoiceChat {
     muted: bool,
@@ -65,6 +74,10 @@ pub struct VoiceChat {
     party: bool,
     /// When each player's voice last arrived, to show who is talking.
     heard: HashMap<u64, Instant>,
+    /// Whether each party member's microphone is on, and when they said so.
+    mics: HashMap<u64, (bool, Instant)>,
+    /// What this player last told the party about their microphone.
+    reported: Option<(bool, Instant)>,
     microphone: Texture2D,
     microphone_off: Texture2D,
 }
@@ -83,6 +96,7 @@ pub struct VoiceView<'a> {
     /// Why it can't be opened, or the last error.
     pub problem: Option<&'a str>,
     heard: &'a HashMap<u64, Instant>,
+    mics: &'a HashMap<u64, (bool, Instant)>,
 }
 
 impl VoiceView<'_> {
@@ -91,6 +105,14 @@ impl VoiceView<'_> {
         self.heard
             .get(&player)
             .is_some_and(|at| at.elapsed() < TALKING)
+    }
+    /// Whether `player`'s own microphone is on. `None` until they say, which
+    /// someone on an older version never does.
+    pub fn mic(&self, player: u64) -> Option<bool> {
+        self.mics
+            .get(&player)
+            .filter(|(_, at)| at.elapsed() < MIC_REPORT_LIFE)
+            .map(|&(open, _)| open)
     }
 }
 
@@ -135,6 +157,8 @@ impl VoiceChat {
             speaking: None,
             party: false,
             heard: HashMap::new(),
+            mics: HashMap::new(),
+            reported: None,
             microphone,
             microphone_off,
         }
@@ -152,6 +176,7 @@ impl VoiceChat {
                 && self.speaking.is_some_and(|at| at.elapsed() < TALKING),
             problem: self.error.as_deref(),
             heard: &self.heard,
+            mics: &self.mics,
         }
     }
 
@@ -171,6 +196,8 @@ impl VoiceChat {
         self.error = None;
         self.party = false;
         self.heard.clear();
+        self.mics.clear();
+        self.reported = None;
         self.decoders.clear();
         if let Ok(mut mixer) = self.mixer.lock() {
             *mixer = Mixer::default();
@@ -270,6 +297,15 @@ impl VoiceChat {
                 }
             }
         }
+        self.report_mic(client);
+        // Before anything can discard the queue: who has a microphone on is
+        // worth knowing even with this player's own audio off.
+        read_mic_reports(
+            &mut client.voice_packets,
+            &mut self.mics,
+            self.party,
+            Instant::now(),
+        );
         // Muting a microphone never disables hearing others. Outside a party,
         // playback stops while dead, paused, disconnected or with audio off.
         let listening = !self.disabled && client.voice_enabled && client.is_ready() && in_call;
@@ -331,6 +367,42 @@ impl VoiceChat {
             for (player, samples) in decoded {
                 mixer.voices.entry(player).or_default().push(samples);
             }
+        }
+    }
+
+    /// Tell the party whether this microphone is on: at once when that
+    /// changes, and now and then so anyone who joins later finds out.
+    fn report_mic(&mut self, client: &mut NetworkClient) {
+        // Nobody to tell, or no way of telling them.
+        if client.party_members.len() < 2
+            || !client.is_ready()
+            || !client.voice_enabled
+            || client.voice_muted
+        {
+            self.reported = None;
+            return;
+        }
+        if self.speaking.is_some_and(|at| at.elapsed() < MIC_QUIET) {
+            return;
+        }
+        let open = self.active && !self.muted;
+        if self
+            .reported
+            .is_some_and(|(said, at)| said == open && at.elapsed() < MIC_REPEAT)
+        {
+            return;
+        }
+        let Some(round) = client.player_round else {
+            return;
+        };
+        let sequence = self.sequence.wrapping_add(1);
+        if client.send_voice(VoiceFrame {
+            round,
+            sequence,
+            samples: mic_report(open),
+        }) {
+            self.sequence = sequence;
+            self.reported = Some((open, Instant::now()));
         }
     }
 
@@ -722,6 +794,28 @@ impl VoiceChat {
     }
 }
 
+/// Take the microphone reports out of `queue` and note them in `mics`. Real
+/// speech counts too: anyone being heard has their microphone on, whatever
+/// their version, and even if this player has them muted.
+fn read_mic_reports(
+    queue: &mut VecDeque<VoicePacket>,
+    mics: &mut HashMap<u64, (bool, Instant)>,
+    party: bool,
+    now: Instant,
+) {
+    if !party {
+        mics.clear();
+        queue.retain(|packet| read_mic_report(&packet.frame.samples).is_none());
+        return;
+    }
+    queue.retain(|packet| {
+        let report = read_mic_report(&packet.frame.samples);
+        mics.insert(packet.player, (report.unwrap_or(true), now));
+        report.is_none()
+    });
+    mics.retain(|_, (_, at)| now.duration_since(*at) < MIC_REPORT_LIFE);
+}
+
 fn voice_encoder() -> Result<opus::Encoder, opus::Error> {
     let mut encoder = opus::Encoder::new(
         VOICE_SAMPLE_RATE,
@@ -1089,6 +1183,66 @@ fn soft_clip(sample: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn voice_packet(player: u64, samples: Vec<u8>) -> VoicePacket {
+        VoicePacket {
+            player,
+            volume: 255,
+            frame: VoiceFrame {
+                round: 1,
+                sequence: 7,
+                samples,
+            },
+        }
+    }
+
+    #[test]
+    fn mic_reports_leave_the_audio_queue_and_speech_counts_as_a_mic_on() {
+        let speech = vec![0x78, 1, 2, 3];
+        let mut queue: VecDeque<_> = [
+            voice_packet(1, mic_report(false)),
+            voice_packet(2, speech.clone()),
+            voice_packet(3, mic_report(true)),
+        ]
+        .into();
+        let mut mics = HashMap::new();
+        let now = Instant::now();
+        read_mic_reports(&mut queue, &mut mics, true, now);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].frame.samples, speech);
+        assert!(!mics[&1].0);
+        assert!(mics[&2].0);
+        assert!(mics[&3].0);
+
+        // The newest word wins, in the order it arrived.
+        let mut queue: VecDeque<_> = [
+            voice_packet(1, speech.clone()),
+            voice_packet(2, mic_report(false)),
+        ]
+        .into();
+        read_mic_reports(&mut queue, &mut mics, true, now);
+        assert!(mics[&1].0);
+        assert!(!mics[&2].0);
+
+        // A member who stops reporting goes back to unknown.
+        read_mic_reports(&mut VecDeque::new(), &mut mics, true, now + MIC_REPORT_LIFE);
+        assert!(mics.is_empty());
+
+        // Leaving the party forgets everyone, and a stray report isn't audio.
+        mics.insert(9, (true, now));
+        let mut queue: VecDeque<_> = [voice_packet(1, mic_report(true))].into();
+        read_mic_reports(&mut queue, &mut mics, false, now);
+        assert!(mics.is_empty() && queue.is_empty());
+    }
+
+    #[test]
+    fn a_decoder_with_no_idea_what_a_mic_report_is_stays_quiet_and_keeps_its_place() {
+        let mut decoder = VoiceDecoder::new().unwrap();
+        for open in [false, true] {
+            assert!(decoder.decode(&voice_packet(1, mic_report(open))).is_none());
+            assert_eq!(decoder.sequence, None);
+        }
+    }
 
     #[test]
     fn map_cues_coalesce_bursts_without_restarting_and_respect_the_mix_budget() {

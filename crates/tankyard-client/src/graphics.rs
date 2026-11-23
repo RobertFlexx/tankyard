@@ -114,7 +114,19 @@ pub fn draw_poly(x: f32, y: f32, sides: u8, radius: f32, rotation: f32, color: C
 }
 /// Macroquad's `draw_circle`: a 20-sided polygon.
 pub fn draw_circle(x: f32, y: f32, radius: f32, color: Color) {
-    draw_poly(x, y, 20, radius, 0., color);
+    draw_poly(x, y, CIRCLE_SIDES, radius, 0., color);
+}
+const CIRCLE_SIDES: u8 = 20;
+/// The unit vector to corner `i` of a polygon turned by `turned` radians.
+fn spoke(i: u8, sides: u8, turned: f32) -> (f32, f32) {
+    let angle = f32::from(i) / f32::from(sides) * std::f32::consts::PI * 2. + turned;
+    (angle.cos(), angle.sin())
+}
+/// The spokes of an unturned circle.
+fn circle_spokes() -> &'static [(f32, f32); CIRCLE_SIDES as usize + 1] {
+    static SPOKES: std::sync::OnceLock<[(f32, f32); CIRCLE_SIDES as usize + 1]> =
+        std::sync::OnceLock::new();
+    SPOKES.get_or_init(|| std::array::from_fn(|i| spoke(i as u8, CIRCLE_SIDES, 0.)))
 }
 fn poly_into(
     vertices: &mut Vec<macroquad::models::Vertex>,
@@ -128,10 +140,13 @@ fn poly_into(
     vertices.clear();
     indices.clear();
     let turned = rotation.to_radians();
+    // Most shapes are unturned circles, so their spokes are looked up rather
+    // than worked out twenty-one times each.
+    let spokes = (sides == CIRCLE_SIDES && rotation == 0.).then(circle_spokes);
     vertices.push(macroquad::models::Vertex::new(x, y, 0., 0., 0., color));
     for i in 0..=sides {
-        let angle = f32::from(i) / f32::from(sides) * std::f32::consts::PI * 2. + turned;
-        let (rx, ry) = (angle.cos(), angle.sin());
+        let (rx, ry) =
+            spokes.map_or_else(|| spoke(i, sides, turned), |table| table[usize::from(i)]);
         vertices.push(macroquad::models::Vertex::new(
             x + radius * rx,
             y + radius * ry,
@@ -418,6 +433,28 @@ mod tests {
 #[cfg(test)]
 mod polygon_tests {
     use super::*;
+
+    #[test]
+    fn a_looked_up_circle_is_the_worked_out_one_to_the_bit() {
+        let (mut fast, mut indices) = (Vec::new(), Vec::new());
+        poly_into(
+            &mut fast,
+            &mut indices,
+            (12.5, -3.25),
+            CIRCLE_SIDES,
+            9.75,
+            0.,
+            WHITE,
+        );
+        assert_eq!(fast.len(), usize::from(CIRCLE_SIDES) + 2);
+        for (i, vertex) in fast[1..].iter().enumerate() {
+            let (rx, ry) = spoke(i as u8, CIRCLE_SIDES, 0_f32.to_radians());
+            assert_eq!(vertex.uv.x.to_bits(), rx.to_bits(), "{i}");
+            assert_eq!(vertex.uv.y.to_bits(), ry.to_bits(), "{i}");
+            assert_eq!(vertex.position.x.to_bits(), (12.5 + 9.75 * rx).to_bits());
+            assert_eq!(vertex.position.y.to_bits(), (-3.25 + 9.75 * ry).to_bits());
+        }
+    }
 
     #[test]
     fn a_polygon_laps_back_to_its_first_point_and_reuses_its_buffers() {

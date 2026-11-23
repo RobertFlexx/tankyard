@@ -1,7 +1,7 @@
 //! Boss rounds in flight. Each has a solid body, so it can be seen and dodged
 //! whatever the settings, with its heart, halo and trail drawn in light, and
 //! each boss's guns burn in their own way.
-use super::fire::ramp;
+use super::fire::{ramp, steel};
 use super::{BossFx, Fuel, Round, TRAIL_POINTS, Trail, perpendicular};
 use crate::emission::{Emission, Layer, Stop};
 use crate::render::{View, polygon};
@@ -10,7 +10,7 @@ use macroquad::prelude::*;
 use std::f32::consts::{PI, TAU};
 use tankyard_client::tank_model::OUTLINE;
 use tankyard_content::ProjectileKind;
-use tankyard_core::LETHAL_DAMAGE;
+use tankyard_core::{BASTION_ROUND_DAMAGE, LETHAL_DAMAGE};
 
 impl BossFx {
     fn fuel_of(&self, round: &Round) -> Fuel {
@@ -20,7 +20,7 @@ impl BossFx {
     }
     /// A clock for a round's flicker, different for each round and still
     /// with motion reduced.
-    fn flicker(&self, round: &Round) -> f32 {
+    pub(super) fn flicker(&self, round: &Round) -> f32 {
         if self.look.calm {
             0.
         } else {
@@ -30,6 +30,10 @@ impl BossFx {
 
     /// One boss round.
     pub fn round(&self, light: &mut Emission, view: &View, round: &Round) {
+        if self.is_star_round(round.owner, round.id) {
+            self.star_round(light, view, round);
+            return;
+        }
         let Round {
             p,
             r,
@@ -55,6 +59,11 @@ impl BossFx {
         let clock = self.flicker(round);
         if damage >= LETHAL_DAMAGE {
             fireball(light, round, clock, level);
+            return;
+        }
+        if damage >= BASTION_ROUND_DAMAGE {
+            self.trail(light, view, round, 0.8);
+            slug(light, round, level);
             return;
         }
         self.trail(light, view, round, 1.);
@@ -261,7 +270,7 @@ impl BossFx {
     }
 
     /// A round's bright trail, from where it has been up to its body.
-    fn trail(&self, light: &mut Emission, view: &View, round: &Round, width: f32) {
+    pub(super) fn trail(&self, light: &mut Emission, view: &View, round: &Round, width: f32) {
         if !self.look.live() {
             return;
         }
@@ -276,6 +285,74 @@ impl BossFx {
             );
         }
     }
+}
+
+/// Bastion's cannon round: a steel slug with a white-hot nose, dragging a
+/// straight wedge of blue light and two clean lines of shock.
+fn slug(light: &mut Emission, round: &Round, level: f32) {
+    let Round {
+        p,
+        r,
+        heading,
+        color,
+        opacity,
+        age,
+        z,
+        ..
+    } = *round;
+    let d = heading.try_normalize().unwrap_or(vec2(1., 0.));
+    let n = perpendicular(d);
+    let o = opacity * level.min(1.);
+    let pale = light.pale_floor();
+    let paint = |t: f32| steel(if pale { t.max(0.3) } else { t });
+    let rim = (1.8 * z).max(1.);
+    // The solid body, so it shows on any floor and at any setting.
+    polygon(p, 0, r + rim, 0., alpha(mix(color, OUTLINE, 0.8), opacity));
+    polygon(p, 0, r, 0., alpha(mix(color, steel(0.3), 0.6), opacity));
+    polygon(p, 0, r * 0.68, 0., alpha(paint(0.12), opacity));
+    // Never reaching further back than it has flown, so it can't poke out
+    // through the back of the gun at launch.
+    let reach = (age * heading.length() * z).max(r * 0.8).min(r * 7.);
+    let point = |back: f32, half: f32, t: f32, strength: f32| Stop {
+        at: p - d * back,
+        half,
+        color: alpha(paint(t), strength * o),
+    };
+    light.spot(Layer::Wash, p, r * 3.8, alpha(paint(0.55), 0.34 * o));
+    light.band(
+        Layer::Wash,
+        &[
+            point(-r * 0.9, r * 0.1, 0.3, 0.),
+            point(-r * 0.2, r * 1.05, 0.35, 0.6),
+            point(reach * 0.4, r * 0.8, 0.5, 0.42),
+            point(reach, r * 0.08, 0.9, 0.),
+        ],
+    );
+    light.band(
+        Layer::Core,
+        &[
+            point(-r * 0.74, r * 0.08, 0.05, 0.),
+            point(-r * 0.1, r * 0.62, 0.04, 0.96),
+            point(reach * 0.34, r * 0.3, 0.2, 0.62),
+            point(reach * 0.8, r * 0.04, 0.4, 0.),
+        ],
+    );
+    for side in [-1., 1.] {
+        light.streak(
+            Layer::Core,
+            p - d * reach * 0.72 + n * side * r * 1.3,
+            p + d * r * 0.15 + n * side * r * 0.96,
+            (r * 0.06).max(0.9),
+            alpha(paint(0.3), 0.),
+            alpha(light.hot(paint(0.2), 0.4), 0.8 * o),
+        );
+    }
+    light.spot(
+        Layer::Core,
+        p + d * r * 0.35,
+        r * 0.62,
+        alpha(light.hot(paint(0.05), 1.), o),
+    );
 }
 
 /// The Siege Engine's round: a white-hot heart in a teardrop of fire, with
@@ -371,7 +448,7 @@ fn flourish(light: &mut Emission, round: &Round, fuel: Fuel, clock: f32, level: 
     let n = perpendicular(d);
     let o = opacity * level.min(1.);
     match fuel {
-        Fuel::Plasma => {}
+        Fuel::Plasma | Fuel::Star => {}
         Fuel::Fire => {
             // Burning fuel: flame licking off the back of the round.
             for lick in 0..3 {

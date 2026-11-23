@@ -466,6 +466,12 @@ pub fn predict_tank(
         }
         return;
     }
+    if tank.creator_boss {
+        // Axiom's cannons run on the server and don't shove its hull.
+        tank.charge = 0.;
+        constrain_tank(tank, config, walls);
+        return;
+    }
     if tank.cooldowns.len() != class.barrels.len()
         || tank.barrel_shots.len() != class.barrels.len()
         || tank.barrel_aims.len() != class.barrels.len()

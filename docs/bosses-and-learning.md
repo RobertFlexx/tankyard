@@ -15,7 +15,7 @@ Boss arrivals use a reliable, deduplicated event: an original 48 kHz alarm, a br
 | Prism | Triangular armor, rotating ricocheting volleys | 90 |
 | Foundry | Armored workshop hull, capped drone escorts and deployed turrets | 100 |
 | Tempest | Arrowhead hull, homing salvos and telegraphed lunges | 78 |
-| Bastion | Square armor, rotating mine ring and explosive cannon | 100 |
+| Bastion | Square armor, rotating mine ring and a heavy cannon that hits for 125 | 100 |
 | Eclipse | Dark disc in a spiked ring, phased radial bursts | 90 |
 | Siege Engine | Tracked chassis and a huge cannon whose shot destroys any tank it reaches | 104 |
 | Skirmisher | Twin cannons, fast orbit and a straight charge | 72 |
@@ -56,6 +56,10 @@ A boss is as tough as the arena is strong. Its health follows how many players a
 Before a special attack, a boss shows exactly where its rounds will go: lanes for a fan, spokes for a ring, and chevrons for a charge. Its core whitens as the attack charges. It fires faster as it's hurt.
 
 The **Siege Engine's cannon** winds up for 1.5 seconds, drawing a red line to the first wall in its way, then fires a huge, very fast round that destroys any tank it reaches, shields included. Get off the line or get behind cover. Walls stop it, a perfect parry turns it back at a capped damage, and it can't one-shot another boss.
+
+**Bastion's cannon** is the smaller relation. It winds up for 1.15 seconds behind a steel line, then fires a fast slug for 125 damage. That won't always kill you, but it will make you reconsider standing there. Walls stop it too.
+
+Bosses aim where you're going, not where you were: they work out where a round will meet a moving tank. They drive in straight lines between decisions and would rather finish a wounded target than start on a healthy one. Running in a straight line is how you get hit. Changing direction is the counterplay.
 
 ## v0.2.16 combat update
 

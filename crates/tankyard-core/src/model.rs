@@ -276,6 +276,12 @@ pub struct Tank {
     pub creator_boss: bool,
     #[serde(default)]
     pub creator_attacks: [f32; crate::creator_boss::ATTACK_COUNT],
+    /// Seconds until Axiom's cannons can fire again, and whose turn it is.
+    /// The server runs them alone, so neither travels in snapshots.
+    #[serde(skip)]
+    pub creator_reload: f32,
+    #[serde(skip)]
+    pub creator_turn: u8,
     #[serde(default)]
     pub server_badge: ServerBadge,
     /// Movement factor from the map pad under the tank; 1 off pads. Each
@@ -404,6 +410,8 @@ impl Clone for Tank {
             game_creator: self.game_creator,
             creator_boss: self.creator_boss,
             creator_attacks: self.creator_attacks,
+            creator_reload: self.creator_reload,
+            creator_turn: self.creator_turn,
             server_badge: self.server_badge,
             terrain: self.terrain,
             push: self.push,
@@ -461,6 +469,8 @@ impl Clone for Tank {
         self.game_creator = source.game_creator;
         self.creator_boss = source.creator_boss;
         self.creator_attacks = source.creator_attacks;
+        self.creator_reload = source.creator_reload;
+        self.creator_turn = source.creator_turn;
         self.server_badge = source.server_badge;
         self.terrain = source.terrain;
         self.push = source.push;
@@ -755,6 +765,8 @@ impl BossKind {
         match self {
             // Its cannon destroys whatever it hits, so it gives longer.
             Self::SiegeEngine => 1.5,
+            // Its lighter cannon still gets a proper look down the barrel.
+            Self::Bastion => 1.15,
             _ => 0.9,
         }
     }
@@ -810,6 +822,14 @@ pub struct Boss {
     /// it, so it never travels in a snapshot.
     #[serde(skip)]
     pub dodge: V2,
+    /// How it reads its target's motion, which lags a real change of course.
+    #[serde(skip)]
+    pub read: V2,
+    /// Where its current straight leg ends, and how long it holds that leg.
+    #[serde(skip)]
+    pub leg: V2,
+    #[serde(skip)]
+    pub leg_time: f32,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Objective {

@@ -8,6 +8,10 @@ pub const VOICE_BITRATE: i32 = 48_000;
 pub const MAX_VOICE_PAYLOAD: usize = 400;
 pub const MAX_VOICE_BYTES: usize = 512;
 pub const VOICE_RADIUS: f32 = 900.;
+/// The start of a microphone report. Read as an Opus packet it claims to hold
+/// no frames, so a client that has never heard of reports decodes nothing,
+/// plays nothing and shows nobody talking. Our encoder never writes it.
+const MIC_REPORT: [u8; 4] = [0x03, 0x00, b'm', b'c'];
 
 /// Bounded 20 ms mono Opus packets, on an independent unreliable channel.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -43,6 +47,24 @@ pub fn decode_voice_packet(bytes: &[u8]) -> Result<VoicePacket, DecodeError> {
 impl VoiceFrame {
     pub fn valid(&self) -> bool {
         self.round > 0 && (1..=MAX_VOICE_PAYLOAD).contains(&self.samples.len())
+    }
+}
+
+/// A voice frame's payload saying whether its sender's microphone is on. It
+/// rides the voice channel so that parties keep working across versions.
+pub fn mic_report(open: bool) -> Vec<u8> {
+    let mut samples = Vec::with_capacity(MIC_REPORT.len() + 1);
+    samples.extend_from_slice(&MIC_REPORT);
+    samples.push(u8::from(open));
+    samples
+}
+
+/// What a microphone report says, or `None` for anything else.
+pub fn read_mic_report(samples: &[u8]) -> Option<bool> {
+    match samples.strip_prefix(&MIC_REPORT)? {
+        [0] => Some(false),
+        [1] => Some(true),
+        _ => None,
     }
 }
 
@@ -82,5 +104,27 @@ mod tests {
         assert!(voice_gain(400.) > voice_gain(700.));
         assert_eq!(voice_gain(VOICE_RADIUS), 0.);
         assert_eq!(voice_gain(f32::NAN), 0.);
+    }
+
+    #[test]
+    fn mic_reports_are_valid_frames_that_say_one_thing() {
+        for open in [false, true] {
+            let frame = VoiceFrame {
+                round: 3,
+                sequence: 9,
+                samples: mic_report(open),
+            };
+            let decoded = decode_voice(&encode(&frame, MAX_VOICE_BYTES).unwrap()).unwrap();
+            assert_eq!(read_mic_report(&decoded.samples), Some(open));
+        }
+        for other in [
+            &[][..],
+            &[0x03, 0x00, b'm', b'c'],
+            &[0x03, 0x00, b'm', b'c', 2],
+            &[0x03, 0x00, b'm', b'c', 1, 0],
+            &[0x78, 0x00, b'm', b'c', 1],
+        ] {
+            assert_eq!(read_mic_report(other), None, "{other:?}");
+        }
     }
 }

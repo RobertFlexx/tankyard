@@ -164,6 +164,9 @@ fn creator_index(session: &LocalSession, player: EntityId) -> Result<usize, Stri
 }
 
 /// Trusted offline entry point; the network always uses the signed transport.
+/// What the server answers when a creator command has gone through.
+pub const APPLIED: &str = "Creator command applied.";
+
 pub fn apply(
     session: &mut LocalSession,
     player: EntityId,
@@ -284,7 +287,7 @@ pub fn apply(
         Command::Moderate { .. } | Command::Map { .. } => unreachable!(),
     }
     world.config.modded = true;
-    Ok("Creator command applied.".into())
+    Ok(APPLIED.into())
 }
 
 #[cfg(test)]

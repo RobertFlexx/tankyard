@@ -70,6 +70,8 @@ const FADED: f32 = 0.3;
 /// A selection side shorter than this on screen has the handles across it
 /// stand outside the edge, so pressing in a thin selection still moves it.
 const HANDLE_ROOM: f32 = 40.;
+/// How long, in seconds, what an undo changed stays lit.
+const FLASH_LIFE: f32 = 0.9;
 
 const HANDLES: [(i8, i8); 8] = [
     (-1, -1),
@@ -130,6 +132,33 @@ fn resized(
         }
     }
     [lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]]
+}
+
+/// A distance with its direction, as a ruler would say it.
+fn signed(value: f32) -> String {
+    let rounded = value.round();
+    if rounded > 0. {
+        format!("+{rounded:.0}")
+    } else if rounded < 0. {
+        format!("−{:.0}", -rounded)
+    } else {
+        "0".to_owned()
+    }
+}
+
+/// A short measurement below and right of the pointer, where the cursor
+/// won't cover it, kept on the canvas.
+fn measurement(text: &str, pointer: Vec2, canvas: Rect, s: f32) {
+    let s = s.max(0.8);
+    let size = 13. * s;
+    let (pad, height) = (6. * s, size + 10. * s);
+    let width = label_width(text, size) + pad * 2.;
+    let x = (pointer.x + 18.)
+        .min(canvas.right() - width - 4.)
+        .max(canvas.x + 4.);
+    let y = (pointer.y + 22.).min(canvas.bottom() - height - 4.);
+    draw_rectangle(x, y, width, height, alpha(surface_color(), 0.9));
+    label(text, x + pad, y + size + 3. * s, size, text_color());
 }
 
 /// Which size step an object's area on screen falls in, each step half as
@@ -648,7 +677,10 @@ impl Editor {
             && !(self.layer_strip && self.layer_strip_rect(layout).contains(pointer))
             && !self
                 .legend_rect(layout)
-                .is_some_and(|legend| legend.contains(pointer));
+                .is_some_and(|legend| legend.contains(pointer))
+            && !self
+                .find_rect(layout)
+                .is_some_and(|bar| bar.contains(pointer));
         // The preview's widgets sit over the arena: a click on one of their
         // choices or board buttons picks it, and a click elsewhere on them
         // does nothing.
@@ -1212,9 +1244,11 @@ impl Editor {
                 self.draw_group_badges(view, s, &tags);
             }
             self.draw_paths(s);
+            self.draw_find_hits(view);
+            self.draw_flash(view);
             self.draw_selection(s);
             self.draw_preview_marks(s);
-            self.draw_gesture(canvas);
+            self.draw_gesture(canvas, s);
         });
         drop(clip);
         self.draw_canvas_status(layout);
@@ -1886,7 +1920,48 @@ impl Editor {
             draw_circle_lines(p.x, p.y, radius.max(5.), 2., player_color());
         }
     }
-    fn draw_gesture(&self, canvas: Rect) {
+    /// Everything the find bar turned up.
+    fn draw_find_hits(&self, view: Rect) {
+        for &key in self.find.hits() {
+            if let Some(r) = self.doc.rect(key) {
+                let a = self.hit_area(key, r);
+                if overlaps(view, a) {
+                    draw_rectangle(a.x, a.y, a.w, a.h, alpha(AMBER, 0.12));
+                    draw_rectangle_lines(a.x - 1., a.y - 1., a.w + 2., a.h + 2., 1.5, AMBER);
+                }
+            }
+        }
+    }
+    /// What the last undo or redo changed, fading out.
+    fn draw_flash(&self, view: Rect) {
+        let age = (get_time() - self.flash_at) as f32;
+        if self.flash.is_empty() || self.flash_revision != self.revision || age >= FLASH_LIFE {
+            return;
+        }
+        let fade = 1. - age / FLASH_LIFE;
+        let color = alpha(accent_color(), fade * fade);
+        for &key in &self.flash {
+            if let Some(r) = self.doc.rect(key) {
+                let a = self.hit_area(key, r);
+                if overlaps(view, a) {
+                    draw_rectangle(a.x, a.y, a.w, a.h, alpha(color, color.a * 0.3));
+                    draw_rectangle_lines(a.x - 3., a.y - 3., a.w + 6., a.h + 6., 2., color);
+                }
+            }
+        }
+    }
+    /// How big the selection is in world units, unless it's one marker whose
+    /// size means nothing.
+    fn selection_size(&self) -> Option<[f32; 2]> {
+        if let [only] = self.selection[..]
+            && matches!(only, Key::Base(_) | Key::Objective(_))
+        {
+            return None;
+        }
+        let b = self.doc.bounds(&self.selection)?;
+        Some([b[2] * self.doc.map.width, b[3] * self.doc.map.height])
+    }
+    fn draw_gesture(&self, canvas: Rect, s: f32) {
         let pointer = ui_layout::pointer();
         match &self.gesture {
             Some(Gesture::Draw { start, last }) => {
@@ -1898,14 +1973,34 @@ impl Editor {
                 draw_rectangle(r.x, r.y, r.w, r.h, alpha(accent_color(), 0.12));
                 draw_rectangle_lines(r.x, r.y, r.w, r.h, 2., accent_color());
                 let size = [area[2] * self.doc.map.width, area[3] * self.doc.map.height];
-                // Below and right of the pointer, where the cursor won't cover it.
-                label(
+                measurement(
                     &format!("{:.0} × {:.0}", size[0], size[1]),
-                    pointer.x + 18.,
-                    pointer.y + 34.,
-                    14.,
-                    text_color(),
+                    pointer,
+                    canvas,
+                    s,
                 );
+            }
+            Some(Gesture::Move {
+                objects,
+                moved: true,
+                ..
+            }) => {
+                if let Some((key, original)) = objects.first()
+                    && let Some(now) = self.doc.rect(*key)
+                {
+                    let from = original.rect();
+                    let text = format!(
+                        "{}, {}",
+                        signed((now[0] - from[0]) * self.doc.map.width),
+                        signed((now[1] - from[1]) * self.doc.map.height)
+                    );
+                    measurement(&text, pointer, canvas, s);
+                }
+            }
+            Some(Gesture::Resize { .. }) if self.handle_press.is_none() => {
+                if let Some([w, h]) = self.selection_size() {
+                    measurement(&format!("{w:.0} × {h:.0}"), pointer, canvas, s);
+                }
             }
             Some(Gesture::Marquee { start, .. }) => {
                 let r = screen_area(*start, pointer);
@@ -1948,10 +2043,10 @@ impl Editor {
                 };
                 format!("Build · {name}{}", if self.swipe { " · swipe" } else { "" })
             }
-            Mode::Edit => match self.selection.len() {
-                0 => "Edit".to_owned(),
-                1 => "Edit · 1 selected".to_owned(),
-                n => format!("Edit · {n} selected"),
+            Mode::Edit => match (self.selection.len(), self.selection_size()) {
+                (0, _) => "Edit".to_owned(),
+                (n, Some([w, h])) => format!("Edit · {n} selected · {w:.0} × {h:.0}"),
+                (n, None) => format!("Edit · {n} selected"),
             },
             Mode::Delete => format!("Delete{}", if self.swipe { " · swipe" } else { "" }),
             Mode::Pan => "Pan · drag to move the view".to_owned(),
@@ -2149,6 +2244,14 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn distances_read_with_their_direction_and_no_negative_zero() {
+        assert_eq!(signed(12.6), "+13");
+        assert_eq!(signed(-40.), "−40");
+        assert_eq!(signed(0.2), "0");
+        assert_eq!(signed(-0.4), "0", "not a minus zero");
+    }
 
     #[test]
     fn a_much_smaller_object_counts_as_smaller_and_a_like_sized_one_as_equal() {

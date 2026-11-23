@@ -6,12 +6,14 @@
 //! [`crate::emission::Emission`], which keeps it soft and bright; warnings
 //! stay visible even with effects turned off, because players need them to
 //! dodge.
+mod axiom;
 mod blasts;
 mod fire;
 mod hull;
 mod shots;
 mod warnings;
 
+pub use axiom::ShownAxiom;
 pub use hull::Armor;
 pub use shots::tracer;
 
@@ -22,8 +24,10 @@ use fire::{Plume, Puff, ramp};
 use macroquad::prelude::*;
 use std::collections::HashMap;
 use std::f32::consts::{E, PI, TAU};
+use tankyard_client::boss_model::AXIOM_GOLD;
 use tankyard_content::ProjectileKind;
-use tankyard_core::{Boss, BossKind, EntityId, LETHAL_DAMAGE, V2};
+use tankyard_core::creator_boss::CANNONS;
+use tankyard_core::{BASTION_ROUND_DAMAGE, Boss, BossKind, EntityId, LETHAL_DAMAGE, V2};
 
 /// Most sparks alive at once, so a long fight can't slow the frame.
 const MOST_SPARKS: usize = 720;
@@ -45,6 +49,8 @@ const KICK_RATE: f32 = 17.;
 const MOST_KICK: f32 = 0.09;
 /// How far along its barrel the Siege Engine's round leaves, in hull radii.
 const SIEGE_MUZZLE: f32 = 1.62;
+/// The same for Bastion's.
+const BASTION_MUZZLE: f32 = 1.52;
 /// How long the pale stretch on a boss's health bar waits after a burst of
 /// damage, and how quickly it then catches up.
 const TRAIL_HOLD: f32 = 0.42;
@@ -108,6 +114,8 @@ enum Fuel {
     Spectrum,
     /// A dark heart with light bending around it.
     Void,
+    /// Axiom's gold starlight.
+    Star,
 }
 
 impl Fuel {
@@ -170,6 +178,10 @@ struct Presence {
     embers: f32,
     smoke: f32,
     flame: f32,
+    /// How far back each of Axiom's cannons is, from the one on its aim.
+    guns: [f32; CANNONS],
+    /// How fast Axiom is driving, in world units a second.
+    drive: Vec2,
 }
 
 impl Presence {
@@ -197,6 +209,8 @@ impl Presence {
             embers: 0.,
             smoke: 0.,
             flame: 0.,
+            guns: [0.; CANNONS],
+            drive: Vec2::ZERO,
         }
     }
 }
@@ -454,6 +468,10 @@ pub struct BossFx {
     sparks: Vec<Spark>,
     flames: Vec<Puff>,
     scars: Vec<Scar>,
+    casts: Vec<axiom::Cast>,
+    /// Whether any of Axiom or its rounds are about, so that every other
+    /// game skips looking for them.
+    stars: bool,
     look: Look,
     random: u32,
 }
@@ -468,6 +486,8 @@ impl Default for BossFx {
             sparks: Vec::with_capacity(256),
             flames: Vec::with_capacity(256),
             scars: Vec::with_capacity(MOST_SCARS),
+            casts: Vec::new(),
+            stars: false,
             look: Look::default(),
             random: 0x9e37_79b9,
         }
@@ -493,11 +513,15 @@ impl BossFx {
             self.bursts.clear();
             self.flames.clear();
             self.scars.clear();
+            self.casts.clear();
         }
     }
-    /// Whether `id` is a boss seen recently.
+    /// Whether `id` is a boss seen recently. Axiom counts only while it's in
+    /// the form, because the tank underneath goes back to firing normal shots.
     pub fn is_boss(&self, id: EntityId) -> bool {
-        self.bosses.contains_key(&id)
+        self.bosses
+            .get(&id)
+            .is_some_and(|shown| shown.fuel != Fuel::Star || shown.unseen <= 0.)
     }
     /// The angle to draw a boss's guns at.
     pub fn aim(&self, boss: &Boss) -> f32 {
@@ -772,22 +796,28 @@ impl BossFx {
         });
     }
 
-    /// A boss's round has just left its gun. True for a shot heavy enough
-    /// to shake the camera.
-    pub fn launched(&mut self, flight: &Flight) -> bool {
+    /// A boss's round has just left its gun. Returns how hard that shakes the
+    /// camera, which is not at all for an ordinary shot.
+    pub fn launched(&mut self, flight: &Flight) -> f32 {
+        if self.is_axiom(flight.owner) {
+            return self.star_launched(flight);
+        }
         let look = self.look;
         let Some(presence) = self.bosses.get_mut(&flight.owner) else {
-            return false;
+            return 0.;
         };
         let (color, fuel, body, hull) =
             (presence.color, presence.fuel, presence.pos, presence.radius);
         let heading = vec2(flight.vel.x, flight.vel.y).normalize_or_zero();
         // Firing shoves the hull back, more for a heavier round.
-        let heavy = flight.damage >= LETHAL_DAMAGE;
-        let shove = if heavy {
-            5.2
+        let lethal = flight.damage >= LETHAL_DAMAGE;
+        let cannon = flight.damage >= BASTION_ROUND_DAMAGE;
+        let (shove, shake) = if lethal {
+            (5.2, 2.2)
+        } else if cannon {
+            (3.2, 1.1)
         } else {
-            (flight.radius / 22.).clamp(0.12, 0.8)
+            ((flight.radius / 22.).clamp(0.12, 0.8), 0.)
         };
         if !look.calm {
             presence.kick_rate -= heading * shove * 60.;
@@ -797,12 +827,17 @@ impl BossFx {
             }
         }
         if !look.live() || flight.kind.is_drone() {
-            return heavy;
+            return shake;
         }
-        if heavy {
+        if lethal {
             let muzzle = body + V2::new(heading.x, heading.y) * hull * SIEGE_MUZZLE;
             self.cannon_blast(muzzle, flight.radius, heading);
-            return true;
+            return shake;
+        }
+        if cannon {
+            let muzzle = body + V2::new(heading.x, heading.y) * hull * BASTION_MUZZLE;
+            self.slug_blast(muzzle, flight.radius, heading, color);
+            return shake;
         }
         self.fueled_burst(
             flight.at,
@@ -824,7 +859,54 @@ impl BossFx {
                 burn: fire::OPEN,
             });
         }
-        false
+        0.
+    }
+
+    /// Bastion's cannon firing: a hard flash and a fan of steel sparks, with
+    /// a little smoke and no flame.
+    fn slug_blast(&mut self, at: V2, r: f32, heading: Vec2, color: Color) {
+        let look = self.look;
+        let angle = heading.y.atan2(heading.x);
+        self.fueled_burst(
+            at,
+            Flash::Muzzle(heading),
+            Fuel::Plasma,
+            r * 1.5,
+            color,
+            0.24,
+        );
+        self.burst(at, Flash::Blast, r * 0.55, color, 0.26);
+        for _ in 0..look.many(4.) {
+            let spread = angle + (self.rand() - 0.5) * 2.;
+            let size = r * self.between((0.5, 0.9));
+            let life = self.between((0.5, 0.9));
+            self.smoke(at, spread, (30., 100.), size, life);
+        }
+        self.spray(Spray {
+            at,
+            heading: Some((angle, 0.36)),
+            count: look.many(26.),
+            speed: (300., 900.),
+            life: (0.18, 0.5),
+            size: (1.4, 3.2),
+            color: fire::steel(0.2),
+        });
+    }
+
+    /// Bastion's round landing: a sharp burst and a smaller scorch.
+    fn slug_impact(&mut self, at: V2, r: f32, color: Color) {
+        let look = self.look;
+        self.fueled_burst(at, Flash::Blast, Fuel::Plasma, r * 1.35, color, 0.5);
+        self.spray(Spray {
+            at,
+            heading: None,
+            count: look.many(28.),
+            speed: (120., 620.),
+            life: (0.25, 0.7),
+            size: (1.3, 3.),
+            color: fire::steel(0.25),
+        });
+        self.scar(at, r * 2.);
     }
 
     /// The Siege Engine firing: a jet of flame from the barrel, more blown
@@ -916,6 +998,11 @@ impl BossFx {
             if self.trails.len() < MOST_TRAILS
                 && let Some(presence) = self.bosses.get(&flight.owner)
             {
+                let heavy = if presence.fuel == Fuel::Star {
+                    Self::star_heavy(flight.kind, flight.radius)
+                } else {
+                    flight.damage >= BASTION_ROUND_DAMAGE
+                };
                 self.trails.insert(
                     flight.id,
                     Trail::new(
@@ -923,7 +1010,7 @@ impl BossFx {
                         flight.radius,
                         presence.color,
                         presence.fuel,
-                        flight.damage >= LETHAL_DAMAGE,
+                        heavy,
                     ),
                 );
             }
@@ -935,11 +1022,13 @@ impl BossFx {
         let from = trail.latest;
         trail.note(flight.at);
         let moved = from.distance(flight.at);
-        if trail.fuel != Fuel::Fire || moved > 260. {
+        let burns =
+            trail.fuel == Fuel::Fire || (trail.fuel == Fuel::Star && Self::star_burns(flight.kind));
+        if !burns || moved > 260. {
             return;
         }
         // Flame is left by distance flown, so it's as dense at any frame rate.
-        let heavy = trail.heavy;
+        let heavy = trail.heavy && trail.fuel == Fuel::Fire;
         let r = flight.radius;
         let spacing = (if heavy { r * 0.3 } else { r * 1.25 }).max(2.);
         trail.fed += moved;
@@ -999,9 +1088,17 @@ impl BossFx {
         else {
             return;
         };
+        if fuel == Fuel::Star || trail.is_some_and(|trail| trail.fuel == Fuel::Star) {
+            self.star_landed(flight, struck, color);
+            return;
+        }
         let (at, radius, kind) = (flight.at, flight.radius, flight.kind);
         if flight.damage >= LETHAL_DAMAGE {
             self.detonate(at, radius);
+            return;
+        }
+        if flight.damage >= BASTION_ROUND_DAMAGE {
+            self.slug_impact(at, radius, color);
             return;
         }
         if matches!(
@@ -1129,6 +1226,7 @@ impl BossFx {
             wake.life -= dt;
         }
         self.wakes.retain(|wake| wake.life > 0.);
+        self.run_casts(dt);
         // A round gone without a word, as across a resync, takes its trail.
         self.trails
             .retain(|_, trail| std::mem::take(&mut trail.seen));
@@ -1150,17 +1248,25 @@ impl BossFx {
                 },
             );
         }
+        if self.stars {
+            self.axiom_lights(view, out);
+        }
         if !self.look.live() {
             return;
         }
         for trail in self.trails.values() {
             if trail.heavy && view.visible(trail.latest, 420.) {
+                let (reach, tint) = match trail.fuel {
+                    Fuel::Fire => (420., alpha(ramp(0.28), 0.95)),
+                    Fuel::Star => (380., alpha(mix(AXIOM_GOLD, WHITE, 0.3), 0.9)),
+                    _ => (300., alpha(fire::steel(0.35), 0.8)),
+                };
                 crate::lighting::gather(
                     out,
                     Light::Spot {
                         at: view.screen(trail.latest),
-                        radius: 420. * z,
-                        color: alpha(ramp(0.28), 0.95),
+                        radius: reach * z,
+                        color: tint,
                     },
                 );
             }
@@ -1387,7 +1493,7 @@ mod tests {
         sync(&mut fx, &boss, 1. / 60.);
         let mut shot = flight(8, 7, boss.pos, 1e7);
         shot.radius = 24.;
-        assert!(fx.launched(&shot), "the heavy round shakes the camera");
+        assert!(fx.launched(&shot) > 0., "the heavy round shakes the camera");
         let mut furthest = 0_f32;
         for _ in 0..120 {
             sync(&mut fx, &boss, 1. / 60.);
@@ -1397,6 +1503,24 @@ mod tests {
         }
         assert!(furthest > 0.5 && furthest <= boss.radius * MOST_KICK * 1.05);
         assert!(fx.kick(&boss, 1.).length() < 0.02);
+    }
+
+    #[test]
+    fn bastions_cannon_kicks_less_than_the_siege_gun_and_leaves_a_mark() {
+        let mut fx = BossFx::default();
+        let boss = boss(7);
+        sync(&mut fx, &boss, 1. / 60.);
+        let plain = fx.launched(&flight(1, 7, boss.pos, 40.));
+        let cannon = flight(2, 7, boss.pos, BASTION_ROUND_DAMAGE);
+        let kick = fx.launched(&cannon);
+        let siege = fx.launched(&flight(3, 7, boss.pos, LETHAL_DAMAGE));
+        assert_eq!(plain, 0.);
+        assert!(kick > 0. && kick < siege, "{kick} {siege}");
+        fx.track(&cannon);
+        assert!(fx.trails[&2].heavy);
+        let scars = fx.scars.len();
+        fx.landed(&cannon, true);
+        assert_eq!(fx.scars.len(), scars + 1);
     }
 
     #[test]

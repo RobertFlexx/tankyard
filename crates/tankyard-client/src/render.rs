@@ -869,15 +869,21 @@ pub fn world(
             .bosses
             .iter()
             .find(|boss| boss.id == projectile.owner && !boss.mothership);
-        let c = boss
-            .map(|b| tankyard_client::boss_model::boss_color(b.kind))
-            .unwrap_or_else(|| {
-                team_color(
-                    projectile.team,
-                    projectile.owner == local,
-                    settings.colorblind,
-                )
-            });
+        let star = effects
+            .boss_fx
+            .is_star_round(projectile.owner, projectile.id);
+        let c = if star {
+            crate::accessibility::palette(tankyard_client::boss_model::AXIOM_GOLD)
+        } else {
+            boss.map(|b| tankyard_client::boss_model::boss_color(b.kind))
+                .unwrap_or_else(|| {
+                    team_color(
+                        projectile.team,
+                        projectile.owner == local,
+                        settings.colorblind,
+                    )
+                })
+        };
         if projectile.frozen.is_some() {
             light.ring(
                 crate::emission::Layer::Wash,
@@ -923,11 +929,11 @@ pub fn world(
                 | ProjectileKind::Homing
         );
         if projectile.frozen.is_none() {
-            if boss.is_some() && gunfire {
+            if (boss.is_some() || star) && gunfire {
                 effects.boss_fx.round(&mut light, view, &round);
                 continue;
             }
-            if boss.is_some() {
+            if boss.is_some() || star {
                 effects.boss_fx.craft(&mut light, view, &round);
             } else if gunfire && light_level > 0. {
                 crate::boss_fx::tracer(&mut light, &round, light_level);
@@ -1110,14 +1116,26 @@ pub fn world(
             });
         if !tank.alive
             || (tank.pocket > 0. && tank.id != local)
-            || !view.visible(position, tank.radius + 65.0)
+            || !view.visible(
+                position,
+                if tank.creator_boss {
+                    tank.radius * tankyard_core::creator_boss::MUZZLE + 30.
+                } else {
+                    tank.radius + 65.0
+                },
+            )
         {
             continue;
         }
         let Some(class) = content.class(&tank.class) else {
             continue;
         };
-        let p = view.screen(position);
+        let p = view.screen(position)
+            + if tank.creator_boss {
+                effects.boss_fx.axiom_kick(tank.id, z)
+            } else {
+                Vec2::ZERO
+            };
         let visual = effects.hulls.get(&tank.id);
         let r = visual.map_or(tank.radius, |hull| hull.radius) * z;
         let color = team_color(tank.team, tank.id == local, settings.colorblind);
@@ -1211,17 +1229,25 @@ pub fn world(
             );
         }
         if tank.creator_boss {
-            tankyard_client::boss_model::axiom_geometry(
+            let aim = *effects.display_aim.get(&tank.id).unwrap_or(&tank.aim);
+            let time = if settings.reduced_motion {
+                0.
+            } else {
+                animation_time
+            };
+            tankyard_client::boss_model::axiom_model(
                 p,
                 r,
-                tank.aim,
-                if settings.reduced_motion {
-                    0.
-                } else {
-                    animation_time
+                tankyard_client::boss_model::AxiomPose {
+                    aim,
+                    time,
+                    recoil: effects.boss_fx.axiom_recoil(tank.id),
                 },
                 &mut draw_model_primitive,
             );
+            effects
+                .boss_fx
+                .axiom_glow(&mut light, tank.id, p, r, aim, time);
         } else {
             class_model_animated(
                 class,
@@ -1281,25 +1307,42 @@ pub fn world(
                 },
             );
         }
+        // Axiom's cannons reach past its hull, and its name and bar clear them.
+        let reach = if tank.creator_boss {
+            r * tankyard_core::creator_boss::MUZZLE
+        } else {
+            r
+        };
         if local != 0 && tank.id != local {
-            arcade_player_label(tank, "", vec2(p.x, p.y - r - 14. * z), 320. * z, 15. * z);
+            arcade_player_label(
+                tank,
+                "",
+                vec2(p.x, p.y - reach - 14. * z),
+                320. * z,
+                15. * z,
+            );
         }
         if crate::accessibility::team_symbols() {
-            team_marker(
-                tank.team,
-                tank.id == local,
-                vec2(p.x, p.y + r * 0.5),
-                r * 0.19,
-            );
+            // On a hull this size the usual share of it would be a marker as
+            // big as a tank, sitting right on the works.
+            let (below, size) = if tank.creator_boss {
+                (r * 0.64, 7. * z)
+            } else {
+                (r * 0.5, r * 0.19)
+            };
+            team_marker(tank.team, tank.id == local, vec2(p.x, p.y + below), size);
         }
-        if local != 0 {
-            health_bar(
-                p,
+        let hull = visual.map_or(tank.health / tank.max_health, |hull| hull.health);
+        if tank.creator_boss {
+            boss_health_bar(
+                p + vec2(0., reach - r),
                 r,
-                visual.map_or(tank.health / tank.max_health, |hull| hull.health),
+                (hull, effects.boss_fx.axiom_trail(tank.id, hull)),
                 z,
-                Color::new(0.45, 0.86, 0.33, 1.0),
+                &tankyard_core::BOSS_PHASES,
             );
+        } else if local != 0 {
+            health_bar(p, r, hull, z, Color::new(0.45, 0.86, 0.33, 1.0));
         }
     }
     for particle in &effects.particles {
@@ -1561,14 +1604,24 @@ fn arena_lights(
                 radius: (projectile.radius * 4. + 36.) * z,
                 color: alpha(
                     mix(
-                        snapshot
-                            .bosses
-                            .iter()
-                            .find(|boss| boss.id == projectile.owner)
-                            .map_or_else(
-                                || team_color(projectile.team, projectile.owner == local, false),
-                                |boss| boss_tint(boss, false),
-                            ),
+                        if boss_fx.is_star_round(projectile.owner, projectile.id) {
+                            tankyard_client::boss_model::AXIOM_GOLD
+                        } else {
+                            snapshot
+                                .bosses
+                                .iter()
+                                .find(|boss| boss.id == projectile.owner)
+                                .map_or_else(
+                                    || {
+                                        team_color(
+                                            projectile.team,
+                                            projectile.owner == local,
+                                            false,
+                                        )
+                                    },
+                                    |boss| boss_tint(boss, false),
+                                )
+                        },
                         WHITE,
                         0.5,
                     ),
@@ -1605,7 +1658,7 @@ pub(crate) fn health_bar(p: Vec2, r: f32, ratio: f32, z: f32, color: Color) {
 /// A boss's health, with a notch where each phase begins and a pale stretch
 /// for what it has just lost.
 fn boss_health_bar(p: Vec2, r: f32, (ratio, lost): (f32, f32), z: f32, marks: &[f32]) {
-    if ratio >= 0.999 && lost <= ratio {
+    if ratio >= 0.999 {
         return;
     }
     let w = (r * 1.8).max(28.0 * z);

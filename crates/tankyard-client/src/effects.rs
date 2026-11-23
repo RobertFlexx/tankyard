@@ -314,7 +314,19 @@ impl Effects {
                 EventKind::Parry => (CYAN, 8, true),
                 EventKind::BodyParry => (AMBER, 30, true),
                 EventKind::StasisRelease => (CYAN, 24, true),
-                EventKind::BossAttack => (RED, 3, true),
+                // Axiom's attacks each have a flare of their own.
+                EventKind::BossAttack => {
+                    match self
+                        .boss_fx
+                        .axiom_cast(event.subject, event.value, event.pos)
+                    {
+                        Some(kick) => {
+                            self.shake = (self.shake + kick).min(4.);
+                            (AMBER, 0, false)
+                        }
+                        None => (RED, 3, true),
+                    }
+                }
                 EventKind::PocketEject => (AMBER, 6, true),
                 EventKind::MapShake => {
                     if event.subject == local {
@@ -456,6 +468,18 @@ impl Effects {
                 self.boss_defeat = Some(((*boss).to_owned(), event.subject, 5.));
                 self.boss_arrival = None;
             }
+            if matches!(event.kind, EventKind::Kill)
+                && let Some(victim) = event.elimination.as_ref().map(|kill| kill.victim)
+                && self.boss_fx.is_axiom(victim)
+            {
+                self.boss_fx.defeated(victim, event.pos);
+                self.boss_defeat = Some((
+                    tankyard_core::creator_boss::NAME.to_owned(),
+                    event.subject,
+                    5.,
+                ));
+                self.boss_arrival = None;
+            }
             if matches!(event.kind, EventKind::Kill) && event.subject == local {
                 self.shake = (self.shake + 1.0).min(4.0);
                 if let Some(elimination) = &event.elimination {
@@ -565,7 +589,9 @@ impl Effects {
             let shown = projectile
                 .previous
                 .lerp(projectile.pos, fraction.clamp(0.0, 1.0));
-            if self.boss_fx.is_boss(projectile.owner) {
+            if self.boss_fx.is_boss(projectile.owner)
+                || self.boss_fx.is_star_round(projectile.owner, projectile.id)
+            {
                 let flight = crate::boss_fx::Flight {
                     id: projectile.id,
                     owner: projectile.owner,
@@ -577,11 +603,11 @@ impl Effects {
                 };
                 // Only a round seen as it leaves the gun gets a muzzle flash:
                 // joining a fight doesn't set them all off at once.
-                if !self.tracked_projectiles.contains_key(&projectile.id)
-                    && projectile.age < 0.12
-                    && self.boss_fx.launched(&flight)
-                {
-                    self.shake = (self.shake + 2.2).min(4.);
+                if !self.tracked_projectiles.contains_key(&projectile.id) && projectile.age < 0.12 {
+                    let kick = self.boss_fx.launched(&flight);
+                    if kick > 0. {
+                        self.shake = (self.shake + kick).min(4.);
+                    }
                 }
                 self.boss_fx.track(&flight);
             }
@@ -627,7 +653,7 @@ impl Effects {
             if prior.seen_at == tick {
                 return true;
             }
-            if boss_fx.is_boss(prior.owner) {
+            if boss_fx.is_boss(prior.owner) || boss_fx.is_star_round(prior.owner, id) {
                 boss_fx.landed(
                     &crate::boss_fx::Flight {
                         id,

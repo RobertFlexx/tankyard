@@ -655,6 +655,11 @@ impl Menu {
             "{} / {} / {} / {}",
             settings.bindings[0], settings.bindings[2], settings.bindings[1], settings.bindings[3]
         );
+        let board_key = if (0..6).any(|index| settings.key(index) == KeyCode::L) {
+            "Arrow by the board"
+        } else {
+            "L or arrow by the board"
+        };
         let movement = [
             ("Move", move_keys.as_str()),
             ("Aim / fire", "Mouse / left click"),
@@ -663,6 +668,7 @@ impl Menu {
             ("Recall drones", "Right click"),
             ("Buy a skill / fill it", "1-8 / Shift + 1-8"),
             ("Tank upgrades", "Tab"),
+            ("Fold the scoreboard", board_key),
             ("Pause / back", "Esc"),
             ("Respawn", "Enter"),
             ("Sandbox level", "PgUp / PgDn (Shift: 15)"),
@@ -692,7 +698,7 @@ impl Menu {
                 right_label(
                     key,
                     x + width - 18.0 * s,
-                    y + 17.0 * s,
+                    y,
                     13.0 * s,
                     if is_dark() {
                         accent()
@@ -706,6 +712,13 @@ impl Menu {
             "Text: arrows move the caret, Shift selects, Ctrl+A/C/X/V edits, and held Backspace repeats.",
             margin,
             677.0 * s,
+            14.0 * s,
+            muted_color(),
+        );
+        label(
+            "Chat: Up and Down bring back what you said, in case it was worth saying twice.",
+            margin,
+            697.0 * s,
             14.0 * s,
             muted_color(),
         );

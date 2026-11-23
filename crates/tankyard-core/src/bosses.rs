@@ -13,6 +13,21 @@ const KEEP_HEADING: f32 = 0.14;
 const TACTIC_MARGIN: f32 = 36.;
 /// How quickly a boss's sidestep follows the rounds it's reading.
 const DODGE_RATE: f32 = 14.;
+/// How quickly its read of a target's motion catches up. A sharp turn can
+/// still slip a shot, which is what makes dodging worth doing.
+const READ_RATE: f32 = 7.;
+/// The furthest ahead it will lead a target, in seconds.
+const MOST_LEAD: f32 = 1.4;
+/// How long before a special it starts bringing the gun round for that shot.
+const LINING_UP: f32 = 0.6;
+/// How close its aim must be, in radians, before it locks a special.
+const LINED_UP: f32 = 0.1;
+/// The longest a ready special waits for the gun to come round, in seconds.
+const MOST_HOLD: f32 = 1.2;
+/// How far around its target one leg takes a circling boss, in radians.
+const LEG_TURN: f32 = 0.62;
+/// About how far a boss drives in a straight line before it picks a new one.
+const LEG_LENGTH: f32 = 200.;
 
 fn boss_clear_steering(
     pos: V2,
@@ -88,6 +103,116 @@ fn boss_glide(pos: V2, step: V2, vel: V2, radius: f32, bounds: Rect, walls: &[Re
     (at, vel)
 }
 
+/// Seconds until a round at `speed` meets a target `gap` away moving at
+/// `moving`, if it ever can.
+fn intercept_time(gap: V2, moving: V2, speed: f32) -> Option<f32> {
+    let a = moving.length_squared() - speed * speed;
+    let b = 2. * gap.dot(moving);
+    let c = gap.length_squared();
+    if a.abs() < 0.001 {
+        return (b < 0.).then(|| -c / b);
+    }
+    let room = b * b - 4. * a * c;
+    if room < 0. {
+        return None;
+    }
+    let root = room.sqrt();
+    let (one, two) = ((-b - root) / (2. * a), (-b + root) / (2. * a));
+    let (near, far) = (one.min(two), one.max(two));
+    [near, far].into_iter().find(|&time| time > 0.)
+}
+
+/// Where to point a gun at `from` so a round at `speed`, fired `warned`
+/// seconds from now, meets a target at `at`. If cover stands between the gun
+/// and that spot, it aims at the target itself.
+fn lead_point(
+    from: V2,
+    (at, moving): (V2, V2),
+    speed: f32,
+    warned: f32,
+    bounds: Rect,
+    walls: &[Rect],
+) -> V2 {
+    let later = at + moving * warned;
+    let flight = intercept_time(later - from, moving, speed)
+        .unwrap_or(0.)
+        .min(MOST_LEAD);
+    let point = bounds.clamp_circle(later + moving * flight, 1.);
+    if walls
+        .iter()
+        .any(|&wall| sweep_rect(from, point, 5., wall).is_some())
+    {
+        at
+    } else {
+        point
+    }
+}
+
+/// How fast the round a boss aims with flies.
+fn aimed_speed(kind: BossKind) -> f32 {
+    match kind {
+        BossKind::SiegeEngine => 390.,
+        BossKind::Skirmisher => 450.,
+        BossKind::Trapper => 240.,
+        BossKind::Guardian => 270.,
+        BossKind::Summoner => 235.,
+        BossKind::FallenOverlord => 305.,
+        BossKind::Defender | BossKind::Prism => 410.,
+        BossKind::FallenBooster => 460.,
+        BossKind::Sentinel => 330.,
+        BossKind::Foundry => 215.,
+        BossKind::Tempest => 285.,
+        BossKind::Bastion => 340.,
+        BossKind::Eclipse => 370.,
+    }
+}
+
+/// The same for the rounds of its special attack.
+fn special_speed(kind: BossKind) -> f32 {
+    match kind {
+        BossKind::SiegeEngine => SIEGE_ROUND_SPEED,
+        BossKind::Bastion => BASTION_ROUND_SPEED,
+        BossKind::Sentinel => 560.,
+        BossKind::Skirmisher => 420.,
+        _ => aimed_speed(kind),
+    }
+}
+
+/// The end of a boss's next straight leg: on the line to `foe` when it's
+/// closing in or backing off, or a chord around it when circling, keeping the
+/// way it's already going unless that way is blocked.
+fn next_leg(b: &Boss, tactic: BossTactic, foe: V2, ring: f32, bounds: Rect, walls: &[Rect]) -> V2 {
+    let away = b.pos - foe;
+    let out = if away.length_squared() > 1. {
+        away.normalized()
+    } else {
+        V2::from_angle(b.aim + std::f32::consts::PI)
+    };
+    if tactic != BossTactic::Orbit {
+        return bounds.clamp_circle(foe + out * ring, b.radius + 8.);
+    }
+    let spin = out.x * b.vel.y - out.y * b.vel.x;
+    let way = if spin.abs() > 1. {
+        spin.signum()
+    } else if b.id.is_multiple_of(2) {
+        1.
+    } else {
+        -1.
+    };
+    for side in [way, -way] {
+        let point = foe + out.rotate(side * LEG_TURN) * ring;
+        if bounds.contains_circle(point, b.radius + 8.)
+            && walls
+                .iter()
+                .all(|&wall| sweep_rect(b.pos, point, b.radius + 4., wall).is_none())
+        {
+            return point;
+        }
+    }
+    // Boxed in both ways: head on, and let the steering find a way past.
+    bounds.clamp_circle(foe + out.rotate(way * LEG_TURN) * ring, b.radius + 8.)
+}
+
 /// One round of a boss's volley.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BossRound {
@@ -107,6 +232,13 @@ pub struct BossRound {
 pub const SIEGE_ROUND_SPEED: f32 = 1500.;
 /// How wide the Siege Engine's cannon round is.
 pub const SIEGE_ROUND_RADIUS: f32 = 24.;
+/// How fast Bastion's cannon round flies.
+pub const BASTION_ROUND_SPEED: f32 = 1050.;
+/// How wide Bastion's cannon round is.
+pub const BASTION_ROUND_RADIUS: f32 = 18.;
+/// What Bastion's cannon round deals: a bad day, not the end of one. No other
+/// boss round comes close, which is how the game knows to draw it as a cannon.
+pub const BASTION_ROUND_DAMAGE: f32 = 125.;
 
 #[allow(clippy::too_many_arguments)]
 const fn round(
@@ -202,7 +334,35 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
                 rounds.push(round(angle, shot, 340., 18., 8., 2.8, 1.3, 0));
             }
         }
-        BossKind::Defender | BossKind::Bastion => {
+        BossKind::Bastion => {
+            // A lighter cannon than the Siege Engine's: it hurts badly rather
+            // than ends you. Wounded, it brackets the line with charges.
+            rounds.push(round(
+                aim,
+                Shell,
+                BASTION_ROUND_SPEED,
+                BASTION_ROUND_DAMAGE,
+                BASTION_ROUND_RADIUS,
+                1.7,
+                8.,
+                0,
+            ));
+            if phase >= 2 {
+                for side in [-1., 1.] {
+                    rounds.push(round(
+                        aim + side * 0.24,
+                        Explosive,
+                        480.,
+                        36.,
+                        12.,
+                        2.2,
+                        1.6,
+                        0,
+                    ));
+                }
+            }
+        }
+        BossKind::Defender => {
             for n in 1..12 {
                 rounds.push(round(
                     aim + turn + n as f32 * TAU / 12.,
@@ -491,6 +651,9 @@ impl World {
             attack: 0,
             attack_windup: 0.,
             dodge: V2::ZERO,
+            read: V2::ZERO,
+            leg: pos,
+            leg_time: 0.,
         });
         self.event(EventKind::BossSpawn, pos, id, kind as u32, 0);
         id
@@ -555,7 +718,7 @@ impl World {
                         t.pos.distance(b.pos)
                             * if t.id == b.target { 0.75 } else { 1. }
                             * if t.id == b.last_attacker { 0.65 } else { 1. }
-                            * (0.85 + t.health / t.max_health.max(1.) * 0.15)
+                            * (0.75 + t.health / t.max_health.max(1.) * 0.25)
                     };
                     cost(a).total_cmp(&cost(c))
                 })
@@ -570,7 +733,12 @@ impl World {
             } else {
                 1
             };
-            if let Some((id, position, _)) = target {
+            if let Some((id, position, moving)) = target {
+                b.read = if id == b.target {
+                    b.read.lerp(moving, 1. - (-DT * READ_RATE).exp())
+                } else {
+                    moving
+                };
                 b.target = id;
                 b.goal = position;
             } else if b.pos.distance(b.goal) < 130.
@@ -584,24 +752,34 @@ impl World {
                 );
             }
             let to = b.goal - b.pos;
-            let velocity = target.map_or(V2::ZERO, |(_, _, v)| v);
-            let lead = (to.length() / 420.).clamp(0., 0.7);
+            let mut lined_up = true;
             if b.tactic != BossTactic::Windup
                 && b.tactic != BossTactic::Charge
                 && b.attack_windup <= 0.
             {
-                let aim = (to + velocity * lead).angle();
-                let difference = (aim - b.aim + std::f32::consts::PI)
+                // Just before a special it aims for that shot instead, at
+                // where the target should be once the warning is over.
+                let (shot, warned) = if b.attack_timer < LINING_UP {
+                    (special_speed(b.kind), b.kind.windup() * 0.45)
+                } else {
+                    (aimed_speed(b.kind), 0.)
+                };
+                let point = target.map_or(b.goal, |(_, position, _)| {
+                    lead_point(b.pos, (position, b.read), shot, warned, bounds, &self.walls)
+                });
+                let difference = ((point - b.pos).angle() - b.aim + std::f32::consts::PI)
                     .rem_euclid(std::f32::consts::TAU)
                     - std::f32::consts::PI;
-                let turn_rate = if b.kind == BossKind::SiegeEngine {
-                    0.85
-                } else {
-                    2.8
+                lined_up = difference.abs() < LINED_UP;
+                let turn_rate = match b.kind {
+                    BossKind::SiegeEngine => 1.,
+                    BossKind::Bastion => 1.7,
+                    _ => 3.2,
                 };
                 b.aim += difference.clamp(-turn_rate * DT, turn_rate * DT);
             }
             b.tactic_time = (b.tactic_time - DT).max(0.);
+            b.leg_time = (b.leg_time - DT).max(0.);
             let speed = if b.mothership {
                 28.
             } else {
@@ -615,7 +793,8 @@ impl World {
                     BossKind::SiegeEngine => 25.,
                     BossKind::Skirmisher => 145.,
                     BossKind::Trapper => 62.,
-                    BossKind::Foundry | BossKind::Bastion | BossKind::Defender => 32.,
+                    BossKind::Bastion => 38.,
+                    BossKind::Foundry | BossKind::Defender => 32.,
                     _ => 55.,
                 }
             };
@@ -636,7 +815,8 @@ impl World {
             let too_far = preferred + 130.;
             let mut desired = if target.is_none() {
                 b.tactic = BossTactic::Patrol;
-                to.normalized() * speed * 0.45
+                // Straight to where it last saw someone, quicker than it wanders.
+                to.normalized() * speed * if b.target != 0 { 0.8 } else { 0.45 }
             } else if b.tactic == BossTactic::Windup && b.tactic_time > 0. {
                 V2::ZERO
             } else if b.tactic == BossTactic::Windup {
@@ -645,21 +825,33 @@ impl World {
                 V2::from_angle(b.aim) * speed * 2.2
             } else if b.tactic == BossTactic::Charge && b.tactic_time > 0. {
                 V2::from_angle(b.aim) * speed * 2.2
-            } else if range < too_close
-                && (b.tactic == BossTactic::Retreat || range < too_close - TACTIC_MARGIN)
-            {
-                b.tactic = BossTactic::Retreat;
-                to.normalized() * -speed
-            } else if range > too_far
-                && (b.tactic == BossTactic::Advance || range > too_far + TACTIC_MARGIN)
-            {
-                b.tactic = BossTactic::Advance;
-                to.normalized() * speed
             } else {
-                b.tactic = BossTactic::Orbit;
-                V2::new(-to.y, to.x).normalized()
-                    * speed
-                    * if b.id.is_multiple_of(2) { 0.8 } else { -0.8 }
+                let tactic = if range < too_close
+                    && (b.tactic == BossTactic::Retreat || range < too_close - TACTIC_MARGIN)
+                {
+                    BossTactic::Retreat
+                } else if range > too_far
+                    && (b.tactic == BossTactic::Advance || range > too_far + TACTIC_MARGIN)
+                {
+                    BossTactic::Advance
+                } else {
+                    BossTactic::Orbit
+                };
+                // It drives in straight lines, and only picks a new one when
+                // this one is done or the fight has changed.
+                if tactic != b.tactic || b.leg_time <= 0. || b.pos.distance(b.leg) < speed * 0.2 {
+                    let hold = (LEG_LENGTH / speed).clamp(0.8, 3.);
+                    let (foe, ring, hold) = match tactic {
+                        BossTactic::Advance => (b.goal + b.read * 0.5, preferred, hold * 0.6),
+                        BossTactic::Retreat => (b.goal, too_close.max(preferred) + 30., hold),
+                        _ => (b.goal, range.max(b.radius + 60.), hold),
+                    };
+                    b.leg = next_leg(b, tactic, foe, ring, bounds, &self.walls);
+                    b.leg_time = hold;
+                }
+                b.tactic = tactic;
+                let run = b.leg - b.pos;
+                run.normalized() * speed * (run.length() / (speed * 0.35)).min(1.)
             };
             // Read nearby incoming rounds, never inputs, and sidestep collisions.
             let mut evasion = V2::ZERO;
@@ -695,7 +887,14 @@ impl World {
             if b.arrival > 0. || b.attack_windup > 0. {
                 desired = V2::ZERO;
             }
-            b.vel = b.vel.lerp(desired, 1. - (-DT * 3.5).exp());
+            // A steady push rather than an ease, so a change of course reads
+            // as one clean move from one heading to the next.
+            let push = if b.tactic == BossTactic::Charge {
+                7.
+            } else {
+                3.6
+            };
+            b.vel = b.vel.toward(desired, speed * push * DT);
             (b.pos, b.vel) = boss_glide(b.pos, b.vel * DT, b.vel, b.radius, bounds, &self.walls);
             b.timer -= DT;
             let primary_due = b.timer <= 0. && b.arrival <= 0.;
@@ -705,7 +904,9 @@ impl World {
             let secondary = previous_windup > 0. && b.attack_windup <= 0.;
             if b.arrival <= 0. && target.is_some() && previous_windup <= 0. {
                 b.attack_timer -= DT;
-                if b.attack_timer <= 0. {
+                // A ready special waits a moment for the gun to come round,
+                // so its warning points at something.
+                if b.attack_timer <= 0. && (lined_up || b.attack_timer < -MOST_HOLD) {
                     b.attack = (b.attack + 1) % 3;
                     b.attack_windup = b.kind.windup();
                     b.attack_timer = 9.5 - f32::from(b.phase) * 1.5;
@@ -829,8 +1030,8 @@ impl World {
                         emit(
                             b.aim + std::f32::consts::PI + (n as f32 - 1.5) * 0.18,
                             ProjectileKind::Drone,
-                            255.,
-                            16.,
+                            270.,
+                            18.,
                             15.,
                             10.,
                             3.5,
@@ -844,8 +1045,8 @@ impl World {
                         emit(
                             b.aim + n as f32 * std::f32::consts::FRAC_PI_2,
                             ProjectileKind::Drone,
-                            220.,
-                            18.,
+                            235.,
+                            20.,
                             19.,
                             11.,
                             3.,
@@ -859,8 +1060,8 @@ impl World {
                         emit(
                             b.aim + n as f32 * std::f32::consts::FRAC_PI_2,
                             ProjectileKind::Drone,
-                            290.,
-                            24.,
+                            305.,
+                            27.,
                             17.,
                             10.,
                             3.5,
@@ -943,8 +1144,8 @@ impl World {
                         emit(
                             b.aim + (n as f32 - 1.) * 0.7,
                             ProjectileKind::Drone,
-                            200.,
-                            17.,
+                            215.,
+                            19.,
                             12.,
                             7.,
                             4.,
@@ -989,8 +1190,8 @@ impl World {
                             0,
                         );
                     }
-                    emit(b.aim, ProjectileKind::Explosive, 300., 40., 15., 3., 1., 0);
-                    b.timer = 2.;
+                    emit(b.aim, ProjectileKind::Explosive, 340., 46., 15., 3., 1., 0);
+                    b.timer = 1.85;
                 }
                 BossKind::Eclipse => {
                     for n in 0..(10 + b.phase as usize * 4) {
@@ -1336,7 +1537,8 @@ mod tests {
         boss.aim = (target - boss.pos).angle();
         boss.arrival = 0.;
         boss.timer = 1000.;
-        boss.attack_timer = 0.;
+        // Past the longest it waits, so it locks onto this exact line.
+        boss.attack_timer = -MOST_HOLD;
         let id = boss.id;
         world.update_bosses();
         assert_eq!(
@@ -1463,6 +1665,138 @@ mod tests {
         let returned = &world.projectiles[index];
         assert_eq!(returned.owner, world.tanks[0].id);
         assert!(returned.damage <= 240., "{}", returned.damage);
+    }
+
+    #[test]
+    fn a_lead_meets_a_moving_target_where_the_round_gets_there() {
+        let bounds = Rect {
+            x: 0.,
+            y: 0.,
+            w: 4000.,
+            h: 4000.,
+        };
+        let (from, at, moving) = (
+            V2::new(500., 2000.),
+            V2::new(950., 2000.),
+            V2::new(0., 180.),
+        );
+        let point = lead_point(from, (at, moving), 400., 0., bounds, &[]);
+        let flight = point.distance(from) / 400.;
+        assert!(point.distance(at + moving * flight) < 1., "{point:?}");
+        // A target it can never catch just gets shot at where it is.
+        let fast = V2::new(900., 0.);
+        assert_eq!(intercept_time(V2::new(600., 0.), fast, 400.), None);
+        // Cover in front of the lead: it aims at the target instead.
+        let wall = Rect {
+            x: 700.,
+            y: 2090.,
+            w: 60.,
+            h: 400.,
+        };
+        assert_eq!(
+            lead_point(from, (at, moving), 400., 0., bounds, &[wall]),
+            at
+        );
+    }
+
+    #[test]
+    fn a_circling_boss_drives_in_straight_legs() {
+        let mut world = arena();
+        world.tanks[0].max_health = 1e9;
+        world.spawn_boss(BossKind::Tempest);
+        let foe = V2::new(1600., 1300.);
+        world.bosses[0].pos = foe + V2::new(450., 0.);
+        world.bosses[0].arrival = 0.;
+        world.bosses[0].timer = 1e6;
+        world.bosses[0].attack_timer = 1e6;
+        let (mut legs, mut bent) = (0, 0);
+        let mut last: Option<(V2, bool)> = None;
+        for _ in 0..600 {
+            world.tanks[0].pos = foe;
+            world.tanks[0].vel = V2::ZERO;
+            world.tanks[0].health = 1e9;
+            world.update_bosses();
+            let boss = &world.bosses[0];
+            assert_eq!(boss.tactic, BossTactic::Orbit);
+            let on_line = boss
+                .vel
+                .normalized()
+                .dot((boss.leg - boss.pos).normalized())
+                > 0.9999;
+            if let Some((leg, was_on_line)) = last {
+                if leg != boss.leg {
+                    legs += 1;
+                } else if was_on_line && !on_line {
+                    bent += 1;
+                }
+            }
+            last = Some((boss.leg, on_line));
+        }
+        assert!(legs >= 3, "it keeps moving around the target: {legs}");
+        assert_eq!(bent, 0, "once on a leg it holds a straight line");
+    }
+
+    #[test]
+    fn a_ready_special_waits_for_the_gun_but_not_forever() {
+        let mut world = arena();
+        world.tanks[0].max_health = 1e9;
+        world.tanks[0].pos = V2::new(1600., 1900.);
+        world.spawn_boss(BossKind::SiegeEngine);
+        let boss = &mut world.bosses[0];
+        boss.pos = V2::new(1600., 1300.);
+        boss.aim = -std::f32::consts::FRAC_PI_2;
+        boss.arrival = 0.;
+        boss.timer = 1e6;
+        boss.attack_timer = DT;
+        world.update_bosses();
+        assert_eq!(world.bosses[0].attack_windup, 0., "still pointing away");
+        for _ in 0..((MOST_HOLD + 0.1) / DT) as usize {
+            world.tanks[0].health = 1e9;
+            world.update_bosses();
+        }
+        assert!(world.bosses[0].attack_windup > 0., "it stopped waiting");
+    }
+
+    #[test]
+    fn bastions_cannon_hurts_badly_but_is_no_siege_gun() {
+        let rounds = special_volley(BossKind::Bastion, 0, 0.5, 1);
+        assert_eq!(rounds.len(), 1);
+        assert_eq!(rounds[0].angle, 0.5);
+        assert!(rounds[0].damage < LETHAL_DAMAGE);
+        assert!(rounds[0].speed < SIEGE_ROUND_SPEED);
+        assert!(rounds[0].radius < SIEGE_ROUND_RADIUS);
+        assert!(BossKind::Bastion.windup() < BossKind::SiegeEngine.windup());
+        assert_eq!(special_volley(BossKind::Bastion, 0, 0.5, 2).len(), 3);
+        // Nothing else in any boss's kit can be mistaken for it.
+        for kind in BossKind::ALL {
+            for phase in 1..=3 {
+                for round in special_volley(kind, 0, 0., phase) {
+                    assert!(
+                        round.damage < BASTION_ROUND_DAMAGE
+                            || matches!(kind, BossKind::Bastion | BossKind::SiegeEngine),
+                        "{kind:?}"
+                    );
+                }
+            }
+        }
+
+        let mut world = arena();
+        world.tanks[0].pos = V2::new(1500., 1300.);
+        world.tanks[0].max_health = 1000.;
+        world.tanks[0].health = 1000.;
+        world.spawn_boss(BossKind::Bastion);
+        let boss = &mut world.bosses[0];
+        boss.pos = V2::new(900., 1300.);
+        boss.arrival = 0.;
+        boss.timer = 1e6;
+        boss.attack_timer = -MOST_HOLD;
+        for _ in 0..(BossKind::Bastion.windup() / DT) as usize + 50 {
+            world.bosses[0].pos = V2::new(900., 1300.);
+            world.bosses[0].timer = 1e6;
+            world.step();
+        }
+        assert_eq!(world.tanks[0].deaths, 0);
+        assert!(world.tanks[0].health <= 1000. - BASTION_ROUND_DAMAGE + 40.);
     }
 
     #[test]

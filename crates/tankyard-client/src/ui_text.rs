@@ -59,30 +59,41 @@ pub struct TextCache {
     order: VecDeque<String>,
 }
 impl TextCache {
-    fn entry(&mut self, text: &str, raster: u16, dpi: f32) -> &mut Metrics {
+    /// Runs `read` on a label's metrics at a raster, measuring it if need be.
+    fn with_entry<R>(
+        &mut self,
+        text: &str,
+        raster: u16,
+        dpi: f32,
+        read: impl FnOnce(&mut Metrics) -> R,
+    ) -> R {
         if self.dpi != dpi.to_bits() {
             self.entries.clear();
             self.order.clear();
             self.dpi = dpi.to_bits();
         }
-        if !self.entries.contains_key(text) {
-            if self.entries.len() == MAX_LABELS
-                && let Some(oldest) = self.order.pop_front()
-            {
-                self.entries.remove(&oldest);
-            }
-            self.order.push_back(text.to_owned());
-            self.entries.insert(text.to_owned(), [None; RASTERS.len()]);
-        }
         let index = RASTERS.binary_search(&raster).expect("UI raster bucket");
-        self.entries.get_mut(text).unwrap()[index].get_or_insert_with(|| measure(text, raster, dpi))
+        if let Some(slots) = self.entries.get_mut(text) {
+            return read(slots[index].get_or_insert_with(|| measure(text, raster, dpi)));
+        }
+        if self.entries.len() == MAX_LABELS
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.entries.remove(&oldest);
+        }
+        self.order.push_back(text.to_owned());
+        let slots = self
+            .entries
+            .entry(text.to_owned())
+            .or_insert([None; RASTERS.len()]);
+        read(slots[index].get_or_insert_with(|| measure(text, raster, dpi)))
     }
     pub fn width(&mut self, text: &str, size: f32, dpi: f32) -> f32 {
         let raster = raster_size(size);
         let metrics = if text.len() > MAX_LABEL_BYTES {
             measure(text, raster, dpi)
         } else {
-            *self.entry(text, raster, dpi)
+            self.with_entry(text, raster, dpi, |metrics| *metrics)
         };
         // Macroquad 0.4.16 scales advances but adds kerning in raster units.
         // Match its rendered width, including fractional desktop DPI.
@@ -94,7 +105,9 @@ impl TextCache {
         if text.len() > MAX_LABEL_BYTES {
             return true;
         }
-        !std::mem::replace(&mut self.entry(text, raster, dpi).prepared, true)
+        !self.with_entry(text, raster, dpi, |metrics| {
+            std::mem::replace(&mut metrics.prepared, true)
+        })
     }
 }
 

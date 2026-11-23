@@ -6,8 +6,10 @@ compile_error!(
 
 mod accessibility;
 mod ambient;
+mod axiom_dock;
 mod boss_fx;
 mod central_owner;
+mod chat_recall;
 mod community_ui;
 mod creator;
 mod credentials;
@@ -1435,9 +1437,11 @@ impl App {
                 if self.party_ui.open {
                     self.party_ui.notice.clone_from(&message);
                 }
-                self.creator.notice = message.clone();
-                self.community.message(&message);
-                self.effects.notice(&message);
+                if !self.creator.heard(&message) {
+                    self.creator.notice = message.clone();
+                    self.community.message(&message);
+                    self.effects.notice(&message);
+                }
             }
             let playing = session.failure.is_none()
                 && !self.paused
@@ -1618,6 +1622,11 @@ impl App {
                 if is_key_pressed(self.settings.key(5)) {
                     self.settings.auto_fire = !self.settings.auto_fire;
                 }
+                if is_key_pressed(KeyCode::L)
+                    && (0..6).all(|index| self.settings.key(index) != KeyCode::L)
+                {
+                    self.toggle_board();
+                }
                 if is_key_pressed(KeyCode::Tab) {
                     self.hud.evolution = !self.hud.evolution;
                 }
@@ -1649,26 +1658,39 @@ impl App {
                 {
                     self.hud.sandbox = !self.hud.sandbox;
                 }
-                for (index, key) in [
-                    KeyCode::Key1,
-                    KeyCode::Key2,
-                    KeyCode::Key3,
-                    KeyCode::Key4,
-                    KeyCode::Key5,
-                    KeyCode::Key6,
-                    KeyCode::Key7,
-                    KeyCode::Key8,
-                ]
-                .into_iter()
-                .enumerate()
+                // As Axiom the number row casts; the tank's stats are put away.
+                if self
+                    .session
+                    .as_ref()
+                    .is_some_and(creator::CreatorUi::in_form)
                 {
-                    if is_key_pressed(key)
+                    if !self.hud.sandbox
                         && let Some(session) = &mut self.session
                     {
-                        session.upgrade_stat(
-                            STAT_ORDER[index],
-                            is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift),
-                        );
+                        self.creator.attack_keys(session, &self.settings);
+                    }
+                } else {
+                    for (index, key) in [
+                        KeyCode::Key1,
+                        KeyCode::Key2,
+                        KeyCode::Key3,
+                        KeyCode::Key4,
+                        KeyCode::Key5,
+                        KeyCode::Key6,
+                        KeyCode::Key7,
+                        KeyCode::Key8,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        if is_key_pressed(key)
+                            && let Some(session) = &mut self.session
+                        {
+                            session.upgrade_stat(
+                                STAT_ORDER[index],
+                                is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift),
+                            );
+                        }
                     }
                 }
             }
@@ -1888,6 +1910,24 @@ impl App {
                         color: render::boss_tint(boss, colorblind),
                     }
                 }),
+                dt,
+            );
+            let shown_aim = &self.effects.display_aim;
+            self.effects.boss_fx.sync_axiom(
+                snapshot
+                    .tanks
+                    .iter()
+                    .filter(|tank| tank.creator_boss && tank.alive)
+                    .map(|tank| boss_fx::ShownAxiom {
+                        id: tank.id,
+                        pos: previous.get(&tank.id).map_or(tank.pos, |&(place, _)| {
+                            session::interpolate_position(place, tank.pos, boss_fraction)
+                        }),
+                        aim: *shown_aim.get(&tank.id).unwrap_or(&tank.aim),
+                        radius: tank.radius,
+                        health: tank.health,
+                        max_health: tank.max_health,
+                    }),
                 dt,
             );
             self.effects.sync_projectiles(
@@ -2326,24 +2366,39 @@ impl App {
                     let r = hud::boss_banner_layout(screen_width(), s);
                     let r = Rect::new(r.x, 106. * s, r.w, 52. * s);
                     panel(r);
+                    let left = format!(
+                        "{} / {}",
+                        hud::grouped(axiom.health.max(0.) as u64),
+                        hud::grouped(axiom.max_health as u64)
+                    );
+                    let numbers = label_width(&left, 11. * s);
+                    right_label(
+                        &left,
+                        r.x + r.w - 14. * s,
+                        r.y + 19. * s,
+                        11. * s,
+                        muted_color(),
+                    );
                     center_label(
-                        &fitted_label(tankyard_core::creator_boss::NAME, 16. * s, r.w - 20. * s),
+                        &fitted_label(
+                            tankyard_core::creator_boss::NAME,
+                            16. * s,
+                            (r.w - (numbers + 24. * s) * 2.).max(40. * s),
+                        ),
                         r.center().x,
                         r.y + 20. * s,
                         16. * s,
-                        AMBER,
+                        axiom_dock::readable(crate::accessibility::palette(
+                            tankyard_client::boss_model::AXIOM_GOLD,
+                        )),
                     );
-                    arcade_track(
+                    let share = (axiom.health / axiom.max_health.max(1.)).clamp(0., 1.);
+                    marked_track(
                         Rect::new(r.x + 14. * s, r.y + 31. * s, r.w - 28. * s, 12. * s),
-                        axiom.health / axiom.max_health,
-                        CYAN,
-                    );
-                    center_label(
-                        &format!("{:.0} / {:.0}", axiom.health.max(0.), axiom.max_health),
-                        r.center().x,
-                        r.y + 41. * s,
-                        9. * s,
-                        text_color(),
+                        share,
+                        self.effects.boss_fx.axiom_trail(axiom.id, share),
+                        crate::accessibility::palette(tankyard_client::boss_model::AXIOM_GOLD),
+                        &tankyard_core::BOSS_PHASES,
                     );
                 }
                 if let Some((boss, killer, life)) = &self.effects.boss_defeat {
@@ -2669,6 +2724,10 @@ impl App {
             pocket_view::blackout(tank.pocket, self.settings.reduced_motion);
         }
     }
+    fn toggle_board(&mut self) {
+        self.settings.leaderboard_hidden = !self.settings.leaderboard_hidden;
+        let _ = self.settings.save();
+    }
     fn hud_action(&mut self, action: HudAction) {
         match action {
             HudAction::Spectate(direction) => {
@@ -2691,6 +2750,7 @@ impl App {
                 self.settings.dark_arena = !self.settings.dark_arena;
                 let _ = self.settings.save();
             }
+            HudAction::ToggleBoard => self.toggle_board(),
             HudAction::Evolve(class) => {
                 if let Some(session) = &mut self.session {
                     session.evolve(&class);

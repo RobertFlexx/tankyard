@@ -105,8 +105,9 @@ thread_local! {
 /// Starts a frame's covers. The main loop calls it before drawing.
 pub fn begin_covers() {
     COVERS.with(|covers| {
-        let mut covers = covers.borrow_mut();
-        covers.last = std::mem::take(&mut covers.now);
+        let covers = &mut *covers.borrow_mut();
+        std::mem::swap(&mut covers.last, &mut covers.now);
+        covers.now.clear();
     });
 }
 /// Declares that `rect`, in the current page's units, is drawn from here on

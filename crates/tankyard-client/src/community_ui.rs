@@ -41,6 +41,7 @@ pub struct CommunityUi {
     scroll_fraction: f32,
     docked: bool,
     compact_chat: bool,
+    recall: crate::chat_recall::ChatRecall,
 }
 impl Default for CommunityUi {
     fn default() -> Self {
@@ -79,6 +80,7 @@ impl Default for CommunityUi {
             scroll_fraction: 0.,
             docked: false,
             compact_chat: false,
+            recall: crate::chat_recall::ChatRecall::default(),
         }
     }
 }
@@ -108,10 +110,14 @@ impl CommunityUi {
             while get_char_pressed().is_some() {}
             return true;
         }
+        if self.typing {
+            self.recall.keys(&mut self.draft);
+        }
         if self.typing && is_key_pressed(KeyCode::Enter) {
             let text = self.draft.trim().replace('\u{2014}', "-");
             if !text.is_empty() {
                 if client.send_chat(&self.room, &text) {
+                    self.recall.note(&text);
                     self.draft.clear();
                     self.typing = false;
                 } else {
@@ -128,6 +134,7 @@ impl CommunityUi {
         {
             self.typing = true;
             self.scroll = 0;
+            self.recall.stop();
             while get_char_pressed().is_some() {}
             return true;
         }

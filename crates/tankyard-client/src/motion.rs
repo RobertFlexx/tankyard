@@ -249,8 +249,13 @@ impl History {
             .iter()
             .filter(|t| t.alive && (t.id == local || (!pocket && t.pocket <= 0.)))
         {
-            let Some((here, color)) = motion(3, tank.id, at(tank.id, tank.pos), tank.radius * 4.)
-            else {
+            let shove = if tank.creator_boss {
+                boss_fx.axiom_kick(tank.id, 1.)
+            } else {
+                Vec2::ZERO
+            };
+            let place = at(tank.id, tank.pos) + V2::new(shove.x, shove.y);
+            let Some((here, color)) = motion(3, tank.id, place, tank.radius * 4.) else {
                 continue;
             };
             let r = tank.radius * z;

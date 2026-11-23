@@ -10,6 +10,7 @@ use crate::render::View;
 use crate::ui::{AMBER, RED, alpha, mix};
 use macroquad::prelude::*;
 use std::f32::consts::{PI, TAU};
+use tankyard_client::boss_model::AXIOM_TEAL;
 
 /// How dark a full-sized scorch mark is.
 const SCAR_SHADE: f32 = 0.42;
@@ -66,6 +67,7 @@ impl BossFx {
                 draw_burst(light, view, burst, level);
             }
         }
+        self.draw_casts(light, view, level);
         for spark in &self.sparks {
             if !view.visible(spark.pos, 40.) {
                 continue;
@@ -195,6 +197,22 @@ fn muzzle(light: &mut Emission, p: Vec2, d: Vec2, burst: &Burst, s: f32, t: f32,
                 s * (2.5 - 2. * ease_out(t)),
                 (s * 0.12).max(0.8),
                 alpha(light.hot(c, 0.5), 0.8 * fade * level),
+            );
+        }
+        Fuel::Star => {
+            // A four-point star at the barrel's mouth, gold over teal.
+            light.glint(
+                p + d * s * 0.3,
+                s * (2.6 - 0.9 * t),
+                d.y.atan2(d.x) + PI / 4.,
+                alpha(light.hot(c, 0.95), 0.9 * fade * level),
+            );
+            light.ring(
+                Layer::Core,
+                p + d * s * 0.3,
+                s * (0.7 + 1.5 * ease_out(t)),
+                (s * 0.07).max(0.8),
+                alpha(light.hot(AXIOM_TEAL, 0.4), 0.7 * fade * fade * level),
             );
         }
         Fuel::Plasma | Fuel::Fire => {

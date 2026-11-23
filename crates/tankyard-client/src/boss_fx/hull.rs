@@ -169,6 +169,20 @@ impl BossFx {
         if level <= 0. {
             return;
         }
+        // A faint wake behind it while it drives, along the line it's on.
+        let speed = boss.vel.length();
+        if !calm && speed > 14. {
+            let way = vec2(boss.vel.x, boss.vel.y) / speed;
+            let drive = ((speed - 14.) / 110.).min(1.);
+            light.streak(
+                Layer::Wash,
+                p - way * r * (1.25 + 0.7 * drive),
+                p - way * r * 0.55,
+                r * (0.16 + 0.1 * drive),
+                alpha(color, 0.),
+                alpha(light.hot(color, 0.25), (0.1 + 0.2 * drive) * level),
+            );
+        }
         if boss.phase >= 2 {
             let (heat, strength, patches) = if boss.phase >= 3 {
                 (Color::new(1., 0.3, 0.14, 1.), 0.34 + 0.16 * pulse, 7)

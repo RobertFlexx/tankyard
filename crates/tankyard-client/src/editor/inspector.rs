@@ -688,13 +688,7 @@ impl Editor {
             }),
             // Both go to what they name, so they leave a layer that hides
             // any of it for every layer.
-            Request::Locate(key) => {
-                if !self.on_layer(key) {
-                    self.set_layer(None);
-                }
-                self.set_selection(vec![key]);
-                self.center_on(key);
-            }
+            Request::Locate(key) => self.locate(key),
             Request::SelectGroup(group) => {
                 let keys = self.doc.in_group(group);
                 if keys.iter().any(|&key| !self.on_layer(key)) {
@@ -1737,8 +1731,13 @@ impl Editor {
 
     fn check_tab(&mut self, x: f32, y: f32, w: f32, s: f32) -> (f32, Request) {
         let mut request = Request::None;
-        let problems = self.problems.clone().unwrap_or_default();
-        let checked = self.problems.is_some();
+        // Borrowed out for the frame instead of copied: a big map can have a
+        // lot to say.
+        let stored = self.problems.take();
+        let checked = stored.is_some();
+        let problems = stored.as_deref().unwrap_or_default();
+        // While a list waits to catch up with an edit, its rows don't jump.
+        let current = self.problems_revision == self.revision;
         let m = &self.doc.map;
         let emitters = m
             .decor
@@ -1769,11 +1768,11 @@ impl Editor {
             f.heading("Ready to play");
             f.note("No problems found, which is suspicious. Playtest with F5, or test from the pointer with Shift+F5.");
         }
-        for problem in &problems {
+        for problem in problems {
             let lines = wrapped_lines(&problem.text, w - 22. * s, 12.5 * s);
             let h = 14. * s + lines.len() as f32 * 17. * s;
             let r = Rect::new(x, f.y, w, h);
-            let over = problem.key.is_some() && contains(r);
+            let over = current && problem.key.is_some() && contains(r);
             draw_rectangle(
                 r.x,
                 r.y,
@@ -1820,7 +1819,9 @@ impl Editor {
         for (title, used, limit) in budgets {
             f.meter(title, used, limit);
         }
-        (f.y, request)
+        let end = f.y;
+        self.problems = stored;
+        (end, request)
     }
 
     fn rules_tab(&mut self, x: f32, y: f32, w: f32, s: f32) -> (f32, Request) {

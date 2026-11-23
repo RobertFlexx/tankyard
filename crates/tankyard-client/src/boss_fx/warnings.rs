@@ -2,17 +2,26 @@
 //! drawn whatever the Effects setting says, and hold still with motion
 //! reduced. Each uses the boss's own color, kept saturated so it reads
 //! against the floor, except the Siege Engine's cannon, which burns.
-use super::fire::ramp;
+use super::fire::{ramp, steel};
 use super::{BossFx, direction, ease_out, perpendicular};
 use crate::emission::{Emission, Layer, Stop};
 use crate::render::View;
 use crate::ui::{AMBER, RED, alpha};
 use macroquad::prelude::*;
 use std::f32::consts::{PI, TAU};
-use tankyard_core::{Boss, BossTactic, LETHAL_DAMAGE, Rect, V2, special_volley};
+use tankyard_core::{
+    BASTION_ROUND_DAMAGE, Boss, BossTactic, LETHAL_DAMAGE, Rect, V2, special_volley,
+};
 
 /// How far along its barrel the Siege Engine's round leaves, in hull radii.
 const SIEGE_MUZZLE: f32 = 1.62;
+/// The same for Bastion's.
+const BASTION_MUZZLE: f32 = 1.52;
+
+/// A cannon line's deepest color, and the ramp its light runs through.
+type LinePaint = (Color, fn(f32) -> Color);
+const FIRE_LINE: LinePaint = (Color::new(1., 0.2, 0.05, 1.), ramp);
+const STEEL_LINE: LinePaint = (Color::new(0.1, 0.36, 1., 1.), steel);
 
 /// A color kept saturated, because light added to a cool floor pulls a pale
 /// tint toward grey.
@@ -28,8 +37,8 @@ fn signal(tint: Color) -> Color {
 
 impl BossFx {
     /// The lanes its rounds will take, charging up, and a ring closing on
-    /// the hull. The Siege Engine's cannon shows its whole line, to the
-    /// first cover that stops it.
+    /// the hull. A cannon shows its whole line, to the first cover that
+    /// stops it.
     pub fn warning(
         &self,
         light: &mut Emission,
@@ -57,7 +66,12 @@ impl BossFx {
         for (index, round) in rounds.iter().enumerate() {
             let d = direction(round.angle);
             let start = p + d * (r + 6. * z);
-            if round.damage >= LETHAL_DAMAGE {
+            if round.damage >= BASTION_ROUND_DAMAGE {
+                let (muzzle, paint) = if round.damage >= LETHAL_DAMAGE {
+                    (SIEGE_MUZZLE, FIRE_LINE)
+                } else {
+                    (BASTION_MUZZLE, STEEL_LINE)
+                };
                 let reach = round.speed * round.life;
                 let from = at + V2::new(d.x, d.y) * boss.radius;
                 let to = at + V2::new(d.x, d.y) * reach;
@@ -71,11 +85,12 @@ impl BossFx {
                 let end = view.screen(from.lerp(to, stop));
                 cannon_line(
                     light,
-                    p + d * r * SIEGE_MUZZLE,
+                    p + d * r * muzzle,
                     end,
                     round.radius * z,
                     stage,
                     flow,
+                    paint,
                 );
                 continue;
             }
@@ -309,9 +324,9 @@ fn spoke(
     );
 }
 
-/// The Siege Engine's line: a burning corridor as wide as its round, with
-/// hard edges, a spine that narrows and flares just before it fires, fire
-/// gathering in the muzzle, and a sight where cover will stop it.
+/// A cannon's line: a corridor of light as wide as its round, with hard edges,
+/// a spine that narrows and flares just before it fires, heat gathering in the
+/// muzzle, and a sight where cover will stop it.
 fn cannon_line(
     light: &mut Emission,
     muzzle: Vec2,
@@ -319,6 +334,7 @@ fn cannon_line(
     radius: f32,
     (progress, armed): (f32, f32),
     flow: f32,
+    (deep, heat): LinePaint,
 ) {
     let along = end - muzzle;
     if along.length_squared() < 1. {
@@ -327,8 +343,7 @@ fn cannon_line(
     let d = along.normalize();
     let n = perpendicular(d);
     let half = radius.max(2.);
-    let deep = Color::new(1., 0.2, 0.05, 1.);
-    let burn = ramp(0.3);
+    let burn = heat(0.3);
     let flare = if armed > 0. {
         0.84 + 0.16 * (flow * 14.).sin()
     } else {
@@ -396,7 +411,7 @@ fn cannon_line(
         Layer::Core,
         muzzle,
         half * (0.42 + 0.9 * gather),
-        alpha(light.hot(ramp(0.1), gather), 0.5 + 0.5 * gather),
+        alpha(light.hot(heat(0.1), gather), 0.5 + 0.5 * gather),
     );
     if flow != 0. {
         for mote in 0..10 {
@@ -409,7 +424,7 @@ fn cannon_line(
                 at,
                 (half * 0.09).max(1.1) * (0.7 + 0.8 * u),
                 alpha(
-                    ramp(0.28 - 0.2 * u),
+                    heat(0.28 - 0.2 * u),
                     (u * PI).sin() * (0.3 + 0.7 * progress),
                 ),
             );
