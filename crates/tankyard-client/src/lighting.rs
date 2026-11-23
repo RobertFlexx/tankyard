@@ -59,6 +59,7 @@ pub fn gather(lights: &mut Vec<Light>, light: Light) {
 
 thread_local! {
     static LIGHT_MAP: RefCell<Option<((u32, u32), RenderTarget)>> = const { RefCell::new(None) };
+    static COVER_MAP: RefCell<Option<((u32, u32), RenderTarget)>> = const { RefCell::new(None) };
     /// The lighting last shown and when, for [`steady`].
     static SHOWN: Cell<Option<([f32; 4], f64)>> = const { Cell::new(None) };
 }
@@ -169,21 +170,7 @@ pub fn darken(lighting: [f32; 4], lights: &[Light], area: Option<Rect>) {
         let Some((_, target)) = slot.as_ref() else {
             return;
         };
-        // A clip set for the window would cut the light map wrongly.
-        crate::ui_layout::unclipped(|| {
-            push_camera_state();
-            // The same camera the frame's own targets use, so the light map
-            // reads back the same way on OpenGL and Metal.
-            let mut camera = Camera2D::from_display_rect(Rect::new(0., 0., w, h));
-            if !crate::graphics::metal() {
-                camera.zoom.y = -camera.zoom.y;
-            }
-            set_camera(&camera);
-            unsafe {
-                get_internal_gl()
-                    .quad_gl
-                    .render_pass(Some(target.render_pass.raw_miniquad_id()));
-            }
+        draw_into(target, w, h, || {
             clear_background(ambient(lighting));
             let lights = &lights[..lights.len().min(MOST_LIGHTS)];
             if glow::begin(Blend::Glow) {
@@ -225,7 +212,6 @@ pub fn darken(lighting: [f32; 4], lights: &[Light], area: Option<Rect>) {
                 }
                 glow::end();
             }
-            pop_camera_state();
         });
         if glow::begin(Blend::Multiply) {
             // The light map is stored bottom-up, so `area` is found from
@@ -251,6 +237,58 @@ pub fn darken(lighting: [f32; 4], lights: &[Light], area: Option<Rect>) {
             glow::end();
         }
     });
+}
+
+/// Draw into `target` in window coordinates. It reads back with `y` flipped,
+/// the same on OpenGL and Metal, as (x / w, 1 - y / h).
+fn draw_into(target: &RenderTarget, w: f32, h: f32, draw: impl FnOnce()) {
+    // A clip set for the window would cut the map wrongly.
+    crate::ui_layout::unclipped(|| {
+        push_camera_state();
+        // The same camera the frame's own targets use.
+        let mut camera = Camera2D::from_display_rect(Rect::new(0., 0., w, h));
+        if !crate::graphics::metal() {
+            camera.zoom.y = -camera.zoom.y;
+        }
+        set_camera(&camera);
+        unsafe {
+            get_internal_gl()
+                .quad_gl
+                .render_pass(Some(target.render_pass.raw_miniquad_id()));
+        }
+        draw();
+        pop_camera_state();
+    });
+}
+
+/// A map of where `shapes` stand, at half the window's resolution, for light
+/// to be held back from them. None when this device can't do it.
+pub fn cover_map(shapes: impl FnOnce()) -> Option<Texture2D> {
+    if !glow::can_cover() {
+        return None;
+    }
+    let (w, h) = (screen_width(), screen_height());
+    let size = (
+        (w * 0.5).clamp(1., 2048.) as u32,
+        (h * 0.5).clamp(1., 2048.) as u32,
+    );
+    COVER_MAP.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.as_ref().is_none_or(|(made, _)| *made != size) {
+            let target = render_target(size.0, size.1);
+            target.texture.set_filter(FilterMode::Linear);
+            *slot = Some((size, target));
+        }
+        let (_, target) = slot.as_ref()?;
+        draw_into(target, w, h, || {
+            clear_background(BLACK);
+            if glow::begin(Blend::Solid) {
+                shapes();
+                glow::end();
+            }
+        });
+        Some(target.texture.clone())
+    })
 }
 
 fn on_screen(at: Vec2, radius: f32, w: f32, h: f32) -> bool {
@@ -298,11 +336,16 @@ const CONE_INDICES: [u16; CONE_STEPS * (3 + (CONE_ROWS.len() - 1) * 6)] = {
 /// Submit small light shapes directly to the ordinary batcher. Stack-backed
 /// vertices and fixed indices avoid allocating a Mesh for each light each frame.
 pub(crate) fn geometry(vertices: &[Vertex], indices: &[u16]) {
+    textured_geometry(vertices, indices, None);
+}
+
+/// The same, with `texture` bound for the shader to read.
+pub(crate) fn textured_geometry(vertices: &[Vertex], indices: &[u16], texture: Option<&Texture2D>) {
     // SAFETY: rendering runs on the main graphics thread; no context borrow
     // survives this call, which copies the geometry into macroquad's batch.
     unsafe {
         let gl = get_internal_gl().quad_gl;
-        gl.texture(None);
+        gl.texture(texture);
         gl.draw_mode(DrawMode::Triangles);
         gl.geometry(vertices, indices);
     }

@@ -37,6 +37,27 @@ impl Menu {
         }
         let by = y + 35.0 * s + Mode::ALL.len().div_ceil(4) as f32 * (height + gap) + 6.0 * s;
         label("ARENA", x, by + 18.0 * s, 13.0 * s, muted_color());
+        let may_choose = !self.party_active || self.party_leader;
+        if may_choose
+            && small_button(
+                Rect::new(x + 66. * s, by - 2. * s, 128. * s, 26. * s),
+                "Change map…",
+                s * 0.8,
+            )
+        {
+            return Action::Page(Page::HostMap);
+        }
+        label(
+            &fitted_label(
+                &self.host_map_line(),
+                13. * s,
+                (screen_width() - x * 2. - 390. * s).max(1.),
+            ),
+            x + 206. * s,
+            by + 16. * s,
+            13. * s,
+            muted_color(),
+        );
         self.map_page = self.map_page.min(self.maps.len().saturating_sub(1) / 8);
         if self.maps.len() > 8 {
             if small_button(
@@ -70,7 +91,7 @@ impl Menu {
                     34.0 * s,
                 ),
                 &title,
-                self.map == index,
+                self.host_map.is_none() && self.map == index,
                 true,
                 s * 0.70,
             ) {
@@ -177,6 +198,21 @@ impl Menu {
             s * 0.7,
         ) {
             self.dynamic_arena = !self.dynamic_arena;
+        }
+        if self.mode == Mode::BossRush
+            && button(
+                Rect::new(right, by + 150. * s, column, 28. * s),
+                &fitted_label(
+                    &format!("Bosses: {}  →", self.rush_line()),
+                    12.5 * s,
+                    column - 20. * s,
+                ),
+                false,
+                may_choose,
+                s * 0.7,
+            )
+        {
+            return Action::Page(Page::BossRush);
         }
         label(
             if self.offline_level > 1 {
@@ -329,36 +365,47 @@ impl Menu {
                 text_color(),
             );
             label(
-                &fitted_label(
-                    self.maps.get(self.map).map_or("Arena", |m| &m.name),
-                    14. * s,
-                    inner,
-                ),
+                &fitted_label(&self.host_map_line(), 14. * s, inner),
                 x + pad,
                 340. * s,
                 14. * s,
                 muted_color(),
             );
+            let mut plan = format!(
+                "{} team slots · {}",
+                self.bots.clamp(2, 8),
+                self.difficulty_name()
+            );
+            if self.mode == Mode::BossRush {
+                plan.push_str(" · ");
+                plan.push_str(&self.rush_line());
+            }
             label(
-                &format!(
-                    "{} team slots · {}",
-                    self.bots.clamp(2, 8),
-                    self.difficulty_name()
-                ),
+                &fitted_label(&plan, 14. * s, inner),
                 x + pad,
                 368. * s,
                 14. * s,
                 muted_color(),
             );
+            let half = (inner - 8. * s) * 0.5;
             if button(
-                Rect::new(x + pad, 405. * s, inner, 38. * s),
+                Rect::new(x + pad, 405. * s, half, 38. * s),
                 "Configure match",
                 false,
                 true,
-                s * 0.85,
+                s * 0.8,
             ) {
                 self.party_setup = true;
                 return Action::Page(Page::Modes);
+            }
+            if button(
+                Rect::new(x + pad + half + 8. * s, 405. * s, half, 38. * s),
+                "Change map…",
+                false,
+                true,
+                s * 0.8,
+            ) {
+                return Action::Page(Page::HostMap);
             }
             if button(
                 Rect::new(x + pad, 455. * s, inner, 42. * s),
@@ -821,19 +868,28 @@ impl Menu {
                 17.0 * s,
                 text_color(),
             );
+            let rush = if self.mode == Mode::BossRush {
+                format!("{}  ·  ", self.rush_line())
+            } else {
+                String::new()
+            };
             label(
-                &if community {
-                    format!(
-                        "{}  ·  rotation and rules from Configure arena",
-                        self.difficulty_name()
-                    )
-                } else {
-                    format!(
-                        "{} bot limit  ·  {}  ·  UDP port 5000",
-                        self.bots,
-                        self.difficulty_name()
-                    )
-                },
+                &fitted_label(
+                    &if community {
+                        format!(
+                            "{rush}{}  ·  rotation and rules from Configure arena",
+                            self.difficulty_name()
+                        )
+                    } else {
+                        format!(
+                            "{rush}{} bot limit  ·  {}  ·  UDP port 5000",
+                            self.bots,
+                            self.difficulty_name()
+                        )
+                    },
+                    15.0 * s,
+                    width,
+                ),
                 x,
                 y + 267.0 * s,
                 15.0 * s,

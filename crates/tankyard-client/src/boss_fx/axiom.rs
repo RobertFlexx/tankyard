@@ -742,7 +742,8 @@ impl BossFx {
             comet(light, round, o);
             return;
         }
-        self.trail(light, view, round, 1.);
+        let path = self.path_of(view, round);
+        self.trail(light, view, round, &path, 1.);
         match kind {
             ProjectileKind::Piercing => {
                 // A falling shard of light with a white spine.

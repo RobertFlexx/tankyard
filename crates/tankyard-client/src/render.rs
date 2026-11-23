@@ -236,7 +236,7 @@ pub fn class_model(
     time: f32,
 ) {
     class_model_animated(
-        class, p, r, aim, recoil, flash, color, time, None, None, None,
+        class, p, r, aim, recoil, flash, color, time, None, None, None, None,
     );
 }
 #[allow(clippy::too_many_arguments)]
@@ -252,6 +252,7 @@ fn class_model_animated(
     barrel_recoils: Option<&[f32]>,
     barrel_aims: Option<&[f32]>,
     world_zoom: Option<f32>,
+    mut cover: Option<&mut TankCover>,
 ) {
     let time = crate::accessibility::motion_time(time);
     let recoil = if crate::accessibility::reduced_motion() {
@@ -273,6 +274,9 @@ fn class_model_animated(
         world_zoom,
         &mut |primitive| {
             draw_model_primitive(primitive);
+            if let Some(cover) = &mut cover {
+                cover.push(primitive);
+            }
             if let crate::tank_model::Primitive::Polygon {
                 center,
                 radius,
@@ -1098,6 +1102,15 @@ pub fn world(
             if dark { text_color() } else { WORLD_TEXT },
         );
     }
+    // Rounds and their trails run under the tanks; anything added from here
+    // on is on or above them.
+    effects.boss_fx.wakes(&mut light, view);
+    light.tanks_next();
+    // Reuse the geometry drawn below for the light mask, without generating
+    // the models and their animated barrel positions a second time.
+    let mut cover = TANK_COVER.take();
+    cover.clear();
+    let hide_light = light.has_under() && crate::glow::can_cover();
     for tank in &snapshot.tanks {
         if tank.alive && tank.id != local && tank.pocket > 0. && tank.pocket < 0.8 {
             let p = view.screen(tank.pos);
@@ -1228,6 +1241,7 @@ pub fn world(
                 alpha(light.hot(aura, 0.3), (beat + 0.3).min(1.)),
             );
         }
+        let first_shape = cover.shapes.len();
         if tank.creator_boss {
             let aim = *effects.display_aim.get(&tank.id).unwrap_or(&tank.aim);
             let time = if settings.reduced_motion {
@@ -1243,7 +1257,12 @@ pub fn world(
                     time,
                     recoil: effects.boss_fx.axiom_recoil(tank.id),
                 },
-                &mut draw_model_primitive,
+                &mut |primitive| {
+                    draw_model_primitive(primitive);
+                    if hide_light {
+                        cover.push(primitive);
+                    }
+                },
             );
             effects
                 .boss_fx
@@ -1278,7 +1297,11 @@ pub fn world(
                         .map_or(tank.barrel_aims.as_slice(), |visual| visual.aim.as_slice()),
                 ),
                 Some(z),
+                hide_light.then_some(&mut cover),
             );
+        }
+        if hide_light {
+            cover.finish_tank(first_shape);
         }
         if tank.rift_shots > 0
             && class.ability == tankyard_content::Ability::Rift
@@ -1511,8 +1534,19 @@ pub fn world(
     // Everything that glows, over the finished and darkened arena.
     crate::profile::phase("effects light", || {
         effects.boss_fx.aftermath(&mut light, view);
-        light.flush();
+        // Light from under a tank doesn't shine through it.
+        let map = if light.under_tanks(cover.tanks.iter().copied()) {
+            crate::lighting::cover_map(|| {
+                for &primitive in &cover.shapes {
+                    draw_model_primitive(primitive);
+                }
+            })
+        } else {
+            None
+        };
+        light.flush(map);
     });
+    TANK_COVER.set(cover);
     for popup in &effects.popups {
         let p = view.screen(popup.pos);
         center_label(
@@ -1524,6 +1558,42 @@ pub fn world(
         );
     }
 }
+/// This frame's tank silhouettes and conservative circles around them. The
+/// circles include the actual barrel ends, even on custom tank models.
+#[derive(Default)]
+struct TankCover {
+    shapes: Vec<crate::tank_model::Primitive>,
+    tanks: Vec<(Vec2, f32)>,
+}
+
+impl TankCover {
+    fn clear(&mut self) {
+        self.shapes.clear();
+        self.tanks.clear();
+    }
+
+    fn push(&mut self, primitive: crate::tank_model::Primitive) {
+        if primitive.color().a >= 0.5 {
+            self.shapes.push(primitive);
+        }
+    }
+
+    fn finish_tank(&mut self, first: usize) {
+        let mut bounds = self.shapes[first..].iter().map(|shape| shape.bounds());
+        if let Some(first) = bounds.next() {
+            let bounds = bounds.fold(first, |all, next| all.combine_with(next));
+            self.tanks
+                .push((bounds.center(), bounds.size().length() * 0.5));
+        }
+    }
+}
+
+thread_local! {
+    static TANK_COVER: std::cell::Cell<TankCover> = const {
+        std::cell::Cell::new(TankCover { shapes: Vec::new(), tanks: Vec::new() })
+    };
+}
+
 /// The light tanks, bosses and shots carry in a dark arena. The player's
 /// own tank lights the most, so the way ahead is always visible.
 fn arena_lights(
@@ -1740,6 +1810,46 @@ pub fn menu_background(time: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_custom_long_barrel_is_part_of_the_same_silhouette_that_is_drawn() {
+        let mut class = Content::builtin().classes[0].clone();
+        class.barrels[0].length = 500.;
+        let mut cover = TankCover::default();
+        crate::tank_model::class_model_geometry(
+            &class,
+            Vec2::ZERO,
+            22.,
+            0.,
+            0.,
+            0.,
+            WHITE,
+            0.,
+            None,
+            None,
+            Some(1.),
+            &mut |primitive| cover.push(primitive),
+        );
+        cover.finish_tank(0);
+        let (center, radius) = cover.tanks[0];
+        assert!(center.distance(vec2(500., 0.)) < radius);
+        let mut light = crate::emission::Emission::default();
+        light.spot(crate::emission::Layer::Wash, vec2(500., 0.), 2., WHITE);
+        light.tanks_next();
+        assert!(light.under_tanks(cover.tanks.iter().copied()));
+        assert!(!light.under_tanks([(Vec2::ZERO, 22. * 2.4)].into_iter()));
+
+        cover.clear();
+        cover.push(crate::tank_model::Primitive::Polygon {
+            center: Vec2::ZERO,
+            sides: 3,
+            radius: 100.,
+            angle: 0.,
+            color: Color::new(1., 1., 1., 0.2),
+        });
+        cover.finish_tank(0);
+        assert!(cover.shapes.is_empty() && cover.tanks.is_empty());
+    }
+
     #[test]
     fn colorblind_palette_distinguishes_ffa_and_every_team() {
         assert_ne!(team_color(0, true, true), team_color(0, false, true));

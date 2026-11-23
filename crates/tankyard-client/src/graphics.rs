@@ -11,6 +11,9 @@ thread_local! {
     static MAX_ANISOTROPY:Cell<u8>=const {Cell::new(1)};
     static MAX_SAMPLES:Cell<u8>=const {Cell::new(1)};
     static MIPMAPS_READY:Cell<bool>=const {Cell::new(false)};
+    // The rendering backend stays fixed for the lifetime of the window.
+    // Asking the driver for ContextInfo clones its version string.
+    static METAL:Cell<Option<bool>>=const {Cell::new(None)};
 }
 /// The most MSAA samples worth offering. Apple GPUs resolve up to 4 samples
 /// in tile memory; their drivers emulate 8, which costs several times more
@@ -94,7 +97,16 @@ pub fn prepare_screen_capture() {
 }
 /// Whether the game renders with Metal (Macs) rather than OpenGL.
 pub fn metal() -> bool {
-    unsafe { get_internal_gl().quad_context.info().backend == miniquad::Backend::Metal }
+    METAL.with(|backend| match backend.get() {
+        Some(metal) => metal,
+        None => {
+            let metal = unsafe {
+                get_internal_gl().quad_context.info().backend == miniquad::Backend::Metal
+            };
+            backend.set(Some(metal));
+            metal
+        }
+    })
 }
 pub fn set_quality(quality: u8) {
     QUALITY.with(|q| q.set(quality.min(2)));

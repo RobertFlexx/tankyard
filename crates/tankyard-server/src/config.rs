@@ -2,7 +2,7 @@ use crate::NetError;
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Read, net::ToSocketAddrs, path::Path};
 use tankyard_ai::Difficulty;
-use tankyard_core::{Mode, WorldConfig};
+use tankyard_core::{BossKind, MOST_RUSH_BOSSES, Mode, WorldConfig};
 
 /// Players per lobby unless a server sets `arena_capacity`.
 pub const DEFAULT_LOBBY_SIZE: usize = 20;
@@ -59,6 +59,10 @@ pub struct ServerSettings {
     /// Uptime-based rotation; zero disables it for private matches.
     pub map_rotation_seconds: u32,
     pub party: Option<crate::party::PartySettings>,
+    /// The bosses Boss Rush fights, in order, by id such as `siege_engine`.
+    /// Empty plays the usual six.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub boss_rush: Vec<String>,
     pub world: WorldConfig,
     /// A host-applied profile takes priority over a pack's initial rules and
     /// survives process restarts when the configuration is saved.
@@ -101,6 +105,7 @@ impl Default for ServerSettings {
             round_restart_seconds: 10.,
             map_rotation_seconds: 7200,
             party: None,
+            boss_rush: Vec::new(),
             world: WorldConfig::default(),
             rules_override: None,
             mods: vec![],
@@ -190,18 +195,28 @@ impl ServerSettings {
             .map_err(|_| NetError("server configuration is not UTF-8".into()))?;
         // TOML's formatted error includes the offending source line. A syntax
         // error in a private config must not echo its password or server key.
-        let settings: Self = toml::from_str(&text).map_err(|e: toml::de::Error| {
+        let mut settings: Self = toml::from_str(&text).map_err(|e: toml::de::Error| {
             NetError(format!(
                 "invalid server configuration near byte {}; check TOML syntax and setting types",
                 e.span().map_or(0, |span| span.start)
             ))
         })?;
+        settings.world.boss_rush =
+            boss_rush_from_text(&settings.boss_rush.join(",")).map_err(NetError)?;
         settings.validate()?;
         Ok(settings)
     }
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), NetError> {
         self.validate()?;
-        let text = toml::to_string_pretty(self).map_err(|e| NetError(e.to_string()))?;
+        // The world holds the lineup; the file holds it by name.
+        let mut saved = self.clone();
+        saved.boss_rush = self
+            .world
+            .boss_rush
+            .iter()
+            .map(|kind| kind.id().to_owned())
+            .collect();
+        let text = toml::to_string_pretty(&saved).map_err(|e| NetError(e.to_string()))?;
         crate::storage::atomic_write(path.as_ref(), text.as_bytes())?;
         Ok(())
     }
@@ -272,6 +287,11 @@ impl ServerSettings {
             ));
         }
         self.world.rules.validate().map_err(NetError)?;
+        if self.world.boss_rush.len() > MOST_RUSH_BOSSES {
+            return Err(NetError(format!(
+                "a Boss Rush can line up at most {MOST_RUSH_BOSSES} bosses"
+            )));
+        }
         if self.mods.len() > tankyard_mods::MAX_MODS
             || self.mods.iter().any(|p| p.as_os_str().len() > 512)
         {
@@ -412,6 +432,35 @@ pub fn parse_private_key(value: &str) -> Result<[u8; 32], NetError> {
     }
     Ok(bytes)
 }
+/// A Boss Rush lineup from `classic`, `all`, or boss ids split by commas, such
+/// as `prism,siege_engine,trapper`. An empty list means the usual six.
+pub fn boss_rush_from_text(text: &str) -> Result<Vec<BossKind>, String> {
+    let text = text.trim().to_ascii_lowercase();
+    match text.as_str() {
+        "" | "classic" => return Ok(Vec::new()),
+        "all" | "full" => return Ok(BossKind::ALL.to_vec()),
+        _ => {}
+    }
+    let lineup = text
+        .split(',')
+        .map(|name| {
+            let id = name.trim().replace(['-', ' '], "_");
+            BossKind::from_id(&id).ok_or_else(|| {
+                format!(
+                    "Unknown boss {:?}. Bosses: {}.",
+                    id.chars().take(32).collect::<String>(),
+                    BossKind::ALL.map(BossKind::id).join(", ")
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if lineup.len() > MOST_RUSH_BOSSES {
+        return Err(format!(
+            "A Boss Rush can line up at most {MOST_RUSH_BOSSES} bosses."
+        ));
+    }
+    Ok(lineup)
+}
 pub fn mode_from_name(name: &str) -> Result<Mode, String> {
     match name.to_ascii_lowercase().as_str() {
         "ffa" | "free-for-all" => Ok(Mode::Ffa),
@@ -446,6 +495,46 @@ pub fn difficulty_from_name(name: &str) -> Result<Difficulty, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_boss_rush_lineup_reads_from_names_and_survives_a_save() {
+        use tankyard_core::BossKind::{Prism, SiegeEngine, Trapper};
+        assert_eq!(super::boss_rush_from_text("classic").unwrap(), []);
+        assert_eq!(super::boss_rush_from_text("  ").unwrap(), []);
+        assert_eq!(super::boss_rush_from_text("ALL").unwrap().len(), 14);
+        assert_eq!(
+            super::boss_rush_from_text("prism, Siege-Engine,trapper").unwrap(),
+            [Prism, SiegeEngine, Trapper]
+        );
+        assert!(super::boss_rush_from_text("prism,,trapper").is_err());
+        assert!(super::boss_rush_from_text("the_landlord").is_err());
+        let too_many = vec!["prism"; tankyard_core::MOST_RUSH_BOSSES + 1].join(",");
+        assert!(super::boss_rush_from_text(&too_many).is_err());
+
+        let dir = std::env::temp_dir().join(format!("tankyard-rush-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("server.toml");
+        let mut settings = ServerSettings::default();
+        settings.world.boss_rush = vec![Trapper, Prism];
+        settings.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("boss_rush"), "{text}");
+        assert_eq!(
+            ServerSettings::load(&path).unwrap().world.boss_rush,
+            [Trapper, Prism]
+        );
+        // An untouched server writes no lineup at all.
+        ServerSettings::default().save(&path).unwrap();
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("boss_rush")
+        );
+        // A misspelled boss is refused when the file loads.
+        std::fs::write(&path, "boss_rush = ['prism', 'the_landlord']").unwrap();
+        assert!(ServerSettings::load(&path).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     use super::*;
     #[test]
     fn malformed_private_configs_never_quote_credential_lines() {

@@ -1,6 +1,7 @@
 use crate::{NetError, ServerSettings, UdpServer};
 use std::{
     net::SocketAddr,
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         mpsc::{self, SyncSender},
@@ -12,6 +13,16 @@ use std::{
 enum HostCommand {
     Shutdown,
     Admin(String, SyncSender<String>),
+    PlanParty(PartyPlan, SyncSender<Result<(), NetError>>),
+}
+
+/// What only the party leader's own computer can give the next round: the
+/// packs on its disk, and which bosses a Boss Rush fights. It takes effect
+/// with the leader's next `ConfigureParty`, all together or not at all.
+#[derive(Clone, Debug, Default)]
+pub struct PartyPlan {
+    pub mods: Vec<PathBuf>,
+    pub boss_rush: Vec<tankyard_core::BossKind>,
 }
 
 /// Player-hosted matches run exactly the dedicated-server transport and
@@ -59,6 +70,9 @@ impl HostedServer {
                                     return;
                                 }
                             }
+                            HostCommand::PlanParty(plan, reply) => {
+                                let _ = reply.try_send(server.plan_party(plan));
+                            }
                         }
                     }
                     let now = Instant::now();
@@ -92,6 +106,25 @@ impl HostedServer {
         let (sender, receiver) = mpsc::sync_channel(1);
         self.sender
             .try_send(HostCommand::Admin(command.into(), sender))
+            .map_err(|e| NetError(format!("host command could not be queued: {e}")))?;
+        Ok(receiver)
+    }
+    /// Line up `plan` for the party's next `ConfigureParty`.
+    pub fn plan_party(&self, plan: PartyPlan) -> Result<(), NetError> {
+        self.plan_party_async(plan)?
+            .recv_timeout(Duration::from_secs(6))
+            .map_err(|e| NetError(format!("host did not respond: {e}")))?
+    }
+
+    /// Queue the plan without blocking the client while the server loads
+    /// packs. The reply confirms preparation; it never starts a round.
+    pub fn plan_party_async(
+        &self,
+        plan: PartyPlan,
+    ) -> Result<mpsc::Receiver<Result<(), NetError>>, NetError> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.sender
+            .try_send(HostCommand::PlanParty(plan, sender))
             .map_err(|e| NetError(format!("host command could not be queued: {e}")))?;
         Ok(receiver)
     }

@@ -244,6 +244,8 @@ impl World {
                 finished: false,
                 round: 1,
                 boss_wave: 0,
+                rush_wave: 0,
+                rush_stalls: 0,
                 safe_radius: config.width.max(config.height),
                 announcement: config
                     .mode_name
@@ -1491,6 +1493,11 @@ impl World {
                     self.award(ally, 3500, 3500);
                 }
                 self.mode_timer = 4.;
+                let next = usize::from(self.match_state.rush_wave);
+                if let Some(next) = self.config.rush_lineup().get(next) {
+                    self.match_state.announcement =
+                        format!("{} down · {} is next", kind.name(), next.name());
+                }
             }
             if mother && self.config.mode == Mode::Mothership {
                 self.finish(Some(if team == 1 { 2 } else { 1 }), "Mothership destroyed");

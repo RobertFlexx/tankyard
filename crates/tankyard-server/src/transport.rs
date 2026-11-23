@@ -134,6 +134,8 @@ pub struct UdpServer {
     pub(crate) shutting_down: bool,
     content_hash: u64,
     pub(crate) loaded_mods: tankyard_mods::LoadedMods,
+    /// The leader's plan for the next party round, its packs already loaded.
+    pub(crate) party_plan: Option<(crate::PartyPlan, tankyard_mods::LoadedMods)>,
     game_data: Bytes,
     pub(crate) native_plugins: Vec<fn() -> Box<dyn tankyard_core::modding::ServerPlugin>>,
     pub(crate) access: crate::access::Access,
@@ -251,6 +253,7 @@ impl UdpServer {
             shutting_down: false,
             content_hash,
             loaded_mods,
+            party_plan: None,
             game_data,
             native_plugins: vec![],
             access,
@@ -1352,7 +1355,46 @@ impl UdpServer {
             },
         );
     }
+    /// Load the packs for the party's next round, without touching this one.
+    /// Nothing changes until the leader's `ConfigureParty` proves they work.
+    pub fn plan_party(&mut self, plan: crate::PartyPlan) -> Result<(), NetError> {
+        if self.settings.party.is_none() {
+            return Err(NetError("Only a party can plan its next round.".into()));
+        }
+        if plan.mods.len() > tankyard_mods::MAX_MODS
+            || plan.boss_rush.len() > tankyard_core::MOST_RUSH_BOSSES
+        {
+            return Err(NetError("That is too much for one party round.".into()));
+        }
+        let loaded = tankyard_lua::load(&plan.mods).map_err(NetError)?;
+        self.party_plan = Some((plan, loaded));
+        Ok(())
+    }
+    /// Check that `plan` can start a round of `candidate`, then adopt its
+    /// packs. Until this succeeds the server carries on as it was.
+    pub(crate) fn adopt_party_plan(
+        &mut self,
+        candidate: &mut ServerSettings,
+        (plan, loaded): (crate::PartyPlan, tankyard_mods::LoadedMods),
+    ) -> Result<(), NetError> {
+        candidate.mods = plan.mods;
+        candidate.world.boss_rush = plan.boss_rush;
+        candidate.validate()?;
+        let mut trial = LocalSession::with_mods(
+            candidate.world.clone(),
+            candidate.desired_bots(0),
+            loaded.clone(),
+        )
+        .map_err(NetError)?;
+        for factory in &self.native_plugins {
+            trial.install_plugin(factory()).map_err(NetError)?;
+        }
+        player_game_data(&trial.bundle)?;
+        self.loaded_mods = loaded;
+        Ok(())
+    }
     pub fn reload_mods(&mut self) -> Result<(), NetError> {
+        self.party_plan = None;
         let loaded = tankyard_lua::load(&self.settings.mods).map_err(NetError)?;
         let mut candidate = LocalSession::with_mods(
             self.settings.world.clone(),

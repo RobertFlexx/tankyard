@@ -582,6 +582,179 @@ fn leader_changes_modes_atomically_without_replacing_invites_members_or_chat() {
 }
 
 #[test]
+fn preparing_a_hosted_party_is_acknowledged_without_starting_a_round() {
+    use tankyard_server::{HostedServer, PartyPlan};
+    let (server, _) = arena(Mode::CoopPve);
+    let mut settings = server.settings.clone();
+    settings.bot_memory_file = Some(String::new());
+    drop(server);
+    let host = HostedServer::start(settings).unwrap();
+    let prepared = host.plan_party_async(PartyPlan::default()).unwrap();
+    prepared
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    let status = host.command("status").unwrap();
+    assert!(status.contains("round 1"), "{status}");
+    assert!(status.contains(Mode::CoopPve.name()), "{status}");
+
+    let missing = std::env::temp_dir().join(format!(
+        "tankyard-missing-party-pack-{}",
+        std::process::id()
+    ));
+    let refused = host
+        .plan_party_async(PartyPlan {
+            mods: vec![missing],
+            boss_rush: Vec::new(),
+        })
+        .unwrap();
+    assert!(
+        refused
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_err()
+    );
+    assert!(host.command("status").unwrap().contains("round 1"));
+}
+
+#[test]
+fn a_leader_brings_a_new_map_and_boss_lineup_to_a_running_party() {
+    use tankyard_core::BossKind;
+    use tankyard_protocol::{MatchSettings, PartyMatchOptions, ServerCommand};
+    use tankyard_server::PartyPlan;
+    let root = std::env::temp_dir().join(format!("tankyard-party-map-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let mut map = tankyard_content::builtin_maps().remove(0);
+    map.id = "leaders_yard".into();
+    map.name = "Leader's Yard".into();
+    let manifest = serde_json::json!({
+        "api_version": 1, "id": "leaders_pack", "name": "Leader's Pack",
+        "version": "1", "maps": [map],
+    });
+    std::fs::write(
+        root.join("mod.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let (mut server, invite) = arena(Mode::CoopPve);
+    let mut leader = NetworkClient::connect(&invite.link(), "Leader", "").unwrap();
+    let mut guest = NetworkClient::connect(&invite.link(), "Guest", "").unwrap();
+    ready(&mut server, &mut [&mut leader, &mut guest]);
+    let public: String = leader
+        .admin_public_key()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert!(
+        !server
+            .admin_command(&format!("owner-client {} {public}", leader.client_id()))
+            .message
+            .starts_with("Error:")
+    );
+    pump(&mut server, &mut [&mut leader, &mut guest], 65);
+    let settings = |map: &str| MatchSettings {
+        mode: Mode::BossRush,
+        map: map.into(),
+        difficulty: "Normal".into(),
+        bots: 3,
+        party: Some(PartyMatchOptions {
+            width: 3600,
+            height: 2600,
+            dynamic_arena: false,
+            starting_level: 1,
+        }),
+    };
+
+    // Without the plan the party's server has never heard of this map, and
+    // asking for it changes nothing.
+    assert!(leader.admin(ServerCommand::ConfigureParty {
+        settings: settings("leaders_yard")
+    }));
+    pump(&mut server, &mut [&mut leader, &mut guest], 10);
+    assert_eq!(server.arenas[0].session.world.config.mode, Mode::CoopPve);
+    assert!(
+        leader
+            .last_action
+            .as_deref()
+            .is_some_and(|m| m.contains("Map"))
+    );
+
+    // A pack that won't load is refused before it can touch the round.
+    assert!(
+        server
+            .plan_party(PartyPlan {
+                mods: vec![root.join("nothing_here")],
+                boss_rush: Vec::new(),
+            })
+            .is_err()
+    );
+    assert_eq!(server.arenas[0].session.world.config.mode, Mode::CoopPve);
+
+    // With it, both players land on the new map, facing the chosen bosses.
+    let before = leader.player_round.unwrap();
+    server
+        .plan_party(PartyPlan {
+            mods: vec![root.clone()],
+            boss_rush: vec![BossKind::Trapper, BossKind::Prism],
+        })
+        .unwrap();
+    assert_eq!(server.arenas[0].session.world.config.mode, Mode::CoopPve);
+    // A guest cannot consume the leader's prepared map or change the round.
+    assert!(!guest.admin(ServerCommand::ConfigureParty {
+        settings: settings("leaders_yard")
+    }));
+    pump(&mut server, &mut [&mut leader, &mut guest], 10);
+    assert_eq!(leader.player_round, Some(before));
+    assert_eq!(server.arenas[0].session.world.config.mode, Mode::CoopPve);
+    assert!(leader.admin(ServerCommand::ConfigureParty {
+        settings: settings("leaders_yard")
+    }));
+    pump(&mut server, &mut [&mut leader, &mut guest], 80);
+    assert_eq!(leader.player_round, Some(before + 1));
+    assert_eq!(guest.player_round, leader.player_round);
+    let world = &server.arenas[0].session.world;
+    assert_eq!(world.config.map, "leaders_yard");
+    assert_eq!(world.bosses[0].kind, BossKind::Trapper);
+    assert!(
+        world.match_state.announcement.contains("1 / 2"),
+        "{}",
+        world.match_state.announcement
+    );
+    for client in [&leader, &guest] {
+        assert!(client.is_ready());
+        assert!(client.bundle.maps.iter().any(|m| m.id == "leaders_yard"));
+        assert_eq!(client.snapshot.as_ref().unwrap().config.map, "leaders_yard");
+    }
+
+    // The next round keeps the lineup, and a late friend gets the map too.
+    assert!(
+        !server
+            .admin_command("restart")
+            .message
+            .starts_with("Error:")
+    );
+    pump(&mut server, &mut [&mut leader, &mut guest], 65);
+    assert_eq!(
+        server.arenas[0].session.world.bosses[0].kind,
+        BossKind::Trapper
+    );
+    let mut late = NetworkClient::connect(&invite.link(), "Late", "").unwrap();
+    ready(&mut server, &mut [&mut leader, &mut guest, &mut late]);
+    assert!(late.bundle.maps.iter().any(|m| m.id == "leaders_yard"));
+
+    // Going back to a built-in map works with the same packs still loaded.
+    assert!(leader.admin(ServerCommand::ConfigureParty {
+        settings: settings("open")
+    }));
+    pump(&mut server, &mut [&mut leader, &mut guest, &mut late], 80);
+    assert_eq!(server.arenas[0].session.world.config.map, "open");
+    assert!(leader.is_ready() && guest.is_ready() && late.is_ready());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn invite_authentication_survives_udp_address_translation_and_packet_loss() {
     use tankyard_server::netem::{EmulationConfig, NetworkEmulator};
     let (mut server, mut invite) = arena(Mode::TwoTeams);

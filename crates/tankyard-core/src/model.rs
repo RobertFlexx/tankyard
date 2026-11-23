@@ -107,7 +107,25 @@ pub struct WorldConfig {
     /// ranges so player IDs stay unambiguous. Host-only; never serialized.
     #[serde(skip)]
     pub id_base: u64,
+    /// The bosses a Boss Rush fights, in order; empty plays [`CLASSIC_RUSH`].
+    /// Host-only: clients follow the wave from the match state.
+    #[serde(skip)]
+    pub boss_rush: Vec<BossKind>,
 }
+/// The bosses a Boss Rush fights unless the host picks its own.
+pub const CLASSIC_RUSH: [BossKind; 6] = [
+    BossKind::Sentinel,
+    BossKind::Prism,
+    BossKind::Foundry,
+    BossKind::Tempest,
+    BossKind::Bastion,
+    BossKind::Eclipse,
+];
+/// The most bosses one Boss Rush can line up.
+pub const MOST_RUSH_BOSSES: usize = 32;
+/// The highest wave number a snapshot may carry. A longer lineup keeps
+/// counting on the host and tells players the real wave in its announcement.
+pub const SHOWN_RUSH_WAVES: u8 = 6;
 impl Default for WorldConfig {
     fn default() -> Self {
         Self {
@@ -129,6 +147,7 @@ impl Default for WorldConfig {
             lives: 1,
             map: "open".into(),
             id_base: 0,
+            boss_rush: Vec::new(),
         }
     }
 }
@@ -139,6 +158,14 @@ fn unit_scale() -> f32 {
     1.
 }
 impl WorldConfig {
+    /// The bosses this Boss Rush fights, in order.
+    pub fn rush_lineup(&self) -> &[BossKind] {
+        if self.boss_rush.is_empty() {
+            &CLASSIC_RUSH
+        } else {
+            &self.boss_rush[..self.boss_rush.len().min(MOST_RUSH_BOSSES)]
+        }
+    }
     pub fn bounds(&self) -> Rect {
         let scale = if self.arena_scale.is_finite() {
             self.arena_scale.clamp(0.5, 1.)
@@ -886,7 +913,14 @@ pub struct MatchState {
     pub winner: Option<u8>,
     pub finished: bool,
     pub round: u32,
+    /// The Boss Rush wave as snapshots carry it, at most [`SHOWN_RUSH_WAVES`].
     pub boss_wave: u8,
+    /// The real Boss Rush wave, on the host.
+    #[serde(skip)]
+    pub rush_wave: u8,
+    /// How many times running the next boss has found nowhere safe to land.
+    #[serde(skip)]
+    pub rush_stalls: u8,
     pub safe_radius: f32,
     pub announcement: String,
     #[serde(default)]

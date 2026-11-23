@@ -1,6 +1,9 @@
 //! Mode objectives and seeded maps share the same combat simulation.
 use crate::physics::circle_rect;
 use crate::*;
+/// Half-second tries a Boss Rush boss gets to find somewhere to land.
+const RUSH_LANDING_TRIES: u8 = 20;
+
 impl World {
     pub(crate) fn initialize_mode(&mut self) {
         match self.config.mode {
@@ -68,9 +71,7 @@ impl World {
                 }
             }
             Mode::BossRush => {
-                self.match_state.boss_wave = 1;
-                self.match_state.announcement = "Boss wave 1 / 6".into();
-                self.spawn_boss(BossKind::Sentinel);
+                self.next_rush_boss();
             }
             Mode::Survival => {
                 self.match_state.safe_radius = self.config.width.min(self.config.height) * 0.55;
@@ -88,6 +89,37 @@ impl World {
             }
             _ => {}
         }
+    }
+    /// Bring on the next boss of the Boss Rush; false when none are left.
+    fn next_rush_boss(&mut self) -> bool {
+        let lineup = self.config.rush_lineup();
+        let total = lineup.len();
+        let Some(&kind) = lineup.get(usize::from(self.match_state.rush_wave)) else {
+            return false;
+        };
+        let wave = self.match_state.rush_wave + 1;
+        // Its health depends on the wave, so count it before it lands.
+        self.match_state.rush_wave = wave;
+        if self.spawn_boss(kind) == 0 {
+            // A boss won't land on a tank, so give the ground a moment to
+            // clear. A map with no room for it at all ends the round plainly.
+            self.match_state.rush_wave = wave - 1;
+            self.match_state.rush_stalls += 1;
+            if self.match_state.rush_stalls >= RUSH_LANDING_TRIES {
+                self.finish(
+                    None,
+                    &format!("No room for the {} on this map", kind.name()),
+                );
+            } else {
+                self.mode_timer = 0.5;
+                self.match_state.announcement = format!("Clear the way for the {}", kind.name());
+            }
+            return true;
+        }
+        self.match_state.rush_stalls = 0;
+        self.match_state.boss_wave = wave.min(SHOWN_RUSH_WAVES);
+        self.match_state.announcement = format!("Boss wave {wave} / {total} · {}", kind.name());
+        true
     }
     pub(crate) fn finish(&mut self, winner: Option<u8>, reason: &str) {
         if self.match_state.finished {
@@ -156,22 +188,13 @@ impl World {
             }
             Mode::BossRush if self.bosses.iter().all(|b| b.health <= 0.) => {
                 self.mode_timer -= DT;
-                if self.mode_timer <= 0. {
-                    if self.match_state.boss_wave >= 6 {
-                        self.finish(Some(1), "All six bosses defeated");
-                    } else {
-                        self.match_state.boss_wave += 1;
-                        self.match_state.announcement =
-                            format!("Boss wave {} / 6", self.match_state.boss_wave);
-                        let kind = match self.match_state.boss_wave {
-                            2 => BossKind::Prism,
-                            3 => BossKind::Foundry,
-                            4 => BossKind::Tempest,
-                            5 => BossKind::Bastion,
-                            _ => BossKind::Eclipse,
-                        };
-                        self.spawn_boss(kind);
-                    }
+                if self.mode_timer <= 0. && !self.next_rush_boss() {
+                    let reason = match self.config.rush_lineup().len() {
+                        1 => "Boss defeated".to_owned(),
+                        6 => "All six bosses defeated".to_owned(),
+                        total => format!("All {total} bosses defeated"),
+                    };
+                    self.finish(Some(1), &reason);
                 }
             }
             _ => {}
@@ -350,6 +373,49 @@ impl World {
 mod tests {
     use super::*;
     use tankyard_content::Content;
+
+    #[test]
+    fn a_blocked_rush_retries_without_skipping_bosses_and_eventually_draws() {
+        let blocked = || {
+            let mut world = world(Mode::Sandbox);
+            world.config.mode = Mode::BossRush;
+            world.config.boss_rush = vec![BossKind::Trapper, BossKind::Prism];
+            world.walls = vec![world.config.bounds()];
+            world.initialize_mode();
+            world
+        };
+        let mut retry = blocked();
+        assert_eq!(retry.match_state.rush_wave, 0);
+        assert_eq!(retry.match_state.rush_stalls, 1);
+        assert!(retry.match_state.announcement.contains("Clear the way"));
+        retry.walls.clear();
+        for _ in 0..40 {
+            retry.update_mode();
+        }
+        assert_eq!(retry.bosses[0].kind, BossKind::Trapper);
+        assert_eq!(retry.match_state.rush_wave, 1);
+        assert_eq!(retry.match_state.rush_stalls, 0);
+        assert!(!retry.match_state.finished);
+
+        let mut impossible = blocked();
+        for _ in 0..700 {
+            impossible.update_mode();
+            if impossible.match_state.finished {
+                break;
+            }
+        }
+        assert!(impossible.match_state.finished);
+        assert_eq!(impossible.match_state.winner, None);
+        assert_eq!(impossible.match_state.rush_wave, 0);
+        assert!(impossible.bosses.is_empty());
+        assert!(impossible.match_state.announcement.contains("No room"));
+        let stalls = impossible.match_state.rush_stalls;
+        for _ in 0..1000 {
+            impossible.step();
+        }
+        assert_eq!(impossible.match_state.rush_stalls, stalls);
+    }
+
     fn world(mode: Mode) -> World {
         World::new(
             WorldConfig {

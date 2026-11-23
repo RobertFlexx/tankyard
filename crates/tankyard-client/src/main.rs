@@ -126,7 +126,7 @@ struct Cli {
     #[arg(long)]
     screenshot: Option<String>,
     /// Open a menu page instead of a game (for screenshots and checks).
-    #[arg(long, hide = true, value_parser = ["main", "mods", "tree", "credits", "settings", "party", "modes", "party-panel", "mods-review", "mods-files", "lobbies", "community", "graphics", "join", "editor", "host-map"])]
+    #[arg(long, hide = true, value_parser = ["main", "mods", "tree", "credits", "settings", "party", "modes", "party-panel", "mods-review", "mods-files", "lobbies", "community", "graphics", "join", "editor", "host-map", "boss-rush"])]
     page: Option<String>,
     #[arg(long = "mod")]
     mods: Vec<std::path::PathBuf>,
@@ -197,6 +197,11 @@ struct PendingJoin {
     address: String,
     return_page: Page,
 }
+struct PreparingParty {
+    result: std::sync::mpsc::Receiver<Result<(), tankyard_server::NetError>>,
+    settings: tankyard_protocol::MatchSettings,
+    started: std::time::Instant,
+}
 struct App {
     editor: Option<editor::Editor>,
     editor_playtest: bool,
@@ -204,6 +209,7 @@ struct App {
     /// The last death whose killer the camera was pointed at.
     spectate_death: u32,
     party_restart: Option<(u32, std::time::Instant)>,
+    preparing_party: Option<PreparingParty>,
     party_ui: party_ui::PartyUi,
     /// Draw the party overlay with sample data (screenshot checks only).
     party_preview: bool,
@@ -287,6 +293,7 @@ impl App {
         }
         let mut menu = Menu::new();
         menu.difficulty = settings.bot_difficulty;
+        menu.load_boss_rush(&settings);
         let ready = mod_library::ready_paths(&settings);
         menu.held_mods(&ready.held, ready.missing);
         match mod_library::load(&ready.paths) {
@@ -320,6 +327,7 @@ impl App {
             party_copy: None,
             spectate_death: 0,
             party_restart: None,
+            preparing_party: None,
             settings,
             display_revision: 0,
             content,
@@ -425,6 +433,7 @@ impl App {
                 "modes" => Page::Modes,
                 "community" => Page::Host,
                 "host-map" => Page::HostMap,
+                "boss-rush" => Page::BossRush,
                 "join" => Page::Join,
                 _ => Page::Main,
             };
@@ -572,7 +581,10 @@ impl App {
             Action::LeaveParty => self.finish_session(),
             Action::ApplyParty => self.apply_party_settings(),
             Action::Page(page) => {
+                // These pages open from the match setup and come back to it.
+                let within_setup = matches!(self.menu.page, Page::HostMap | Page::BossRush);
                 if page == Page::Modes
+                    && !within_setup
                     && self.active_party()
                     && let Some(Session {
                         engine: session::Engine::Online { client, .. },
@@ -583,7 +595,7 @@ impl App {
                     self.menu.load_party_settings(settings);
                 }
 
-                if page == Page::Modes && self.menu.page != Page::Party {
+                if page == Page::Modes && self.menu.page != Page::Party && !within_setup {
                     self.menu.party_setup = false;
                 }
                 if page == Page::Party
@@ -650,20 +662,22 @@ impl App {
             }
             Action::Offline => {
                 let paths = self.ready_mods();
-                let attempt = if paths.is_empty() {
-                    Ok(Session::offline(
-                        self.menu.config(),
-                        self.menu.bots,
-                        &self.settings.player_name,
-                    ))
-                } else {
-                    Session::offline_modded(
-                        self.menu.config(),
-                        self.menu.bots,
-                        &self.settings.player_name,
-                        &paths,
-                    )
-                };
+                let attempt = self.menu.host_setup(paths).and_then(|(config, paths)| {
+                    if paths.is_empty() {
+                        Ok(Session::offline(
+                            config,
+                            self.menu.bots,
+                            &self.settings.player_name,
+                        ))
+                    } else {
+                        Session::offline_modded(
+                            config,
+                            self.menu.bots,
+                            &self.settings.player_name,
+                            &paths,
+                        )
+                    }
+                });
                 match attempt {
                     Ok(mut session) => {
                         if let session::Engine::Offline(local) = &mut session.engine {
@@ -686,15 +700,18 @@ impl App {
             }
             Action::CreateParty => {
                 let mods = self.ready_mods();
-                match Session::party(
-                    self.menu.config(),
-                    self.menu.bots.clamp(2, 8),
-                    self.menu.offline_level,
-                    &self.settings.player_name,
-                    self.menu.difficulty_name(),
-                    mods,
-                    self.settings.auto_party_network,
-                ) {
+                let party = self.menu.host_setup(mods).and_then(|(config, mods)| {
+                    Session::party(
+                        config,
+                        self.menu.bots.clamp(2, 8),
+                        self.menu.offline_level,
+                        &self.settings.player_name,
+                        self.menu.difficulty_name(),
+                        mods,
+                        self.settings.auto_party_network,
+                    )
+                });
+                match party {
                     Ok(session) => {
                         self.launch(session);
                     }
@@ -853,6 +870,7 @@ impl App {
         self.party_ui = party_ui::PartyUi::default();
         self.party_copy = None;
         self.party_restart = None;
+        self.preparing_party = None;
         self.menu.party_configuring = false;
         self.menu.party_invite = None;
         self.menu.party_roster.clear();
@@ -964,7 +982,93 @@ impl App {
             .is_some_and(|session| session.party_invite.is_some() && session.failure.is_none())
     }
     fn apply_party_settings(&mut self) {
+        if !self.menu.party_active || self.party_restart.is_some() || self.preparing_party.is_some()
+        {
+            return;
+        }
+        if !self.menu.party_leader {
+            self.menu.error = "Only the party leader can start a new round.".into();
+            return;
+        }
+        // Packing a saved map can fail, so it goes before anything is sent.
+        let paths = self.ready_mods();
+        let (config, mods) = match self.menu.host_setup(paths) {
+            Ok(setup) => setup,
+            Err(error) => {
+                self.menu.error = error;
+                return;
+            }
+        };
         let settings = self.menu.party_match_settings();
+        if let Some(Session {
+            engine: session::Engine::Online {
+                host: Some(host), ..
+            },
+            ..
+        }) = &self.session
+        {
+            // Keep pumping input and networking while the server loads the
+            // leader's packs. Only a successful reply permits ConfigureParty.
+            match host.plan_party_async(tankyard_server::PartyPlan {
+                mods,
+                boss_rush: config.boss_rush,
+            }) {
+                Ok(result) => {
+                    self.preparing_party = Some(PreparingParty {
+                        result,
+                        settings,
+                        started: std::time::Instant::now(),
+                    });
+                    self.menu.party_configuring = true;
+                    self.menu.error.clear();
+                    self.menu.info = "Preparing the next party round…".into();
+                }
+                Err(error) => self.menu.error = error.to_string(),
+            }
+        } else {
+            self.send_party_settings(settings);
+        }
+    }
+
+    fn poll_party_preparation(&mut self) {
+        let Some(preparing) = &self.preparing_party else {
+            return;
+        };
+        if !self.active_party() {
+            self.preparing_party = None;
+            self.menu.party_configuring = false;
+            return;
+        }
+        let result = match preparing.result.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty)
+                if preparing.started.elapsed().as_secs() < 15 =>
+            {
+                return;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => Err(tankyard_server::NetError(
+                "Preparing the next party round timed out. Try again.".into(),
+            )),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(tankyard_server::NetError(
+                "The party server stopped before the next round was ready.".into(),
+            )),
+        };
+        let preparing = self.preparing_party.take().expect("pending preparation");
+        self.menu.party_configuring = false;
+        match result {
+            Ok(()) => self.send_party_settings(preparing.settings),
+            Err(error) => {
+                self.menu.info.clear();
+                self.menu.error = error.to_string();
+            }
+        }
+    }
+
+    fn send_party_settings(&mut self, settings: tankyard_protocol::MatchSettings) {
+        if !self.active_party() || !self.menu.party_leader {
+            self.menu.error = "Party controls are no longer available.".into();
+            return;
+        }
         let Some(Session {
             engine: session::Engine::Online { client, .. },
             action_result,
@@ -973,18 +1077,14 @@ impl App {
         else {
             return;
         };
-        if !self.menu.party_active || self.party_restart.is_some() {
-            return;
-        }
-        if !self.menu.party_leader {
-            self.menu.error = "Only the party leader can start a new round.".into();
-            return;
-        }
         let Some(round) = client
             .snapshot
             .as_ref()
             .map(|snapshot| snapshot.match_state.round)
         else {
+            self.menu.info.clear();
+            self.menu.error =
+                "Waiting for the party connection. Try again when the match is ready.".into();
             return;
         };
         client.last_action = None;
@@ -1500,6 +1600,7 @@ impl App {
                 self.settings.master_volume * self.settings.effects_volume
             },
         );
+        self.poll_party_preparation();
         if let Some((round, started)) = self.party_restart {
             let client = self
                 .session

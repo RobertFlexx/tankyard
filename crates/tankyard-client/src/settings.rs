@@ -92,6 +92,8 @@ pub struct Settings {
     pub voice_volume: f32,
     pub auto_fire: bool,
     pub bot_difficulty: usize,
+    /// The bosses a Boss Rush fights, by id; empty plays the classic six.
+    pub boss_rush: Vec<String>,
     pub show_fps: bool,
     /// The scoreboard is folded away behind its tab.
     pub leaderboard_hidden: bool,
@@ -213,6 +215,7 @@ impl Default for Settings {
             voice_volume: 0.8,
             auto_fire: false,
             bot_difficulty: 1,
+            boss_rush: vec![],
             show_fps: false,
             leaderboard_hidden: false,
             bindings: ["W", "S", "A", "D", "Space", "E"].map(str::to_owned),
@@ -237,6 +240,7 @@ impl Settings {
             server_address: std::mem::take(&mut self.server_address),
             favorites: std::mem::take(&mut self.favorites),
             recent_servers: std::mem::take(&mut self.recent_servers),
+            boss_rush: std::mem::take(&mut self.boss_rush),
             window_position: self.window_position,
             theme_chosen: true,
             games_played: self.games_played,
@@ -308,6 +312,10 @@ impl Settings {
     }
     pub fn validate(&mut self) {
         self.bot_difficulty = self.bot_difficulty.min(3);
+        let mut bosses = std::collections::HashSet::new();
+        self.boss_rush.retain(|id| {
+            tankyard_core::BossKind::from_id(id).is_some() && bosses.insert(id.clone())
+        });
         let mut ids = std::collections::HashSet::new();
         self.practice_records.retain(|record| {
             tankyard_client::practice::CHALLENGES

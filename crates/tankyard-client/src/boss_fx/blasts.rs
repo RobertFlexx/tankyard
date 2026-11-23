@@ -1,6 +1,7 @@
 //! What boss fire sets off: flashes, shock waves, sparks, smoke and the
 //! scorch marks heavy blasts leave on the floor.
 use super::fire::ramp;
+use super::ribbon::Path;
 use super::shots::{band_from_trail, bolt};
 use super::{
     BossFx, Burst, Flash, Fuel, SCAR_SECONDS, WAKE_SECONDS, direction, ease_out, perpendicular,
@@ -43,24 +44,34 @@ impl BossFx {
         }
     }
 
-    /// Everything happening apart from the bosses and their rounds: flame,
-    /// flashes, shock waves, sparks and the trails of rounds already gone.
-    pub fn aftermath(&self, light: &mut Emission, view: &View) {
+    /// The trails of rounds already gone, fading where they lie. They run
+    /// along the floor with the rounds, so they go down before the tanks.
+    pub fn wakes(&self, light: &mut Emission, view: &View) {
         if !self.look.live() {
             return;
         }
         let level = self.look.level();
         for wake in &self.wakes {
             let fade = (wake.life / WAKE_SECONDS).clamp(0., 1.);
+            let head = view.screen(wake.trail.latest);
             band_from_trail(
                 light,
                 view,
                 &wake.trail,
-                view.screen(wake.trail.latest),
+                &Path::of(&wake.trail, view, head, Vec2::ZERO),
                 wake.trail.radius * view.zoom,
                 fade * fade * level,
             );
         }
+    }
+
+    /// Everything happening apart from the bosses and their rounds: flame,
+    /// flashes, shock waves and sparks.
+    pub fn aftermath(&self, light: &mut Emission, view: &View) {
+        if !self.look.live() {
+            return;
+        }
+        let level = self.look.level();
         self.draw_flames(light, view, level);
         for burst in &self.bursts {
             if view.visible(burst.at, burst.size * 8.) {

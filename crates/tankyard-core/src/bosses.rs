@@ -548,8 +548,16 @@ impl World {
         } else {
             1.
         };
+        // Each wave is 14% tougher than the first, up to 70% on the last, so
+        // a long lineup climbs as far as the usual six and no further.
+        let bosses = self.config.rush_lineup().len();
+        let climb = if bosses <= 6 {
+            0.14
+        } else {
+            0.7 / (bosses - 1) as f32
+        };
         11_000.
-            * (1. + f32::from(self.match_state.boss_wave.max(1) - 1) * 0.14)
+            * (1. + f32::from(self.match_state.rush_wave.max(1) - 1) * climb)
             * kind.toughness()
             * (0.3 + 0.7 * strength)
             * crowd

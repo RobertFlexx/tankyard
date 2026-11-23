@@ -2,8 +2,9 @@
 //! whatever the settings, with its heart, halo and trail drawn in light, and
 //! each boss's guns burn in their own way.
 use super::fire::{ramp, steel};
-use super::{BossFx, Fuel, Round, TRAIL_POINTS, Trail, perpendicular};
-use crate::emission::{Emission, Layer, Stop};
+use super::ribbon::{FINE, PLAIN, Path, Section, Sway, keyed, swell};
+use super::{BossFx, Fuel, Round, Trail, perpendicular};
+use crate::emission::{Emission, Layer, Stop, heated};
 use crate::render::{View, polygon};
 use crate::ui::{AMBER, alpha, mix};
 use macroquad::prelude::*;
@@ -57,16 +58,17 @@ impl BossFx {
         };
         let fuel = self.fuel_of(round);
         let clock = self.flicker(round);
+        let path = self.path_of(view, round);
         if damage >= LETHAL_DAMAGE {
-            fireball(light, round, clock, level);
+            fireball(light, round, &path, clock, level);
             return;
         }
         if damage >= BASTION_ROUND_DAMAGE {
-            self.trail(light, view, round, 0.8);
-            slug(light, round, level);
+            self.trail(light, view, round, &path, 0.8);
+            slug(light, round, &path, clock, level);
             return;
         }
-        self.trail(light, view, round, 1.);
+        self.trail(light, view, round, &path, 1.);
         match kind {
             ProjectileKind::Piercing => {
                 // A lance, with a hot spine running its length.
@@ -204,7 +206,7 @@ impl BossFx {
             }
         }
         if self.look.live() {
-            flourish(light, round, fuel, clock, level);
+            flourish(light, round, &path, fuel, clock, level);
         }
     }
 
@@ -229,7 +231,8 @@ impl BossFx {
         };
         match kind {
             ProjectileKind::Drone => {
-                self.trail(light, view, round, 0.62);
+                let path = self.path_of(view, round);
+                self.trail(light, view, round, &path, 0.62);
                 let engine = p - d * r * 0.62;
                 light.spot(
                     Layer::Wash,
@@ -269,8 +272,31 @@ impl BossFx {
         }
     }
 
+    /// The road a round has flown. One with no trail, as with effects off or
+    /// just after launch, gets a straight run behind it, never further back
+    /// than it has flown, so nothing pokes out through the back of the gun.
+    pub(super) fn path_of(&self, view: &View, round: &Round) -> Path {
+        let shortest = round.r * 0.8;
+        if let Some(trail) = self.trails.get(&round.id) {
+            let path = Path::of(trail, view, round.p, round.heading);
+            if path.length() >= shortest {
+                return path;
+            }
+        }
+        let flown = (round.age * round.heading.length() * round.z).max(shortest);
+        let way = -round.heading.try_normalize().unwrap_or(vec2(1., 0.));
+        Path::straight(round.p, way, flown.min(round.r * 8.5))
+    }
+
     /// A round's bright trail, from where it has been up to its body.
-    pub(super) fn trail(&self, light: &mut Emission, view: &View, round: &Round, width: f32) {
+    pub(super) fn trail(
+        &self,
+        light: &mut Emission,
+        view: &View,
+        round: &Round,
+        path: &Path,
+        width: f32,
+    ) {
         if !self.look.live() {
             return;
         }
@@ -279,7 +305,7 @@ impl BossFx {
                 light,
                 view,
                 trail,
-                round.p,
+                path,
                 round.r * width,
                 round.opacity * self.look.level(),
             );
@@ -288,20 +314,20 @@ impl BossFx {
 }
 
 /// Bastion's cannon round: a steel slug with a white-hot nose, dragging a
-/// straight wedge of blue light and two clean lines of shock.
-fn slug(light: &mut Emission, round: &Round, level: f32) {
+/// wedge of blue light down the line it has really flown, with two lines of
+/// shock running off its shoulders and a pair of bright threads winding
+/// around each other behind it.
+fn slug(light: &mut Emission, round: &Round, path: &Path, clock: f32, level: f32) {
     let Round {
         p,
         r,
         heading,
         color,
         opacity,
-        age,
         z,
         ..
     } = *round;
     let d = heading.try_normalize().unwrap_or(vec2(1., 0.));
-    let n = perpendicular(d);
     let o = opacity * level.min(1.);
     let pale = light.pale_floor();
     let paint = |t: f32| steel(if pale { t.max(0.3) } else { t });
@@ -310,67 +336,117 @@ fn slug(light: &mut Emission, round: &Round, level: f32) {
     polygon(p, 0, r + rim, 0., alpha(mix(color, OUTLINE, 0.8), opacity));
     polygon(p, 0, r, 0., alpha(mix(color, steel(0.3), 0.6), opacity));
     polygon(p, 0, r * 0.68, 0., alpha(paint(0.12), opacity));
-    // Never reaching further back than it has flown, so it can't poke out
-    // through the back of the gun at launch.
-    let reach = (age * heading.length() * z).max(r * 0.8).min(r * 7.);
-    let point = |back: f32, half: f32, t: f32, strength: f32| Stop {
-        at: p - d * back,
-        half,
-        color: alpha(paint(t), strength * o),
+    let reach = path.length().min(r * 7.).max(r * 0.8);
+    let lead = r * 0.9;
+    let sections = if light.rich() { FINE } else { PLAIN };
+    let moving = clock != 0.;
+    let sway = if moving {
+        Sway::of(Fuel::Plasma, r, clock)
+    } else {
+        Sway::STILL
     };
+    let line = path.line(lead, reach, sections, sway);
     light.spot(Layer::Wash, p, r * 3.8, alpha(paint(0.55), 0.34 * o));
-    light.band(
-        Layer::Wash,
-        &[
-            point(-r * 0.9, r * 0.1, 0.3, 0.),
-            point(-r * 0.2, r * 1.05, 0.35, 0.6),
-            point(reach * 0.4, r * 0.8, 0.5, 0.42),
-            point(reach, r * 0.08, 0.9, 0.),
-        ],
-    );
-    light.band(
-        Layer::Core,
-        &[
-            point(-r * 0.74, r * 0.08, 0.05, 0.),
-            point(-r * 0.1, r * 0.62, 0.04, 0.96),
-            point(reach * 0.34, r * 0.3, 0.2, 0.62),
-            point(reach * 0.8, r * 0.04, 0.4, 0.),
-        ],
-    );
+    let wash = [
+        (-r * 0.9, r * 0.1, 0.3, 0.),
+        (-r * 0.2, r * 1.05, 0.35, 0.6),
+        (reach * 0.4, r * 0.8, 0.5, 0.42),
+        (reach, r * 0.08, 0.9, 0.),
+    ];
+    line.band(light, Layer::Wash, |_, at| {
+        let (half, heat, strength) = keyed(&wash, at);
+        Section {
+            half,
+            color: alpha(paint(heat), strength * o),
+            side: 0.,
+        }
+    });
+    let heart = [
+        (-r * 0.74, r * 0.08, 0.05, 0.),
+        (-r * 0.1, r * 0.62, 0.04, 0.96),
+        (reach * 0.34, r * 0.3, 0.2, 0.62),
+        (reach * 0.8, r * 0.04, 0.4, 0.),
+        (reach, r * 0.02, 0.4, 0.),
+    ];
+    line.band(light, Layer::Core, |_, at| {
+        let (half, heat, strength) = keyed(&heart, at);
+        Section {
+            half,
+            color: alpha(paint(heat), strength * o),
+            side: 0.,
+        }
+    });
+    let shock = heated(paint(0.2), 0.4, pale);
+    let thin = (r * 0.06).max(0.9);
     for side in [-1., 1.] {
-        light.streak(
-            Layer::Core,
-            p - d * reach * 0.72 + n * side * r * 1.3,
-            p + d * r * 0.15 + n * side * r * 0.96,
-            (r * 0.06).max(0.9),
-            alpha(paint(0.3), 0.),
-            alpha(light.hot(paint(0.2), 0.4), 0.8 * o),
+        line.band(light, Layer::Core, |_, at| {
+            let u = (at / (reach * 0.72)).clamp(0., 1.);
+            // Comes up from nothing at the shoulder, and thins away.
+            let strength = 0.8 * swell(at + r * 0.15, r * 0.7) * (1. - u);
+            Section {
+                half: thin * (1. - 0.5 * u),
+                color: alpha(shock, strength * o),
+                side: side * r * (0.96 + 0.34 * u),
+            }
+        });
+    }
+    if moving && light.rich() {
+        twist(
+            light,
+            &line,
+            reach,
+            r,
+            clock,
+            alpha(heated(paint(0.1), 0.5, pale), o),
         );
     }
     light.spot(
         Layer::Core,
         p + d * r * 0.35,
         r * 0.62,
-        alpha(light.hot(paint(0.05), 1.), o),
+        alpha(heated(paint(0.05), 1., pale), o),
     );
 }
 
-/// The Siege Engine's round: a white-hot heart in a teardrop of fire, with
-/// tongues of flame licking back off it. The stream it leaves in the air is
-/// made of real puffs of flame, added as it flies.
-fn fireball(light: &mut Emission, round: &Round, clock: f32, level: f32) {
+/// Two bright threads winding around each other down a heavy round's wake,
+/// brighter on the near side of each turn.
+fn twist(
+    light: &mut Emission,
+    line: &super::ribbon::Line,
+    reach: f32,
+    r: f32,
+    clock: f32,
+    color: Color,
+) {
+    for strand in [0., PI] {
+        line.band(light, Layer::Core, |_, at| {
+            let u = (at / reach.max(1.)).clamp(0., 1.);
+            let turn = at / (r * 1.5) - clock * 9. + strand;
+            let near = 0.45 + 0.55 * turn.cos().max(0.);
+            let body = swell(at, r * 1.2) * (1. - u).powf(1.3);
+            Section {
+                half: (r * 0.09).max(0.8) * (0.5 + 0.5 * near),
+                color: alpha(color, color.a * 0.6 * near * body),
+                side: turn.sin() * r * 0.62 * (1. - u * 0.6),
+            }
+        });
+    }
+}
+
+/// The Siege Engine's round: a white-hot heart in a teardrop of fire that
+/// bends with its flight, with tongues of flame licking back along the line
+/// it has flown. The stream it leaves in the air is made of real puffs of
+/// flame, added as it flies.
+fn fireball(light: &mut Emission, round: &Round, path: &Path, clock: f32, level: f32) {
     let Round {
         p,
         r,
         heading,
         color,
         opacity,
-        age,
         z,
         ..
     } = *round;
-    let d = heading.try_normalize().unwrap_or(vec2(1., 0.));
-    let n = perpendicular(d);
     let o = opacity * level.min(1.);
     let pale = light.pale_floor();
     let heat = |t: f32| ramp(if pale { t.max(0.22) } else { t });
@@ -378,47 +454,71 @@ fn fireball(light: &mut Emission, round: &Round, clock: f32, level: f32) {
     // The solid body, so it shows on any floor and at any setting.
     polygon(p, 0, r + rim, 0., alpha(mix(color, OUTLINE, 0.8), opacity));
     polygon(p, 0, r, 0., alpha(Color::new(1., 0.42, 0.1, 1.), opacity));
-    // Never trail further back than it has really flown, so at launch the
-    // fire doesn't stick out through the back of the gun.
-    let flown = (age * heading.length() * z).max(r * 0.8);
-    let reach = flown.min(r * 8.5);
-    let point = |back: f32, half: f32, t: f32, strength: f32| Stop {
-        at: p - d * back,
-        half,
-        color: alpha(heat(t), strength * o),
+    let reach = path.length().min(r * 8.5).max(r * 0.8);
+    let lead = r * 0.95;
+    let sections = if light.rich() { FINE } else { PLAIN };
+    let moving = clock != 0.;
+    let sway = if moving {
+        Sway::of(Fuel::Fire, r, clock)
+    } else {
+        Sway::STILL
     };
-    light.spot(Layer::Wash, p - d * r, r * 5., alpha(heat(0.5), 0.3 * o));
-    light.band(
-        Layer::Wash,
-        &[
-            point(-r * 0.95, r * 0.12, 0.3, 0.),
-            point(-r * 0.3, r * 1.08, 0.3, 0.62),
-            point(reach * 0.26, r * 1.1, 0.36, 0.66),
-            point(reach * 0.6, r * 0.66, 0.58, 0.42),
-            point(reach, r * 0.1, 0.84, 0.),
-        ],
-    );
-    light.band(
-        Layer::Core,
-        &[
-            point(-r * 0.78, r * 0.1, 0.1, 0.),
-            point(-r * 0.12, r * 0.76, 0.05, 0.96),
-            point(reach * 0.28, r * 0.58, 0.14, 0.84),
-            point(reach * 0.62, r * 0.26, 0.3, 0.5),
-            point(reach * 0.86, r * 0.05, 0.42, 0.),
-        ],
-    );
-    // Tongues of flame licking back from around the head.
+    let line = path.line(lead, reach, sections, sway);
+    let (behind, _) = path.at(r, &mut 0);
+    light.spot(Layer::Wash, behind, r * 5., alpha(heat(0.5), 0.3 * o));
+    let wash = [
+        (-r * 0.95, r * 0.12, 0.3, 0.),
+        (-r * 0.3, r * 1.08, 0.3, 0.62),
+        (reach * 0.26, r * 1.1, 0.36, 0.66),
+        (reach * 0.6, r * 0.66, 0.58, 0.42),
+        (reach, r * 0.1, 0.84, 0.),
+    ];
+    line.band(light, Layer::Wash, |_, at| {
+        let (half, t, strength) = keyed(&wash, at);
+        Section {
+            half,
+            color: alpha(heat(t), strength * o),
+            side: 0.,
+        }
+    });
+    let heart = [
+        (-r * 0.78, r * 0.1, 0.1, 0.),
+        (-r * 0.12, r * 0.76, 0.05, 0.96),
+        (reach * 0.28, r * 0.58, 0.14, 0.84),
+        (reach * 0.62, r * 0.26, 0.3, 0.5),
+        (reach * 0.86, r * 0.05, 0.42, 0.),
+        (reach, r * 0.03, 0.42, 0.),
+    ];
+    line.band(light, Layer::Core, |_, at| {
+        let (half, t, strength) = keyed(&heart, at);
+        // The hot middle weaves a little inside the flame around it.
+        let weave = if moving {
+            (at / (r * 1.7) - clock * 13.).sin() * r * 0.12 * (at / reach).clamp(0., 1.)
+        } else {
+            0.
+        };
+        Section {
+            half,
+            color: alpha(heat(t), strength * o),
+            side: weave,
+        }
+    });
+    if moving && light.rich() {
+        twist(light, &line, reach, r, clock, alpha(heat(0.12), 0.8 * o));
+    }
+    // Tongues of flame, each one peeling off the road the round has flown.
     for lick in 0..7 {
         let phase = lick as f32 * 2.399_963;
         let side = lick as f32 / 3. - 1.;
         let sway = (clock * (9. + lick as f32) + phase).sin();
         let length = r * (0.75 + 0.3 * (clock * 13. + phase * 2.).sin());
-        let at = p - d * r * (0.3 + 0.28 * phase.sin().abs()) + n * side * r * (0.92 + 0.1 * sway);
+        let back = r * (0.3 + 0.28 * phase.sin().abs()) + length * 0.72;
+        let (at, way) = path.at(back.min(path.length()), &mut 0);
+        let across = perpendicular(way);
         light.oval(
             Layer::Wash,
-            at - d * length * 0.72 + n * sway * r * 0.1,
-            -d * length,
+            at + across * (side * r * (0.92 + 0.1 * sway) + sway * r * 0.1),
+            way * length,
             r * 0.28,
             alpha(heat(0.28 + 0.04 * lick as f32), 0.66 * o),
         );
@@ -435,7 +535,7 @@ fn fireball(light: &mut Emission, round: &Round, clock: f32, level: f32) {
 }
 
 /// The touch that marks whose guns a round came from.
-fn flourish(light: &mut Emission, round: &Round, fuel: Fuel, clock: f32, level: f32) {
+fn flourish(light: &mut Emission, round: &Round, path: &Path, fuel: Fuel, clock: f32, level: f32) {
     let Round {
         p,
         r,
@@ -455,10 +555,11 @@ fn flourish(light: &mut Emission, round: &Round, fuel: Fuel, clock: f32, level: 
                 let phase = lick as f32 * 2.1;
                 let sway = (clock * 12. + phase).sin();
                 let length = r * (0.9 + 0.3 * (clock * 15. + phase).sin());
+                let (at, way) = path.at((r * 0.6 + length).min(path.length()), &mut 0);
                 light.oval(
                     Layer::Wash,
-                    p - d * (r * 0.6 + length) + n * (lick as f32 - 1.) * r * (0.5 + 0.1 * sway),
-                    -d * length,
+                    at + perpendicular(way) * (lick as f32 - 1.) * r * (0.5 + 0.1 * sway),
+                    way * length,
                     r * 0.34,
                     alpha(ramp(0.3 + 0.08 * lick as f32), 0.6 * o),
                 );
@@ -587,68 +688,50 @@ pub fn tracer(light: &mut Emission, round: &Round, level: f32) {
     );
 }
 
-/// Draw `trail` as a tapered ribbon ending at `head`.
+/// Draw `trail` as a ribbon of light along `path`: hottest just behind the
+/// round, cooling and thinning to nothing at its tail.
 pub(super) fn band_from_trail(
     light: &mut Emission,
     view: &View,
     trail: &Trail,
-    head: Vec2,
+    path: &Path,
     r: f32,
     strength: f32,
 ) {
-    let count = usize::from(trail.count);
-    if count < 2 || strength <= 0.01 {
+    let reach = path.length().min(trail.reach() * view.zoom);
+    if reach < 1. || strength <= 0.01 {
         return;
     }
-    let color = if trail.fuel == Fuel::Fire {
-        ramp(0.3)
+    let (color, deep) = if trail.fuel == Fuel::Fire {
+        (ramp(0.24), ramp(0.74))
     } else {
-        trail.color
+        let c = trail.color;
+        (c, Color::new(c.r * 0.52, c.g * 0.52, c.b * 0.52, 1.))
     };
-    let deep = if trail.fuel == Fuel::Fire {
-        ramp(0.7)
-    } else {
-        mix(color, Color::new(0.5, 0.1, 0.1, 1.), 0.5)
-    };
-    let clear = Stop {
-        at: head,
-        half: 0.,
-        color: alpha(color, 0.),
-    };
-    let mut wash = [clear; TRAIL_POINTS + 1];
-    let mut heart = [clear; TRAIL_POINTS + 1];
-    for age in 0..count {
-        // The oldest point first, so the band runs tail to head.
-        let index = count - 1 - age;
-        let u = (age as f32 + 1.) / count as f32;
-        let at = view.screen(trail.point(age));
-        let at = if age == 0 { at.lerp(head, 0.4) } else { at };
-        let body = 1. - u;
-        let tint = mix(color, deep, u);
-        wash[index] = Stop {
-            at,
-            half: r * (1.3 * body + 0.14),
-            color: alpha(tint, 0.5 * body.powf(1.25) * strength),
-        };
-        heart[index] = Stop {
-            at,
-            half: r * (0.52 * body + 0.05),
+    let pale = light.pale_floor();
+    let sections = if light.rich() { FINE } else { PLAIN };
+    let clock = trail.clock + trail.seed;
+    let line = path.line(0., reach, sections, Sway::of(trail.fuel, r, clock));
+    // It opens over about the round's own width, behind its body.
+    let start = (r * 0.8 / reach).clamp(0.05, 0.32);
+    line.band(light, Layer::Wash, |t, _| {
+        let (body, open) = (1. - t, swell(t, start));
+        Section {
+            half: r * (1.3 * body + 0.14) * (0.42 + 0.58 * open),
+            color: alpha(mix(color, deep, t), 0.5 * open * body.powf(1.25) * strength),
+            side: 0.,
+        }
+    });
+    line.band(light, Layer::Core, |t, at| {
+        let (body, open) = (1. - t, swell(t, start));
+        Section {
+            half: r * (0.52 * body + 0.05) * (0.42 + 0.58 * open),
             color: alpha(
-                light.hot(tint, 0.42 * body),
-                0.85 * body.powf(1.5) * strength,
+                heated(mix(color, deep, t), 0.5 * body, pale),
+                0.85 * open * body.powf(1.5) * strength,
             ),
-        };
-    }
-    wash[count] = Stop {
-        at: head,
-        half: r * 1.35,
-        color: alpha(color, 0.54 * strength),
-    };
-    heart[count] = Stop {
-        at: head,
-        half: r * 0.56,
-        color: alpha(light.hot(color, 0.6), 0.85 * strength),
-    };
-    light.band(Layer::Wash, &wash[..=count]);
-    light.band(Layer::Core, &heart[..=count]);
+            // The bright thread wanders a little inside its glow.
+            side: (at / (r * 2.1).max(4.) - clock * 8.).sin() * r * 0.1 * t,
+        }
+    });
 }

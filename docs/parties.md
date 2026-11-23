@@ -12,6 +12,8 @@ For local play or an existing manual forward, choose **Manual / LAN** before cre
 
 Use **Return to menu** to keep the party. Open **Party modes**, choose the next setup, and click **Start party round**. Everyone stays connected; guests in menus can resume when ready. Sandbox is available to the party leader, and friends replace friendly bot slots automatically. **Leave party** ends the leader's hosted match and requires confirmation in the party panel.
 
+**Change map…** opens the map picker, on the Parties page before you create the party and under **Party modes** while it runs. It lists the built-in arenas, **My maps** from the Arena Workshop, and your **Map packs**. Friends don't need the map installed: they receive it when the round starts, and so does anyone who joins later. If a map or pack won't load, the current round carries on and the leader sees why. A Boss Rush party fights the leader's [lineup](playing.md#boss-rush).
+
 Automatic address discovery uses fixed HTTPS services, and router mapping requests only a leased UDP entry that the game verifies and renews. Ending the party deletes only its own entry; a crash lets the lease expire. The game does not change your firewall. The preferred local port is 5000; an occupied port is replaced by an available port shown in the invite screen. The parser accepts IPv4 and bracketed IPv6 endpoints; the built-in host listens on IPv4.
 
 Enter while alive or Slash opens party chat; new messages appear in the collapsed roster. The online match keeps running while you browse menus.

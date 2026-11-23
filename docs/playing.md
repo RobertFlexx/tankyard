@@ -160,6 +160,12 @@ Dedicated servers rotate to an appropriate map every two hours of process uptime
 
 The Tank tree shows every upgrade connection. Scroll over the tree to zoom around the pointer. Drag empty space, or use the middle/right mouse button, to pan. Click a tank for its model, strengths and tradeoffs. Fit all restores the overview; Focus centers and enlarges the selected tank. Background gameplay on the main menu pauses with Reduced motion.
 
+## Boss Rush
+
+Pick **Boss Rush** under Game modes, then press **Bosses** to set the lineup. **Classic six** is the usual run, **Quick three** is the short one, and **Full rush** is all fourteen. Click bosses in the order you want to meet them, and click one again to drop it. The arrows swap neighbors, **Shuffle** deals a new order, and the count adds or removes bosses at the end. The game remembers your lineup.
+
+Each wave is tougher than the one before. Lineups of six or more reach 70% tougher on the last boss; shorter runs gain 14% per wave. Between waves the banner says who's next. A boss won't land on top of a tank, so if there's no room the banner asks you to clear the way. If it still cannot land after ten seconds, the round ends in a draw.
+
 ## Infection and King of the Hill
 
 Infection starts with an eight-second preparation period once at least two tanks are present. One random Patient Zero becomes infected. Survivors win by lasting up to three minutes; infected win by converting everyone. Death after the outbreak converts survivors and automatically respawns them, preserving their build. Late arrivals join the infected. Your role and the remaining time appear at the top. Parties keep a fixed total population instead of recreating converted survivors.

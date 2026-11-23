@@ -19,13 +19,17 @@ use std::f32::consts::TAU;
 /// Most pieces one frame keeps; past this the rest are dropped.
 const MOST_PIECES: usize = 6144;
 /// Most band points one frame keeps.
-const MOST_STOPS: usize = 24_576;
+const MOST_STOPS: usize = 40_960;
 /// Most steps around a ring.
 const MOST_STEPS: usize = 96;
 /// Vertices gathered before they go to the renderer, well under its limit.
 const BATCH: usize = 20_000;
+/// Most pieces looked at to see whether a frame needs a cover map.
+const MOST_CHECKS: usize = 1024;
 /// Fainter than this can't show in an 8-bit frame.
 const FAINTEST: f32 = 0.004;
+/// Limit on how far a band corner can extend relative to its half width.
+const MIN_MITER: f32 = 0.45;
 
 /// Which part of the pass a piece belongs to, drawn in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +89,8 @@ enum Piece {
 struct Mesh {
     vertices: Vec<Vertex>,
     indices: Vec<u16>,
+    /// The cover map this batch is held back by, and the window it spans.
+    cover: Option<(Texture2D, f32, f32)>,
 }
 
 impl Mesh {
@@ -97,7 +103,17 @@ impl Mesh {
     }
     fn submit(&mut self) {
         if !self.vertices.is_empty() {
-            crate::lighting::geometry(&self.vertices, &self.indices);
+            if let Some((_, w, h)) = self.cover {
+                for vertex in &mut self.vertices {
+                    let (x, y) = (vertex.position.x, vertex.position.y);
+                    vertex.normal = vec4(x / w, 1. - y / h, 0., 0.);
+                }
+            }
+            crate::lighting::textured_geometry(
+                &self.vertices,
+                &self.indices,
+                self.cover.as_ref().map(|(texture, ..)| texture),
+            );
             self.vertices.clear();
             self.indices.clear();
         }
@@ -168,7 +184,10 @@ impl Mesh {
             let normal = vec2(-tangent.y, tangent.x);
             // Keep the band its full width around a bend, within reason.
             let reference = if out == Vec2::ZERO { into } else { out };
-            let miter = normal.dot(vec2(-reference.y, reference.x)).abs().max(0.45);
+            let miter = normal
+                .dot(vec2(-reference.y, reference.x))
+                .abs()
+                .max(MIN_MITER);
             let offset = normal * (stop.half / miter);
             self.pair(stop.at - offset, stop.at + offset, stop.color);
         }
@@ -187,10 +206,7 @@ impl Mesh {
         color: Color,
         fades: bool,
     ) {
-        let span = sweep.abs().min(TAU) / TAU;
-        let steps =
-            (((radius.max(1.).sqrt() * 5.5 * span) as usize).max(if fades { 6 } else { 16 }))
-                .min(MOST_STEPS);
+        let steps = ring_steps(radius, sweep, fades);
         self.room((steps + 1) * 2);
         let first = self.vertices.len() as u16;
         let (inner, outer) = ((radius - half).max(0.), radius + half);
@@ -214,6 +230,29 @@ impl Mesh {
         }
         self.strip(first, steps);
     }
+}
+
+fn ring_steps(radius: f32, sweep: f32, fades: bool) -> usize {
+    let span = sweep.abs().min(TAU) / TAU;
+    (((radius.max(1.).sqrt() * 5.5 * span) as usize).max(if fades { 6 } else { 16 }))
+        .min(MOST_STEPS)
+}
+
+/// A conservative radial bound on a polygonal ring's hole. The straight
+/// segments lie inside the true circle, so radius - half alone is too large.
+fn ring_hole(radius: f32, half: f32, sweep: f32) -> f32 {
+    let full = sweep.abs() >= TAU - 1e-3;
+    let steps = ring_steps(radius, sweep, !full);
+    // A full ring can be clipped to a facing arc. Allow for rounding its
+    // section count down, which can lengthen a section slightly.
+    let steps = if full { steps - 1 } else { steps };
+    let angle = sweep.abs().min(TAU) / steps as f32;
+    (radius - half).max(0.) * (angle * 0.5).cos().max(0.)
+}
+
+fn outline_radii(sides: u8, radius: f32, half: f32) -> (f32, f32) {
+    let cosine = (std::f32::consts::PI / f32::from(sides.max(3))).cos();
+    ((radius * cosine - half).max(0.), radius + half / cosine)
 }
 
 impl Mesh {
@@ -274,6 +313,9 @@ pub struct Emission {
     mesh: Mesh,
     pale_floor: bool,
     detail: u8,
+    /// How many pieces of each layer went in before the tanks: smoke, wash
+    /// and core. Those lie under the tanks, and a tank on top hides them.
+    under: [usize; 3],
 }
 
 thread_local! {
@@ -296,6 +338,40 @@ impl Emission {
         self.wash.clear();
         self.core.clear();
         self.stops.clear();
+        self.under = [0; 3];
+    }
+    /// The tanks are next: what's queued so far lies under them.
+    pub fn tanks_next(&mut self) {
+        self.under = [self.smoke.len(), self.wash.len(), self.core.len()];
+    }
+    /// Whether this frame has any light that tank silhouettes could hide.
+    pub fn has_under(&self) -> bool {
+        self.under.iter().any(|&count| count > 0)
+    }
+    /// Whether any light under the tanks reaches one of `tanks`, given as
+    /// where each stands and how far it reaches. When none does, this frame
+    /// needs no cover map at all.
+    pub fn under_tanks(&self, tanks: impl Iterator<Item = (Vec2, f32)> + Clone) -> bool {
+        if tanks.clone().next().is_none() {
+            return false;
+        }
+        let pieces = self.smoke[..self.under[0]]
+            .iter()
+            .chain(&self.wash[..self.under[1]])
+            .chain(&self.core[..self.under[2]]);
+        for (index, piece) in pieces.enumerate() {
+            // Looking any longer would cost more than the map it could save.
+            if index >= MOST_CHECKS {
+                return true;
+            }
+            if tanks
+                .clone()
+                .any(|(at, reach)| touches(piece, &self.stops, at, reach))
+            {
+                return true;
+            }
+        }
+        false
     }
     /// Whether to spend pieces on the extra layers of an effect.
     pub fn rich(&self) -> bool {
@@ -308,13 +384,7 @@ impl Emission {
     /// `color` heated by `amount`, 0 to 1. White-hot on a dark floor; on a
     /// pale one, where white wouldn't show, it stays well inside the color.
     pub fn hot(&self, color: Color, amount: f32) -> Color {
-        let amount = amount.clamp(0., 1.) * if self.pale_floor { 0.34 } else { 1. };
-        Color::new(
-            color.r + (1. - color.r) * amount,
-            color.g + (1. - color.g) * amount,
-            color.b + (1. - color.b) * amount,
-            color.a,
-        )
+        heated(color, amount, self.pale_floor)
     }
     fn push(&mut self, layer: Layer, piece: Piece) {
         let list = match layer {
@@ -533,23 +603,49 @@ impl Emission {
             },
         );
     }
-    /// Lay the queue down in a window `w` by `h` and return its storage.
-    pub fn flush(mut self) {
+    /// Lay the queue down and keep its storage. With a `cover` map, what
+    /// was queued before the tanks is held back where a tank stands on it.
+    pub fn flush(mut self, cover: Option<Texture2D>) {
         let (w, h) = (screen_width(), screen_height());
         if glow::available() {
-            if !self.smoke.is_empty() && glow::begin(Blend::Soft) {
-                self.draw(Layer::Smoke, w, h);
+            let mut from = [0; 3];
+            if let Some(cover) = cover {
+                self.mesh.cover = Some((cover, w, h));
+                let [smoke, wash, core] = self.under;
+                if smoke > 0 && glow::begin(Blend::CoveredSoft) {
+                    self.draw(Layer::Smoke, 0..smoke, w, h);
+                    glow::end();
+                    from[0] = smoke;
+                }
+                if (wash > 0 || core > 0)
+                    && glow::begin(if self.pale_floor {
+                        Blend::CoveredSoft
+                    } else {
+                        Blend::CoveredGlow
+                    })
+                {
+                    self.draw(Layer::Wash, 0..wash, w, h);
+                    self.draw(Layer::Core, 0..core, w, h);
+                    glow::end();
+                    from[1] = wash;
+                    from[2] = core;
+                }
+                self.mesh.cover = None;
+            }
+            let [smoke, wash, core] = from;
+            if self.smoke.len() > smoke && glow::begin(Blend::Soft) {
+                self.draw(Layer::Smoke, smoke..self.smoke.len(), w, h);
                 glow::end();
             }
-            if (!self.wash.is_empty() || !self.core.is_empty())
+            if (self.wash.len() > wash || self.core.len() > core)
                 && glow::begin(if self.pale_floor {
                     Blend::Soft
                 } else {
                     Blend::Glow
                 })
             {
-                self.draw(Layer::Wash, w, h);
-                self.draw(Layer::Core, w, h);
+                self.draw(Layer::Wash, wash..self.wash.len(), w, h);
+                self.draw(Layer::Core, core..self.core.len(), w, h);
                 glow::end();
             }
         } else {
@@ -558,7 +654,7 @@ impl Emission {
         self.clear();
         SPARE.with(|spare| *spare.borrow_mut() = self);
     }
-    fn draw(&mut self, layer: Layer, w: f32, h: f32) {
+    fn draw(&mut self, layer: Layer, range: std::ops::Range<usize>, w: f32, h: f32) {
         let Self {
             smoke,
             wash,
@@ -572,7 +668,7 @@ impl Emission {
             Layer::Wash => wash,
             Layer::Core => core,
         };
-        for piece in pieces.iter() {
+        for piece in &pieces[range] {
             if visible(piece, stops, w, h) {
                 add_piece(mesh, stops, piece, w, h);
             }
@@ -657,6 +753,18 @@ impl Emission {
     }
 }
 
+/// `color` heated by `amount`, 0 to 1; see [`Emission::hot`]. For code that
+/// holds the queue mutably while it works out its colors.
+pub fn heated(color: Color, amount: f32, pale_floor: bool) -> Color {
+    let amount = amount.clamp(0., 1.) * if pale_floor { 0.34 } else { 1. };
+    Color::new(
+        color.r + (1. - color.r) * amount,
+        color.g + (1. - color.g) * amount,
+        color.b + (1. - color.b) * amount,
+        color.a,
+    )
+}
+
 fn mix_color(a: Color, b: Color, t: f32) -> Color {
     Color::new(
         a.r + (b.r - a.r) * t,
@@ -664,6 +772,55 @@ fn mix_color(a: Color, b: Color, t: f32) -> Color {
         a.b + (b.b - a.b) * t,
         a.a + (b.a - a.a) * t,
     )
+}
+
+/// Whether `piece` reaches a circle of `reach` around `at`.
+fn touches(piece: &Piece, stops: &[Stop], at: Vec2, reach: f32) -> bool {
+    let near = |center: Vec2, radius: f32| center.distance_squared(at) < (radius + reach).powi(2);
+    match *piece {
+        Piece::Spot {
+            at: center, radius, ..
+        } => near(center, radius),
+        Piece::Oval {
+            at: center,
+            along,
+            across,
+            ..
+        } => near(center, along.length() + across),
+        Piece::Ring {
+            at: center,
+            radius,
+            half,
+            sweep,
+            ..
+        } => {
+            // A ring lights its rim alone, so a tank inside a wide one is clear.
+            let distance = center.distance(at);
+            distance < radius + half + reach && distance + reach > ring_hole(radius, half, sweep)
+        }
+        Piece::Outline {
+            at: center,
+            sides,
+            radius,
+            half,
+            ..
+        } => {
+            // The sides lie inside the corner radius, and their mitered
+            // corners reach farther out than a circular ring of this width.
+            let (inner, outer) = outline_radii(sides, radius, half);
+            let distance = center.distance(at);
+            distance < outer + reach && distance + reach > inner
+        }
+        Piece::Band { from, to } => stops[from as usize..to as usize].windows(2).any(|pair| {
+            let (a, b) = (pair[0].at, pair[1].at);
+            let along = b - a;
+            let t = ((at - a).dot(along) / along.length_squared().max(1e-3)).clamp(0., 1.);
+            // Include the same corner extension as Mesh::band. Missing a
+            // miter here would let it shine through the edge of a tank.
+            let half = pair[0].half.max(pair[1].half) / MIN_MITER;
+            (a + along * t).distance_squared(at) < (half + reach).powi(2)
+        }),
+    }
 }
 
 fn visible(piece: &Piece, stops: &[Stop], w: f32, h: f32) -> bool {
@@ -684,14 +841,21 @@ fn visible(piece: &Piece, stops: &[Stop], w: f32, h: f32) -> bool {
                         .any(|&corner| corner.distance_squared(at) >= (radius - half).powi(2)))
         }
         Piece::Outline {
-            at, radius, half, ..
-        } => on_screen(at, radius + half, w, h),
+            at,
+            sides,
+            radius,
+            half,
+            ..
+        } => on_screen(at, outline_radii(sides, radius, half).1, w, h),
         Piece::Band { from, to } => {
-            stops[from as usize..to as usize]
-            .iter()
-            .any(|stop| on_screen(stop.at, stop.half + 8., w, h))
-            // A long beam can cross the window with no point inside it.
-            || to - from <= 8
+            stops[from as usize..to as usize].windows(2).any(|pair| {
+                // A segment can cross the window with neither endpoint
+                // inside it, including ribbons with many sections.
+                let half = pair[0].half.max(pair[1].half) / MIN_MITER;
+                let lo = pair[0].at.min(pair[1].at) - half;
+                let hi = pair[0].at.max(pair[1].at) + half;
+                hi.x > 0. && hi.y > 0. && lo.x < w && lo.y < h
+            })
         }
     }
 }
@@ -859,6 +1023,106 @@ mod tests {
         };
         let tinted = pale.hot(color, 1.);
         assert!(tinted.g < 0.55 && tinted.b < 0.5, "{tinted:?}");
+    }
+
+    #[test]
+    fn only_light_that_reaches_a_tank_asks_for_a_cover_map() {
+        let tank = (vec2(500., 500.), 30.);
+        let check = |light: &Emission| light.under_tanks([tank].into_iter());
+        let mut light = queue();
+        assert!(!check(&light));
+        light.spot(Layer::Wash, vec2(100., 100.), 40., WHITE);
+        light.tanks_next();
+        assert!(!check(&light), "a glow across the arena");
+        // Something on top of the tanks doesn't count.
+        light.spot(Layer::Core, vec2(500., 500.), 40., WHITE);
+        assert!(!check(&light), "queued after the tanks");
+        let mut light = queue();
+        light.spot(Layer::Wash, vec2(480., 480.), 20., WHITE);
+        light.tanks_next();
+        assert!(check(&light), "a glow under the tank");
+        // A long beam with no point near the tank still crosses it.
+        let mut light = queue();
+        light.beam(Layer::Core, vec2(0., 500.), vec2(1200., 500.), 3., WHITE);
+        light.tanks_next();
+        assert!(check(&light));
+        // A wide ring around the tank lights only its rim.
+        let mut light = queue();
+        light.ring(Layer::Wash, vec2(500., 500.), 300., 4., WHITE);
+        light.tanks_next();
+        assert!(!check(&light));
+        let mut light = queue();
+        light.ring(Layer::Wash, vec2(500., 200.), 300., 4., WHITE);
+        light.tanks_next();
+        assert!(check(&light), "its rim runs under the tank");
+    }
+
+    #[test]
+    fn a_new_frame_forgets_what_lay_under_the_tanks() {
+        let mut light = queue();
+        light.spot(Layer::Wash, vec2(1., 1.), 4., WHITE);
+        light.tanks_next();
+        assert_eq!(light.under, [0, 1, 0]);
+        light.clear();
+        assert_eq!(light.under, [0; 3]);
+        assert!(!light.under_tanks([(vec2(1., 1.), 9.)].into_iter()));
+    }
+
+    #[test]
+    fn overlap_checks_include_miters_and_the_inside_of_polygon_rims() {
+        let mut light = queue();
+        let stop = |x, y| Stop {
+            at: vec2(x, y),
+            half: 12.,
+            color: WHITE,
+        };
+        light.band(
+            Layer::Wash,
+            &[stop(-100., 0.), stop(0., 0.), stop(-100., 40.)],
+        );
+        light.outline(Layer::Wash, vec2(300., 300.), 3, 100., 0., 3., WHITE);
+        light.ring(Layer::Wash, vec2(600., 600.), 100., 1., WHITE);
+        for piece in &light.wash {
+            let mut mesh = Mesh::default();
+            add_piece(&mut mesh, &light.stops, piece, 1920., 1080.);
+            for indices in mesh.indices.as_chunks::<3>().0 {
+                let center = indices
+                    .iter()
+                    .map(|&i| mesh.vertices[usize::from(i)].position.truncate())
+                    .sum::<Vec2>()
+                    / 3.;
+                assert!(
+                    touches(piece, &light.stops, center, 0.01),
+                    "missed emitted geometry at {center}: {piece:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_ribbon_crossing_the_window_needs_no_stop_inside_it() {
+        let mut light = queue();
+        let stops: Vec<_> = (0..15)
+            .map(|i| Stop {
+                at: vec2(if i % 2 == 0 { -100. } else { 300. }, 50.),
+                half: 2.,
+                color: WHITE,
+            })
+            .collect();
+        light.band(Layer::Wash, &stops);
+        assert!(visible(&light.wash[0], &light.stops, 200., 100.));
+        light.tanks_next();
+        assert!(light.under_tanks([(vec2(100., 50.), 5.)].into_iter()));
+    }
+
+    #[test]
+    fn an_empty_arena_never_builds_a_cover_map_even_when_effects_are_busy() {
+        let mut light = queue();
+        for _ in 0..MOST_CHECKS + 1 {
+            light.spot(Layer::Wash, Vec2::ZERO, 10., WHITE);
+        }
+        light.tanks_next();
+        assert!(!light.under_tanks(std::iter::empty()));
     }
 
     #[test]

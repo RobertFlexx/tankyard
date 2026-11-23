@@ -10,6 +10,7 @@ mod axiom;
 mod blasts;
 mod fire;
 mod hull;
+mod ribbon;
 mod shots;
 mod warnings;
 
@@ -36,7 +37,7 @@ const MOST_TRAILS: usize = 640;
 const MOST_WAKES: usize = 200;
 const MOST_SCARS: usize = 28;
 /// Points kept along each round's trail.
-const TRAIL_POINTS: usize = 12;
+const TRAIL_POINTS: usize = 14;
 /// How long a trail lingers after its round has gone.
 const WAKE_SECONDS: f32 = 0.24;
 /// How long a scorch mark stays on the floor.
@@ -298,6 +299,8 @@ fn direction(angle: f32) -> Vec2 {
 #[derive(Clone, Copy, Debug)]
 struct Trail {
     points: [V2; TRAIL_POINTS],
+    /// When each point was laid, on `clock`.
+    laid: [f32; TRAIL_POINTS],
     head: u8,
     count: u8,
     /// The round's own last position, where the trail's bright end meets it.
@@ -310,12 +313,17 @@ struct Trail {
     /// Distance flown since it last left flame behind.
     fed: f32,
     seen: bool,
+    /// Seconds since it began.
+    clock: f32,
+    /// Sets where its sway starts, so no two writhe in step.
+    seed: f32,
 }
 
 impl Trail {
     fn new(pos: V2, radius: f32, color: Color, fuel: Fuel, heavy: bool) -> Self {
         Self {
             points: [pos; TRAIL_POINTS],
+            laid: [0.; TRAIL_POINTS],
             head: 0,
             count: 1,
             latest: pos,
@@ -325,6 +333,8 @@ impl Trail {
             heavy,
             fed: 0.,
             seen: true,
+            clock: 0.,
+            seed: 0.,
         }
     }
     /// Note the round at `pos`, dropping a point once it has moved far
@@ -337,15 +347,31 @@ impl Trail {
         // trail drawn across it would streak over the whole arena.
         if pos.distance(last) > 260. {
             self.points[0] = pos;
+            self.laid[0] = self.clock;
             self.head = 0;
             self.count = 1;
             return;
         }
-        if pos.distance(last) >= (self.radius * 0.7).max(6.) {
+        if pos.distance(last) >= self.spacing() {
             self.head = (self.head + 1) % TRAIL_POINTS as u8;
             self.points[usize::from(self.head)] = pos;
+            self.laid[usize::from(self.head)] = self.clock;
             self.count = (self.count + 1).min(TRAIL_POINTS as u8);
         }
+    }
+    /// How far the round flies between points.
+    fn spacing(&self) -> f32 {
+        (self.radius * 0.7).max(6.)
+    }
+    /// The longest its ribbon runs in the world, kept inside the points it
+    /// has, so the tail never reaches the end of what it remembers.
+    fn reach(&self) -> f32 {
+        self.spacing() * (TRAIL_POINTS - 2) as f32
+    }
+    /// How long ago the `age`th newest point was laid.
+    fn age(&self, age: usize) -> f32 {
+        let at = (usize::from(self.head) + TRAIL_POINTS - age % TRAIL_POINTS) % TRAIL_POINTS;
+        (self.clock - self.laid[at]).max(0.)
     }
     /// The `age`th newest point.
     fn point(&self, age: usize) -> V2 {
@@ -1003,16 +1029,15 @@ impl BossFx {
                 } else {
                     flight.damage >= BASTION_ROUND_DAMAGE
                 };
-                self.trails.insert(
-                    flight.id,
-                    Trail::new(
-                        flight.at,
-                        flight.radius,
-                        presence.color,
-                        presence.fuel,
-                        heavy,
-                    ),
+                let mut trail = Trail::new(
+                    flight.at,
+                    flight.radius,
+                    presence.color,
+                    presence.fuel,
+                    heavy,
                 );
+                trail.seed = (flight.id % 97) as f32 * 0.37;
+                self.trails.insert(flight.id, trail);
             }
             return;
         }
@@ -1224,12 +1249,15 @@ impl BossFx {
         self.scars.retain(|scar| scar.age < SCAR_SECONDS);
         for wake in &mut self.wakes {
             wake.life -= dt;
+            wake.trail.clock += dt;
         }
         self.wakes.retain(|wake| wake.life > 0.);
         self.run_casts(dt);
         // A round gone without a word, as across a resync, takes its trail.
-        self.trails
-            .retain(|_, trail| std::mem::take(&mut trail.seen));
+        self.trails.retain(|_, trail| {
+            trail.clock += dt;
+            std::mem::take(&mut trail.seen)
+        });
     }
 
     /// Light this frame's bosses and blasts throw onto a dark arena.

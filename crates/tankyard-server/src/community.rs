@@ -265,8 +265,15 @@ impl UdpServer {
                 let options = settings
                     .party
                     .ok_or_else(|| NetError("Missing party settings.".into()))?;
+                // The map may come from a pack the leader has just added.
+                let plan = self.party_plan.take();
+                let maps = plan
+                    .as_ref()
+                    .map_or(&self.arenas[0].session.bundle.maps, |(_, loaded)| {
+                        &loaded.bundle.maps
+                    });
                 let mut candidate = self.settings.configured_match(
-                    &self.arenas[0].session.bundle.maps,
+                    maps,
                     settings.mode,
                     &settings.map,
                     crate::difficulty_from_name(&settings.difficulty).map_err(NetError)?,
@@ -278,7 +285,11 @@ impl UdpServer {
                 let party = candidate.party.as_mut().expect("active party");
                 party.ally_slots = settings.bots;
                 party.starting_level = options.starting_level;
-                candidate.validate()?;
+                match plan {
+                    // The map may only exist in the plan's packs.
+                    Some(plan) => self.adopt_party_plan(&mut candidate, plan)?,
+                    None => candidate.validate()?,
+                }
                 self.settings = candidate;
                 self.restart_round();
             }

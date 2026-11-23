@@ -18,6 +18,12 @@ pub enum Blend {
     /// A texture multiplied into what is under it: a light map over the
     /// arena, darkening where no light falls.
     Multiply,
+    /// [`Blend::Soft`], held back wherever the cover map is set.
+    CoveredSoft,
+    /// [`Blend::Glow`], held back wherever the cover map is set.
+    CoveredGlow,
+    /// Solid white whatever the shape's color: what the cover map is made of.
+    Solid,
 }
 
 const VERTEX: &str = r#"#version 100
@@ -34,17 +40,112 @@ void main() {
     uv = texcoord * 2.0 - 1.0;
 }"#;
 
+/// The same, carrying where this point falls on the cover map.
+const COVERED_VERTEX: &str = r#"#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+attribute vec4 color0;
+attribute vec4 normal;
+varying lowp vec4 tint;
+varying mediump vec2 uv;
+varying mediump vec2 cover;
+uniform mat4 Model;
+uniform mat4 Projection;
+void main() {
+    gl_Position = Projection * Model * vec4(position, 1);
+    tint = color0 / 255.0;
+    uv = texcoord * 2.0 - 1.0;
+    cover = normal.xy;
+}"#;
+
 // Light from a small source fades with the square of distance; the last term
-// takes the remainder smoothly to zero at the edge so no rim shows.
-const SOFT: &str = r#"#version 100
+// takes the remainder smoothly to zero at the edge so no rim shows. A wide,
+// faint glow would still step visibly through an 8-bit frame, so it is nudged
+// by under one step of fixed noise, which is scaled to the brightest channel
+// and fades out with the light so that dark floor stays clean.
+macro_rules! falloff {
+    ($at:expr, $position:expr) => {
+        concat!(
+            "float d = dot(",
+            $at,
+            ", ",
+            $at,
+            ");
+    float edge = max(1.0 - d, 0.0);
+    float a = edge * edge * (0.25 + 0.75 / (1.0 + 10.0 * d));
+    float grain = fract(52.9829189 * fract(dot(",
+            $position,
+            ", VEC(0.06711056, 0.00583715))));
+    float light = TINT.a * a;
+    float peak = max(max(TINT.r, TINT.g), max(TINT.b, 0.2));
+    light = max(light + (grain - 0.5) * min(light * 64.0, 1.0) / (255.0 * peak), 0.0);"
+        )
+    };
+}
+
+fn soft_glsl(covered: bool) -> String {
+    let body = falloff!("uv", "gl_FragCoord.xy")
+        .replace("VEC", "vec2")
+        .replace("TINT", "tint");
+    if covered {
+        format!(
+            "#version 100
+precision mediump float;
+varying lowp vec4 tint;
+varying mediump vec2 uv;
+varying mediump vec2 cover;
+uniform sampler2D Texture;
+void main() {{
+    {body}
+    gl_FragColor = vec4(tint.rgb, light * (1.0 - texture2D(Texture, cover).r));
+}}"
+        )
+    } else {
+        format!(
+            "#version 100
+precision mediump float;
+varying lowp vec4 tint;
+varying mediump vec2 uv;
+void main() {{
+    {body}
+    gl_FragColor = vec4(tint.rgb, light);
+}}"
+        )
+    }
+}
+
+fn soft_msl(covered: bool) -> String {
+    let body = falloff!("in.uv", "in.position.xy")
+        .replace("VEC", "float2")
+        .replace("TINT", "in.tint");
+    if covered {
+        format!(
+            "
+fragment float4 fragmentShader(CoveredVaryings in [[stage_in]],
+                               texture2d<float> Texture [[texture(0)]], sampler smp [[sampler(0)]]) {{
+    {body}
+    return float4(in.tint.rgb, light * (1.0 - Texture.sample(smp, in.cover).r));
+}}
+"
+        )
+    } else {
+        format!(
+            "
+fragment float4 fragmentShader(Varyings in [[stage_in]]) {{
+    {body}
+    return float4(in.tint.rgb, light);
+}}
+"
+        )
+    }
+}
+
+const SOLID: &str = r#"#version 100
 precision mediump float;
 varying lowp vec4 tint;
 varying mediump vec2 uv;
 void main() {
-    float d = dot(uv, uv);
-    float edge = max(1.0 - d, 0.0);
-    float a = edge * edge * (0.25 + 0.75 / (1.0 + 10.0 * d));
-    gl_FragColor = vec4(tint.rgb, tint.a * a);
+    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
 }"#;
 
 const FLAT: &str = r#"#version 100
@@ -90,12 +191,39 @@ vertex Varyings vertexShader(Vertex v [[stage_in]], constant Uniforms& u [[buffe
 }
 "#;
 
-const SOFT_MSL: &str = r#"
+/// The same inputs as [`MSL`], with where the point falls on the cover map.
+const COVERED_MSL: &str = r#"#include <metal_stdlib>
+using namespace metal;
+struct Uniforms {
+    float4x4 Projection;
+    float4x4 Model;
+    float4 _Time;
+};
+struct CoveredVertex {
+    float3 position [[attribute(0)]];
+    float2 texcoord [[attribute(1)]];
+    float4 color0 [[attribute(2)]];
+    float4 normal [[attribute(3)]];
+};
+struct CoveredVaryings {
+    float4 position [[position]];
+    float2 uv;
+    float4 tint;
+    float2 cover;
+};
+vertex CoveredVaryings vertexShader(CoveredVertex v [[stage_in]], constant Uniforms& u [[buffer(0)]]) {
+    CoveredVaryings out;
+    out.position = u.Projection * u.Model * float4(v.position, 1.0);
+    out.uv = v.texcoord * 2.0 - 1.0;
+    out.tint = v.color0 / 255.0;
+    out.cover = v.normal.xy;
+    return out;
+}
+"#;
+
+const SOLID_MSL: &str = r#"
 fragment float4 fragmentShader(Varyings in [[stage_in]]) {
-    float d = dot(in.uv, in.uv);
-    float edge = max(1.0 - d, 0.0);
-    float a = edge * edge * (0.25 + 0.75 / (1.0 + 10.0 * d));
-    return float4(in.tint.rgb, in.tint.a * a);
+    return float4(1.0);
 }
 "#;
 
@@ -119,8 +247,26 @@ struct Materials {
     multiply: Material,
 }
 
+/// What keeps light off the tanks standing on it. Loaded apart from the
+/// others, so a driver that refuses these loses only that layering.
+struct Covering {
+    soft: Material,
+    glow: Material,
+    solid: Material,
+}
+
 fn material(fragment: &str, msl: &str, blend: Blend) -> Result<Material, String> {
-    let program = format!("{MSL}{msl}");
+    shader(VERTEX, MSL, fragment, msl, blend)
+}
+
+fn shader(
+    vertex: &str,
+    msl_head: &str,
+    fragment: &str,
+    msl: &str,
+    blend: Blend,
+) -> Result<Material, String> {
+    let program = format!("{msl_head}{msl}");
     let mut pipeline_params = PipelineParams {
         color_blend: Some(BlendState::new(
             Equation::Add,
@@ -141,7 +287,10 @@ fn material(fragment: &str, msl: &str, blend: Blend) -> Result<Material, String>
             BlendFactor::One,
         ));
     }
-    if matches!(blend, Blend::Glow | Blend::Add) {
+    if blend == Blend::Solid {
+        pipeline_params.color_blend = None;
+    }
+    if matches!(blend, Blend::Glow | Blend::CoveredGlow | Blend::Add) {
         pipeline_params.color_blend = Some(BlendState::new(
             Equation::Add,
             BlendFactor::Value(BlendValue::SourceAlpha),
@@ -158,10 +307,7 @@ fn material(fragment: &str, msl: &str, blend: Blend) -> Result<Material, String>
         if crate::graphics::metal() {
             ShaderSource::Msl { program: &program }
         } else {
-            ShaderSource::Glsl {
-                vertex: VERTEX,
-                fragment,
-            }
+            ShaderSource::Glsl { vertex, fragment }
         },
         MaterialParams {
             pipeline_params,
@@ -174,14 +320,37 @@ fn material(fragment: &str, msl: &str, blend: Blend) -> Result<Material, String>
 thread_local! {
     static MATERIALS: Option<Materials> = (|| {
         Ok::<_, String>(Materials {
-            soft: material(SOFT, SOFT_MSL, Blend::Soft)?,
-            glow: material(SOFT, SOFT_MSL, Blend::Glow)?,
+            soft: material(&soft_glsl(false), &soft_msl(false), Blend::Soft)?,
+            glow: material(&soft_glsl(false), &soft_msl(false), Blend::Glow)?,
             add: material(FLAT, FLAT_MSL, Blend::Add)?,
             multiply: material(TEXTURED, TEXTURED_MSL, Blend::Multiply)?,
         })
     })()
     .map_err(|error| log::warn!("Soft lighting unavailable: {error}"))
     .ok();
+    static COVERING: Option<Covering> = (|| {
+        let covered = |blend| {
+            shader(
+                COVERED_VERTEX,
+                COVERED_MSL,
+                &soft_glsl(true),
+                &soft_msl(true),
+                blend,
+            )
+        };
+        Ok::<_, String>(Covering {
+            soft: covered(Blend::CoveredSoft)?,
+            glow: covered(Blend::CoveredGlow)?,
+            solid: material(SOLID, SOLID_MSL, Blend::Solid)?,
+        })
+    })()
+    .map_err(|error| log::warn!("Light will not be kept off tanks: {error}"))
+    .ok();
+}
+
+/// Whether light can be held back by a cover map on this device.
+pub fn can_cover() -> bool {
+    available() && COVERING.with(Option::is_some)
 }
 
 /// Whether the shaders loaded, so `begin` can work.
@@ -192,6 +361,22 @@ pub fn available() -> bool {
 /// Draw with `blend` until `end`. False when shaders are unavailable, and
 /// nothing changed.
 pub fn begin(blend: Blend) -> bool {
+    if matches!(
+        blend,
+        Blend::CoveredSoft | Blend::CoveredGlow | Blend::Solid
+    ) {
+        return COVERING.with(|covering| {
+            let Some(covering) = covering else {
+                return false;
+            };
+            gl_use_material(match blend {
+                Blend::CoveredSoft => &covering.soft,
+                Blend::CoveredGlow => &covering.glow,
+                _ => &covering.solid,
+            });
+            true
+        });
+    }
     MATERIALS.with(|materials| {
         let Some(materials) = materials else {
             return false;
@@ -200,7 +385,7 @@ pub fn begin(blend: Blend) -> bool {
             Blend::Soft => &materials.soft,
             Blend::Glow => &materials.glow,
             Blend::Add => &materials.add,
-            Blend::Multiply => &materials.multiply,
+            _ => &materials.multiply,
         });
         true
     })

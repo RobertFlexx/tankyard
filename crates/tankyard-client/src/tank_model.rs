@@ -22,6 +22,38 @@ pub enum Primitive {
         color: Color,
     },
 }
+impl Primitive {
+    pub fn color(&self) -> Color {
+        match *self {
+            Self::Polygon { color, .. }
+            | Self::Triangle { color, .. }
+            | Self::Quad { color, .. } => color,
+        }
+    }
+    /// A conservative screen-space bound, including polygon corners and
+    /// barrel ends. This needs no graphics context.
+    pub fn bounds(&self) -> Rect {
+        let vertices: &[Vec2] = match self {
+            Self::Polygon { center, radius, .. } => {
+                return Rect::new(
+                    center.x - radius,
+                    center.y - radius,
+                    radius * 2.,
+                    radius * 2.,
+                );
+            }
+            Self::Triangle { vertices, .. } => vertices,
+            Self::Quad { vertices, .. } => vertices,
+        };
+        let mut lo = vertices[0];
+        let mut hi = lo;
+        for &vertex in &vertices[1..] {
+            lo = lo.min(vertex);
+            hi = hi.max(vertex);
+        }
+        Rect::new(lo.x, lo.y, hi.x - lo.x, hi.y - lo.y)
+    }
+}
 /// Fit the entire silhouette, including long rifles, into a UI preview.
 pub fn preview_placement(class: &ClassDef, rect: Rect, max_radius: f32, aim: f32) -> (Vec2, f32) {
     let radius = 22.0 * class.multipliers[0].sqrt().clamp(0.85, 1.6) * class.body_scale;

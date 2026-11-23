@@ -26,8 +26,8 @@ pub mod websocket;
 pub use bastion_anticheat as bastion;
 
 pub use client::{NetworkClient, NetworkDiagnostics};
-pub use config::{ServerSettings, difficulty_from_name, mode_from_name};
-pub use host::HostedServer;
+pub use config::{ServerSettings, boss_rush_from_text, difficulty_from_name, mode_from_name};
+pub use host::{HostedServer, PartyPlan};
 pub use session::LocalSession;
 pub use transport::{AdminReply, OwnerExtension, ServerMetrics, TickTiming, UdpServer};
 

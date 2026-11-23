@@ -95,7 +95,7 @@ impl UdpServer {
                 self.local_role(client,role)?;Ok("Server role updated.".into())
             },
             "reload-mods"=>{self.reload_mods()?;Ok("Mods reloaded; a new round has started.".into())},
-            "help" => Ok("Commands: status, players, maps, owner-client <client> [public-key], role <entity> <player|moderator|admin|owner>, kick <entity>, ban <entity> [minutes], unban <ip>, bans, bots <count>, difficulty <name>, mode <name>, map <id>, restart, reload-mods, creator-admin [on|off|status], central-owner [on|off|status], save [path], shutdown".into()),
+            "help" => Ok("Commands: status, players, maps, owner-client <client> [public-key], role <entity> <player|moderator|admin|owner>, kick <entity>, ban <entity> [minutes], unban <ip>, bans, bots <count>, difficulty <name>, mode <name>, map <id>, boss-rush [classic|all|<id,id,...>], restart, reload-mods, creator-admin [on|off|status], central-owner [on|off|status], save [path], shutdown".into()),
             "status" => {
                 let timing = self.metrics.tick_timing();
                 let world = &self.arenas[0].session.world;
@@ -178,6 +178,14 @@ impl UdpServer {
                 Ok("Rules applied live. Use save to retain them in the server configuration.".into())
             }
             "restart" => { self.restart_round(); Ok("A new round has started.".into()) }
+            "boss-rush" => {
+                if let Some(lineup) = args.next() {
+                    self.settings.world.boss_rush = crate::boss_rush_from_text(lineup).map_err(NetError)?;
+                }
+                let lineup = self.settings.world.rush_lineup();
+                let names: Vec<_> = lineup.iter().map(|kind| kind.name()).collect();
+                Ok(format!("Boss Rush lineup ({}): {}. It applies from the next round.", names.len(), names.join(", ")))
+            }
             "difficulty" => {
                 let difficulty = difficulty_from_name(args.next().ok_or_else(|| NetError("expected a bot difficulty".into()))?).map_err(NetError)?;
                 self.settings.difficulty = difficulty;
@@ -270,7 +278,7 @@ fn validate_arguments(verb: &str, count: usize) -> Result<(), NetError> {
         "owner-client" => (1..=2).contains(&count),
         "role" => count == 2,
         "ban" => (1..=2).contains(&count),
-        "save" | "creator-admin" | "central-owner" => count <= 1,
+        "save" | "creator-admin" | "central-owner" | "boss-rush" => count <= 1,
         "rules" => count <= 2,
         "help" | "status" | "players" | "maps" | "bans" | "reload-mods" | "restart"
         | "shutdown" | "quit" => count == 0,

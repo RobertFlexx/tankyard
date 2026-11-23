@@ -43,6 +43,10 @@ struct Args {
     /// Map id; the console's maps command lists them, mods included.
     #[arg(long)]
     map: Option<String>,
+    /// The bosses Boss Rush fights, in order: classic, all, or ids split by
+    /// commas such as prism,siege_engine,trapper.
+    #[arg(long)]
+    boss_rush: Option<String>,
     /// Most players connected at once, across every lobby.
     #[arg(long)]
     max_players: Option<usize>,
@@ -182,6 +186,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(map) = args.map {
         settings.world.map = map;
+    }
+    if let Some(lineup) = args.boss_rush {
+        settings.world.boss_rush = tankyard_server::boss_rush_from_text(&lineup)?;
     }
     if let Some(max_players) = args.max_players {
         settings.max_players = max_players;

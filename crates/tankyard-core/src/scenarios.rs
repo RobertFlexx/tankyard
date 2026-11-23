@@ -783,6 +783,103 @@ fn mothership_and_boss_rush_complete() {
 }
 
 #[test]
+fn a_boss_rush_fights_its_lineup_in_order_and_ends_with_it() {
+    use crate::{CLASSIC_RUSH, MOST_RUSH_BOSSES, SHOWN_RUSH_WAVES};
+    let run = |lineup: Vec<BossKind>| {
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::BossRush,
+                target_count: 0,
+                spawn_protection: 0.,
+                boss_rush: lineup,
+                ..Default::default()
+            },
+            tankyard_content::Content::builtin(),
+        );
+        world.add_player("Pilot", false);
+        let mut fought = Vec::new();
+        for _ in 0..80 {
+            if world.match_state.finished {
+                break;
+            }
+            let boss = world
+                .bosses
+                .iter()
+                .find(|boss| boss.health > 0.)
+                .map(|b| b.kind);
+            if let Some(kind) = boss {
+                fought.push(kind);
+                // A snapshot never carries a wave older clients would refuse.
+                assert!(world.match_state.boss_wave <= SHOWN_RUSH_WAVES);
+                assert!(
+                    world.match_state.announcement.contains(kind.name()),
+                    "{}",
+                    world.match_state.announcement
+                );
+            }
+            for boss in &mut world.bosses {
+                boss.health = 0.;
+            }
+            for _ in 0..250 {
+                world.step();
+                if world.match_state.finished {
+                    break;
+                }
+            }
+        }
+        (fought, world)
+    };
+    // No choice made: the usual six.
+    let (fought, world) = run(Vec::new());
+    assert_eq!(fought, CLASSIC_RUSH);
+    assert_eq!(
+        world.match_state.announcement,
+        "Team 1 wins - All six bosses defeated"
+    );
+    // Just two, in the order asked for.
+    let two = vec![BossKind::Trapper, BossKind::Sentinel];
+    let (fought, world) = run(two.clone());
+    assert_eq!(fought, two);
+    assert!(world.match_state.finished);
+    assert_eq!(world.match_state.rush_wave, 2);
+    // A single boss.
+    let (fought, world) = run(vec![BossKind::Prism]);
+    assert_eq!(fought, [BossKind::Prism]);
+    assert!(world.match_state.announcement.ends_with("Boss defeated"));
+    // The whole roster, past what a snapshot can count.
+    let (fought, world) = run(BossKind::ALL.to_vec());
+    assert_eq!(fought, BossKind::ALL);
+    assert_eq!(world.match_state.boss_wave, SHOWN_RUSH_WAVES);
+    assert_eq!(world.match_state.rush_wave, 14);
+    // More than a lineup may hold is cut, not trusted.
+    let (fought, _) = run(vec![BossKind::Sentinel; MOST_RUSH_BOSSES + 40]);
+    assert_eq!(fought.len(), MOST_RUSH_BOSSES);
+}
+
+#[test]
+fn a_long_lineup_climbs_no_higher_than_the_usual_six() {
+    let toughest = |lineup: Vec<BossKind>| {
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::BossRush,
+                target_count: 0,
+                boss_rush: lineup,
+                ..Default::default()
+            },
+            tankyard_content::Content::builtin(),
+        );
+        world.add_player("Pilot", false);
+        world.match_state.rush_wave = world.config.rush_lineup().len() as u8;
+        world.boss_health(BossKind::Sentinel)
+    };
+    let usual = toughest(Vec::new());
+    let full = toughest(BossKind::ALL.to_vec());
+    assert!((usual - full).abs() < usual * 0.001, "{usual} {full}");
+    // A short one takes the same steps, so it stops lower.
+    assert!(toughest(vec![BossKind::Sentinel, BossKind::Prism]) < usual);
+}
+
+#[test]
 fn later_boss_rush_rounds_still_have_six_waves() {
     for round in [2, 7, 42] {
         let mut world = empty(Mode::BossRush);

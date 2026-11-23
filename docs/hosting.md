@@ -67,8 +67,9 @@ On Windows, run `.\tankyard-server.exe --write-config server.toml --name "My are
 | `bot_memory_file` | Where bots keep what they learn, `"bot-memory.json"` by default. `""` turns it off |
 | `mods` | Mod pack folders or ZIPs to load, such as `["mods/my_arena.zip"]` |
 | `mode`, `map` under `[world]` | The game mode and map |
+| `boss_rush` | The bosses Boss Rush fights, in order, such as `["prism", "siege_engine"]`. Leave it out for the usual six. It goes above the first `[section]` |
 
-Command-line options override the file for one run: `--port 5001`, `--mode maze`, `--bots 8`, `--mod mods/vampire`. `tankyard-server --help` lists them all.
+Command-line options override the file for one run: `--port 5001`, `--mode maze`, `--bots 8`, `--mod mods/vampire`, `--boss-rush all`. `tankyard-server --help` lists them all.
 
 ### 3. Start it
 
@@ -214,6 +215,8 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 
 Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
 
+Boss ids for `--boss-rush`, `boss_rush` and the console: `sentinel`, `prism`, `foundry`, `tempest`, `bastion`, `eclipse`, `guardian`, `summoner`, `defender`, `fallen_overlord`, `fallen_booster`, `siege_engine`, `skirmisher` and `trapper`. `classic` is the usual six and `all` is every boss.
+
 Tank Yard 2.0 uses protocol 34, which carries the Even, Odd and Most gates, eight conditions a trigger, On input change, Gate to counter and rift events that name their owner. Version 1.7.0 used 33, which added boards, 1.6.0 used 32, which added Gatewright's rifts and the widget looks (shapes, borders, fills, lettering, bar and button looks), 1.5.0, 1.5.1 and 1.5.2 used 31, which added HUD widgets pinned over the arena or a tank, choice layouts and glow, 1.4.0 used 30, which added designed widgets with choices and players' picks, 1.3.0 used 29, 1.1.0 and 1.2.0 used 28, 1.0.1 used 27, 1.0.0 used 26, and 0.15 and 0.16 used 25. When upgrading from those versions, update clients, servers and any separate relay together; older snapshots are incompatible. Older clients receive an update message. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
 
 The ordinary server includes signed creator tools by default on official public arenas (`--central`); `creator_admin = false` overrides that policy. Default community/personal hosts are disabled; public community operators can explicitly opt in. Password-protected hosts cannot enable the tools. See [creator administration](creator-administration.md) for policy, immediate revocation, auditing, and updating the central Raspberry Pi/Docker deployment.
@@ -229,6 +232,7 @@ The process console is the host's administration interface:
 | `mode domination` | Start another mode |
 | `maps`, `map maze` | List loaded maps or select a map and start a new round |
 | `restart` | Start a new round with the current settings |
+| `boss-rush`, `boss-rush all`, `boss-rush prism,trapper` | Show or change the Boss Rush lineup from the next round; `classic` restores the usual six |
 | `rules`, `rules movement_multiplier 1.2`, `rules reset` | Read rules, change one value live, or restore defaults |
 | `kick 123`, `ban 123 60` | Remove a player or ban their address for 60 minutes |
 | `unban 192.168.1.20`, `bans` | Manage address bans |

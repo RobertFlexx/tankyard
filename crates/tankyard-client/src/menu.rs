@@ -1,4 +1,5 @@
 mod about;
+mod boss_rush;
 mod community;
 mod host_map;
 mod mods_page;
@@ -59,6 +60,8 @@ pub enum Page {
     Party,
     /// The map a hosted game plays on.
     HostMap,
+    /// Which bosses a Boss Rush fights, in what order.
+    BossRush,
 }
 pub enum Action {
     None,
@@ -137,6 +140,10 @@ pub struct Menu {
     pub maps: Vec<tankyard_content::MapDef>,
     /// The built-in arenas' IDs, to tell them from pack maps.
     builtin_maps: Vec<String>,
+    /// The bosses a Boss Rush fights, in order; empty plays the classic six.
+    pub boss_rush: Vec<tankyard_core::BossKind>,
+    /// The lineup page was cleared and nothing has been picked since.
+    rush_blank: bool,
     /// A map saved in the editor that hosted games play on instead of the
     /// arena list's choice.
     host_map: Option<host_map::SavedMap>,
@@ -246,6 +253,8 @@ impl Menu {
             scale_anchor: None,
             builtin_maps: maps.iter().map(|map| map.id.clone()).collect(),
             maps,
+            boss_rush: Vec::new(),
+            rush_blank: false,
             host_map: None,
             host_source: Default::default(),
             saved_maps: None,
@@ -406,12 +415,19 @@ impl Menu {
     }
     pub fn load_party_settings(&mut self, settings: &tankyard_protocol::MatchSettings) {
         self.mode = settings.mode;
-        self.map = self
-            .maps
-            .iter()
-            .position(|map| map.id == settings.map)
-            .unwrap_or(0);
-        self.map_page = self.map / 8;
+        // A saved map isn't in the arena list, so it stays chosen by its id.
+        // A map only the party's server has leaves the list where it was.
+        if self
+            .host_map
+            .as_ref()
+            .is_none_or(|saved| saved.id != settings.map)
+        {
+            self.host_map = None;
+            if let Some(index) = self.maps.iter().position(|map| map.id == settings.map) {
+                self.map = index;
+                self.map_page = index / 8;
+            }
+        }
         self.bots = settings.bots.clamp(2, 8);
         self.difficulty = ["Beginner", "Normal", "Advanced", "Expert"]
             .iter()
@@ -427,7 +443,10 @@ impl Menu {
     pub fn party_match_settings(&self) -> tankyard_protocol::MatchSettings {
         tankyard_protocol::MatchSettings {
             mode: self.mode,
-            map: self.config().map,
+            map: self
+                .host_map
+                .as_ref()
+                .map_or_else(|| self.config().map, |saved| saved.id.clone()),
             difficulty: self.difficulty_name().into(),
             bots: self.bots.clamp(2, 8),
             party: Some(tankyard_protocol::PartyMatchOptions {
@@ -450,8 +469,13 @@ impl Menu {
             seed: self.seed,
             width: self.width,
             height: self.height,
+            boss_rush: self.boss_rush.clone(),
             ..Default::default()
         }
+    }
+    /// Pick up the lineup saved in `settings`.
+    pub fn load_boss_rush(&mut self, settings: &Settings) {
+        self.boss_rush = boss_rush::lineup_from_ids(&settings.boss_rush);
     }
     /// Restyle the main menu for the enabled packs. A new splash is picked
     /// only when the list of splashes changes.
@@ -628,6 +652,7 @@ impl Menu {
             Page::Controls => self.controls(settings, s),
             Page::Party => self.party(settings, s),
             Page::HostMap => self.host_maps(settings, s),
+            Page::BossRush => self.boss_rush_page(settings, s),
         };
         drop(canvas);
         if reviewing {
@@ -990,7 +1015,7 @@ pub fn mode_blurb(mode: Mode) -> &'static str {
         Mode::KingOfTheHill => "Capture and defend the moving hill.",
         Mode::Mothership => "Protect your armed command ship.",
         Mode::CaptureCore => "Steal, carry, and return the core.",
-        Mode::BossRush => "Cooperate through six boss waves.",
+        Mode::BossRush => "Line up the bosses. Regret them in order.",
         Mode::Deathmatch => "Get the most kills before time runs out.",
         Mode::Sandbox => "Choose classes and test your build.",
         Mode::RandomEvents => "Fight through rotating arena events.",
