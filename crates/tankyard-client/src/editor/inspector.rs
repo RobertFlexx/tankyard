@@ -1259,10 +1259,11 @@ impl Editor {
                     });
                 }
                 if d.kind == DecorKind::Emitter {
+                    let area = vec2(d.rect[2] * map_w, d.rect[3] * map_h);
                     let effect = d.effect.get_or_insert_default();
-                    effect_form(&mut f, effect);
+                    effect_form(&mut f, effect, area);
                 } else {
-                    f.heading("Colour");
+                    f.heading("Color");
                     f.color(&mut d.color);
                 }
             }
@@ -2743,7 +2744,7 @@ fn trigger_form(
             t.amount = t.amount.clamp(0, 100);
             f.integer("Strength (%)", &mut t.amount, [0, 100]);
             motion_form(f, t);
-            f.note("Mixes the colour into the group's decor, lights and particles; 100% paints them over completely and 0% clears the tint. A short Over and Go back after make a flash.");
+            f.note("Mixes the color into the group's decor, lights and particles; 100% paints them over completely and 0% clears the tint. A short Over and Go back after make a flash.");
         }
         TriggerAction::Scale => {
             t.group = t.group.clamp(1, MAP_GROUPS);
@@ -4032,12 +4033,25 @@ fn script_name(text: &str) -> String {
     name
 }
 
-fn effect_form(f: &mut Form, e: &mut ParticleEffect) {
+/// An emitter's particles, `area` its size in map units.
+fn effect_form(f: &mut Form, e: &mut ParticleEffect, area: Vec2) {
+    let top = f.y;
     f.heading("Particles");
-    for row in brushes::EFFECT_PRESETS.chunks(5).enumerate() {
-        if let Some(i) = f.buttons(row.1, true) {
-            *e = brushes::effect_preset(row.0 * 5 + i);
-        }
+    let current = (0..brushes::EFFECT_PRESETS.len()).find(|&i| brushes::effect_preset(i) == *e);
+    if current.is_none() {
+        right_label(
+            "Custom",
+            f.x + f.w,
+            top + 21. * f.s,
+            12. * f.s,
+            muted_color(),
+        );
+    }
+    effect_preview(f, e, area);
+    let presets: [usize; brushes::EFFECT_PRESETS.len()] = std::array::from_fn(|i| i);
+    let mut chosen = current.unwrap_or(usize::MAX);
+    if f.pick("", &mut chosen, &presets, |i| brushes::EFFECT_PRESETS[i], 5) {
+        *e = brushes::effect_preset(chosen);
     }
     f.pick(
         "Shape",
@@ -4066,15 +4080,152 @@ fn effect_form(f: &mut Form, e: &mut ParticleEffect) {
     e.rate = e.rate.min(240. / e.lifetime);
     f.toggle("Fade out", &mut e.fade);
     f.toggle("Glow (adds light)", &mut e.glow);
-    f.heading("Start colour");
+    f.heading("Start color");
     f.color(&mut e.color);
-    f.heading("End colour");
+    f.heading("End color");
     f.color(&mut e.end_color);
+}
+
+/// The effect running in a box of its own, scaled so everywhere its
+/// particles go fits, so each change shows at once.
+fn effect_preview(f: &mut Form, e: &ParticleEffect, area: Vec2) {
+    let s = f.s;
+    let r = Rect::new(f.x, f.y, f.w, 150. * s);
+    f.y += r.h + 10. * s;
+    draw_rectangle(r.x, r.y, r.w, r.h, Color::from_rgba(21, 25, 31, 255));
+    let step = 24. * s;
+    let grid = alpha(WHITE, 0.035);
+    let mut x = r.x + step;
+    while x < r.right() - 1. {
+        draw_line(x, r.y, x, r.bottom(), 1., grid);
+        x += step;
+    }
+    let mut y = r.y + step;
+    while y < r.bottom() - 1. {
+        draw_line(r.x, y, r.right(), y, 1., grid);
+        y += step;
+    }
+    let bounds = effect_reach(e, area);
+    let room = Rect::new(r.x + 12. * s, r.y + 12. * s, r.w - 24. * s, r.h - 24. * s);
+    let zoom = (room.w / bounds.w).min(room.h / bounds.h).min(1.5);
+    let middle = room.center() - bounds.center() * zoom;
+    let emit = Rect::new(
+        middle.x - area.x * zoom * 0.5,
+        middle.y - area.y * zoom * 0.5,
+        area.x * zoom,
+        area.y * zoom,
+    );
+    if e.area == EmitArea::Point {
+        draw_circle(middle.x, middle.y, 2. * s, alpha(muted_color(), 0.5));
+    } else {
+        draw_rectangle_lines(
+            emit.x,
+            emit.y,
+            emit.w,
+            emit.h,
+            1.,
+            alpha(muted_color(), 0.3),
+        );
+    }
+    let time = if reduced_motion() {
+        2.
+    } else {
+        get_time() as f32
+    } + 8.;
+    let screen = ui_layout::position(emit.point());
+    {
+        let _clip = ui_layout::Scissor::new(r);
+        let mut remaining = 240;
+        crate::scenery::particles(
+            e,
+            Rect::new(screen.x, screen.y, emit.w, emit.h),
+            zoom,
+            time,
+            11,
+            &mut remaining,
+            1.,
+        );
+    }
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1., line_color());
+    let at_once = (e.rate * e.lifetime).ceil().min(240.);
+    label(
+        &format!("{at_once:.0} at a time"),
+        r.x + 8. * s,
+        r.bottom() - 8. * s,
+        11. * s,
+        muted_color(),
+    );
+    right_label(
+        &format!("Shown at {:.0}%", zoom * 100.),
+        r.right() - 8. * s,
+        r.bottom() - 8. * s,
+        11. * s,
+        muted_color(),
+    );
+}
+
+/// Roughly everywhere an effect's particles go, around the middle of an
+/// emitter `area` in size: its directions, speeds and ages sampled.
+fn effect_reach(e: &ParticleEffect, area: Vec2) -> Rect {
+    let half = if e.area == EmitArea::Point {
+        Vec2::ZERO
+    } else {
+        area * 0.5
+    };
+    let pad = Vec2::splat(e.size.max(e.end_size) * 1.2 + e.wobble * 0.5) + half;
+    let (mut low, mut high) = (-pad, pad);
+    for i in 0..=8 {
+        let angle = (e.direction + (i as f32 / 8. - 0.5) * e.spread).to_radians();
+        let heading = vec2(angle.cos(), angle.sin());
+        for speed in [0.65, 1.] {
+            for step in 1..=12 {
+                let age = e.lifetime * step as f32 / 12.;
+                let travel = if e.drag > 0.001 {
+                    -(-e.drag * age).exp_m1() / e.drag
+                } else {
+                    age
+                };
+                let p = heading * e.speed * speed * travel + vec2(0., e.gravity * age * age * 0.5);
+                low = low.min(p - pad);
+                high = high.max(p + pad);
+            }
+        }
+    }
+    let size = (high - low).max(Vec2::splat(60.));
+    let middle = (low + high) * 0.5;
+    Rect::new(
+        middle.x - size.x * 0.5,
+        middle.y - size.y * 0.5,
+        size.x,
+        size.y,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_effects_reach_covers_its_emitter_and_where_its_particles_head() {
+        let area = vec2(80., 40.);
+        let rain = brushes::effect_preset(1);
+        let reach = effect_reach(&rain, area);
+        assert!(reach.contains(vec2(-40., -20.)) && reach.contains(vec2(40., 20.)));
+        // Rain falls, so the box reaches well below the emitter and barely above.
+        assert!(reach.bottom() > 200. && reach.y > -40.);
+        // A burst from a point with no speed still gets a box to show it in.
+        let still = ParticleEffect {
+            speed: 0.,
+            gravity: 0.,
+            wobble: 0.,
+            size: 1.,
+            end_size: 1.,
+            area: EmitArea::Point,
+            ..ParticleEffect::default()
+        };
+        let reach = effect_reach(&still, area);
+        assert!(reach.w >= 60. && reach.h >= 60. && reach.contains(Vec2::ZERO));
+    }
 
     #[test]
     fn only_a_change_from_what_the_form_first_showed_is_an_edit() {

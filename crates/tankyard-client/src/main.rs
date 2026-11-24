@@ -51,6 +51,7 @@ mod server_status;
 mod session;
 mod settings;
 mod splash;
+mod sprites;
 mod staff_ui;
 mod startup;
 mod syntax;

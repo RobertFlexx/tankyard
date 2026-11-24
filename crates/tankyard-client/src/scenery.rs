@@ -1116,13 +1116,32 @@ fn hash(mut value: u32) -> f32 {
 
 /// How opaque a particle `age` seconds old and `fraction` of the way through
 /// its life is, before the emitter's opacity: with `fade` it appears over a
-/// tenth of a second and fades out as it ages.
+/// tenth of a second, holds its strength through most of its life and fades
+/// out as it ends.
 fn particle_alpha(fade: bool, fraction: f32, age: f32) -> f32 {
     if fade {
-        (1. - fraction).min(age * 10.).clamp(0., 1.)
+        (smooth(age * 10.) * (1. - fraction.clamp(0., 1.).powf(1.5))).clamp(0., 1.)
     } else {
         1.
     }
+}
+
+/// Smoothly from 0 to 1 as `t` goes from 0 to 1.
+fn smooth(t: f32) -> f32 {
+    let t = t.clamp(0., 1.);
+    t * t * (3. - 2. * t)
+}
+
+/// A color in linear light, where mixing behaves as light does.
+fn linear([r, g, b]: [u8; 3]) -> [f32; 3] {
+    [r, g, b].map(|c| (f32::from(c) / 255.).powf(2.2))
+}
+
+/// The color `t` of the way from `from` to `to`, both in linear light, so a
+/// fade from yellow to red passes through orange rather than brown.
+fn mix_light(from: [f32; 3], to: [f32; 3], t: f32) -> Color {
+    let [r, g, b] = std::array::from_fn(|i| (from[i] + (to[i] - from[i]) * t).powf(1. / 2.2));
+    Color::new(r, g, b, 1.)
 }
 
 /// Where in `r` a particle starts, from two random fractions.
@@ -1149,17 +1168,27 @@ fn emit_point(area: EmitArea, r: Rect, u: f32, v: f32) -> Vec2 {
     }
 }
 
-fn star(p: Vec2, radius: f32, rotation: f32, c: Color) {
-    let point = |i: usize, scale: f32| {
-        let a = (rotation - 90. + i as f32 * 36.).to_radians();
-        p + vec2(a.cos(), a.sin()) * radius * scale
-    };
-    for i in 0..5 {
-        let tip = point(i * 2, 1.);
-        draw_triangle(p, point(i * 2 + 9, 0.42), tip, c);
-        draw_triangle(p, tip, point(i * 2 + 1, 0.42), c);
-    }
+/// One particle as it is this frame, in screen pixels.
+#[derive(Clone, Copy)]
+struct Mote {
+    at: Vec2,
+    radius: f32,
+    /// Where it's heading, in pixels a second, for sparks to streak along.
+    velocity: Vec2,
+    turn: f32,
+    color: Color,
+    /// How near the top of its twinkle it is, from 0 to 1.
+    glint: f32,
 }
+
+thread_local! {
+    static MOTES: std::cell::RefCell<Vec<Mote>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// How strong a glowing particle's halo is, against the particle.
+const HALO: f32 = 0.34;
+/// How wide the spark sprite's head is, against its cell.
+const SPARK_HEAD: f32 = 0.32;
 
 pub fn particles(
     effect: &ParticleEffect,
@@ -1171,99 +1200,281 @@ pub fn particles(
     opacity: f32,
 ) {
     use std::f32::consts::TAU;
-    let blend = match (effect.shape, effect.glow) {
-        (ParticleShape::Soft, true) => Some(Blend::Glow),
-        (ParticleShape::Soft, false) => Some(Blend::Soft),
-        (_, true) => Some(Blend::Add),
-        (_, false) => None,
-    };
-    let shaded = blend.is_some_and(glow::begin);
     let last = (time * effect.rate).floor() as i64;
     let count = (effect.rate * effect.lifetime).ceil().min(240.) as i64;
-    for birth in (last - count + 1).max(0)..=last {
-        if *remaining == 0 {
-            break;
-        }
-        let age = time - birth as f32 / effect.rate;
-        if age < 0. || age > effect.lifetime {
-            continue;
-        }
-        let key = seed
-            .wrapping_mul(0x9e3779b9)
-            .wrapping_add((birth as u32).wrapping_mul(37));
-        let random = |n: u32| hash(key.wrapping_add(n));
-        let angle = (effect.direction + (random(0) - 0.5) * effect.spread).to_radians();
-        let speed = effect.speed * (0.65 + 0.35 * random(1));
-        let displacement = if effect.drag > 0.001 {
-            -(-effect.drag * age).exp_m1() / effect.drag
-        } else {
-            age
-        };
-        let heading = vec2(angle.cos(), angle.sin());
-        let mut p = emit_point(effect.area, r, random(2), random(3))
-            + heading * speed * displacement * zoom
-            + vec2(0., effect.gravity * age * age * 0.5 * zoom);
-        if effect.wobble > 0. {
-            // Sway across the direction of travel, starting from the origin.
-            let phase = random(5) * TAU;
-            let rate = TAU * (0.4 + 0.8 * random(6));
-            let sway = (age * rate + phase).sin() - phase.sin();
-            p += vec2(-heading.y, heading.x) * effect.wobble * 0.5 * sway * zoom;
-        }
-        if p.x < -120. || p.y < -120. || p.x > screen_width() + 120. || p.y > screen_height() + 120.
-        {
-            continue;
-        }
-        let fraction = age / effect.lifetime;
-        let radius = (effect.size + (effect.end_size - effect.size) * fraction) * zoom;
-        if radius < 0.4 {
-            continue;
-        }
-        let shimmer = if effect.twinkle > 0. {
-            let rate = TAU * (1.2 + 2. * random(7));
-            1. - effect.twinkle * (0.5 + 0.5 * (age * rate + random(8) * TAU).sin())
-        } else {
-            1.
-        };
-        let c = alpha(
-            mix(color(effect.color), color(effect.end_color), fraction),
-            particle_alpha(effect.fade, fraction, age) * opacity * shimmer,
-        );
-        let rotation = random(4) * 360. + effect.spin * age;
-        match effect.shape {
-            ParticleShape::Dot => draw_circle(p.x, p.y, radius, c),
-            ParticleShape::Soft if shaded => glow::spot(p, radius * 2., c),
-            ParticleShape::Soft => {
-                draw_circle(p.x, p.y, radius * 1.4, alpha(c, c.a * 0.3));
-                draw_circle(p.x, p.y, radius * 0.7, alpha(c, c.a * 0.5));
+    let (from, to) = (linear(effect.color), linear(effect.end_color));
+    MOTES.with(|motes| {
+        let motes = &mut *motes.borrow_mut();
+        motes.clear();
+        for birth in (last - count + 1).max(0)..=last {
+            if *remaining == 0 {
+                break;
             }
-            ParticleShape::Square => draw_poly(p.x, p.y, 4, radius, rotation + 45., c),
-            ParticleShape::Triangle => draw_poly(p.x, p.y, 3, radius, rotation, c),
-            ParticleShape::Star => star(p, radius * 1.3, rotation, c),
-            ParticleShape::Ring => draw_poly_lines(
-                p.x,
-                p.y,
-                crate::graphics::circle_sides(radius),
+            let age = time - birth as f32 / effect.rate;
+            if age < 0. || age > effect.lifetime {
+                continue;
+            }
+            let key = seed
+                .wrapping_mul(0x9e3779b9)
+                .wrapping_add((birth as u32).wrapping_mul(37));
+            let random = |n: u32| hash(key.wrapping_add(n));
+            let angle = (effect.direction + (random(0) - 0.5) * effect.spread).to_radians();
+            let speed = effect.speed * (0.65 + 0.35 * random(1));
+            let displacement = if effect.drag > 0.001 {
+                -(-effect.drag * age).exp_m1() / effect.drag
+            } else {
+                age
+            };
+            let heading = vec2(angle.cos(), angle.sin());
+            let mut p = emit_point(effect.area, r, random(2), random(3))
+                + heading * speed * displacement * zoom
+                + vec2(0., effect.gravity * age * age * 0.5 * zoom);
+            let mut velocity =
+                heading * speed * (-effect.drag * age).exp() + vec2(0., effect.gravity * age);
+            if effect.wobble > 0. {
+                // Sway across the direction of travel, starting from the origin.
+                let phase = random(5) * TAU;
+                let rate = TAU * (0.4 + 0.8 * random(6));
+                let sway = (age * rate + phase).sin() - phase.sin();
+                let side = vec2(-heading.y, heading.x) * effect.wobble * 0.5;
+                p += side * sway * zoom;
+                velocity += side * rate * (age * rate + phase).cos();
+            }
+            if p.x < -120.
+                || p.y < -120.
+                || p.x > screen_width() + 120.
+                || p.y > screen_height() + 120.
+            {
+                continue;
+            }
+            let fraction = age / effect.lifetime;
+            // Growing particles swell fast and settle, as a puff does; shrinking
+            // ones hold their size, then dwindle, as an ember does.
+            let eased = if effect.end_size >= effect.size {
+                fraction * (2. - fraction)
+            } else {
+                fraction * fraction
+            };
+            // Each one a little larger or smaller than the next, and grown in
+            // over its first moment rather than popping in.
+            let radius = (effect.size + (effect.end_size - effect.size) * eased)
+                * zoom
+                * (0.82 + 0.36 * random(9))
+                * (0.6 + 0.4 * smooth(age / 0.08));
+            if radius < 0.3 {
+                continue;
+            }
+            let (shimmer, glint) = if effect.twinkle > 0. {
+                let rate = TAU * (1.2 + 2. * random(7));
+                let dip = 0.5 + 0.5 * (age * rate + random(8) * TAU).sin();
+                (
+                    1. - effect.twinkle * dip,
+                    effect.twinkle * smooth((0.14 - dip) / 0.14),
+                )
+            } else {
+                (1., 0.)
+            };
+            let mut color = mix_light(from, to, fraction);
+            color.a = particle_alpha(effect.fade, fraction, age) * opacity * shimmer;
+            if color.a <= 0.003 {
+                continue;
+            }
+            motes.push(Mote {
+                at: p,
                 radius,
-                0.,
-                (zoom * 2.).max(1.),
-                c,
-            ),
-            ParticleShape::Spark => {
-                let d = heading * radius;
-                draw_line(
-                    p.x - d.x,
-                    p.y - d.y,
-                    p.x + d.x,
-                    p.y + d.y,
-                    (radius * 0.3).max(1.),
-                    c,
+                velocity: if velocity.length_squared() > 1e-4 {
+                    velocity * zoom
+                } else {
+                    heading
+                },
+                turn: (random(4) * 360. + effect.spin * age).to_radians(),
+                color,
+                glint,
+            });
+            *remaining -= 1;
+        }
+        draw_motes(effect, motes, zoom);
+    });
+}
+
+/// A spark's half length along its travel and half width across its head:
+/// longer the faster it goes, as the eye smears a quick bright thing.
+fn streak(mote: &Mote) -> (Vec2, f32) {
+    let direction = mote.velocity.normalize_or_zero();
+    let smear = (mote.velocity.length() * 0.03).min(mote.radius * 5.);
+    (
+        direction * (mote.radius + smear),
+        (mote.radius * 0.32).max(0.9),
+    )
+}
+
+/// The hot middle of a glowing particle: its color, most of the way to white.
+fn core(c: Color) -> Color {
+    Color::new(
+        c.r + (1. - c.r) * 0.6,
+        c.g + (1. - c.g) * 0.6,
+        c.b + (1. - c.b) * 0.6,
+        c.a * 0.85,
+    )
+}
+
+fn draw_motes(effect: &ParticleEffect, motes: &[Mote], zoom: f32) {
+    use crate::sprites::{self, Sprite};
+    if motes.is_empty() {
+        return;
+    }
+    let shape = effect.shape;
+    let ring_width = (zoom * 2.).max(1.);
+    // Light first: a soft halo under each glowing particle.
+    if effect.glow {
+        if glow::begin(Blend::Glow) {
+            for m in motes {
+                let halo = alpha(m.color, m.color.a * HALO);
+                match shape {
+                    ParticleShape::Spark => {
+                        let (along, across) = streak(m);
+                        glow::stretched_spot(m.at, along * 1.3, across * 5., halo);
+                    }
+                    // A soft particle is its own glow, and a ring glows along
+                    // its line, below.
+                    ParticleShape::Soft | ParticleShape::Ring => {}
+                    _ => glow::spot(m.at, m.radius * 2.6, halo),
+                }
+            }
+            glow::end();
+        }
+        if shape == ParticleShape::Ring && glow::begin(Blend::Light) {
+            for m in motes {
+                let halo = alpha(m.color, m.color.a * HALO * 0.8);
+                sprites::ring(m.at, m.radius, 0., (6. * zoom).max(3.), halo);
+            }
+            glow::end();
+        }
+    }
+    // The particles themselves.
+    if shape == ParticleShape::Soft {
+        if glow::begin(if effect.glow {
+            Blend::Glow
+        } else {
+            Blend::Soft
+        }) {
+            for m in motes {
+                glow::spot(m.at, m.radius * 2., m.color);
+            }
+            glow::end();
+        } else {
+            for m in motes {
+                glow::fallback_spot(m.at, m.radius * 1.6, m.color);
+            }
+        }
+    } else {
+        let lit = effect.glow && glow::begin(Blend::Light);
+        for m in motes {
+            match shape {
+                ParticleShape::Dot => sprites::draw(
+                    Sprite::Disc,
+                    m.at,
+                    Vec2::splat(m.radius / 0.86),
+                    0.,
+                    m.color,
+                ),
+                ParticleShape::Square => sprites::draw(
+                    Sprite::Square,
+                    m.at,
+                    Vec2::splat(m.radius * 0.84),
+                    m.turn,
+                    m.color,
+                ),
+                ParticleShape::Triangle => sprites::draw(
+                    Sprite::Triangle,
+                    m.at,
+                    Vec2::splat(m.radius * 1.13),
+                    m.turn,
+                    m.color,
+                ),
+                ParticleShape::Star => sprites::draw(
+                    Sprite::Star,
+                    m.at,
+                    Vec2::splat(m.radius * 1.38),
+                    m.turn,
+                    m.color,
+                ),
+                ParticleShape::Ring => sprites::ring(m.at, m.radius, ring_width, 0.9, m.color),
+                ParticleShape::Spark => {
+                    let (along, across) = streak(m);
+                    sprites::draw(
+                        Sprite::Spark,
+                        m.at,
+                        vec2(along.length(), across / SPARK_HEAD),
+                        along.y.atan2(along.x),
+                        m.color,
+                    );
+                }
+                ParticleShape::Soft => {}
+            }
+        }
+        if lit {
+            glow::end();
+        }
+    }
+    // The brightest part of glowing particles, and the catch of light at the
+    // top of a twinkle.
+    if effect.glow && glow::begin(Blend::Light) {
+        for m in motes {
+            let hot = core(m.color);
+            match shape {
+                ParticleShape::Dot => {
+                    sprites::draw(Sprite::Disc, m.at, Vec2::splat(m.radius * 0.45), 0., hot)
+                }
+                // A soft particle brightens towards its middle with no edge.
+                ParticleShape::Soft => sprites::draw(
+                    Sprite::Halo,
+                    m.at,
+                    Vec2::splat(m.radius),
+                    0.,
+                    alpha(hot, hot.a * 0.5),
+                ),
+                ParticleShape::Square => sprites::draw(
+                    Sprite::Square,
+                    m.at,
+                    Vec2::splat(m.radius * 0.4),
+                    m.turn,
+                    hot,
+                ),
+                ParticleShape::Triangle => sprites::draw(
+                    Sprite::Triangle,
+                    m.at,
+                    Vec2::splat(m.radius * 0.55),
+                    m.turn,
+                    hot,
+                ),
+                ParticleShape::Star => {
+                    sprites::draw(Sprite::Star, m.at, Vec2::splat(m.radius * 0.7), m.turn, hot)
+                }
+                ParticleShape::Ring => {
+                    sprites::ring(m.at, m.radius, ring_width * 0.45, 0.6, hot);
+                }
+                ParticleShape::Spark => {
+                    let (along, across) = streak(m);
+                    sprites::draw(
+                        Sprite::Spark,
+                        m.at,
+                        vec2(along.length() * 0.85, across / SPARK_HEAD * 0.5),
+                        along.y.atan2(along.x),
+                        hot,
+                    );
+                }
+            }
+            if m.glint > 0.01 && matches!(shape, ParticleShape::Star | ParticleShape::Dot) {
+                sprites::draw(
+                    Sprite::Glint,
+                    m.at,
+                    Vec2::splat(m.radius * (2.4 + 1.2 * m.glint)),
+                    std::f32::consts::FRAC_PI_4 * 0.25,
+                    alpha(core(m.color), m.color.a.min(1.) * m.glint),
                 );
             }
         }
-        *remaining -= 1;
-    }
-    if shaded {
         glow::end();
     }
 }
@@ -1461,8 +1672,21 @@ mod tests {
     #[test]
     fn fading_particles_appear_quickly_and_fade_as_they_age() {
         assert_eq!(particle_alpha(true, 0., 0.), 0.);
-        assert_eq!(particle_alpha(true, 0.1, 0.2), 0.9);
-        assert!((particle_alpha(true, 0.75, 1.2) - 0.25).abs() < 1e-6);
+        assert!(particle_alpha(true, 0.02, 0.05) < 0.6, "still appearing");
+        assert!(
+            particle_alpha(true, 0.1, 0.2) > 0.95,
+            "in within a tenth of a second"
+        );
+        // It holds most of its strength through middle age, then goes.
+        assert!(particle_alpha(true, 0.5, 0.8) > 0.6);
+        // Once in, it only fades.
+        let mut previous = 1.;
+        for step in 2..=20 {
+            let fraction = step as f32 / 20.;
+            let alpha = particle_alpha(true, fraction, fraction * 1.6);
+            assert!(alpha <= previous, "fades steadily");
+            previous = alpha;
+        }
         assert_eq!(particle_alpha(true, 1., 1.6), 0.);
         // Without fade, a particle is solid from its first to its last frame.
         assert_eq!(particle_alpha(false, 0., 0.), 1.);

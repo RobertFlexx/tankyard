@@ -15,6 +15,9 @@ pub enum Blend {
     Glow,
     /// Shapes as drawn, added to what is under them: glowing sparks.
     Add,
+    /// Textured shapes added to what is under them: glowing particle
+    /// sprites.
+    Light,
     /// A texture multiplied into what is under it: a light map over the
     /// arena, darkening where no light falls.
     Multiply,
@@ -249,6 +252,7 @@ struct Materials {
     soft: Material,
     glow: Material,
     add: Material,
+    light: Material,
     multiply: Material,
 }
 
@@ -295,7 +299,10 @@ fn shader(
     if blend == Blend::Solid {
         pipeline_params.color_blend = None;
     }
-    if matches!(blend, Blend::Glow | Blend::CoveredGlow | Blend::Add) {
+    if matches!(
+        blend,
+        Blend::Glow | Blend::CoveredGlow | Blend::Add | Blend::Light
+    ) {
         pipeline_params.color_blend = Some(BlendState::new(
             Equation::Add,
             BlendFactor::Value(BlendValue::SourceAlpha),
@@ -328,6 +335,7 @@ thread_local! {
             soft: material(&soft_glsl(false), &soft_msl(false), Blend::Soft)?,
             glow: material(&soft_glsl(false), &soft_msl(false), Blend::Glow)?,
             add: material(FLAT, FLAT_MSL, Blend::Add)?,
+            light: material(TEXTURED, TEXTURED_MSL, Blend::Light)?,
             multiply: material(TEXTURED, TEXTURED_MSL, Blend::Multiply)?,
         })
     })()
@@ -390,6 +398,7 @@ pub fn begin(blend: Blend) -> bool {
             Blend::Soft => &materials.soft,
             Blend::Glow => &materials.glow,
             Blend::Add => &materials.add,
+            Blend::Light => &materials.light,
             _ => &materials.multiply,
         });
         true

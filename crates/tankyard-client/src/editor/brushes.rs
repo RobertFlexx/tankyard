@@ -223,7 +223,7 @@ fn live(gate: GateMode, tests: Vec<TriggerTest>, out: u8) -> MapTrigger {
 }
 
 /// Particle presets shared by the palette and the inspector.
-pub const EFFECT_PRESETS: [&str; 10] = [
+pub const EFFECT_PRESETS: [&str; 20] = [
     "Embers",
     "Rain",
     "Dust",
@@ -234,6 +234,16 @@ pub const EFFECT_PRESETS: [&str; 10] = [
     "Glitter",
     "Fountain",
     "Pulse",
+    "Flame",
+    "Steam",
+    "Bubbles",
+    "Confetti",
+    "Leaves",
+    "Ash",
+    "Magic",
+    "Energy",
+    "Blizzard",
+    "Pollen",
 ];
 pub fn effect_preset(index: usize) -> ParticleEffect {
     match index {
@@ -360,7 +370,7 @@ pub fn effect_preset(index: usize) -> ParticleEffect {
             area: EmitArea::Point,
             ..Default::default()
         },
-        _ => ParticleEffect {
+        9 => ParticleEffect {
             shape: ParticleShape::Ring,
             glow: true,
             rate: 1.5,
@@ -372,6 +382,181 @@ pub fn effect_preset(index: usize) -> ParticleEffect {
             color: [120, 220, 255],
             end_color: [90, 140, 255],
             area: EmitArea::Point,
+            ..Default::default()
+        },
+        // Flame: a tongue of light rising from the middle, yellow going red,
+        // licking from side to side.
+        10 => ParticleEffect {
+            shape: ParticleShape::Soft,
+            glow: true,
+            rate: 34.,
+            lifetime: 0.7,
+            speed: 60.,
+            spread: 26.,
+            gravity: -260.,
+            drag: 1.,
+            size: 9.,
+            end_size: 1.,
+            color: [255, 140, 40],
+            end_color: [170, 32, 16],
+            wobble: 8.,
+            twinkle: 0.15,
+            area: EmitArea::Point,
+            ..Default::default()
+        },
+        // Steam: white puffs that rise, spread and thin out.
+        11 => ParticleEffect {
+            shape: ParticleShape::Soft,
+            rate: 5.,
+            lifetime: 2.4,
+            speed: 40.,
+            spread: 30.,
+            gravity: -25.,
+            drag: 0.8,
+            size: 8.,
+            end_size: 38.,
+            color: [236, 240, 245],
+            end_color: [200, 210, 222],
+            wobble: 22.,
+            ..Default::default()
+        },
+        // Bubbles: rings that wander upward and swell a little.
+        12 => ParticleEffect {
+            shape: ParticleShape::Ring,
+            rate: 5.,
+            lifetime: 3.2,
+            speed: 38.,
+            spread: 26.,
+            gravity: -12.,
+            drag: 0.3,
+            size: 5.,
+            end_size: 9.,
+            color: [170, 225, 255],
+            end_color: [214, 240, 255],
+            wobble: 26.,
+            twinkle: 0.2,
+            ..Default::default()
+        },
+        // Confetti: tumbling squares thrown up that flutter down.
+        13 => ParticleEffect {
+            shape: ParticleShape::Square,
+            rate: 18.,
+            lifetime: 2.6,
+            speed: 260.,
+            spread: 60.,
+            gravity: 50.,
+            drag: 1.6,
+            size: 5.,
+            end_size: 5.,
+            color: [255, 92, 140],
+            end_color: [255, 214, 74],
+            spin: 540.,
+            wobble: 30.,
+            ..Default::default()
+        },
+        // Leaves: a few at a time, drifting down and turning as they go.
+        14 => ParticleEffect {
+            shape: ParticleShape::Triangle,
+            rate: 2.5,
+            lifetime: 6.,
+            speed: 30.,
+            direction: 100.,
+            spread: 40.,
+            gravity: 14.,
+            drag: 0.5,
+            size: 7.,
+            end_size: 6.,
+            color: [140, 170, 70],
+            end_color: [214, 140, 50],
+            spin: 90.,
+            wobble: 60.,
+            ..Default::default()
+        },
+        // Ash: grey flakes settling slowly.
+        15 => ParticleEffect {
+            rate: 10.,
+            lifetime: 5.,
+            speed: 18.,
+            direction: 90.,
+            spread: 60.,
+            gravity: 6.,
+            drag: 0.3,
+            size: 2.5,
+            end_size: 1.5,
+            color: [128, 122, 118],
+            end_color: [74, 70, 68],
+            wobble: 34.,
+            twinkle: 0.2,
+            ..Default::default()
+        },
+        // Magic: violet stars that rise, turn and catch the light.
+        16 => ParticleEffect {
+            shape: ParticleShape::Star,
+            glow: true,
+            rate: 14.,
+            lifetime: 1.8,
+            speed: 45.,
+            spread: 360.,
+            gravity: -30.,
+            drag: 0.9,
+            size: 6.,
+            end_size: 0.,
+            color: [196, 140, 255],
+            end_color: [100, 220, 255],
+            spin: 200.,
+            twinkle: 0.9,
+            area: EmitArea::Round,
+            ..Default::default()
+        },
+        // Energy: quick bright streaks flying out from the middle.
+        17 => ParticleEffect {
+            shape: ParticleShape::Spark,
+            glow: true,
+            rate: 26.,
+            lifetime: 0.6,
+            speed: 320.,
+            spread: 360.,
+            drag: 2.2,
+            size: 5.,
+            end_size: 1.,
+            color: [150, 232, 255],
+            end_color: [80, 120, 255],
+            area: EmitArea::Point,
+            ..Default::default()
+        },
+        // Blizzard: snow driven sideways by the wind.
+        18 => ParticleEffect {
+            shape: ParticleShape::Soft,
+            rate: 40.,
+            lifetime: 2.6,
+            speed: 280.,
+            direction: 160.,
+            spread: 14.,
+            gravity: 40.,
+            drag: 0.1,
+            size: 3.5,
+            end_size: 3.,
+            color: [245, 250, 255],
+            end_color: [215, 228, 245],
+            wobble: 18.,
+            twinkle: 0.3,
+            ..Default::default()
+        },
+        // Pollen: specks of warm light drifting about.
+        _ => ParticleEffect {
+            shape: ParticleShape::Soft,
+            glow: true,
+            rate: 6.,
+            lifetime: 5.,
+            speed: 10.,
+            spread: 360.,
+            drag: 0.2,
+            size: 3.,
+            end_size: 3.,
+            color: [255, 236, 150],
+            end_color: [255, 210, 120],
+            wobble: 50.,
+            twinkle: 0.4,
             ..Default::default()
         },
     }
@@ -436,6 +621,16 @@ fn palettes() -> Vec<Vec<Brush>> {
             effect("Glitter", 7),
             effect("Fountain", 8),
             effect("Pulse", 9),
+            effect("Flame", 10),
+            effect("Steam", 11),
+            effect("Bubbles", 12),
+            effect("Confetti", 13),
+            effect("Leaves", 14),
+            effect("Ash", 15),
+            effect("Magic", 16),
+            effect("Energy", 17),
+            effect("Blizzard", 18),
+            effect("Pollen", 19),
         ],
         vec![
             logic(
@@ -2423,6 +2618,17 @@ pub fn thumbnail(brush: &Brush, r: Rect, map: &MapDef, settings: &Settings, time
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_particle_preset_is_valid_and_within_the_live_limit() {
+        for (index, name) in EFFECT_PRESETS.iter().enumerate() {
+            let effect = effect_preset(index);
+            effect
+                .validate()
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(effect.rate * effect.lifetime <= 240., "{name}");
+        }
+    }
     use tankyard_client::editor_document::Document;
     use tankyard_core::{DT, LogicEffect, MapLogic, Occupant, V2, WorldConfig};
 

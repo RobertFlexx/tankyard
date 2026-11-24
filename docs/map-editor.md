@@ -637,12 +637,15 @@ The bundled **Workshop Toolkit** adds Repeat, Ring of blocks, Arena frame, Snap 
 
 ## Particle generator
 
-Place an emitter from **Decor**. Its Object tab has ten presets (Embers, Rain, Dust, Sparks, Fireflies, Smoke, Snow, Glitter, Fountain and Pulse) and every setting: shape, where particles start, rate, lifetime, speed, direction, spread, gravity, drag, start and end size, spin, wobble, twinkle, fade, glow and both colors. Direction uses screen coordinates: 0° right, 90° down.
+Place an emitter from **Decor**. Its Object tab has twenty presets (Embers, Rain, Dust, Sparks, Fireflies, Smoke, Snow, Glitter, Fountain, Pulse, Flame, Steam, Bubbles, Confetti, Leaves, Ash, Magic, Energy, Blizzard and Pollen) and every setting: shape, where particles start, rate, lifetime, speed, direction, spread, gravity, drag, start and end size, spin, wobble, twinkle, fade, glow and both colors. Direction uses screen coordinates: 0° right, 90° down.
+
+A preview above the presets runs the effect, scaled so everywhere its particles go fits in the box, and shows how many are alive at a time. The preset that matches the current settings is highlighted; once you change a setting the heading reads **Custom**.
 
 - **Shape:** dot, square, spark, ring, triangle, soft (a dot with a soft edge, for smoke, mist and glows) or star.
 - **Emit from:** anywhere in the emitter (Fill), inside the ellipse it encloses (Round), along its outline (Edge) or from its center.
 - **Wobble** sways each particle sideways as it travels, for smoke and fireflies. **Twinkle** makes each one flicker.
-- **Glow** adds particles' light to what lies beneath them, like embers or sparks. In a dark arena, the area around the emitter is lit as well.
+- **Glow** adds particles' light to what lies beneath them, like embers or sparks: each gets a soft halo and a hot middle, and a twinkling dot or star catches the light at its brightest. In a dark arena, the area around the emitter is lit as well.
+- Sparks stretch along the way they are moving, longer the faster they go. Colors blend from start to end as light does, so yellow to red passes through orange.
 
 Particles are drawn from seeds, so they cost the server nothing and send no network traffic. A map has at most 48 emitters, each with at most 240 live particles, and the client draws at most 1,024 map particles, scaled by the Effects setting. Reduced motion hides map particles and freezes spin, pulse and conveyor marks.
 
