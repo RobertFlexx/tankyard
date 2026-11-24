@@ -8,14 +8,18 @@
 //! dodge.
 mod axiom;
 mod blasts;
+mod clash;
 mod fire;
 mod hull;
+mod railgun;
 mod ribbon;
 mod shots;
 mod warnings;
 
 pub use axiom::ShownAxiom;
+pub use clash::{clash_color, headline};
 pub use hull::Armor;
+pub use railgun::Streams;
 pub use shots::tracer;
 
 use crate::lighting::Light;
@@ -38,6 +42,8 @@ const MOST_WAKES: usize = 200;
 const MOST_SCARS: usize = 28;
 /// Points kept along each round's trail.
 const TRAIL_POINTS: usize = 14;
+/// Past this far from the camera nobody can see the air move a trail.
+const AIR_RANGE: f32 = 3000.;
 /// How long a trail lingers after its round has gone.
 const WAKE_SECONDS: f32 = 0.24;
 /// How long a scorch mark stays on the floor.
@@ -58,6 +64,12 @@ const TRAIL_HOLD: f32 = 0.42;
 const TRAIL_RATE: f32 = 5.5;
 /// The orange of a big explosion.
 const FIRE: Color = Color::new(1., 0.55, 0.16, 1.);
+/// How long a boss's exhaust stays lit in the air behind it.
+const EXHAUST_LIFE: f32 = 0.95;
+/// Slower than this it isn't really driving, and leaves nothing.
+const EXHAUST_SPEED: f32 = 14.;
+/// Sets how finely its exhaust is laid, as a trail's radius would.
+const EXHAUST_GAP: f32 = 20.;
 
 /// How strongly effects are drawn, from the player's settings.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -117,6 +129,8 @@ enum Fuel {
     Void,
     /// Axiom's gold starlight.
     Star,
+    /// The Railgunner's ions: white at the heart, blue, violet at the edge.
+    Ion,
 }
 
 impl Fuel {
@@ -126,6 +140,7 @@ impl Fuel {
             BossKind::Tempest | BossKind::Skirmisher => Self::Arc,
             BossKind::Prism => Self::Spectrum,
             BossKind::Eclipse | BossKind::FallenOverlord | BossKind::FallenBooster => Self::Void,
+            BossKind::Railgunner => Self::Ion,
             BossKind::Sentinel
             | BossKind::Bastion
             | BossKind::Guardian
@@ -149,6 +164,8 @@ pub struct Shown<'a> {
 /// What the renderer remembers about a boss between frames.
 #[derive(Clone, Copy, Debug)]
 struct Presence {
+    /// Which boss it is; Axiom is a tank, so it has none.
+    kind: Option<BossKind>,
     pos: V2,
     radius: f32,
     color: Color,
@@ -183,12 +200,17 @@ struct Presence {
     guns: [f32; CANNONS],
     /// How fast Axiom is driving, in world units a second.
     drive: Vec2,
+    /// A Railgunner's firing pose and what it was doing last frame.
+    rail: railgun::RailShown,
+    /// The gas its drive has left in the air.
+    exhaust: [Trail; 2],
 }
 
 impl Presence {
     fn new(shown: &Shown<'_>) -> Self {
         let boss = shown.boss;
         Self {
+            kind: Some(boss.kind),
             pos: shown.pos,
             radius: boss.radius,
             color: shown.color,
@@ -212,8 +234,37 @@ impl Presence {
             flame: 0.,
             guns: [0.; CANNONS],
             drive: Vec2::ZERO,
+            rail: railgun::RailShown::default(),
+            exhaust: exhaust_for(shown.pos, shown.color, Fuel::of(boss.kind)),
         }
     }
+    /// How far firing has shoved its hull, in the world.
+    fn kick_v2(&self) -> V2 {
+        V2::new(self.kick.x, self.kick.y)
+    }
+}
+
+/// A boss's two wisps of exhaust, with nothing laid yet.
+fn exhaust_for(pos: V2, color: Color, fuel: Fuel) -> [Trail; 2] {
+    let mut wisp = Trail::new(pos, EXHAUST_GAP, color, fuel, false);
+    wisp.linger = EXHAUST_LIFE;
+    wisp.stir = 0.42;
+    let mut other = wisp;
+    other.seed = 3.1;
+    [wisp, other]
+}
+
+/// Where a boss's exhaust leaves it: the Railgunner's two real engines, and
+/// for the rest the back corners of wherever it's driving.
+fn exhaust_from(kind: BossKind, pos: V2, aim: f32, vel: V2, radius: f32) -> [V2; 2] {
+    if kind == BossKind::Railgunner {
+        let ahead = V2::from_angle(aim);
+        let side = V2::new(-ahead.y, ahead.x);
+        return [-1., 1.].map(|out| pos - ahead * (radius * 1.31) + side * (radius * out * 0.7));
+    }
+    let way = vel.normalized();
+    let side = V2::new(-way.y, way.x);
+    [-1., 1.].map(|out| pos - way * (radius * 0.82) + side * (radius * out * 0.46))
 }
 
 /// `health` as a share of what this boss can hold.
@@ -299,12 +350,20 @@ fn direction(angle: f32) -> Vec2 {
 #[derive(Clone, Copy, Debug)]
 struct Trail {
     points: [V2; TRAIL_POINTS],
+    /// The push each point's gas still has from whatever left it.
+    drift: [V2; TRAIL_POINTS],
     /// When each point was laid, on `clock`.
     laid: [f32; TRAIL_POINTS],
     head: u8,
     count: u8,
     /// The round's own last position, where the trail's bright end meets it.
     latest: V2,
+    /// How far it has come in all.
+    flown: f32,
+    /// Seconds a stretch of it stays lit.
+    linger: f32,
+    /// How much the air moves its gas: more for a big round than a small one.
+    stir: f32,
     radius: f32,
     color: Color,
     fuel: Fuel,
@@ -323,10 +382,14 @@ impl Trail {
     fn new(pos: V2, radius: f32, color: Color, fuel: Fuel, heavy: bool) -> Self {
         Self {
             points: [pos; TRAIL_POINTS],
+            drift: [V2::ZERO; TRAIL_POINTS],
             laid: [0.; TRAIL_POINTS],
             head: 0,
             count: 1,
             latest: pos,
+            flown: 0.,
+            linger: ribbon::LINGER,
+            stir: (radius / 16.).clamp(0.35, 1.2),
             radius,
             color,
             fuel,
@@ -340,23 +403,56 @@ impl Trail {
     /// Note the round at `pos`, dropping a point once it has moved far
     /// enough, so the trail's shape doesn't depend on the frame rate.
     fn note(&mut self, pos: V2) {
+        let stepped = pos.distance(self.latest);
         self.latest = pos;
         self.seen = true;
-        let last = self.points[usize::from(self.head)];
+        let head = usize::from(self.head);
+        let last = self.points[head];
         // A jump means a rift or a bounce back through a teleport, and a
         // trail drawn across it would streak over the whole arena.
         if pos.distance(last) > 260. {
             self.points[0] = pos;
+            self.drift[0] = V2::ZERO;
             self.laid[0] = self.clock;
             self.head = 0;
             self.count = 1;
             return;
         }
+        if stepped.is_finite() {
+            self.flown += stepped;
+        }
         if pos.distance(last) >= self.spacing() {
+            // The gas keeps a little of the speed it was left at.
+            let took = (self.clock - self.laid[head]).max(1. / 240.);
+            let push = (pos - last) * (ribbon::CARRY / took);
+            let speed = push.length();
             self.head = (self.head + 1) % TRAIL_POINTS as u8;
-            self.points[usize::from(self.head)] = pos;
-            self.laid[usize::from(self.head)] = self.clock;
+            let head = usize::from(self.head);
+            self.points[head] = pos;
+            self.drift[head] = if speed > ribbon::MOST_CARRY {
+                push * (ribbon::MOST_CARRY / speed)
+            } else {
+                push
+            };
+            self.laid[head] = self.clock;
             self.count = (self.count + 1).min(TRAIL_POINTS as u8);
+        }
+    }
+    /// Let the gas it has left move with the air for `dt`. Big rounds stir up
+    /// more of it than small ones.
+    fn billow(&mut self, dt: f32, air: f32, camera: V2) {
+        let settle = (-ribbon::CARRY_DRAG * dt).exp();
+        let watched = self.points[usize::from(self.head)].distance(camera) < AIR_RANGE;
+        for back in 0..usize::from(self.count) {
+            let at = (usize::from(self.head) + TRAIL_POINTS - back) % TRAIL_POINTS;
+            let loose = ((self.clock - self.laid[at]) / ribbon::HOLDS).clamp(0., 1.);
+            let carried = if watched && loose > 0. {
+                ribbon::air(self.points[at], air + self.seed) * (loose * loose * self.stir)
+            } else {
+                V2::ZERO
+            };
+            self.points[at] += (self.drift[at] + carried) * dt;
+            self.drift[at] *= settle;
         }
     }
     /// How far the round flies between points.
@@ -418,6 +514,8 @@ enum Flash {
     Arrival,
     /// A drifting puff of smoke.
     Smoke,
+    /// A soft bloom of light with no shock wave.
+    Bloom,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -495,6 +593,27 @@ pub struct BossFx {
     flames: Vec<Puff>,
     scars: Vec<Scar>,
     casts: Vec<axiom::Cast>,
+    tracers: Vec<railgun::Tracer>,
+    wrecks: Vec<railgun::Wreck>,
+    clashes: Vec<clash::Clash>,
+    /// Plasma rounds that just vanished, held a frame in case a clash took them.
+    gone: Vec<clash::GoneRound>,
+    /// Heavy rounds' blasts, waiting to see whether a clash took the round.
+    blasts: Vec<clash::HeldBlast>,
+    /// Damage numbers for strikes the player landed, ready to show.
+    strikes: Vec<(V2, u32, Color)>,
+    /// Seconds left of the instant a hard hit holds everything still.
+    hold: f32,
+    /// A clock for the air that trails drift on.
+    air: f32,
+    /// Sounds due, each from a place or, with none, right at the player.
+    cues: Vec<(crate::map_sounds::RailCue, Option<V2>)>,
+    /// The player's tank, so a Railgunner's lock on them can be louder.
+    local: EntityId,
+    /// Where the camera is, so a clash far away doesn't shake it.
+    camera: V2,
+    /// Camera shake from blasts set off between frames.
+    pending_shake: f32,
     /// Whether any of Axiom or its rounds are about, so that every other
     /// game skips looking for them.
     stars: bool,
@@ -513,6 +632,18 @@ impl Default for BossFx {
             flames: Vec::with_capacity(256),
             scars: Vec::with_capacity(MOST_SCARS),
             casts: Vec::new(),
+            tracers: Vec::new(),
+            wrecks: Vec::new(),
+            clashes: Vec::new(),
+            gone: Vec::new(),
+            blasts: Vec::new(),
+            strikes: Vec::new(),
+            hold: 0.,
+            air: 0.,
+            cues: Vec::new(),
+            local: 0,
+            camera: V2::ZERO,
+            pending_shake: 0.,
             stars: false,
             look: Look::default(),
             random: 0x9e37_79b9,
@@ -530,6 +661,10 @@ impl BossFx {
     fn between(&mut self, (low, high): (f32, f32)) -> f32 {
         low + (high - low) * self.rand()
     }
+    /// Say which tank is the player's.
+    pub fn set_local(&mut self, id: EntityId) {
+        self.local = id;
+    }
     pub fn set_look(&mut self, look: Look) {
         self.look = look;
         if !look.live() {
@@ -540,6 +675,14 @@ impl BossFx {
             self.flames.clear();
             self.scars.clear();
             self.casts.clear();
+            self.tracers.clear();
+            self.wrecks.clear();
+            // Pending strikes also carry the local player's damage feedback.
+            // Keep their short timers when decorative effects are disabled.
+            self.gone.clear();
+            self.blasts.clear();
+            self.hold = 0.;
+            self.pending_shake = 0.;
         }
     }
     /// Whether `id` is a boss seen recently. Axiom counts only while it's in
@@ -645,6 +788,19 @@ impl BossFx {
             let (y, vy) = settle(presence.kick.y, presence.kick_rate.y, KICK_RATE, dt);
             presence.kick = vec2(x, y);
             presence.kick_rate = vec2(vx, vy);
+            // Its exhaust stays in the air, so it bends where the boss turned.
+            let nozzles = exhaust_from(boss.kind, item.pos, presence.aim, boss.vel, boss.radius);
+            let (driving, air, camera) = (boss.vel.length() > EXHAUST_SPEED, self.air, self.camera);
+            for (wisp, nozzle) in presence.exhaust.iter_mut().zip(nozzles) {
+                wisp.clock += dt;
+                wisp.color = item.color;
+                if look.live() {
+                    if driving {
+                        wisp.note(nozzle);
+                    }
+                    wisp.billow(dt, air, camera);
+                }
+            }
             let (color, radius, pos, phase) = (presence.color, boss.radius, item.pos, boss.phase);
             let mut due = (0, 0, 0);
             if look.live() && phase >= 2 {
@@ -664,6 +820,10 @@ impl BossFx {
                 presence.embers -= due.0 as f32;
                 presence.smoke -= due.1 as f32;
                 presence.flame -= due.2 as f32;
+            }
+            // Its pose runs even with effects off: the warnings depend on it.
+            if boss.kind == BossKind::Railgunner {
+                self.rail_frame(boss, known, dt);
             }
             if !look.live() {
                 continue;
@@ -828,6 +988,9 @@ impl BossFx {
         if self.is_axiom(flight.owner) {
             return self.star_launched(flight);
         }
+        if self.is_railgunner(flight.owner) {
+            return self.rail_launched(flight);
+        }
         let look = self.look;
         let Some(presence) = self.bosses.get_mut(&flight.owner) else {
             return 0.;
@@ -921,8 +1084,13 @@ impl BossFx {
 
     /// Bastion's round landing: a sharp burst and a smaller scorch.
     fn slug_impact(&mut self, at: V2, r: f32, color: Color) {
-        let look = self.look;
         self.fueled_burst(at, Flash::Blast, Fuel::Plasma, r * 1.35, color, 0.5);
+        self.slug_debris(at, r);
+    }
+
+    /// What's left of Bastion's slug after it hits: steel sparks and a scorch.
+    fn slug_debris(&mut self, at: V2, r: f32) {
+        let look = self.look;
         self.spray(Spray {
             at,
             heading: None,
@@ -983,8 +1151,13 @@ impl BossFx {
 
     /// The Siege Engine's round going off where it landed.
     fn detonate(&mut self, at: V2, r: f32) {
-        let look = self.look;
         self.fueled_burst(at, Flash::Blast, Fuel::Fire, r * 1.5, FIRE, 0.72);
+        self.fireball(at, r);
+    }
+
+    /// The Siege Engine's fire going up: flame, smoke, embers and a scorch.
+    fn fireball(&mut self, at: V2, r: f32) {
+        let look = self.look;
         self.plume(Plume {
             at,
             scatter: r * 0.5,
@@ -1019,6 +1192,13 @@ impl BossFx {
         let look = self.look;
         if !look.live() {
             return;
+        }
+        if self.is_railgunner(flight.owner) {
+            // A plasma stream is one ribbon, drawn through all its rounds.
+            if tankyard_core::is_beam_round(flight.kind, flight.vel) {
+                return;
+            }
+            self.rail_track(flight);
         }
         if !self.trails.contains_key(&flight.id) {
             if self.trails.len() < MOST_TRAILS
@@ -1092,6 +1272,11 @@ impl BossFx {
 
     /// A boss's round is gone: hit something if it `struck`, or spent.
     pub fn landed(&mut self, flight: &Flight, struck: bool) {
+        if self.is_railgunner(flight.owner) {
+            self.trails.remove(&flight.id);
+            self.rail_landed(flight, struck);
+            return;
+        }
         let trail = self.trails.remove(&flight.id);
         let look = self.look;
         if !look.live() {
@@ -1119,11 +1304,11 @@ impl BossFx {
         }
         let (at, radius, kind) = (flight.at, flight.radius, flight.kind);
         if flight.damage >= LETHAL_DAMAGE {
-            self.detonate(at, radius);
+            self.hold_blast(flight.owner, at, radius, color, clash::Blast::Siege);
             return;
         }
         if flight.damage >= BASTION_ROUND_DAMAGE {
-            self.slug_impact(at, radius, color);
+            self.hold_blast(flight.owner, at, radius, color, clash::Blast::Bastion);
             return;
         }
         if matches!(
@@ -1181,6 +1366,14 @@ impl BossFx {
         if !look.live() {
             return;
         }
+        if let Some(presence) = self.bosses.get(&id)
+            && presence.fuel == Fuel::Ion
+        {
+            let (pos, aim, radius) = (presence.pos, presence.aim, presence.radius);
+            self.bosses.remove(&id);
+            self.rail_defeated(pos, aim, radius);
+            return;
+        }
         let (at, radius, color) = self
             .bosses
             .remove(&id)
@@ -1231,6 +1424,11 @@ impl BossFx {
 
     /// Run sparks, flashes and trails on by `dt`.
     pub fn update(&mut self, dt: f32) {
+        // Strikes keep to the host's clock even while the sparks hang still.
+        self.run_clashes(dt);
+        let dt = self.held(dt);
+        self.air = (self.air + dt) % 3600.;
+        let (air, camera) = (self.air, self.camera);
         for burst in &mut self.bursts {
             burst.age += dt;
             burst.at += burst.vel * dt;
@@ -1250,12 +1448,15 @@ impl BossFx {
         for wake in &mut self.wakes {
             wake.life -= dt;
             wake.trail.clock += dt;
+            wake.trail.billow(dt, air, camera);
         }
         self.wakes.retain(|wake| wake.life > 0.);
         self.run_casts(dt);
+        self.run_rail(dt);
         // A round gone without a word, as across a resync, takes its trail.
         self.trails.retain(|_, trail| {
             trail.clock += dt;
+            trail.billow(dt, air, camera);
             std::mem::take(&mut trail.seen)
         });
     }
@@ -1282,11 +1483,14 @@ impl BossFx {
         if !self.look.live() {
             return;
         }
+        self.rail_world_lights(view, out);
+        self.clash_lights(view, out);
         for trail in self.trails.values() {
             if trail.heavy && view.visible(trail.latest, 420.) {
                 let (reach, tint) = match trail.fuel {
                     Fuel::Fire => (420., alpha(ramp(0.28), 0.95)),
                     Fuel::Star => (380., alpha(mix(AXIOM_GOLD, WHITE, 0.3), 0.9)),
+                    Fuel::Ion => (360., alpha(railgun::ion(0.42), 0.9)),
                     _ => (300., alpha(fire::steel(0.35), 0.8)),
                 };
                 crate::lighting::gather(
@@ -1306,6 +1510,7 @@ impl BossFx {
                 Flash::Muzzle(_) => (burst.size * 9. + 60., (1. - t) * 0.8),
                 Flash::Hit => (burst.size * 7. + 40., (1. - t).powi(2) * 0.7),
                 Flash::Blast => (burst.size * 9. + 90., (1. - t).powi(2)),
+                Flash::Bloom => (burst.size * 6. + 60., (1. - t).powi(2) * 0.8),
                 Flash::Release => (burst.size * 3.6 + 110., (1. - t).powi(2) * 0.9),
                 Flash::Phase => (burst.size * 4.6 + 160., (1. - t).powi(2)),
                 Flash::Fall => (burst.size * 7. + 260., (1. - t).powi(2)),
@@ -1548,6 +1753,10 @@ mod tests {
         assert!(fx.trails[&2].heavy);
         let scars = fx.scars.len();
         fx.landed(&cannon, true);
+        // A heavy blast waits a moment in case a parry took the round.
+        assert_eq!(fx.scars.len(), scars);
+        fx.update(1. / 60.);
+        fx.update(1. / 60.);
         assert_eq!(fx.scars.len(), scars + 1);
     }
 
@@ -1581,6 +1790,8 @@ mod tests {
         let (slow, fast) = (count_after(8), count_after(32));
         assert!(slow.abs_diff(fast) <= 6, "{slow} at 30 fps, {fast} at 120");
         fx.landed(&shot, true);
+        fx.update(1. / 60.);
+        fx.update(1. / 60.);
         assert_eq!(fx.scars.len(), 1);
         assert!(fx.flames.len() > at_launch);
     }

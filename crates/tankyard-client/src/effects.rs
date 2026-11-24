@@ -143,7 +143,11 @@ pub struct Popup {
     pub text: String,
     pub life: f32,
     pub color: Color,
+    /// Drawn larger, for a hit worth reading across the room.
+    pub big: bool,
 }
+/// How long the big words and numbers from a parry clash stay up.
+pub const BIG_POPUP_SECONDS: f32 = 1.9;
 /// The color of a rift event's end, 0 for an entry and 1 for an exit, as
 /// the viewer sees the rifts of the player behind it.
 fn rift_color(event: &GameEvent, viewer: (EntityId, u8)) -> Color {
@@ -161,6 +165,8 @@ pub struct HullVisual {
 }
 pub struct Effects {
     round: Option<u32>,
+    /// Map sounds still to play, such as a Play sound's repeats.
+    pub map_cues: crate::map_sounds::CuePlayer,
     pub hulls: HashMap<EntityId, HullVisual>,
     pub particles: Vec<Particle>,
     pub projectile_fades: Vec<ProjectileFade>,
@@ -204,6 +210,7 @@ impl Effects {
     pub fn new() -> Self {
         Self {
             round: None,
+            map_cues: Default::default(),
             hulls: HashMap::new(),
             particles: Vec::with_capacity(2048),
             projectile_fades: Vec::with_capacity(256),
@@ -311,7 +318,15 @@ impl Effects {
                 EventKind::Capture => (AMBER, 6, true),
                 EventKind::BossSpawn => (RED, 10, true),
                 EventKind::Victory => (AMBER, 10, true),
-                EventKind::Parry => (CYAN, 8, true),
+                EventKind::Parry => match tankyard_core::clash_of(event.value) {
+                    Some((style, bits, damage)) => {
+                        let boss = self.boss_fx.clash_boss(style, bits, event.pos);
+                        self.boss_fx
+                            .clash(style, event.pos, boss, damage, event.subject == local);
+                        (crate::boss_fx::clash_color(style), 0, false)
+                    }
+                    None => (CYAN, 8, true),
+                },
                 EventKind::BodyParry => (AMBER, 30, true),
                 EventKind::StasisRelease => (CYAN, 24, true),
                 // Axiom's attacks each have a flare of their own.
@@ -504,7 +519,11 @@ impl Effects {
                     EventKind::Evolve => Some("Tank upgraded".into()),
                     EventKind::PocketEject => Some("A double forced you out".into()),
                     EventKind::Kill => None, // The name belongs in the top-screen feed.
-                    EventKind::Parry => Some("Parried".into()),
+                    EventKind::Parry => Some(
+                        tankyard_core::clash_of(event.value)
+                            .map_or("Parried", |(style, ..)| crate::boss_fx::headline(style))
+                            .into(),
+                    ),
                     EventKind::BodyParry => Some("SMASHER COUNTERED".into()),
                     EventKind::StasisRelease => Some("RELEASE".into()),
                     EventKind::RiftFizzle => {
@@ -521,11 +540,14 @@ impl Effects {
                             | EventKind::StasisRelease
                     ) {
                         if self.popups.len() < 32 {
+                            let clash = matches!(event.kind, EventKind::Parry)
+                                && tankyard_core::clash_of(event.value).is_some();
                             self.popups.push(Popup {
                                 pos: event.pos,
                                 text,
-                                life: 1.5,
+                                life: if clash { BIG_POPUP_SECONDS } else { 1.5 },
                                 color,
+                                big: clash,
                             });
                         }
                     } else {
@@ -782,6 +804,18 @@ impl Effects {
             }
         }
         self.boss_fx.update(dt);
+        self.shake = (self.shake + self.boss_fx.take_shake()).min(4.);
+        for (pos, damage, color) in self.boss_fx.take_strikes() {
+            if self.popups.len() < 32 {
+                self.popups.push(Popup {
+                    pos,
+                    text: format!("-{}", crate::hud::grouped(u64::from(damage))),
+                    life: BIG_POPUP_SECONDS,
+                    color,
+                    big: true,
+                });
+            }
+        }
         for p in &mut self.projectile_fades {
             p.life -= dt;
         }

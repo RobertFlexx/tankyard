@@ -2,11 +2,21 @@
 
 Any current game client can use creator or central-owner tools when it holds the corresponding private signing key. Menu and verification code are public and reviewable. Public binaries and GitHub contain no private signing credentials. Private [staff credential packs](#staff-credential-packs) replace the self-contained credential editions.
 
-Version 0.4.1 adds a bottom-right owner toggle with authorization diagnostics and a Maps tab in the creator panel. Map changes are signed, audited and checked against the server's catalog. They retain identities, roles, upgrades and scores, refresh map-dependent objects and projectiles, and roll back if current entities cannot fit safely.
+The bottom-right owner toggle opens the creator panel, including authorization diagnostics and a Maps tab. Map changes are signed, audited and checked against the server's catalog. They retain identities, roles, upgrades and scores, refresh map-dependent objects and projectiles, and roll back if current entities cannot fit safely.
 
 Choose **Showtime → Become Axiom** in the creator console. Axiom, the Worldshaper has an original model, 120,000 health and a shared top-screen health bar. Its 180-unit body radius exceeds every regular boss. Collapse the console to fight. Holding fire runs its six cannons in turn, with their shells converging on the aim point. The twelve attacks sit on the number row: `1` to `4` are offense (Starfall, Sunburst, Comet Lance, Meteor Shower), `5` to `8` are control (Constellation, Repulse, Gravity Well, Rift Dash), and `9`, `0`, `-` and `=` are fortress (Nova Mines, Star Lattice, Solar Turrets, Reforge). The ability key also casts Rift Dash, a key bound to something else keeps doing that, and the bar's cells can be clicked. Hover a cell to see its effect and recharge. Rift Dash stops at walls and borders; Reforge heals eight percent with a thirty-second cooldown. The server enforces cooldowns, projectile limits and protected-player damage rules. Returning to the tank or resetting restores class stats; revocation also removes the form's shots. Death and a new round remove the form. This is a modified event round and does not record normal arena progress. The central-owner role has no access to this form.
 
 Transforming ends pocket travel and clears temporary class effects, including cloak protection, shields and boosts. The underlying tank's ability stays disabled as Axiom. A map with no space for the full body refuses the transformation without changing the current life. Attacks launch only from clear space; a blocked launch keeps its cooldown. Repulse can clear nearby hostile shots even at the projectile limit, while preserving friendly shots. Reforge is unavailable at full health.
+
+## Staff controls in 2.0.5
+
+These controls need a 2.0.5 client and a 2.0.5 server. Both stay on protocol 34, so players on older 2.0 clients can still join; they just won't have the new tools. Existing signed staff packs still unlock the updated public client, because the tools do not live inside the pack.
+
+The creator panel adds **Heal every player**, boss-health presets for rehearsing each phase, and **Go to** beside living players. Moderation includes editable reason presets, ban-duration presets and a separate **Unmute** action. Mutes are limited to one day even when a longer ban duration is selected.
+
+The server panel adds a searchable player list, boss summon and dismiss controls, **Bans** and **Live** tabs. Bans show masked addresses and require a second click to lift one. The list shows up to 64 active bans, longest first. Live shows player and arena counts, tick timings, traffic and rejected packets; it refreshes while the tab is open without filling the audit log. Each action still requires its server permission. Summoning or dismissing bosses marks the arena modified.
+
+On **Mods**, the row's switch and the detail button both enable or disable a pack. The password screen supports Show/Hide and keypad Enter, and focusing the password field no longer prevents clicking Unlock. Disabling a staff pack locks its tools immediately. Creator and central-owner credentials remain separate.
 
 ## Roles and scope
 
@@ -14,7 +24,7 @@ Transforming ends pocket travel and clears temporary class effects, including cl
 | --- | --- | --- |
 | Server Host | Local hosting channel or explicit process-console grant | Server-local moderation, roles, rooms, bots, match settings, restart and audit |
 | Moderator / Admin | A grant from this server's owner | Only the selected server permissions |
-| Central Server Owner | Separate pinned Ed25519 key, verified on the official central profile | Central-server moderation, announcements, roles, match settings, bots and audit; no creator gameplay modifiers |
+| Central Server Owner | Separate pinned Ed25519 key, verified on the official central profile | Central-server moderation, announcements, roles, match settings, bots and audit; no personal creator combat powers |
 | Game Creator | Pinned creator Ed25519 key and consenting host policy | Creator gameplay controls plus server-local kick, ban, mute, warnings and announcements |
 
 Badges are assigned by the server, carried through snapshots, respawns, chat and elimination records, and shown beside names. Names and client labels never confer authority. The central-owner meeting achievement requires another human with the verified badge; it is a local cosmetic achievement, like the creator meeting achievement.

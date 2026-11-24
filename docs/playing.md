@@ -162,7 +162,7 @@ The Tank tree shows every upgrade connection. Scroll over the tree to zoom aroun
 
 ## Boss Rush
 
-Pick **Boss Rush** under Game modes, then press **Bosses** to set the lineup. **Classic six** is the usual run, **Quick three** is the short one, and **Full rush** is all fourteen. Click bosses in the order you want to meet them, and click one again to drop it. The arrows swap neighbors, **Shuffle** deals a new order, and the count adds or removes bosses at the end. The game remembers your lineup.
+Pick **Boss Rush** under Game modes, then press **Bosses** to set the lineup. **Classic six** is the usual run, **Quick three** is the short one, and **Full rush** is all fifteen. Click bosses in the order you want to meet them, and click one again to drop it. The arrows swap neighbors, **Shuffle** deals a new order, and the count adds or removes bosses at the end. The game remembers your lineup.
 
 Each wave is tougher than the one before. Lineups of six or more reach 70% tougher on the last boss; shorter runs gain 14% per wave. Between waves the banner says who's next. A boss won't land on top of a tank, so if there's no room the banner asks you to clear the way. If it still cannot land after ten seconds, the round ends in a draw.
 
@@ -185,7 +185,7 @@ All text boxes support Ctrl/Cmd+A/C/X/V and Shift+Insert for paste. Clipboard wo
 - **Sharpening** restores crispness after upscaling or FXAA without halos.
 - **FXAA** smooths remaining stair-steps on edges at almost no cost.
 - **MSAA**, **shape quality** (circle detail) and **texture filtering** refine geometry and textured tanks. Apple silicon Macs go up to 4x MSAA.
-- **Metal renderer** (Macs only, on by default): draws with Metal, Apple's native graphics API, instead of OpenGL, which macOS only emulates on top of Metal. It's several times faster. Turning it off (or starting with `--safe-graphics`) uses OpenGL after a restart. Other systems always use OpenGL.
+- **Metal renderer** (Macs only, on by default): draws with Apple's native graphics API. Metal is recommended on macOS, where OpenGL is deprecated. Turning it off (or starting with `--safe-graphics`) uses OpenGL after a restart. Other systems always use OpenGL.
 
 If a driver can't compile the post-processing shaders, the arena falls back to bilinear filtering and the Graphics tab says so.
 
@@ -203,7 +203,21 @@ The party roster includes **I'm ready** and a ready count. Readiness is shared w
 
 Siege Engine, Skirmisher and Trapper add three boss encounters, each with a practice trial. Special attacks lock their aim during the warning. Heavy siege shots, a straight skirmisher charge and side-pocket mines each leave a different escape route. Boss models use distinct mechanical silhouettes rather than a shared stack of rotating armor.
 
-Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Server and client must both use protocol 32, so Tank Yard 1.6.0 plays only with 1.6.0. Versions 1.5.0 to 1.5.2 used protocol 31.
+Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Every Tank Yard 2.0 release uses protocol 34, so 2.0 clients and servers can play together.
+
+## Railgunner and heavy parry clashes
+
+**Railgunner** is the largest regular boss: a slow, heavily armored long-range hunter with its own health bar at the top of the screen. It favors distant exposed players, leads moving targets and locks its cannon aim near the end of its warning. Move sideways when the aim locks; cover breaks its line of sight. Close to the hull, its main barrel cannot reach you, although it can hop backward and fire weak flank guns.
+
+Watch the barrel. For an ordinary rail shot it only strains at its latches. When the plasma beam is coming, its armor splits, the coils spread and the muzzle claws unfold, and the whole thing throws open as the aim locks. The white-blue stream then sweeps after its target. When it stops, the boss vents with the barrel still open and takes extra damage, which is your moment.
+
+It appears very rarely in eligible natural boss events, and only when the arena has enough experienced players. You can also choose it in a custom Boss Rush or practice against it in **Get under the rail**.
+
+A timed parry against a heavy boss shot creates a **clash**. The strike returns along the attack, damages its owner and briefly delays its next attack. Breaking Railgunner’s beam stops the whole stream and leaves its vents open. Railgunner’s cannon produces an ion strike; Siege Engine sends back fire and a blast; Bastion produces a smaller steel-blue impact. Ordinary boss shots still use the usual reflection.
+
+A human player's clash takes 10% of full boss health for the beam, 9% for Railgunner’s main cannon, 7% for Siege Engine and 4% for Bastion. Railgunner’s lighter echo is worth half a cannon clash. A boss cannot take several clashes from the same volley, and bot clashes deal 40% of those amounts.
+
+Reduced motion and Effects at zero keep the readable parry headline and damage feedback without the flashes, particles or camera shake. Warning sights remain visible so attacks can still be read.
 
 ## Bacteria’s pocket dimension
 

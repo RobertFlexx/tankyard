@@ -1235,6 +1235,9 @@ fn scripts_shake_views_and_play_sounds() {
             tankyard.shake_view(nil, 60, 1.5)
             tankyard.play_sound("fanfare", 100, 200, 40)
           end
+          if tankyard.tick() == 5 then
+            tankyard.play_sound("power_up", 100, 200, 50)
+          end
         end)
     "#;
     let mut world = world();
@@ -1260,14 +1263,24 @@ fn scripts_shake_views_and_play_sounds() {
     // Bots have no view to shake.
     assert_eq!(shakes.len(), 1);
     assert_eq!(tankyard_core::shake_of(shakes[0].value), (0.6, 1.5));
-    let sound = events
+    let sounds: Vec<_> = events
         .iter()
-        .find(|e| matches!(e.kind, tankyard_core::EventKind::MapSound))
-        .expect("the sound plays");
+        .filter(|e| matches!(e.kind, tankyard_core::EventKind::MapSound))
+        .collect();
+    assert_eq!(sounds.len(), 2, "both sounds play");
+    let sound = sounds[0];
     assert!(sound.pos.distance(tankyard_core::V2::new(100., 200.)) < 0.01);
     assert_eq!(
         tankyard_core::sound_of(sound.value),
         Some((tankyard_content::MapSound::Fanfare, 0.4))
+    );
+    // A newer sound, named as it is written in files: this version hears
+    // it, and older ones hear the classic sound it falls back to.
+    let cue = tankyard_core::SoundCue::decode(sounds[1].value, sounds[1].subject).unwrap();
+    assert_eq!(cue.sound, tankyard_content::MapSound::PowerUp);
+    assert_eq!(
+        tankyard_core::sound_of(sounds[1].value),
+        Some((tankyard_content::MapSound::Fanfare, 0.5))
     );
 }
 

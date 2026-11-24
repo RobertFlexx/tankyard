@@ -154,10 +154,17 @@ fn export_bosses(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     for (index, kind) in BossKind::ALL.into_iter().enumerate() {
         let x = (index % columns) as f32 * 360. + 180.;
         let y = (index / columns) as f32 * 320. + 145.;
+        // The Railgunner's barrel is longer than a cell, so it's drawn smaller
+        // and centered on its whole length rather than on its turret.
+        let (size, back) = if kind == BossKind::Railgunner {
+            (72., 34.)
+        } else {
+            (kind.radius() * 0.9, 0.)
+        };
         tankyard_client::boss_model::boss_model_geometry(
             kind,
-            vec2(x, y),
-            kind.radius() * 0.9,
+            vec2(x, y) - vec2(args.aim.cos(), args.aim.sin()) * back,
+            size,
             tankyard_client::boss_model::Pose {
                 aim: args.aim,
                 turn: kind.turn((args.time / tankyard_core::DT) as u64),
@@ -165,6 +172,7 @@ fn export_bosses(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                 phase: args.phase,
                 charge: 0.,
                 lit: false,
+                ..Default::default()
             },
             None,
             &mut |primitive| write_primitive(&mut svg, primitive),

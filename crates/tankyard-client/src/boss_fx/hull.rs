@@ -1,8 +1,11 @@
 //! The light a boss carries: its core, the pool it casts, an edge of light
 //! that follows its real armor, and the burning of a wounded hull.
-use super::{BossFx, direction};
+use super::fire::ramp;
+use super::ribbon::{FINE, PLAIN, Path, Section, Sway, swell};
+use super::{BossFx, Fuel, direction};
 use crate::emission::{Emission, Layer, Stop};
-use crate::ui::alpha;
+use crate::render::View;
+use crate::ui::{alpha, mix};
 use macroquad::prelude::*;
 use std::f32::consts::TAU;
 use tankyard_core::Boss;
@@ -169,20 +172,6 @@ impl BossFx {
         if level <= 0. {
             return;
         }
-        // A faint wake behind it while it drives, along the line it's on.
-        let speed = boss.vel.length();
-        if !calm && speed > 14. {
-            let way = vec2(boss.vel.x, boss.vel.y) / speed;
-            let drive = ((speed - 14.) / 110.).min(1.);
-            light.streak(
-                Layer::Wash,
-                p - way * r * (1.25 + 0.7 * drive),
-                p - way * r * 0.55,
-                r * (0.16 + 0.1 * drive),
-                alpha(color, 0.),
-                alpha(light.hot(color, 0.25), (0.1 + 0.2 * drive) * level),
-            );
-        }
         if boss.phase >= 2 {
             let (heat, strength, patches) = if boss.phase >= 3 {
                 (Color::new(1., 0.3, 0.14, 1.), 0.34 + 0.16 * pulse, 7)
@@ -230,6 +219,69 @@ impl BossFx {
                 r * 1.55,
                 alpha(light.hot(color, 0.45), 0.34 * shown.heat * level),
             );
+        }
+    }
+}
+
+impl BossFx {
+    /// What its drive leaves in the air: two wisps of hot gas that stay where
+    /// they were laid, so they show every turn it really made, spread as they
+    /// cool, and keep going for a moment after it stops.
+    pub fn exhaust(&self, light: &mut Emission, view: &View, boss: &Boss) {
+        if !self.look.live() {
+            return;
+        }
+        let Some(shown) = self.bosses.get(&boss.id) else {
+            return;
+        };
+        let level = self.look.level().min(1.);
+        let nozzle = (boss.radius * view.zoom * 0.085).max(1.6);
+        let sections = if light.rich() { FINE } else { PLAIN };
+        for wisp in &shown.exhaust {
+            if wisp.count < 2 || !view.visible(wisp.latest, 420.) {
+                continue;
+            }
+            let path = Path::of(wisp, view, view.screen(wisp.latest), Vec2::ZERO);
+            let length = path.length();
+            if length < 4. {
+                continue;
+            }
+            let base = wisp.color;
+            let (hot, deep) = if wisp.fuel == Fuel::Fire {
+                (ramp(0.1), ramp(0.72))
+            } else {
+                (
+                    light.hot(base, 0.55),
+                    Color::new(base.r * 0.45, base.g * 0.45, base.b * 0.45, 1.),
+                )
+            };
+            let sway = Sway::of(wisp.fuel, nozzle * 1.7, wisp.clock + wisp.seed);
+            let line = path.line(0., length, sections, sway);
+            let life = wisp.linger;
+            // How old the gas is, and how far it has opened out of the nozzle.
+            let state = |at: f32| ((path.age(at) / life).clamp(0., 1.), swell(at, nozzle * 2.2));
+            line.band(light, Layer::Wash, |_, at| {
+                let (u, joined) = state(at);
+                Section {
+                    half: nozzle * (2. + 3.8 * u.sqrt()),
+                    color: alpha(
+                        mix(base, deep, u),
+                        0.34 * joined * (1. - u).powf(1.6) * level,
+                    ),
+                    side: 0.,
+                }
+            });
+            line.band(light, Layer::Core, |_, at| {
+                let (u, joined) = state(at);
+                Section {
+                    half: nozzle * (0.5 + 0.35 * u),
+                    color: alpha(
+                        mix(hot, base, (u * 1.6).min(1.)),
+                        0.5 * joined * (1. - u).powi(3) * level,
+                    ),
+                    side: 0.,
+                }
+            });
         }
     }
 }

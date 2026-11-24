@@ -124,6 +124,7 @@ pub struct UdpServer {
     pub(crate) transport: crate::netcode::Transport,
     pub(crate) peers: HashMap<u64, Peer>,
     pub(crate) bans: Vec<crate::admin::Ban>,
+    password_guard: crate::password_guard::PasswordGuard,
     pub(crate) elapsed: Duration,
     accumulator: Duration,
     snapshot_accumulator: Duration,
@@ -243,6 +244,7 @@ impl UdpServer {
             transport,
             peers: HashMap::new(),
             bans,
+            password_guard: Default::default(),
             elapsed: Duration::ZERO,
             accumulator: Duration::ZERO,
             snapshot_accumulator: Duration::ZERO,
@@ -466,6 +468,7 @@ impl UdpServer {
                 action: "global_moderation",
                 target: "backend",
                 reason: &format!("{action:?}"),
+                ..Default::default()
             },
         )
         .map_err(NetError)?;
@@ -876,9 +879,28 @@ impl UdpServer {
                     return;
                 }
             }
-            if password != self.settings.password {
+            let address = self.transport.client_addr(client).map(|a| a.ip());
+            if !self.settings.password.is_empty()
+                && let Some(ip) = address
+                && self
+                    .password_guard
+                    .locked(ip, self.settings.shared_relay(ip), self.elapsed)
+            {
+                self.reject(client, crate::password_guard::LOCKED_OUT);
+                return;
+            }
+            if !crate::password_guard::same_password(&password, &self.settings.password) {
+                if !self.settings.password.is_empty()
+                    && let Some(ip) = address
+                {
+                    self.password_guard.missed(ip, self.elapsed);
+                }
                 self.reject(client, "Incorrect server password.");
                 return;
+            }
+            if let Some(ip) = address {
+                let shared = self.settings.shared_relay(ip);
+                self.password_guard.passed(ip, shared);
             }
             let account = if let Some(credential) = account_token {
                 if self.settings.netcode_private_key.is_none() {
@@ -1087,6 +1109,13 @@ impl UdpServer {
             } => {
                 let applied = match command {
                     ServerCommand::Kick { .. } => "Player removed.",
+                    ServerCommand::LiftBan { .. } => "Ban lifted.",
+                    ServerCommand::SummonBoss { .. } => "Boss summoned.",
+                    ServerCommand::DismissBosses => "Bosses dismissed.",
+                    // A read answers with its data, which is reply enough.
+                    ServerCommand::ReadAudit
+                    | ServerCommand::ReadBans
+                    | ServerCommand::ReadHealth => "",
                     _ => "Server command applied.",
                 };
                 let result =
@@ -1481,6 +1510,7 @@ impl UdpServer {
         if !self.access.take_admin_token(client, unix_time().as_secs()) {
             return Err(NetError("Wait before sending another command.".into()));
         }
+        let creator_name = self.tank_name(player).unwrap_or_default();
         crate::access::audit(
             self.settings.creator_audit_file(),
             &crate::access::AuditRecord {
@@ -1489,6 +1519,8 @@ impl UdpServer {
                 action: "creator_request",
                 target: &player.to_string(),
                 reason: &String::from_utf8_lossy(payload),
+                actor_name: &creator_name,
+                ..Default::default()
             },
         )
         .map_err(NetError)?;
@@ -1514,7 +1546,12 @@ impl UdpServer {
                 actor: &client.to_string(),
                 action: "creator_result",
                 target: &player.to_string(),
-                reason: &format!("{result:?}"),
+                reason: &match &result {
+                    Ok(message) => message.clone(),
+                    Err(NetError(error)) => format!("Refused: {error}"),
+                },
+                actor_name: &creator_name,
+                ..Default::default()
             },
         ) {
             log::error!("Could not audit creator command outcome: {error}");
@@ -1542,6 +1579,7 @@ impl UdpServer {
             action: "creator_policy",
             target: &self.settings.server_id,
             reason: if enabled { "enabled" } else { "disabled" },
+            ..Default::default()
         };
         let audit = crate::access::audit(self.settings.creator_audit_file(), &record);
         if enabled {
@@ -1846,8 +1884,21 @@ impl UdpServer {
 
     pub(crate) fn replicate_events(&mut self, arena: usize) {
         self.important_events.clear();
+        // A sound meant for one tank goes only to that tank's player, so no
+        // one else's client plays it, whatever version it is.
+        let mut private = Vec::new();
         let state = &mut self.arenas[arena];
         for event in state.session.world.events.drain(..) {
+            if matches!(event.kind, EventKind::MapSound)
+                && let Some(cue) = tankyard_core::SoundCue::decode(event.value, event.subject)
+                && cue.range == tankyard_content::SoundRange::Cause
+            {
+                // Nobody set it off, so nobody hears it.
+                if cue.listener != 0 {
+                    private.push((cue.listener, event));
+                }
+                continue;
+            }
             match event.kind {
                 EventKind::LevelUp
                 | EventKind::Evolve
@@ -1861,8 +1912,35 @@ impl UdpServer {
                 | EventKind::PocketEject
                 | EventKind::MapShake
                 | EventKind::MapSound => self.important_events.push(event),
+                // A clash lands on a boss that may be a long way from the parry.
+                EventKind::Parry if event.value != 0 => self.important_events.push(event),
                 _ if state.pending_effects.len() < 4096 => state.pending_effects.push(event),
                 _ => {}
+            }
+        }
+        let round = state.session.world.match_state.round;
+        for (listener, event) in private {
+            let Some(client) = self.peers.iter().find_map(|(&id, peer)| {
+                (peer.arena == arena
+                    && peer.entity == Some(listener)
+                    && peer.disconnect_at.is_none())
+                .then_some(id)
+            }) else {
+                continue;
+            };
+            let Ok(packets) = encode_event_batches(round, std::slice::from_ref(&event)) else {
+                continue;
+            };
+            for bytes in packets {
+                if self
+                    .server
+                    .can_send_message(client, EVENT_CHANNEL, bytes.len())
+                {
+                    self.server
+                        .send_message(client, EVENT_CHANNEL, Bytes::from(bytes));
+                } else {
+                    self.metrics.events_deferred += 1;
+                }
             }
         }
         if self.important_events.is_empty() {

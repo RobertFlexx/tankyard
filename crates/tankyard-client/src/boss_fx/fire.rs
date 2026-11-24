@@ -135,9 +135,13 @@ impl BossFx {
     }
 
     pub(super) fn run_flames(&mut self, dt: f32) {
+        let time = self.air;
         for puff in &mut self.flames {
             puff.age += dt;
-            puff.pos += puff.vel * dt;
+            // Burning gas slows, and the air takes it from there.
+            let loose = (puff.age / 0.14).min(1.);
+            let carried = super::ribbon::air(puff.pos, time + puff.seed * 0.7) * (0.7 * loose);
+            puff.pos += (puff.vel + carried) * dt;
             puff.vel *= (-puff.drag * dt).exp();
         }
         self.flames.retain(|puff| puff.age < puff.life);
@@ -166,7 +170,8 @@ impl BossFx {
             };
             // Fast gas is drawn out along its path, and everything sways a
             // little, so a stream reads as flame rather than a spray of dots.
-            let stretch = 1. + (speed / 360.).min(1.7);
+            let stretch =
+                (1. + (speed / 360.).min(1.7)).max(if puff.burn == STREAM { 1.65 } else { 1. });
             let sway = (puff.seed * 31. + puff.age * 15.).sin() * radius * 0.16;
             let p = view.screen(puff.pos) + perpendicular(heading) * sway;
             let born = start.max(puff.burn.heat);

@@ -577,15 +577,15 @@ impl VoiceChat {
             mixer.alarm_volume = volume.clamp(0., 1.);
         }
     }
-    /// Play a map sound with its trigger/distance gain and the current effects
-    /// volume. Bursts coalesce and already playing cues follow volume changes.
-    pub fn map_sound(&mut self, sound: tankyard_content::MapSound, gain: f32, volume: f32) {
-        self.cue(crate::map_sounds::samples(sound), gain, volume);
+    /// Play synthesized `samples` at `gain` and the current effects volume.
+    /// Bursts coalesce and already playing cues follow volume changes.
+    pub fn cue(&mut self, samples: std::sync::Arc<[f32]>, gain: f32, volume: f32) {
+        self.cue_at(samples, gain, volume, 1.);
     }
 
-    /// Play synthesized `samples` at `gain` and the current effects volume,
-    /// as `map_sound` does.
-    pub fn cue(&mut self, samples: std::sync::Arc<[f32]>, gain: f32, volume: f32) {
+    /// [`Voice::cue`], played `rate` times as fast, which raises or lowers
+    /// its pitch to match.
+    pub fn cue_at(&mut self, samples: std::sync::Arc<[f32]>, gain: f32, volume: f32, rate: f32) {
         self.poll_errors();
         self.effects_volume(volume);
         if self.disabled
@@ -606,7 +606,7 @@ impl VoiceChat {
             }
         }
         if let Ok(mut mixer) = self.mixer.lock() {
-            mixer.cue(samples, gain);
+            mixer.cue(samples, gain, rate);
         }
     }
 
@@ -1101,7 +1101,9 @@ const CUE_LIMIT: usize = 12;
 /// A map sound being played.
 struct Cue {
     samples: Arc<[f32]>,
-    at: usize,
+    /// Where it has got to, between samples when it plays at another rate.
+    at: f64,
+    rate: f64,
     gain: f32,
 }
 
@@ -1119,13 +1121,17 @@ struct Mixer {
     pocket: crate::pocket_audio::PocketAudio,
 }
 impl Mixer {
-    fn cue(&mut self, samples: Arc<[f32]>, gain: f32) {
+    fn cue(&mut self, samples: Arc<[f32]>, gain: f32, rate: f32) {
         if !gain.is_finite() || gain <= 0.001 {
             return;
         }
         let gain = gain.clamp(0., 1.);
+        // Two octaves either way is as far as any cue goes.
+        let rate = f64::from(if rate.is_finite() { rate } else { 1. }).clamp(0.25, 4.);
         if let Some(cue) = self.cues.iter_mut().rev().find(|cue| {
-            Arc::ptr_eq(&cue.samples, &samples) && cue.at < VOICE_SAMPLE_RATE as usize / 40
+            Arc::ptr_eq(&cue.samples, &samples)
+                && (cue.rate - rate).abs() < 1e-3
+                && cue.at < f64::from(VOICE_SAMPLE_RATE) / 40.
         }) {
             cue.gain = cue.gain.max(gain);
             return;
@@ -1133,7 +1139,8 @@ impl Mixer {
         if self.cues.len() < CUE_LIMIT {
             self.cues.push(Cue {
                 samples,
-                at: 0,
+                at: 0.,
+                rate,
                 gain,
             });
         }
@@ -1145,12 +1152,19 @@ impl Mixer {
             let mut cues = 0.;
             let mut finished = false;
             for cue in &mut self.cues {
-                cues += cue.samples.get(cue.at).copied().unwrap_or(0.) * cue.gain;
-                cue.at += 1;
-                finished |= cue.at >= cue.samples.len();
+                // Between two samples when it plays at another rate; at its
+                // own rate this is exactly the sample.
+                let index = cue.at as usize;
+                let between = (cue.at - index as f64) as f32;
+                let here = cue.samples.get(index).copied().unwrap_or(0.);
+                let next = cue.samples.get(index + 1).copied().unwrap_or(0.);
+                cues += (here + (next - here) * between) * cue.gain;
+                cue.at += cue.rate;
+                finished |= cue.at as usize >= cue.samples.len();
             }
             if finished {
-                self.cues.retain(|cue| cue.at < cue.samples.len());
+                self.cues
+                    .retain(|cue| (cue.at as usize) < cue.samples.len());
             }
             self.b = self.voices.values_mut().map(Playback::sample).sum::<f32>() * self.volume
                 + self.alarm.pop_front().unwrap_or(0.) * self.alarm_volume
@@ -1251,13 +1265,13 @@ mod tests {
             ..Default::default()
         };
         let chime = crate::map_sounds::samples(tankyard_content::MapSound::Chime);
-        mixer.cue(chime.clone(), 0.2);
+        mixer.cue(chime.clone(), 0.2, 1.);
         for _ in 0..480 {
             mixer.sample(48_000);
         }
         let at = mixer.cues[0].at;
         for _ in 0..100 {
-            mixer.cue(chime.clone(), 0.6);
+            mixer.cue(chime.clone(), 0.6, 1.);
         }
         assert_eq!(mixer.cues.len(), 1);
         assert_eq!(mixer.cues[0].at, at);
@@ -1265,16 +1279,16 @@ mod tests {
         for _ in 0..1200 {
             mixer.sample(48_000);
         }
-        mixer.cue(chime, 0.3);
+        mixer.cue(chime, 0.3, 1.);
         assert_eq!(mixer.cues.len(), 2, "a later trigger plays separately");
         let oldest = mixer.cues[0].samples.clone();
         for _ in 0..100 {
-            mixer.cue(Arc::from(vec![0.2; 100]), 0.5);
+            mixer.cue(Arc::from(vec![0.2; 100]), 0.5, 1.);
         }
         assert_eq!(mixer.cues.len(), CUE_LIMIT);
         assert!(Arc::ptr_eq(&oldest, &mixer.cues[0].samples));
         for gain in [f32::NAN, f32::INFINITY, -1., 0.] {
-            mixer.cue(Arc::from(vec![0.2; 100]), gain);
+            mixer.cue(Arc::from(vec![0.2; 100]), gain, 1.);
         }
         for rate in [44_100, 48_000, 96_000] {
             for _ in 0..rate * 2 {
@@ -1287,12 +1301,47 @@ mod tests {
     }
 
     #[test]
+    fn a_cue_at_another_rate_plays_faster_or_slower_and_stays_smooth() {
+        let mut mixer = Mixer {
+            cue_volume: 1.,
+            ..Default::default()
+        };
+        let ramp: Arc<[f32]> = (0..400).map(|i| i as f32 / 1000.).collect();
+        mixer.cue(ramp.clone(), 1., 2.);
+        mixer.cue(ramp.clone(), 1., 0.5);
+        mixer.cue(ramp, 1., 1.);
+        assert_eq!(
+            mixer.cues.len(),
+            3,
+            "the same sound at other pitches plays apart"
+        );
+        for _ in 0..201 {
+            mixer.sample(48_000);
+        }
+        assert_eq!(
+            mixer.cues.len(),
+            2,
+            "twice as fast is done in half the time"
+        );
+        // Half as fast lands between samples and takes their average.
+        let slow = mixer.cues.iter().find(|cue| cue.rate < 1.).unwrap();
+        assert!((slow.at - 100.).abs() < 1e-9);
+        for _ in 0..1000 {
+            let sample = mixer.sample(48_000);
+            assert!(sample.is_finite() && sample.abs() <= 1.);
+        }
+        assert!(mixer.cues.is_empty());
+        mixer.cue(Arc::from(vec![0.2; 10]), 0.5, f32::NAN);
+        assert_eq!(mixer.cues[0].rate, 1.);
+    }
+
+    #[test]
     fn volume_changes_and_mute_apply_to_map_cues_already_playing() {
         let mut mixer = Mixer {
             cue_volume: 0.5,
             ..Default::default()
         };
-        mixer.cue(Arc::from(vec![0.4; 100]), 0.5);
+        mixer.cue(Arc::from(vec![0.4; 100]), 0.5, 1.);
         for _ in 0..8 {
             mixer.sample(48_000);
         }

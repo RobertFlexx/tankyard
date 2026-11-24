@@ -1,10 +1,9 @@
 //! Logic preview: the arena's triggers run in the editor with the same rule
 //! engine servers use, with a test tank at the pointer for area triggers.
 use tankyard_content::{
-    GroupPoses, HudCellKind, HudPin, HudWidget, MapCounters, MapDef, MapSound, MapTrigger, UiFill,
-    UiPin,
+    GroupPoses, HudCellKind, HudPin, HudWidget, MapCounters, MapDef, MapTrigger, UiFill, UiPin,
 };
-use tankyard_core::{DT, LogicEffect, LogicInput, MapLogic, Occupant, V2, WorldConfig};
+use tankyard_core::{DT, LogicEffect, LogicInput, MapLogic, Occupant, SoundCue, V2, WorldConfig};
 
 /// A trigger's gate as the preview sees it now.
 pub struct GateView {
@@ -49,8 +48,8 @@ pub struct Preview {
     /// A Shake screen that reached the test tank: strength from 0 to 1, and
     /// the round time it ends.
     pub shake: Option<(f32, f32)>,
-    /// Play sound triggers since the editor last played them, with volume.
-    pub sounds: Vec<(MapSound, f32)>,
+    /// Play sound triggers since the editor last played them.
+    pub sounds: Vec<SoundCue>,
     /// Where the test tank was last, for gates that count tanks inside.
     probe: Option<V2>,
     logic: MapLogic,
@@ -357,12 +356,12 @@ impl Preview {
                         None,
                     )
                 }
-                LogicEffect::Sound { sound, volume, at } => {
+                LogicEffect::Sound { cue, at } => {
                     if self.sounds.len() < 8 {
-                        self.sounds.push((sound, volume));
+                        self.sounds.push(cue);
                     }
                     (
-                        format!("Plays the {} sound", sound.name().to_lowercase()),
+                        format!("Plays the {} sound", cue.sound.name().to_lowercase()),
                         Some(at),
                     )
                 }

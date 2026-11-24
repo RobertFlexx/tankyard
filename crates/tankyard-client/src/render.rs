@@ -860,10 +860,22 @@ pub fn world(
     } else {
         (settings.effects / 0.8).clamp(0., 1.25)
     };
+    // Carried between ticks, so spinning launchers don't step at 60 Hz.
+    let boss_time = crate::accessibility::motion_time(animation_time);
+    let mut streams = crate::boss_fx::Streams::default();
     for projectile in &snapshot.projectiles {
         // Fixed-step simulation / unlocked rendering: interpolate local bullets
         // between authoritative 60 Hz positions without altering collisions.
         let interpolated = projectile.previous.lerp(projectile.pos, interpolation);
+        // A plasma stream is drawn as one ribbon through all its rounds, and
+        // the ones just off screen still shape the part that's on it.
+        if effects
+            .boss_fx
+            .is_stream_round(projectile.owner, projectile.kind, projectile.vel)
+        {
+            streams.note(projectile.owner, view.screen(interpolated), projectile.age);
+            continue;
+        }
         if !view.visible(interpolated, projectile.radius + 30.0) {
             continue;
         }
@@ -1015,21 +1027,62 @@ pub fn world(
         interpolation,
         (local, crate::rifts::team_of(snapshot, local)),
     );
-    // Carried between ticks, so spinning launchers don't step at 60 Hz.
-    let boss_time = crate::accessibility::motion_time(animation_time);
+    effects
+        .boss_fx
+        .rail_streams(&mut light, view, &snapshot.bosses, &mut streams, boss_time);
     for boss in &snapshot.bosses {
         let position = previous_positions
             .get(&boss.id)
             .map_or(boss.pos, |&(previous, _)| {
                 crate::session::interpolate_position(previous, boss.pos, interpolation)
             });
-        if !view.visible(position, boss.radius + 100.0) {
+        let railgunner = boss.kind == tankyard_core::BossKind::Railgunner;
+        if railgunner {
+            // It shoots from off screen, so its sight and warning are drawn
+            // whether or not the hull itself is in view.
+            let mark = snapshot
+                .tanks
+                .iter()
+                .find(|tank| tank.id == boss.target && tank.alive)
+                .map(|tank| {
+                    previous_positions
+                        .get(&tank.id)
+                        .map_or(tank.pos, |&(previous, _)| {
+                            crate::session::interpolate_position(previous, tank.pos, interpolation)
+                        })
+                });
+            effects.boss_fx.rail_sight(
+                &mut light,
+                view,
+                boss,
+                position,
+                snapshot.walls.iter().map(scaled),
+                mark,
+                boss_time,
+            );
+            if boss.attack_windup > 0. {
+                effects.boss_fx.warning(
+                    &mut light,
+                    view,
+                    boss,
+                    position,
+                    snapshot.walls.iter().map(scaled),
+                    boss_time,
+                );
+            }
+        }
+        let reach = if railgunner {
+            boss.radius * 2.6
+        } else {
+            boss.radius + 100.0
+        };
+        if !view.visible(position, reach) {
             continue;
         }
         let p = view.screen(position) + effects.boss_fx.kick(boss, z);
         let r = boss.radius * z;
         let aim = effects.boss_fx.aim(boss);
-        if boss.attack_windup > 0. {
+        if boss.attack_windup > 0. && !railgunner {
             effects.boss_fx.warning(
                 &mut light,
                 view,
@@ -1043,6 +1096,7 @@ pub fn world(
         effects
             .boss_fx
             .dash(&mut light, view, boss, position, boss_time);
+        effects.boss_fx.exhaust(&mut light, view, boss);
         let color = boss_tint(boss, settings.colorblind);
         let turn = (f64::from(animation_time) * f64::from(boss.kind.spin()))
             .rem_euclid(std::f64::consts::TAU) as f32;
@@ -1063,6 +1117,7 @@ pub fn world(
                 phase: boss.phase,
                 charge,
                 lit: true,
+                ..effects.boss_fx.rail_pose(boss)
             },
             boss.mothership.then_some(color),
             &mut draw_model_primitive,
@@ -1076,6 +1131,11 @@ pub fn world(
             boss_time,
             armor,
         );
+        if railgunner {
+            effects
+                .boss_fx
+                .rail_lights(&mut light, boss, p, r, boss_time);
+        }
         boss_health_bar(
             p,
             r,
@@ -1101,6 +1161,27 @@ pub fn world(
             18.0 * z,
             if dark { text_color() } else { WORLD_TEXT },
         );
+    }
+    // A destroyed Railgunner stays in one piece just long enough to burn.
+    for (at, radius, aim) in effects.boss_fx.wrecks() {
+        if view.visible(at, radius * 2.6) {
+            tankyard_client::boss_model::boss_model_geometry(
+                tankyard_core::BossKind::Railgunner,
+                view.screen(at),
+                radius * z,
+                tankyard_client::boss_model::Pose {
+                    aim,
+                    time: boss_time,
+                    phase: 3,
+                    lit: true,
+                    vent: 1.,
+                    open: 0.72,
+                    ..Default::default()
+                },
+                None,
+                &mut draw_model_primitive,
+            );
+        }
     }
     // Rounds and their trails run under the tanks; anything added from here
     // on is on or above them.
@@ -1549,13 +1630,33 @@ pub fn world(
     TANK_COVER.set(cover);
     for popup in &effects.popups {
         let p = view.screen(popup.pos);
-        center_label(
-            &popup.text,
-            p.x,
-            p.y - 40.0 * z,
-            18.0 * z,
-            alpha(popup.color, (popup.life / 0.5).min(1.0)),
-        );
+        let opacity = (popup.life / 0.5).min(1.0);
+        if popup.big {
+            // Big enough to read through the flash it's sitting on: it lands
+            // oversized, settles, and carries a dark edge.
+            let age = (crate::effects::BIG_POPUP_SECONDS - popup.life).max(0.);
+            let settle = if crate::accessibility::motion_time(1.) == 0. {
+                0.
+            } else {
+                (1. - age / 0.16).max(0.).powi(2)
+            };
+            let size = 30.0 * z * (1. + 0.38 * settle);
+            let y = p.y - (52.0 + 10.0 * (1. - settle)) * z;
+            let edge = Color::new(0.02, 0.025, 0.04, 0.82 * opacity);
+            let step = (1.6 * z).max(1.);
+            for (x, y_off) in [(-step, 0.), (step, 0.), (0., -step), (0., step)] {
+                center_label(&popup.text, p.x + x, y + y_off, size, edge);
+            }
+            center_label(&popup.text, p.x, y, size, alpha(popup.color, opacity));
+        } else {
+            center_label(
+                &popup.text,
+                p.x,
+                p.y - 40.0 * z,
+                18.0 * z,
+                alpha(popup.color, opacity),
+            );
+        }
     }
 }
 /// This frame's tank silhouettes and conservative circles around them. The

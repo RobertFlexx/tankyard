@@ -1,18 +1,32 @@
 //! The line a round has really flown, smoothed into one curve, and the ribbons
 //! of light laid along it.
 //!
+//! A ribbon is gas left hanging in the air. Each point stays where it was laid,
+//! keeps a little of the push the round gave it, and is then carried off by
+//! slow eddies, so a ribbon holds its shape while the round flies on and comes
+//! apart from the tail. Any ripple in it is fixed to the air for the same
+//! reason: tied to the round, it would slide along like a picture being dragged.
+//!
 //! A ribbon is measured by distance from the round rather than by how many
 //! points its trail holds, so laying a new point leaves its shape alone. It
 //! swells out of nothing at the round and thins away to nothing at its tail,
-//! so neither end shows an edge. Road older than [`LINGER`] seconds is let go,
+//! so neither end shows an edge. Road older than its trail's linger is let go,
 //! so a round that slows or stops draws its trail back in after it.
 use super::{Fuel, TRAIL_POINTS, Trail};
 use crate::emission::{Emission, Layer, Stop};
 use crate::render::View;
 use macroquad::prelude::*;
+use tankyard_core::V2;
 
 /// Seconds a stretch of road stays lit after the round has left it.
 pub(super) const LINGER: f32 = 0.42;
+/// How much of a round's speed the gas it leaves keeps, and the most that is.
+pub(super) const CARRY: f32 = 0.055;
+pub(super) const MOST_CARRY: f32 = 130.;
+/// How quickly that push dies away.
+pub(super) const CARRY_DRAG: f32 = 7.;
+/// How long new gas holds together before the air starts to take it.
+pub(super) const HOLDS: f32 = 0.16;
 /// Sections along a ribbon, and how many lower shape quality spends.
 pub(super) const FINE: usize = 15;
 pub(super) const PLAIN: usize = 9;
@@ -21,6 +35,25 @@ pub(super) const PLAIN: usize = 9;
 const CORNER: f32 = 0.3;
 /// Room for the round itself, every point of its trail and where it gives out.
 const MOST: usize = TRAIL_POINTS + 2;
+
+/// How the air is moving at `at`, in world units a second: a few slow eddies
+/// laid over each other. Each runs across its own wave, so the flow carries gas
+/// around without piling it up or thinning it out.
+pub(super) fn air(at: V2, time: f32) -> V2 {
+    // Wave x, wave y, flow x, flow y, how fast it turns over, where it starts.
+    const EDDIES: [(f32, f32, f32, f32, f32, f32); 4] = [
+        (0.0083, 0.0127, 28.5, -18.6, 0.71, 0.4),
+        (-0.0191, 0.0074, 9.4, 24.3, 1.13, 1.9),
+        (0.0052, -0.0263, -19.6, -3.9, 1.67, 3.7),
+        (0.0417, 0.0291, 8., -11.5, 2.6, 5.2),
+    ];
+    let mut flow = V2::ZERO;
+    for (wave_x, wave_y, flow_x, flow_y, rate, start) in EDDIES {
+        let swing = (wave_x * at.x + wave_y * at.y + rate * time + start).cos();
+        flow += V2::new(flow_x, flow_y) * swing;
+    }
+    flow
+}
 
 /// Where a round has been, from the round backward, on screen.
 #[derive(Clone, Copy, Debug)]
@@ -31,7 +64,12 @@ pub(super) struct Path {
     ways: [Vec2; MOST],
     /// How far each point is from the round.
     along: [f32; MOST],
+    /// How long ago each point was laid.
+    ages: [f32; MOST],
     count: usize,
+    /// How far the round has come in all, on screen: the distance a ripple in
+    /// the gas is measured from, so it holds still in the air.
+    flown: f32,
 }
 
 impl Path {
@@ -40,46 +78,56 @@ impl Path {
             points: [head; MOST],
             ways: [Vec2::ZERO; MOST],
             along: [0.; MOST],
+            ages: [0.; MOST],
             count: 1,
+            flown: 0.,
         }
     }
 
     /// A straight stretch behind `head`, for a round with no trail of its own.
     pub(super) fn straight(head: Vec2, way: Vec2, length: f32) -> Self {
         let mut path = Self::new(head);
-        path.extend(head + way * length);
+        path.extend(head + way * length, 0.);
         path.finished(-way)
     }
 
     /// The road `trail` has laid, ending at `head`.
     pub(super) fn of(trail: &Trail, view: &View, head: Vec2, heading: Vec2) -> Self {
-        Self::through(
+        let mut path = Self::through(
             head,
             heading,
             (0..usize::from(trail.count))
                 .map(|back| (view.screen(trail.point(back)), trail.age(back))),
-        )
+            trail.linger,
+        );
+        path.flown = trail.flown * view.zoom;
+        path
     }
 
     /// The path from `head` back through `points`, newest first, each with
-    /// its age, up to where [`LINGER`] runs out.
-    fn through(head: Vec2, heading: Vec2, points: impl Iterator<Item = (Vec2, f32)>) -> Self {
+    /// its age, up to where `linger` runs out.
+    fn through(
+        head: Vec2,
+        heading: Vec2,
+        points: impl Iterator<Item = (Vec2, f32)>,
+        linger: f32,
+    ) -> Self {
         let mut path = Self::new(head);
         let (mut newer, mut newer_age) = (head, 0.);
         for (at, age) in points {
-            if age >= LINGER {
-                let t = ((LINGER - newer_age) / (age - newer_age).max(1e-4)).clamp(0., 1.);
-                path.extend(newer.lerp(at, t));
+            if age >= linger {
+                let t = ((linger - newer_age) / (age - newer_age).max(1e-4)).clamp(0., 1.);
+                path.extend(newer.lerp(at, t), linger);
                 break;
             }
-            path.extend(at);
+            path.extend(at, age);
             (newer, newer_age) = (at, age);
         }
         path.finished(heading)
     }
 
     /// Add the next point back, unless it lies on the last one.
-    fn extend(&mut self, at: Vec2) {
+    fn extend(&mut self, at: Vec2, age: f32) {
         if self.count >= MOST {
             return;
         }
@@ -90,7 +138,26 @@ impl Path {
         }
         self.points[self.count] = at;
         self.along[self.count] = self.along[self.count - 1] + gap;
+        self.ages[self.count] = age;
         self.count += 1;
+    }
+
+    /// How old the gas is `distance` back from the round, in seconds.
+    pub(super) fn age(&self, distance: f32) -> f32 {
+        if self.count < 2 || distance <= 0. {
+            return self.ages[0];
+        }
+        let after = (1..self.count)
+            .find(|&index| self.along[index] >= distance)
+            .unwrap_or(self.count - 1);
+        let span = (self.along[after] - self.along[after - 1]).max(1e-3);
+        let t = ((distance - self.along[after - 1]) / span).clamp(0., 1.);
+        self.ages[after - 1] + (self.ages[after] - self.ages[after - 1]) * t
+    }
+
+    /// The distance `at` back from the round, as a place in the air.
+    pub(super) fn in_air(&self, at: f32) -> f32 {
+        self.flown - at
     }
 
     /// Work out which way the curve runs through each point.
@@ -174,7 +241,7 @@ impl Path {
             let (point, way) = self.at(at, &mut cursor);
             let across = vec2(-way.y, way.x);
             *slot = (
-                point + across * sway.offset(at, (at / reach.max(1e-3)).clamp(0., 1.)),
+                point + across * sway.offset(self.in_air(at), (at / reach.max(1e-3)).clamp(0., 1.)),
                 across,
             );
         }
@@ -187,8 +254,8 @@ impl Path {
     }
 }
 
-/// How a ribbon writhes: a wave running down it from the round, nothing at
-/// the round and growing toward the tail.
+/// How a ribbon billows: a ripple fixed to the air, turning over slowly, with
+/// nothing at the round and growing toward the tail as the gas ages.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Sway {
     size: f32,
@@ -209,12 +276,13 @@ impl Sway {
     /// The way a round's fuel moves, for a round of radius `r`.
     pub(super) fn of(fuel: Fuel, r: f32, clock: f32) -> Self {
         let (size, wavelength, rate) = match fuel {
-            Fuel::Fire => (0.34, 3.2, 11.),
-            Fuel::Arc => (0.3, 1.8, 24.),
-            Fuel::Void => (0.26, 3.7, 5.5),
-            Fuel::Spectrum => (0.17, 4.4, 7.),
-            Fuel::Star => (0.16, 3.9, 8.),
-            Fuel::Plasma => (0.11, 3.5, 6.5),
+            Fuel::Fire => (0.34, 3.2, 3.1),
+            Fuel::Arc => (0.3, 1.8, 7.5),
+            Fuel::Void => (0.26, 3.7, 1.5),
+            Fuel::Spectrum => (0.17, 4.4, 1.9),
+            Fuel::Star => (0.16, 3.9, 2.2),
+            Fuel::Plasma => (0.11, 3.5, 1.8),
+            Fuel::Ion => (0.13, 2.9, 2.6),
         };
         Self {
             size: size * r,
@@ -224,11 +292,11 @@ impl Sway {
         }
     }
 
-    fn offset(self, at: f32, out: f32) -> f32 {
+    fn offset(self, place: f32, out: f32) -> f32 {
         if self.size <= 0. {
             return 0.;
         }
-        let phase = at / self.wavelength - self.clock * self.rate;
+        let phase = place / self.wavelength - self.clock * self.rate;
         let wave = (phase.sin() + 0.45 * (phase * 2.3 + 1.7).sin()) / 1.45;
         self.size * wave * out.powf(1.35)
     }
@@ -331,8 +399,8 @@ mod tests {
         let head = vec2(radius, 0.);
         let heading = vec2(0., 1.);
         let points = curve(0., radius, 12., TRAIL_POINTS);
-        let with = Path::through(head, heading, points.iter().copied());
-        let without = Path::through(head, heading, points[1..].iter().copied());
+        let with = Path::through(head, heading, points.iter().copied(), LINGER);
+        let without = Path::through(head, heading, points[1..].iter().copied(), LINGER);
         for step in 1..=16 {
             let distance = step as f32 * 6.;
             let gap = at(&with, distance).distance(at(&without, distance));
@@ -346,7 +414,7 @@ mod tests {
     fn the_curve_goes_through_every_point() {
         let head = vec2(200., 0.);
         let points = curve(0., 200., 12., 8);
-        let path = Path::through(head, vec2(0., 1.), points.iter().copied());
+        let path = Path::through(head, vec2(0., 1.), points.iter().copied(), LINGER);
         for index in 0..path.count {
             let p = at(&path, path.along[index]);
             assert!(p.distance(path.points[index]) < 0.01);
@@ -364,7 +432,7 @@ mod tests {
             (vec2(0., 10.), 0.04),
             (vec2(-10., 20.), 0.05),
         ];
-        let path = Path::through(head, vec2(1., 1.), points.into_iter());
+        let path = Path::through(head, vec2(1., 1.), points.into_iter(), LINGER);
         let mut cursor = 0;
         for step in 0..=100 {
             let distance = path.length() * step as f32 / 100.;
@@ -383,11 +451,16 @@ mod tests {
                 .map(move |i| (vec2(i as f32 * -10., 0.), aged + i as f32 * 0.01))
                 .collect::<Vec<_>>()
         };
-        let moving = Path::through(head, vec2(1., 0.), points(0.).into_iter());
+        let moving = Path::through(head, vec2(1., 0.), points(0.).into_iter(), LINGER);
         assert!((moving.length() - 100.).abs() < 0.01);
-        let halfway = Path::through(head, vec2(1., 0.), points(LINGER - 0.05).into_iter());
+        let halfway = Path::through(
+            head,
+            vec2(1., 0.),
+            points(LINGER - 0.05).into_iter(),
+            LINGER,
+        );
         assert!(halfway.length() < 60., "{}", halfway.length());
-        let gone = Path::through(head, vec2(1., 0.), points(LINGER + 1.).into_iter());
+        let gone = Path::through(head, vec2(1., 0.), points(LINGER + 1.).into_iter(), LINGER);
         assert!(gone.length() < 4., "{}", gone.length());
     }
 
@@ -401,7 +474,7 @@ mod tests {
             (vec2(3., 0.), 0.04),
         ];
         for heading in [Vec2::ZERO, vec2(f32::NAN, 0.), vec2(0., 5.)] {
-            let path = Path::through(Vec2::ZERO, heading, bad.into_iter());
+            let path = Path::through(Vec2::ZERO, heading, bad.into_iter(), LINGER);
             let line = path.line(
                 4.,
                 path.length().max(1.),
@@ -435,6 +508,48 @@ mod tests {
         // Held still, it's a straight line.
         let still = path.line(0., 100., FINE, Sway::STILL);
         assert!(still.spine[..still.count].iter().all(|&(p, _)| p.y == 0.));
+    }
+
+    #[test]
+    fn a_ripple_stays_in_the_air_while_the_round_flies_through_it() {
+        let sway = Sway::of(Fuel::Fire, 10., 2.);
+        let line_at = |flown: f32| {
+            let mut path = Path::straight(vec2(flown, 0.), vec2(-1., 0.), 100.);
+            path.flown = flown;
+            path.line(0., 100., FINE, sway)
+        };
+        // The gas forty units back from the round now, and the same patch of
+        // air once the round has flown a further ten.
+        let wave = |flown: f32, back: f32| sway.offset(flown - back, 1.);
+        assert!((wave(50., 40.) - wave(60., 50.)).abs() < 1e-4);
+        assert!((wave(50., 40.) - wave(60., 40.)).abs() > 0.05, "moved on");
+        assert!(line_at(50.).spine[8].0.y.is_finite());
+    }
+
+    #[test]
+    fn the_air_carries_gas_without_piling_it_up() {
+        // The flow in minus the flow out of a small box should come to nothing.
+        let h = 0.5;
+        for (x, y) in [(0., 0.), (130., -40.), (-900., 712.), (2400., 1900.)] {
+            let time = 3.7;
+            let dx = air(V2::new(x + h, y), time).x - air(V2::new(x - h, y), time).x;
+            let dy = air(V2::new(x, y + h), time).y - air(V2::new(x, y - h), time).y;
+            assert!(((dx + dy) / (2. * h)).abs() < 0.04, "{}", dx + dy);
+            let flow = air(V2::new(x, y), time);
+            assert!(flow.x.is_finite() && flow.length() < 110.);
+        }
+    }
+
+    #[test]
+    fn age_runs_from_the_round_to_the_tail() {
+        let points: Vec<_> = (1..=4)
+            .map(|i| (vec2(i as f32 * -10., 0.), i as f32 * 0.1))
+            .collect();
+        let path = Path::through(Vec2::ZERO, vec2(1., 0.), points.into_iter(), 1.);
+        assert_eq!(path.age(-3.), 0.);
+        assert!((path.age(15.) - 0.15).abs() < 1e-3);
+        assert!((path.age(40.) - 0.4).abs() < 1e-3);
+        assert!((path.age(900.) - 0.4).abs() < 1e-3);
     }
 
     #[test]

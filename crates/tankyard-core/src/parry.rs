@@ -87,8 +87,13 @@ impl World {
         ) {
             return false;
         }
-        let (owner, team, pos) = (tank.id, tank.team, tank.pos);
         let ability = ability.unwrap_or(Ability::Parry);
+        if self.clash(projectile, defender, impact, ability) {
+            return true;
+        }
+        let tank = &self.tanks[defender];
+        let shot = &self.projectiles[projectile];
+        let (owner, team, pos) = (tank.id, tank.team, tank.pos);
         let target = shot.owner;
         let target_pos = self.homing_position(target, team, owner);
         let direction = target_pos.map_or_else(

@@ -62,7 +62,12 @@ async fn prompt(name: &str, pack: &Verified, mut backdrop: Option<&mut Ambient>)
     let mut pending: Option<Pending> = None;
     let mut unlocked_at = None;
     let mut retry_at = get_time() + backoff(FAILURES.load(Ordering::Relaxed));
+    let mut reveal = false;
     loop {
+        // This screen runs its own loop, so it starts its own frames. Without
+        // this the click that focused the field stayed spent, and no button
+        // here could ever be clicked after it.
+        begin_frame();
         if is_quit_requested() {
             return false;
         }
@@ -72,6 +77,7 @@ async fn prompt(name: &str, pack: &Verified, mut backdrop: Option<&mut Ambient>)
             && get_time() - at > 0.6
             && !is_mouse_button_down(MouseButton::Left)
             && !is_key_down(KeyCode::Enter)
+            && !is_key_down(KeyCode::KpEnter)
         {
             while get_char_pressed().is_some() {}
             return true;
@@ -92,9 +98,8 @@ async fn prompt(name: &str, pack: &Verified, mut backdrop: Option<&mut Ambient>)
                 Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
                     pending = None;
                     let failures = FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
-                    let wait = backoff(failures);
-                    notice = format!("Incorrect password. Try again in {wait:.0} s.");
-                    retry_at = get_time() + wait;
+                    notice = "Incorrect password.".into();
+                    retry_at = get_time() + backoff(failures);
                     focused = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -148,13 +153,22 @@ async fn prompt(name: &str, pack: &Verified, mut backdrop: Option<&mut Ambient>)
         let available = pending.is_none() && unlocked_at.is_none() && !waiting;
         set_interactive(available);
         text_field(
-            Rect::new(r.x + 36. * s, r.y + 120. * s, r.w - 72. * s, 46. * s),
+            Rect::new(r.x + 36. * s, r.y + 120. * s, r.w - 142. * s, 46. * s),
             &mut password,
             &mut focused,
             256,
             s,
-            true,
+            !reveal,
         );
+        if small_button(
+            Rect::new(r.right() - 100. * s, r.y + 120. * s, 64. * s, 46. * s),
+            if reveal { "Hide" } else { "Show" },
+            s * 0.85,
+        ) {
+            reveal = !reveal;
+            // Peeking shouldn't cost the place in the field.
+            focused = true;
+        }
         let submit = button(
             Rect::new(r.x + 36. * s, r.y + 186. * s, r.w - 72. * s, 42. * s),
             if pending.is_some() {
@@ -180,7 +194,8 @@ async fn prompt(name: &str, pack: &Verified, mut backdrop: Option<&mut Ambient>)
             while get_char_pressed().is_some() {}
             return true;
         }
-        if available && !password.is_empty() && (submit || is_key_pressed(KeyCode::Enter)) {
+        let entered = is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter);
+        if available && !password.is_empty() && (submit || entered) {
             let (reply, receiver) = mpsc::channel();
             let secret = Zeroizing::new(std::mem::take(&mut *password));
             let pack = pack.clone();
@@ -197,11 +212,14 @@ async fn prompt(name: &str, pack: &Verified, mut backdrop: Option<&mut Ambient>)
             }
         }
         set_interactive(true);
-        let notice = if waiting && pending.is_none() && notice.is_empty() {
-            format!(
-                "Too many attempts. Try again in {:.0} s.",
-                (retry_at - get_time()).ceil()
-            )
+        // The wait counts down, and the line stops mentioning it once it's over.
+        let notice = if waiting && pending.is_none() {
+            let left = (retry_at - get_time()).ceil();
+            if notice.is_empty() {
+                format!("Too many attempts. Try again in {left:.0} s.")
+            } else {
+                format!("{notice} Try again in {left:.0} s.")
+            }
         } else {
             notice.clone()
         };
@@ -219,6 +237,7 @@ async fn prompt(name: &str, pack: &Verified, mut backdrop: Option<&mut Ambient>)
             12. * s,
             muted_color(),
         );
+        end_frame();
         next_frame().await;
     }
 }

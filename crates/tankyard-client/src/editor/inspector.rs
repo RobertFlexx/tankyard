@@ -287,6 +287,118 @@ impl Form<'_> {
         self.y += 50. * s;
         changed
     }
+    /// One bar per channel, dragged up or down to weigh it. A drag across
+    /// the bars sets each one it passes, so a slope takes one stroke.
+    pub fn weights(&mut self, weights: &mut [u8], first: u8, shares: bool) -> bool {
+        thread_local! {
+            static DRAGGING: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+        }
+        let s = self.s;
+        let id = self.id("weights");
+        let area = Rect::new(self.x, self.y, self.w, 86. * s);
+        let count = weights.len().max(1);
+        let gap = if count > 16 { 1. } else { 3. } * s;
+        let bar = (area.w - gap * (count - 1) as f32) / count as f32;
+        let pointer = crate::ui_layout::pointer();
+        let down = is_mouse_button_down(MouseButton::Left);
+        let column =
+            |x: f32| (((x - area.x) / (bar + gap)).floor().max(0.) as usize).min(count - 1);
+        let dragging = DRAGGING.with(|drag| {
+            if is_mouse_button_pressed(MouseButton::Left) && contains(area) && take_click() {
+                drag.set(Some(id));
+            } else if !down {
+                drag.set(None);
+            }
+            drag.get() == Some(id)
+        });
+        let mut changed = false;
+        if dragging && !weights.is_empty() {
+            let level = ((area.y + area.h - pointer.y) / area.h * 100.)
+                .round()
+                .clamp(0., 100.) as u8;
+            let slot = &mut weights[column(pointer.x)];
+            changed = *slot != level;
+            *slot = level;
+        }
+        let total: u32 = weights.iter().map(|&w| u32::from(w)).sum();
+        draw_rectangle(
+            area.x,
+            area.y,
+            area.w,
+            area.h,
+            mix(surface_color(), bg_color(), 0.5),
+        );
+        for quarter in 1..4 {
+            let y = area.y + area.h * quarter as f32 / 4.;
+            draw_line(area.x, y, area.x + area.w, y, 1., alpha(line_color(), 0.35));
+        }
+        let pointed = (dragging || contains(area)).then(|| column(pointer.x));
+        for (i, &weight) in weights.iter().enumerate() {
+            let x = area.x + i as f32 * (bar + gap);
+            let h = area.h * f32::from(weight) / 100.;
+            let lit = pointed == Some(i);
+            let color = if weight == 0 {
+                alpha(muted_color(), 0.35)
+            } else if lit {
+                mix(accent(), WHITE, 0.25)
+            } else {
+                accent()
+            };
+            draw_rectangle(
+                x,
+                area.y + area.h - h.max(1.5 * s),
+                bar,
+                h.max(1.5 * s),
+                color,
+            );
+            // The weight itself, above its bar, where there's room.
+            if bar >= 26. * s {
+                let text = weight.to_string();
+                let size = 10.5 * s;
+                let y = (area.y + area.h - h - 4. * s).max(area.y + size);
+                label(
+                    &text,
+                    x + (bar - label_width(&text, size)) * 0.5,
+                    y,
+                    size,
+                    if lit { text_color() } else { muted_color() },
+                );
+            }
+            if bar >= 16. * s || i % 4 == 0 {
+                label(
+                    &(u32::from(first) + i as u32).to_string(),
+                    x + 1. * s,
+                    area.y + area.h + 13. * s,
+                    10.5 * s,
+                    if lit { text_color() } else { muted_color() },
+                );
+            }
+        }
+        let caption = match pointed.map(|i| (i, weights.get(i).copied().unwrap_or(0))) {
+            Some((i, weight)) => {
+                let channel = u32::from(first) + i as u32;
+                if shares && total > 0 {
+                    format!(
+                        "Channel {channel}: weight {weight}, comes up {:.0}%",
+                        f64::from(weight) / f64::from(total) * 100.
+                    )
+                } else {
+                    format!("Channel {channel}: weight {weight}")
+                }
+            }
+            None if total == 0 => "Every weight is 0, so nothing is picked".to_owned(),
+            None => "Drag the bars to weigh each channel".to_owned(),
+        };
+        label(
+            &caption,
+            area.x,
+            area.y + area.h + 30. * s,
+            11.5 * s,
+            if total == 0 { RED } else { muted_color() },
+        );
+        self.y += area.h + 42. * s;
+        changed
+    }
     pub fn toggle(&mut self, title: &str, value: &mut bool) -> bool {
         let changed = toggle(
             Rect::new(self.x, self.y, self.w, 30. * self.s),
@@ -478,7 +590,6 @@ impl Form<'_> {
     }
 }
 
-/// What the inspector asks of the editor once its form is done.
 /// What the form last made of one object. A form keeps values in range as it
 /// draws, so an object from a hand-written pack can come out a little different
 /// just by being looked at. Only a change from what it first showed is an edit,
@@ -512,6 +623,7 @@ impl<T: Clone + PartialEq> FormShown<T> {
     }
 }
 
+/// What the inspector asks of the editor once its form is done.
 enum Request {
     None,
     Locate(Key),
@@ -532,6 +644,8 @@ enum Request {
     Notice(String),
     /// Select every object in a group.
     SelectGroup(u8),
+    /// Play a sound as a Play sound trigger would.
+    Hear(tankyard_core::SoundCue),
 }
 
 impl Editor {
@@ -728,6 +842,7 @@ impl Editor {
                 self.preview.fire(&self.doc.map, &config, index, self.probe);
             }
             Request::Notice(text) => self.say(text),
+            Request::Hear(cue) => self.preview.sounds.push(cue),
         }
     }
 
@@ -1152,7 +1267,7 @@ impl Editor {
                 }
             }
             Object::Trigger(t) => {
-                if let Some(other) = trigger_form(
+                match trigger_form(
                     &mut f,
                     t,
                     live.as_ref(),
@@ -1161,7 +1276,8 @@ impl Editor {
                     &names,
                     &connections,
                 ) {
-                    request = Request::Locate(Key::Trigger(other));
+                    Request::None => {}
+                    asked => request = asked,
                 }
             }
             Object::Spawn(region) => {
@@ -2298,8 +2414,9 @@ fn trigger_form(
     map_paths: usize,
     names: &[GroupName],
     connections: &Connections,
-) -> Option<usize> {
+) -> Request {
     let s = f.s;
+    let mut ask = Request::None;
     let summary = describe_trigger_named(t, names);
     let lines = wrapped_lines(&summary, f.w - 18. * s, 13. * s);
     let h = 14. * s + lines.len() as f32 * 18. * s;
@@ -2500,14 +2617,17 @@ fn trigger_form(
         TriggerAction::Random | TriggerAction::Sequence => {
             t.group = t.group.clamp(1, MAP_CHANNELS - 1);
             f.stepper("First channel", &mut t.group, [1, MAP_CHANNELS - 1], None);
-            let most = i32::from(MAP_CHANNELS - t.group) + 1;
+            let mut most = i32::from(MAP_CHANNELS - t.group) + 1;
+            if t.action == TriggerAction::Random && t.pick == RandomPick::Weighted {
+                most = most.min(RANDOM_WEIGHTS as i32);
+            }
             t.amount = t.amount.clamp(2, most);
             f.integer("Channels", &mut t.amount, [2, most]);
-            f.note(if t.action == TriggerAction::Random {
-                "Sends on one channel, picked at random each time."
+            if t.action == TriggerAction::Random {
+                random_form(f, t);
             } else {
-                "Sends on the next channel each time it acts and starts over after the last. Reset triggers takes it back to the first."
-            });
+                f.note("Sends on the next channel each time it acts and starts over after the last. Reset triggers takes it back to the first.");
+            }
         }
         TriggerAction::Heal | TriggerAction::Hurt => {
             t.amount = t.amount.clamp(1, 100);
@@ -2676,9 +2796,56 @@ fn trigger_form(
         }
         TriggerAction::Sound => {
             f.pick("", &mut t.sound, &MapSound::ALL, MapSound::name, 4);
+            if f.buttons(&["Hear it"], true).is_some() {
+                ask = Request::Hear(tankyard_core::SoundCue::of(t, 0));
+            }
             t.amount = t.amount.clamp(1, 100);
             f.integer("Volume (%)", &mut t.amount, [1, 100]);
-            f.note("Plays at the middle of this trigger's area, quieter for players further away. It uses the Effects volume.");
+            let mut pitch = i32::from(t.pitch);
+            f.integer(
+                "Pitch (semitones)",
+                &mut pitch,
+                [-i32::from(SOUND_PITCH), i32::from(SOUND_PITCH)],
+            );
+            t.pitch = pitch as i8;
+            let mut wander = f32::from(t.vary) / 10.;
+            f.number(
+                "Pitch wander (semitones)",
+                &mut wander,
+                [0., f32::from(SOUND_VARY) / 10.],
+                0.1,
+            );
+            t.vary = (wander * 10.).round().clamp(0., f32::from(SOUND_VARY)) as u8;
+            if t.vary > 0 {
+                f.note("Each play lands somewhere within this much of the pitch, either way, so a sound heard often doesn't sound copied.");
+            }
+            let mut plays = i32::from(t.repeat.max(1));
+            f.integer("Plays", &mut plays, [1, i32::from(SOUND_REPEATS)]);
+            t.repeat = if plays > 1 { plays as u8 } else { 0 };
+            if plays > 1 {
+                t.gap = t.gap.clamp(0., SOUND_GAP);
+                f.number("Between plays (s)", &mut t.gap, [0., SOUND_GAP], 0.05);
+            } else {
+                t.gap = 0.;
+            }
+            f.pick("Heard", &mut t.range, &SoundRange::ALL, SoundRange::name, 2);
+            f.note(match t.range {
+                SoundRange::Near => "Plays at the middle of this trigger's area, quieter for players further away.",
+                SoundRange::Far => "Plays at the middle of this trigger's area and carries about two and a half times as far before it fades.",
+                SoundRange::Everywhere => "Every player hears it at full volume, wherever they are.",
+                SoundRange::Cause => "Only the player whose tank set it off hears it, at full volume. With no tank behind it, such as on a timer, nobody does.",
+            });
+            let classic = usize::from(t.sound.index()) < MapSound::CLASSIC
+                && t.pitch == 0
+                && t.vary == 0
+                && t.repeat <= 1
+                && t.range == SoundRange::Near;
+            if !classic {
+                f.note(&format!(
+                    "Players on versions before 2.0.5 hear the {} sound once, as if nearby.",
+                    t.sound.fallback().name().to_lowercase()
+                ));
+            }
         }
         TriggerAction::Shove => {
             t.group = t.group.clamp(1, MAP_GROUPS);
@@ -2797,7 +2964,10 @@ fn trigger_form(
     f.integer("Chance %", &mut chance, [1, 100]);
     t.chance = chance as u8;
     f.toggle("Once per round", &mut t.once);
-    picked
+    match picked {
+        Some(other) => Request::Locate(Key::Trigger(other)),
+        None => ask,
+    }
 }
 
 thread_local! {
@@ -3596,6 +3766,40 @@ fn curve_graph(f: &mut Form, easing: Easing) {
 
 /// The gate: up to eight conditions, how they combine and what a shut gate
 /// sends instead, with what each one says in the preview right now.
+/// How a Random signal picks: the way, how many channels at once, and for
+/// Weighted, how much each channel counts.
+fn random_form(f: &mut Form, t: &mut MapTrigger) {
+    let s = f.s;
+    f.pick("Pick", &mut t.pick, &RandomPick::ALL, RandomPick::name, 4);
+    let channels = t.amount.clamp(2, i32::from(MAP_CHANNELS)) as usize;
+    let mut picks = i32::from(t.picks.max(1));
+    f.integer("Channels at once", &mut picks, [1, channels as i32 - 1]);
+    t.picks = if picks > 1 { picks as u8 } else { 0 };
+    let several = picks > 1;
+    f.note(match (t.pick, several) {
+        (RandomPick::Any, false) => "Sends on one channel picked at random each time. The same one can come up twice in a row.",
+        (RandomPick::Any, true) => "Sends on that many different channels, picked at random each time.",
+        (RandomPick::Fresh, _) => "Picks at random but never sends on a channel it used last time.",
+        (RandomPick::Shuffle, _) => "Works through every channel in a random order before any comes up again, so each gets its turn. Reset triggers starts the round over.",
+        (RandomPick::Weighted, _) => "Channels with more weight come up more often, and a channel at 0 never does.",
+    });
+    if t.pick == RandomPick::Weighted {
+        t.weights.resize(channels.min(RANDOM_WEIGHTS), 10);
+        f.y += 4. * s;
+        f.weights(&mut t.weights, t.group, !several);
+        if let Some(choice) = f.buttons(&["Even out", "Each half the last"], true) {
+            for (i, weight) in t.weights.iter_mut().enumerate() {
+                *weight = match choice {
+                    0 => 10,
+                    // 100, 50, 25 ... each channel half as likely as the one
+                    // before, as for rarer and rarer loot.
+                    _ => (100u32 >> i.min(6)) as u8,
+                };
+            }
+        }
+    }
+}
+
 fn gate_form(f: &mut Form, t: &mut MapTrigger, live: Option<&GateView>, free_channel: Option<u8>) {
     let s = f.s;
     f.heading("Only if");
@@ -3625,7 +3829,9 @@ fn gate_form(f: &mut Form, t: &mut MapTrigger, live: Option<&GateView>, free_cha
             }
             right = up.x - 6. * s;
         }
-        if let Some(holds) = live.and_then(|view| view.holds.get(i)) {
+        if test.kind != TestKind::Chance
+            && let Some(holds) = live.and_then(|view| view.holds.get(i))
+        {
             status_pill(
                 if *holds { "holds" } else { "fails" },
                 right,
@@ -3638,11 +3844,29 @@ fn gate_form(f: &mut Form, t: &mut MapTrigger, live: Option<&GateView>, free_cha
         let (x, w) = (f.x, f.w);
         f.x += 10. * s;
         f.w -= 10. * s;
+        let was = test.kind;
         f.pick("", &mut test.kind, &TestKind::ALL, TestKind::name, 3);
+        if test.kind == TestKind::Chance && was != TestKind::Chance {
+            test.value = 50;
+        }
         match test.kind {
             TestKind::Shown | TestKind::Hidden => {
                 test.index = test.index.clamp(1, MAP_GROUPS);
                 f.stepper("Group", &mut test.index, [1, MAP_GROUPS], None);
+            }
+            TestKind::Chance => {
+                let mut other = test.against > 0;
+                f.toggle("Percent from a counter", &mut other);
+                if other {
+                    test.against = test.against.clamp(1, MAP_COUNTERS);
+                    f.stepper("Counter", &mut test.against, [1, MAP_COUNTERS], None);
+                    f.note("Reads the counter as a percent each time, so 0 never holds and 100 or more always does.");
+                } else {
+                    test.against = 0;
+                    test.value = test.value.clamp(0, 100);
+                    f.integer("Chance (%)", &mut test.value, [0, 100]);
+                }
+                f.note("Rolls once each time the trigger tries to act. A Gate to counter stores that same roll's answer.");
             }
             kind => {
                 if kind == TestKind::Counter {
@@ -3717,24 +3941,33 @@ fn gate_form(f: &mut Form, t: &mut MapTrigger, live: Option<&GateView>, free_cha
     }
     if count > 0 {
         if let Some(view) = live {
-            let passed = view.holds.iter().filter(|&&h| h).count();
-            let text = format!(
-                "{passed} of {} hold{}",
-                view.holds.len(),
-                if passed == 1 && view.holds.len() == 1 {
-                    "s"
-                } else {
-                    ""
-                }
-            );
+            // Chance conditions only come up as the trigger acts, so the
+            // preview counts the others and leaves the gate to the roll.
+            let fixed: Vec<bool> = t
+                .conditions()
+                .zip(&view.holds)
+                .filter(|(test, _)| test.kind != TestKind::Chance)
+                .map(|(_, &holds)| holds)
+                .collect();
+            let passed = fixed.iter().filter(|&&h| h).count();
+            let text = match (fixed.len(), t.rolls()) {
+                (0, _) => "Decided by a roll each time".to_owned(),
+                (n, rolls) => format!(
+                    "{passed} of {n} hold{}{}",
+                    if passed == 1 && n == 1 { "s" } else { "" },
+                    if rolls { ", and a roll" } else { "" }
+                ),
+            };
             label(&text, f.x, f.y + 13. * s, 12.5 * s, muted_color());
-            status_pill(
-                if view.open { "open" } else { "shut" },
-                f.x + f.w,
-                f.y + 1.5 * s,
-                view.open,
-                s,
-            );
+            if !t.rolls() {
+                status_pill(
+                    if view.open { "open" } else { "shut" },
+                    f.x + f.w,
+                    f.y + 1.5 * s,
+                    view.open,
+                    s,
+                );
+            }
             f.y += 26. * s;
         }
         if free_channel.is_some() || t.otherwise > 0 {
@@ -3773,7 +4006,7 @@ fn gate_form(f: &mut Form, t: &mut MapTrigger, live: Option<&GateView>, free_cha
             GateMode::Most => "Acts while more than half of the conditions hold: a majority gate.",
         });
     } else {
-        f.note("Conditions look at counters, groups, the tanks inside or the round time when the trigger fires. Several make AND, OR, NAND, NOR, XOR, XNOR, parity and majority gates.");
+        f.note("Conditions look at counters, groups, the tanks inside, the round time or a chance when the trigger fires. Several make AND, OR, NAND, NOR, XOR, XNOR, parity and majority gates.");
     }
 }
 

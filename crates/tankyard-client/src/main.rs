@@ -51,6 +51,7 @@ mod server_status;
 mod session;
 mod settings;
 mod splash;
+mod staff_ui;
 mod startup;
 mod syntax;
 mod tank_tree;
@@ -92,7 +93,7 @@ struct Cli {
     #[arg(long)]
     offline: bool,
     /// Open a practice challenge directly.
-    #[arg(long, value_parser = ["shape_sprint", "drone_drill", "skirmish", "last_stand", "parry_lab", "stasis_lab", "boss_hunt", "trap_fort", "siege_school", "skirmisher_hunt", "trapper_hunt"], conflicts_with_all = ["offline", "host", "join", "connect_token", "class", "level"])]
+    #[arg(long, value_parser = ["shape_sprint", "drone_drill", "skirmish", "last_stand", "parry_lab", "stasis_lab", "boss_hunt", "trap_fort", "siege_school", "skirmisher_hunt", "trapper_hunt", "rail_duel"], conflicts_with_all = ["offline", "host", "join", "connect_token", "class", "level"])]
     practice: Option<String>,
     #[arg(long)]
     host: bool,
@@ -1990,6 +1991,8 @@ impl App {
                 self.settings.effects,
                 self.settings.reduced_motion,
             ));
+            self.effects.boss_fx.set_local(session.player);
+            self.effects.boss_fx.set_camera(self.view.center);
             let boss_fraction = session.render_fraction(self.accumulator / DT);
             let colorblind = self.settings.colorblind;
             let previous = &session.previous_positions;
@@ -2059,20 +2062,35 @@ impl App {
                 self.voice
                     .boss_alarm(self.settings.master_volume * self.settings.effects_volume);
             }
-            // Map sounds play where their trigger is, heard from the camera.
+            // Map sounds play where their trigger is, heard from the camera,
+            // unless the map says they carry further or are for one tank.
             let listener = self.view.center;
             let volume = self.settings.master_volume * self.settings.effects_volume;
+            let now = get_time();
             for event in &sounds {
-                let falloff = map_sounds::falloff(event.pos.distance(listener));
+                let distance = event.pos.distance(listener);
                 if matches!(event.kind, tankyard_core::EventKind::MapSound)
-                    && let Some((sound, gain)) = tankyard_core::sound_of(event.value)
+                    && let Some(cue) = tankyard_core::SoundCue::decode(event.value, event.subject)
                 {
-                    self.voice
-                        .cue(map_sounds::samples(sound), gain * falloff, volume);
+                    let gain = map_sounds::reach(&cue, distance, session.player);
+                    self.effects.map_cues.play(&cue, gain, now);
                 } else if let Some((cue, gain)) = map_sounds::rift_cue(event) {
-                    self.voice
-                        .cue(map_sounds::rift_samples(cue), gain * falloff, volume);
+                    self.voice.cue(
+                        map_sounds::rift_samples(cue),
+                        gain * map_sounds::falloff(distance),
+                        volume,
+                    );
                 }
+            }
+            for (samples, gain, rate) in self.effects.map_cues.due(now) {
+                self.voice.cue_at(samples, gain, volume, rate);
+            }
+            for (cue, at) in self.effects.boss_fx.take_cues() {
+                let falloff = at.map_or(1., |at| {
+                    map_sounds::falloff(at.distance(listener) * cue.carry())
+                });
+                self.voice
+                    .cue(map_sounds::rail_samples(cue), cue.gain() * falloff, volume);
             }
         }
         if let Some(session) = &mut self.session {
@@ -2104,12 +2122,9 @@ impl App {
             && let Some(editor) = &mut self.editor
         {
             let action = editor.draw(&self.settings, s);
-            for (sound, volume) in editor.take_sounds() {
-                self.voice.map_sound(
-                    sound,
-                    volume,
-                    self.settings.master_volume * self.settings.effects_volume,
-                );
+            let volume = self.settings.master_volume * self.settings.effects_volume;
+            for (samples, gain, rate) in editor.take_sounds(get_time()) {
+                self.voice.cue_at(samples, gain, volume, rate);
             }
             match action {
                 editor::Action::None => {}
@@ -2312,6 +2327,25 @@ impl App {
             .and_then(|session| session.display.as_ref())
             .and_then(|snapshot| snapshot.tanks.iter().find(|t| t.creator_boss && t.alive));
         let axiom_height = if axiom.is_some() { 61. * s } else { 0. };
+        // The Railgunner always gets a bar of its own, under Axiom's if both
+        // are out. In Boss Rush the boss of the wave gets one too.
+        let headline_boss = self
+            .session
+            .as_ref()
+            .and_then(|session| session.display.as_ref())
+            .and_then(|snapshot| {
+                let bosses = &snapshot.bosses;
+                bosses
+                    .iter()
+                    .find(|boss| boss.kind == tankyard_core::BossKind::Railgunner)
+                    .or_else(|| {
+                        (snapshot.config.mode == tankyard_core::Mode::BossRush)
+                            .then(|| bosses.first())
+                            .flatten()
+                    })
+            });
+        let rail_top = 106. * s + axiom_height;
+        let axiom_height = axiom_height + headline_boss.map_or(0., |_| hud::RAIL_BAR_HEIGHT * s);
         let mut overlays = notifications::top_overlays(
             screen_height(),
             s,
@@ -2465,54 +2499,46 @@ impl App {
                         .or(arena_pick);
                 if let Some(axiom) = axiom {
                     let r = hud::boss_banner_layout(screen_width(), s);
-                    let r = Rect::new(r.x, 106. * s, r.w, 52. * s);
-                    panel(r);
-                    let left = format!(
-                        "{} / {}",
-                        hud::grouped(axiom.health.max(0.) as u64),
-                        hud::grouped(axiom.max_health as u64)
-                    );
-                    let numbers = label_width(&left, 11. * s);
-                    right_label(
-                        &left,
-                        r.x + r.w - 14. * s,
-                        r.y + 19. * s,
-                        11. * s,
-                        muted_color(),
-                    );
-                    center_label(
-                        &fitted_label(
-                            tankyard_core::creator_boss::NAME,
-                            16. * s,
-                            (r.w - (numbers + 24. * s) * 2.).max(40. * s),
-                        ),
-                        r.center().x,
-                        r.y + 20. * s,
-                        16. * s,
-                        axiom_dock::readable(crate::accessibility::palette(
-                            tankyard_client::boss_model::AXIOM_GOLD,
-                        )),
-                    );
                     let share = (axiom.health / axiom.max_health.max(1.)).clamp(0., 1.);
-                    marked_track(
-                        Rect::new(r.x + 14. * s, r.y + 31. * s, r.w - 28. * s, 12. * s),
-                        share,
-                        self.effects.boss_fx.axiom_trail(axiom.id, share),
-                        crate::accessibility::palette(tankyard_client::boss_model::AXIOM_GOLD),
-                        &tankyard_core::BOSS_PHASES,
+                    hud::boss_bar(
+                        &hud::BossBar {
+                            kind: None,
+                            name: tankyard_core::creator_boss::NAME,
+                            health: axiom.health,
+                            max_health: axiom.max_health,
+                            lost: self.effects.boss_fx.axiom_trail(axiom.id, share),
+                            tint: crate::accessibility::palette(
+                                tankyard_client::boss_model::AXIOM_GOLD,
+                            ),
+                            marks: &tankyard_core::BOSS_PHASES,
+                            status: None,
+                            marked: false,
+                        },
+                        r.x,
+                        106. * s,
+                        r.w,
+                        s,
+                    );
+                }
+                if let Some(boss) = headline_boss {
+                    hud::headline_boss_bar(
+                        boss,
+                        self.effects.boss_fx.health_trail(boss),
+                        boss.target != 0 && boss.target == session.player,
+                        rail_top,
+                        s,
+                        self.settings.colorblind,
                     );
                 }
                 if let Some((boss, killer, life)) = &self.effects.boss_defeat {
                     let opacity = (life / 0.4).min(1.);
                     let mut rect = hud::boss_banner_layout(screen_width(), s);
                     rect.y += axiom_height;
-                    panel(rect);
-                    draw_rectangle(rect.x, rect.y, 4. * s, rect.h, alpha(AMBER, opacity));
-                    center_label(
+                    arcade_center_in(
                         "BOSS DEFEATED",
                         rect.center().x,
                         rect.y + 20. * s,
-                        12. * s,
+                        16. * s,
                         alpha(AMBER, opacity),
                     );
                     let hunter = snapshot
@@ -2520,16 +2546,16 @@ impl App {
                         .iter()
                         .find(|t| t.id == *killer)
                         .map_or_else(|| "a player".to_owned(), |t| t.display_name());
-                    center_label(
+                    arcade_center_in(
                         &fitted_label(
                             &format!("{boss} was killed by {hunter}"),
-                            20. * s,
+                            21. * s,
                             rect.w - 24. * s,
                         ),
                         rect.center().x,
-                        rect.y + 46. * s,
-                        20. * s,
-                        alpha(text_color(), opacity),
+                        rect.y + 47. * s,
+                        21. * s,
+                        alpha(WHITE, opacity),
                     );
                 } else if let Some((kind, life)) = self.effects.boss_arrival {
                     let opacity = (life / 0.4).min(1.);
@@ -2537,21 +2563,19 @@ impl App {
                     rect.y += axiom_height;
                     let width = rect.w;
                     let y = rect.y;
-                    panel(rect);
-                    draw_rectangle(rect.x, rect.y, 4. * s, rect.h, alpha(RED, opacity));
-                    center_label(
+                    arcade_center_in(
                         "BOSS INCOMING",
                         rect.x + rect.w * 0.5,
                         y + 20. * s,
-                        12. * s,
-                        alpha(RED, opacity),
+                        16. * s,
+                        alpha(Color::new(1., 0.42, 0.38, 1.), opacity),
                     );
-                    center_label(
-                        &fitted_label(kind.name(), 22. * s, width - 24. * s),
+                    arcade_center_in(
+                        &fitted_label(kind.name(), 25. * s, width - 24. * s),
                         rect.x + rect.w * 0.5,
-                        y + 47. * s,
-                        22. * s,
-                        alpha(text_color(), opacity),
+                        y + 49. * s,
+                        25. * s,
+                        alpha(WHITE, opacity),
                     );
                 }
                 for (index, kill) in self

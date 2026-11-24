@@ -78,6 +78,18 @@ impl UdpServer {
             .map_or(0, |peer| peer.arena)
             .min(self.arenas.len() - 1)
     }
+    /// A player's plain name, from whichever arena they're in.
+    pub(crate) fn tank_name(&self, entity: tankyard_core::EntityId) -> Option<String> {
+        self.arenas.iter().find_map(|arena| {
+            arena
+                .session
+                .world
+                .tanks
+                .iter()
+                .find(|tank| tank.id == entity)
+                .map(|tank| tank.name.clone())
+        })
+    }
     pub(crate) fn arena_of_entity(&self, entity: tankyard_core::EntityId) -> Option<usize> {
         self.arenas.iter().position(|arena| {
             arena

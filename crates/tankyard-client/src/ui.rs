@@ -1494,17 +1494,24 @@ pub fn arcade_center(value: &str, x: f32, y: f32, size: f32) {
     arcade_label(value, x - label_width(value, size) * 0.5, y, size);
 }
 pub fn arcade_label(value: &str, x: f32, y: f32, size: f32) {
+    arcade_label_in(value, x, y, size, WHITE);
+}
+/// [`arcade_center`] in a color of its own, fading with it.
+pub fn arcade_center_in(value: &str, x: f32, y: f32, size: f32, color: Color) {
+    arcade_label_in(value, x - label_width(value, size) * 0.5, y, size, color);
+}
+fn arcade_label_in(value: &str, x: f32, y: f32, size: f32, color: Color) {
     if crate::accessibility::contrast() {
-        label(value, x, y, size, WHITE);
+        label(value, x, y, size, color);
         return;
     }
-    let ink = Color::new(0.15, 0.15, 0.16, 1.);
+    let ink = Color::new(0.15, 0.15, 0.16, color.a);
     let edge = (size * 0.06).clamp(1., 2.3);
     prepare_label(value, size);
     for (dx, dy) in [(-edge, 0.), (edge, 0.), (0., -edge), (0., edge)] {
         placed_label(value, x + dx, y + dy, size, ink);
     }
-    placed_label(value, x, y, size, WHITE);
+    placed_label(value, x, y, size, color);
 }
 
 pub fn capsule(rect: Rect, color: Color) {

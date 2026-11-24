@@ -193,7 +193,13 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **Announce:** shows text to everyone, up to 96 characters. `{1}`–`{255}` insert counters (see [Counters](#counters)); `{cause}` names the tank that set it off, or is empty when there is none.
 - **Boss:** brings the chosen boss to the trigger. A crowded map or the 16-boss limit can prevent it.
 - **Signal:** fires every *On signal* trigger on that channel.
-- **Random signal:** sends on one channel picked at random from a run of 2 or more, starting at *First channel*.
+- **Random signal:** sends on a channel picked at random from a run of 2 or more, starting at *First channel*. **Pick** chooses how (2.0.5):
+  - *Any* picks any channel each time, so the same one can come up twice in a row.
+  - *No repeats* never picks the channel it sent on last time.
+  - *Shuffle* works through every channel in a random order before any comes up again, and never starts a new round with the one that ended the last. Reset triggers starts the round over.
+  - *Weighted* picks by weight, so a channel weighted 60 comes up twelve times as often as one weighted 5, and a channel at 0 never does. Drag the bars to set the weights, or drag across them to set several in one stroke; hover a bar to see how often it comes up. **Even out** sets them all equal, and **Each half the last** makes each channel half as likely as the one before. Weighted picks from up to 32 channels.
+
+  **Channels at once** sends on that many different channels each time, such as two prizes out of six.
 - **Sequence:** sends on the next channel of a run each time it acts, then starts over: with *First channel* 5 and 3 channels it sends 5, 6, 7, 5, 6…
 - **Count:** adds an amount (negative subtracts) to a counter. Counters stay within ±1,073,741,823 and reset each round.
 - **Set counter:** puts a counter at an exact value. Goals watching that value act as if it had been counted to.
@@ -208,7 +214,7 @@ A trigger has four parts: **when** it fires, the **filters** that apply, an opti
 - **Move group, Move group to, Turn decor, Fade decor:** animate a group. See [Motions](#motions).
 - **Tint decor, Scale decor, Animate decor, Stop group:** color, resize, animate or halt a group's decor. See [Effects](#effects).
 - **Shake screen:** shakes the views of the noticed tanks inside the area. See [Effects](#effects).
-- **Play sound:** plays one of eight sounds at the trigger. See [Effects](#effects).
+- **Play sound:** plays one of 28 sounds, at a pitch and as many times as you like. See [Effects](#effects).
 - **Shove body, Fling tanks, Blast, Zoom view, Lighting, Play path:** push a body, throw tanks, change the view or the darkness, or send a group along a path. See [Physics](#physics).
 - **Show UI, Hide UI:** put a designed widget on players' screens, such as a message, a counter, a timer or a menu of choices, and take it away again. See [UI](#ui).
 
@@ -295,7 +301,12 @@ Effects change how a group looks and how the arena feels without touching collis
   *Times a second* sets the pace, from 0.05 to 12. The five styles play together, so one group can bob and sway at once. Size 0 settles a style; with Over, it eases out. Changing the pace of a running animation keeps it where it is in its cycle, so it never jumps.
 - **Stop group** halts everything the group's motions are doing, where it is: moves, turns, fades, tints and sizes stop part way, animations freeze mid-pose, and any trip back is cancelled. Nothing that was stopped arrives, so On arrive triggers stay quiet. Play another motion to start the group again.
 - **Shake screen** shakes the views of the noticed tanks inside the area, at a strength from 1 to 100% for 0.1 to 10 seconds. A stronger shake replaces a weaker one. Players can turn shaking down with **Camera shake** in Settings, and Reduced motion turns it off.
-- **Play sound** plays Chime, Bell, Alarm, Switch, Whoosh, Rumble, Fanfare or Thump at the middle of the trigger's area, at 1–100% volume. Players nearby hear it at full volume and it fades out a little past the edge of the screen. It uses each player's Effects volume. Bursts of the same sound within 25 milliseconds share a cue, with the loudest volume retained. Up to twelve cues overlap; additional sounds in a full mix are skipped, so sounds already playing can finish.
+- **Play sound** plays one of 28 sounds at the middle of the trigger's area, at 1–100% volume: Chime, Bell, Alarm, Switch, Whoosh, Rumble, Fanfare and Thump, and (2.0.5) Coin, Pop, Beep, Click, Tick, Laser, Power up, Power down, Buzzer, Success, Door, Explosion, Teleport, Magic, Splash, Gong, Thunder, Countdown, Drum and Horn. **Hear it** plays the sound as it's set, through your speakers. The game makes every sound itself, so a map carries no audio. From 2.0.5:
+  - **Pitch** moves it up to 12 semitones up or down, and **Pitch wander** lets each play land anywhere within that many semitones of it, so a sound heard often doesn't sound copied.
+  - **Plays** repeats it up to eight times, **Between plays** seconds apart (0 to 3). With no gap and some wander, the plays stack into one thicker sound.
+  - **Heard** says who hears it. *Nearby* players hear it at full volume, fading out a little past the edge of the screen. *Far away* carries about two and a half times as far. *Everywhere* is full volume for every player. *Tank that set it off* plays only to that tank's player, at full volume, and to nobody when no tank set it off, such as on a timer.
+
+  It uses each player's Effects volume. Bursts of the same sound at the same pitch within 25 milliseconds share a cue, with the loudest volume retained. Up to twelve cues overlap; additional sounds in a full mix are skipped, so sounds already playing can finish. Players on versions before 2.0.5 hear the nearest of the first eight sounds, once, as if nearby.
 
 Reduced motion holds animations still but keeps tints and sizes, since those carry meaning: a red door is still red. Tint, Scale and Animate need Tank Yard 1.1.0 or later on the server and every player.
 
@@ -318,6 +329,8 @@ The **Effects** tab in Build holds ready-made effects. Like the Motion pieces, e
 | Quake | Shakes the views of tanks that enter its area, at most every 3 seconds |
 | Chime | Plays a chime when a tank arrives |
 | Siren | Plays the alarm on signal 1 |
+| Coin pickup | Plays a coin sound that only the tank driving in hears |
+| Countdown | Counts down for everyone on signal 1 |
 
 The logic preview plays effects too. With the test tank inside a Shake screen trigger's area, the canvas shakes while the preview runs, and Play sound triggers play through your speakers.
 
@@ -439,8 +452,9 @@ A board stays up when a button is clicked, and each player can click up to 20 ti
 - **Group shown / Group hidden:** a group is currently shown or hidden.
 - **Tanks inside:** the number of noticed tanks inside the trigger's own area, using its *Who* and *Team* filters. A Plate with *Tanks inside ≥ 2* only works for two tanks at once.
 - **Round time:** whole seconds since the round started, such as *Round time ≥ 300* for overtime.
+- **Chance** (2.0.5): holds that percent of the time, rolled once each time the trigger tries to act. **Percent from a counter** reads the percent from a counter instead, so odds can change during a round. A Gate to counter stores the same roll it opened or shut on.
 
-Tanks inside and Round time compare like counters, so they can also be held against a counter. **Remove** deletes a card, and **↑** moves it up one place.
+Tanks inside and Round time compare like counters, so they can also be held against a counter. A Chance condition with *Not all* is the odds of it not happening. **Remove** deletes a card, and **↑** moves it up one place.
 
 With two or more conditions, **Combine** chooses how they make the gate:
 
@@ -459,7 +473,7 @@ With one condition, *Not all* and *None* both open when it fails, which makes a 
 
 A shut gate does nothing by default, and doesn't use up *Once per round*, the rest time or *Chance*. Switch on **Otherwise send a signal** to send on the *Otherwise channel* instead (it starts at the lowest channel nothing uses), which makes an if/else: the trigger acts when the gate is open and signals when it's shut. If all 255 channels are in use, free one before adding an otherwise signal. Otherwise signals count toward the chained actions a tick, so they can't loop forever.
 
-While the preview runs, every card shows **holds** or **fails**, and the gate shows how many hold and whether it is **open** or **shut**, updated live. Gated triggers show a small diamond on their canvas badge, and their tag reads like `AND of 2 → Hide` or `#1≥3 → Signal 4`. The Logic tab's trigger list spells each gate out in full.
+While the preview runs, every card shows **holds** or **fails**, and the gate shows how many hold and whether it is **open** or **shut**, updated live. Chance cards only come up as the trigger acts, so the preview counts the others and says a roll decides the rest. Gated triggers show a small diamond on their canvas badge, and their tag reads like `AND of 2 → Hide` or `#1≥3 → Signal 4`. The Logic tab's trigger list spells each gate out in full.
 
 ### Live gates
 
@@ -523,6 +537,8 @@ The **Gates** tab in Build holds ready-made logic, each piece drawn with its own
 | Lever | Flips counter 1 between 0 and 1 when a tank enters |
 | Coin flip | Toggles a group half of the time, every 5 seconds |
 | Dice | Sends one of signals 1–3 at random every 15 seconds |
+| Loot table | On signal 1, sends one of signals 2–5 by weight: the first most often, the last rarely |
+| Shuffle | Sends signals 1–4 in a shuffled order every 10 seconds, each one before any repeats |
 | Sequence | Sends signals 1, 2 and 3 in turn, one every 3 seconds |
 | Display | Announces counter 1 every time it changes |
 | Alarm | Announces when group 1 is hidden, however it happened |
@@ -647,7 +663,7 @@ The workshop folder is `workshop/` inside Tank Yard's data directory. **Files �
 - `exports/<map-id>-<timestamp>.zip`: portable exports.
 - `prefs.json`: panel sizes, canvas switches, navigation settings, the palette tab and item, the inspector tab, the logic preview's speed, and where you were looking in the map you had open.
 
-Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings, and maps that use them need 1.0. Tank Yard 1.1.0 adds launch pads, Tint, Scale, Animate, Stop, Shake screen and Play sound; it uses protocol 28, so 1.1.0 and 1.2.0 servers and players play together, and maps that use the new pieces need 1.1.0 to open. Tank Yard 1.3.0 adds pushable bodies, paths, ice, gravity wells, darkness and lighting, decor that responds to tanks, the new decor shapes, group names and the Physics triggers; it uses protocol 29, so 1.3.0 servers and players play only with each other, and maps that use the new pieces need 1.3.0 to open. Tank Yard 1.4.0 adds Show UI, Hide UI and the *Tank that set it off* filter; it uses protocol 30, so 1.4.0 servers and players play only with each other, and maps that use the new pieces need 1.4.0 to open. Tank Yard 1.5.0 adds widgets that float over an area or a tank, choice arrangements, glow and the new icons; it uses protocol 31, so 1.5.0, 1.5.1 and 1.5.2 servers and players play only with each other, and maps that use the new pieces need 1.5.0 to open. Tank Yard 1.6.0 adds widget shapes, borders, fills, lettering, title colors, bar looks, button looks and the one-click looks; it uses protocol 32, so 1.6.0 servers and players play only with each other, and maps that use the new looks need 1.6.0 to open. Tank Yard 1.7.0 adds boards, 255 counters and signal channels, larger counters, the bit and power math, counters moved along by other counters, the new counter formats and the new Zoom view settings, and allows 4,096 triggers and 4,096 decor items a map; it uses protocol 33, so 1.7.0 servers and players play only with each other, and maps that use any of these need 1.7.0 to open. Tank Yard 2.0.0 adds the Even, Odd and Most gates, up to eight conditions, On input change, Gate to counter and timers as short as 0.05 seconds; it uses protocol 34, so 2.0 servers and players play only with each other, and maps that use any of these need 2.0.0 to open. Maps from earlier versions open unchanged.
+Each export contains `mod.json` and `editor.json`. Gameplay uses the manifest, and the editor document lets others keep editing. The ZIP holds no compiled code. Maps that use conveyors, portals, signals, counters, filters or shapes need protocol 25 (Tank Yard 0.15) on both server and clients. The trigger features added in 0.15.1 (While inside, On empty, On destroy, Random signal, Set counter, Calculate, Script event, single-condition gates and the tank actions) need 0.15.1 to host a map or play it offline. The logic added in 0.16.0 (On change, On shown, On hidden, On boss down, Sequence, Reset triggers, the Tanks inside and Round time conditions, several conditions in one gate and otherwise signals) needs 0.16.0 to host a map or play it offline; older servers refuse such a map with a clear error. Tank Yard 1.0 adds motions, light flicker and the new particle settings, and maps that use them need 1.0. Tank Yard 1.1.0 adds launch pads, Tint, Scale, Animate, Stop, Shake screen and Play sound; it uses protocol 28, so 1.1.0 and 1.2.0 servers and players play together, and maps that use the new pieces need 1.1.0 to open. Tank Yard 1.3.0 adds pushable bodies, paths, ice, gravity wells, darkness and lighting, decor that responds to tanks, the new decor shapes, group names and the Physics triggers; it uses protocol 29, so 1.3.0 servers and players play only with each other, and maps that use the new pieces need 1.3.0 to open. Tank Yard 1.4.0 adds Show UI, Hide UI and the *Tank that set it off* filter; it uses protocol 30, so 1.4.0 servers and players play only with each other, and maps that use the new pieces need 1.4.0 to open. Tank Yard 1.5.0 adds widgets that float over an area or a tank, choice arrangements, glow and the new icons; it uses protocol 31, so 1.5.0, 1.5.1 and 1.5.2 servers and players play only with each other, and maps that use the new pieces need 1.5.0 to open. Tank Yard 1.6.0 adds widget shapes, borders, fills, lettering, title colors, bar looks, button looks and the one-click looks; it uses protocol 32, so 1.6.0 servers and players play only with each other, and maps that use the new looks need 1.6.0 to open. Tank Yard 1.7.0 adds boards, 255 counters and signal channels, larger counters, the bit and power math, counters moved along by other counters, the new counter formats and the new Zoom view settings, and allows 4,096 triggers and 4,096 decor items a map; it uses protocol 33, so 1.7.0 servers and players play only with each other, and maps that use any of these need 1.7.0 to open. Tank Yard 2.0.0 adds the Even, Odd and Most gates, up to eight conditions, On input change, Gate to counter and timers as short as 0.05 seconds; it uses protocol 34, so 2.0 servers and players play only with each other, and maps that use any of these need 2.0.0 to open. A map that names the Railgunner in a boss trigger, or that uses the Chance condition, the Random signal's other ways of picking, the newer sounds or the Play sound settings added in 2.0.5, needs Tank Yard 2.0.5 on the host; players on older 2.0 clients can still join it. Maps from earlier versions open unchanged.
 
 For a dedicated server, put the ZIP in persistent storage, add its path to the top-level `mods` list, and run `reload-mods`. Then `maps` lists it and `map my_arena` selects it. Joining clients receive the checked map data automatically. See [Hosting](hosting.md) and [domain setup](hosting-domain.md).
 

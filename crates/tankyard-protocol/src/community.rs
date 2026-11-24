@@ -148,6 +148,17 @@ pub enum ServerCommand {
     ConfigureRules {
         rules: tankyard_mods::GameRules,
     },
+    /// List the bans in force. Newer commands stay at the end, so older
+    /// servers keep reading every command they know.
+    ReadBans,
+    LiftBan {
+        ban: u64,
+    },
+    ReadHealth,
+    SummonBoss {
+        boss: String,
+    },
+    DismissBosses,
 }
 impl ServerCommand {
     pub fn valid(&self) -> bool {
@@ -200,7 +211,100 @@ impl ServerCommand {
             .valid(),
             Self::ConfigureParty { settings } => settings.party.is_some() && settings.valid(),
             Self::ConfigureRules { rules } => rules.validate().is_ok(),
-            Self::ReloadMods | Self::ReadAudit | Self::RestartRound => true,
+            Self::SummonBoss { boss } => tankyard_core::BossKind::from_id(boss).is_some(),
+            Self::ReloadMods
+            | Self::ReadAudit
+            | Self::RestartRound
+            | Self::ReadBans
+            | Self::LiftBan { .. }
+            | Self::ReadHealth
+            | Self::DismissBosses => true,
+        }
+    }
+    /// What this command does, as a line in the audit log. `player` names a
+    /// player by entity and `ban` names a ban by its id; both fall back to the
+    /// number when nothing better is known.
+    pub fn describe(&self, player: impl Fn(u64) -> String, ban: impl Fn(u64) -> String) -> String {
+        let because = |reason: &str| match reason.trim() {
+            "" => String::new(),
+            reason => format!(" ({reason})"),
+        };
+        match self {
+            Self::Warn {
+                player: who,
+                reason,
+            } => format!("Warned {}{}", player(*who), because(reason)),
+            Self::Announce { text } => format!("Announced \"{}\"", text.trim()),
+            Self::Kick {
+                player: who,
+                reason,
+            } => format!("Kicked {}{}", player(*who), because(reason)),
+            Self::Ban {
+                player: who,
+                minutes,
+                reason,
+            } => format!(
+                "Banned {} for {}{}",
+                player(*who),
+                span(u64::from(*minutes)),
+                because(reason)
+            ),
+            Self::Mute {
+                player: who,
+                minutes: 0,
+            } => format!("Unmuted {}", player(*who)),
+            Self::Mute {
+                player: who,
+                minutes,
+            } => format!("Muted {} for {}", player(*who), span(u64::from(*minutes))),
+            Self::Nominate {
+                player: who,
+                role,
+                permissions,
+            } => {
+                let allowed: Vec<_> = permissions
+                    .iter()
+                    .map(|permission| words(&format!("{permission:?}")).to_lowercase())
+                    .collect();
+                let allowed = if allowed.is_empty() {
+                    "nothing".to_owned()
+                } else {
+                    allowed.join(", ")
+                };
+                format!("Made {} {role:?} ({allowed})", player(*who))
+            }
+            Self::CreateRoom {
+                id,
+                name,
+                minimum_role,
+            } => format!("Opened room {name} ({id}) for {minimum_role:?} and up"),
+            Self::DeleteRoom { id } => format!("Closed room {id}"),
+            Self::SetBots { count } => format!("Set the bots to {count}"),
+            Self::ReloadMods => "Reloaded mods".to_owned(),
+            Self::ReadAudit => "Read the audit log".to_owned(),
+            Self::ConfigureMatch {
+                mode,
+                map,
+                difficulty,
+            } => format!(
+                "Set the match to {} on {map}, {difficulty} bots",
+                mode.name()
+            ),
+            Self::RestartRound => "Restarted the round".to_owned(),
+            Self::ConfigureParty { settings } => format!(
+                "Set the party round to {} on {}",
+                settings.mode.name(),
+                settings.map
+            ),
+            Self::ConfigureRules { rules } => format!("Changed the game rules: {rules:?}"),
+            Self::ReadBans => "Read the ban list".to_owned(),
+            Self::LiftBan { ban: id } => format!("Lifted the ban on {}", ban(*id)),
+            Self::ReadHealth => "Read server health".to_owned(),
+            Self::SummonBoss { boss } => format!(
+                "Summoned {}",
+                tankyard_core::BossKind::from_id(boss).map_or(boss.as_str(), |kind| kind.name())
+            ),
+            Self::DismissBosses => "Dismissed every boss".to_owned(),
         }
     }
     pub fn permission(&self) -> ServerPermission {
@@ -208,7 +312,7 @@ impl ServerCommand {
             Self::Warn { .. } => ServerPermission::Warn,
             Self::Announce { .. } => ServerPermission::Announce,
             Self::Kick { .. } => ServerPermission::Kick,
-            Self::Ban { .. } => ServerPermission::Ban,
+            Self::Ban { .. } | Self::ReadBans | Self::LiftBan { .. } => ServerPermission::Ban,
             Self::Mute { .. } => ServerPermission::Mute,
             Self::Nominate { .. } => ServerPermission::ManageRoles,
             Self::CreateRoom { .. } | Self::DeleteRoom { .. } => ServerPermission::ManageRooms,
@@ -216,11 +320,76 @@ impl ServerCommand {
             | Self::ConfigureMatch { .. }
             | Self::ConfigureParty { .. }
             | Self::ConfigureRules { .. }
-            | Self::RestartRound => ServerPermission::Configure,
+            | Self::RestartRound
+            | Self::SummonBoss { .. }
+            | Self::DismissBosses => ServerPermission::Configure,
             Self::ReloadMods => ServerPermission::ReloadMods,
-            Self::ReadAudit => ServerPermission::ViewAudit,
+            Self::ReadAudit | Self::ReadHealth => ServerPermission::ViewAudit,
         }
     }
+}
+
+/// A length of time in minutes, the way staff read it: `45m`, `2h 5m`, `7d 3h`.
+pub fn span(minutes: u64) -> String {
+    let (days, hours, minutes) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
+    match (days, hours) {
+        (0, 0) => format!("{minutes}m"),
+        (0, _) => format!("{hours}h {minutes}m"),
+        _ => format!("{days}d {hours}h"),
+    }
+}
+
+/// `ManageRoles` as `Manage roles`.
+fn words(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (i, c) in name.chars().enumerate() {
+        if i > 0 && c.is_uppercase() {
+            out.push(' ');
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The most ban rows one answer carries.
+pub const MOST_BAN_ROWS: usize = 64;
+
+/// One ban in force, as staff see it. The address is masked: a ban list
+/// tends to end up on a shared screen.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BanRow {
+    pub id: u64,
+    pub who: String,
+    pub reason: String,
+    pub minutes_left: u32,
+}
+impl BanRow {
+    pub fn valid(&self) -> bool {
+        let line = |text: &str, chars: usize| {
+            text.len() <= chars * 4
+                && text.chars().count() <= chars
+                && !text.chars().any(char::is_control)
+        };
+        line(&self.who, 96) && line(&self.reason, 160)
+    }
+}
+
+/// How a server is running, for the staff who look after it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerHealth {
+    pub uptime_seconds: u64,
+    pub humans: u16,
+    pub bots: u16,
+    pub arenas: u16,
+    pub bosses: u16,
+    pub tick_average_micros: u32,
+    pub tick_p95_micros: u32,
+    pub tick_budget_micros: u32,
+    pub snapshot_kib: u64,
+    pub rejected_packets: u64,
+    pub bans: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

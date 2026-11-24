@@ -1308,6 +1308,7 @@ impl Document {
             }
             // Timers have no tank behind them.
             let to_cause = trigger.who == TriggerWho::Cause
+                || (trigger.action == TriggerAction::Sound && trigger.range == SoundRange::Cause)
                 || trigger.ui.as_ref().is_some_and(|ui| {
                     ui.to == UiAudience::Cause
                         || (trigger.action == TriggerAction::Ui && ui.pin == UiPin::Cause)
@@ -1849,6 +1850,72 @@ fn sentence(text: &str) -> String {
     }
     out
 }
+/// A Random signal in words: "send one of signals 4 to 7, never the one
+/// from last time".
+fn describe_random(t: &MapTrigger) -> String {
+    let (first, last) = (t.group, i32::from(t.group) + t.amount - 1);
+    let how_many = match t.picks {
+        0 | 1 => "one".to_owned(),
+        n => n.to_string(),
+    };
+    let several = t.picks > 1;
+    match t.pick {
+        RandomPick::Any => format!("send {how_many} of signals {first} to {last} at random"),
+        RandomPick::Fresh if several => format!(
+            "send {how_many} of signals {first} to {last} at random, none of them from last time"
+        ),
+        RandomPick::Fresh => {
+            format!("send one of signals {first} to {last} at random, never the last one again")
+        }
+        RandomPick::Shuffle if several => {
+            format!("deal {how_many} of signals {first} to {last} at a time from a shuffled round")
+        }
+        RandomPick::Shuffle => format!("send signals {first} to {last} in a shuffled order"),
+        RandomPick::Weighted => {
+            format!("send {how_many} of signals {first} to {last}, picked by weight")
+        }
+    }
+}
+/// A Play sound in words: "play the bell sound for everyone at 70% volume,
+/// 3 times 0.5 s apart".
+fn describe_sound(t: &MapTrigger) -> String {
+    let mut text = format!(
+        "play the {} sound {} at {}% volume",
+        t.sound.name().to_lowercase(),
+        match t.range {
+            SoundRange::Near => "here",
+            SoundRange::Far => "here, heard far off,",
+            SoundRange::Everywhere => "for everyone",
+            SoundRange::Cause => "to the tank that set it off",
+        },
+        t.amount
+    );
+    if t.pitch != 0 {
+        text += &format!(
+            ", {} semitone{} {}",
+            t.pitch.unsigned_abs(),
+            if t.pitch.unsigned_abs() == 1 { "" } else { "s" },
+            if t.pitch > 0 { "up" } else { "down" }
+        );
+    }
+    if t.vary > 0 {
+        text += &format!(
+            ", wandering up to {} either way",
+            trimmed(f32::from(t.vary) / 10.)
+        );
+    }
+    if t.repeat > 1 {
+        text += &format!(", {} times {} s apart", t.repeat, trimmed(t.gap));
+    }
+    text
+}
+/// `value` with at most two decimals and none it doesn't need.
+fn trimmed(value: f32) -> String {
+    format!("{value:.2}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned()
+}
 fn seconds(value: f32) -> String {
     if value.fract().abs() < 0.01 {
         format!("{value:.0} s")
@@ -2049,11 +2116,7 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
             ),
             None => format!("set counter {} to {}", t.group, t.amount),
         },
-        TriggerAction::Random => format!(
-            "send one of signals {} to {}",
-            t.group,
-            i32::from(t.group) + t.amount - 1
-        ),
+        TriggerAction::Random => describe_random(t),
         TriggerAction::Heal => format!("repair {}% of health here", t.amount),
         TriggerAction::Hurt => format!("deal {}% of health here", t.amount),
         TriggerAction::Award => format!("award {} points here", t.amount),
@@ -2106,11 +2169,7 @@ pub fn describe_trigger(t: &MapTrigger) -> String {
             t.amount,
             seconds(t.tween)
         ),
-        TriggerAction::Sound => format!(
-            "play the {} sound here at {}% volume",
-            t.sound.name().to_lowercase(),
-            t.amount
-        ),
+        TriggerAction::Sound => describe_sound(t),
         TriggerAction::Shove => format!(
             "shove body {} {} at {} units a second",
             t.group,
@@ -2283,6 +2342,8 @@ pub fn describe_test(test: &TriggerTest) -> String {
         TestKind::Inside => format!("the tank count inside {words} {other}"),
         TestKind::Time if test.against > 0 => format!("the round time {words} {other}"),
         TestKind::Time => format!("the round time {words} {other} s"),
+        TestKind::Chance if test.against > 0 => format!("a {other}% chance comes up"),
+        TestKind::Chance => format!("a {}% chance comes up", test.value.clamp(0, 100)),
     }
 }
 /// The gate in words, starting "if" or "unless", when there is one.
@@ -2322,6 +2383,7 @@ fn test_tag(test: &TriggerTest) -> String {
         TestKind::Inside => format!("in{symbol}{other}"),
         TestKind::Time if test.against > 0 => format!("t{symbol}{other}"),
         TestKind::Time => format!("t{symbol}{other}s"),
+        TestKind::Chance => format!("{other}%"),
     }
 }
 /// The gate in a few characters: "#1≥3", "AND(#1≥3, G4 on)", or with
@@ -2455,11 +2517,19 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
                 (None, amount) => format!("#{} = {amount}", t.group),
             }
         }
-        TriggerAction::Random => format!(
-            "Send {}\u{2013}{}",
-            t.group,
-            i32::from(t.group) + t.amount - 1
-        ),
+        TriggerAction::Random => {
+            let span = format!("{}\u{2013}{}", t.group, i32::from(t.group) + t.amount - 1);
+            let verb = match t.pick {
+                RandomPick::Any => "Send",
+                RandomPick::Fresh => "Fresh",
+                RandomPick::Shuffle => "Shuffle",
+                RandomPick::Weighted => "Weigh",
+            };
+            match t.picks {
+                0 | 1 => format!("{verb} {span}"),
+                n => format!("{verb} {n} of {span}"),
+            }
+        }
         TriggerAction::Heal => format!("+{}%", t.amount),
         TriggerAction::Hurt => format!("\u{2212}{}%", t.amount),
         TriggerAction::Award => format!("+{} pts", t.amount),
@@ -2507,6 +2577,7 @@ fn tag(t: &MapTrigger, compact: bool) -> String {
         TriggerAction::Animate => format!("{} {} {}", t.style.name(), t.group, t.amount),
         TriggerAction::Stop => format!("Stop {}", t.group),
         TriggerAction::Shake => format!("Shake {}%", t.amount),
+        TriggerAction::Sound if t.repeat > 1 => format!("{} \u{d7}{}", t.sound.name(), t.repeat),
         TriggerAction::Sound => t.sound.name().into(),
         TriggerAction::Shove => format!("Shove {} {}", t.group, arrow(t.angle)),
         TriggerAction::Fling => format!("Fling {}", arrow(t.angle)),

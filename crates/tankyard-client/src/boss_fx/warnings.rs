@@ -10,7 +10,8 @@ use crate::ui::{AMBER, RED, alpha};
 use macroquad::prelude::*;
 use std::f32::consts::{PI, TAU};
 use tankyard_core::{
-    BASTION_ROUND_DAMAGE, Boss, BossTactic, LETHAL_DAMAGE, Rect, V2, special_volley,
+    BASTION_ROUND_DAMAGE, BEAM_ROUND_RADIUS, BEAM_ROUND_SPEED, Boss, BossKind, BossTactic,
+    LETHAL_DAMAGE, RAIL_MUZZLE, Rect, V2, special_volley,
 };
 
 /// How far along its barrel the Siege Engine's round leaves, in hull radii.
@@ -22,6 +23,7 @@ const BASTION_MUZZLE: f32 = 1.52;
 type LinePaint = (Color, fn(f32) -> Color);
 const FIRE_LINE: LinePaint = (Color::new(1., 0.2, 0.05, 1.), ramp);
 const STEEL_LINE: LinePaint = (Color::new(0.1, 0.36, 1., 1.), steel);
+const ION_LINE: LinePaint = (Color::new(0.34, 0.22, 1., 1.), super::railgun::ion);
 
 /// A color kept saturated, because light added to a cool floor pulls a pale
 /// tint toward grey.
@@ -63,11 +65,36 @@ impl BossFx {
         let stage = (progress, armed);
         let rounds = special_volley(boss.kind, boss.attack, boss.aim, boss.phase);
         let circle = rounds.len() >= 8;
+        let railgunner = boss.kind == BossKind::Railgunner;
+        if railgunner && boss.attack == 2 {
+            // The stream has no rounds yet, so its line is shown on its own.
+            let d = direction(boss.aim);
+            let from = at + V2::new(d.x, d.y) * boss.radius;
+            let to = at + V2::new(d.x, d.y) * BEAM_ROUND_SPEED * 1.05;
+            let stop = walls
+                .clone()
+                .filter_map(|wall| {
+                    tankyard_core::physics::sweep_rect(from, to, BEAM_ROUND_RADIUS, wall)
+                })
+                .map(|(t, _)| t)
+                .fold(1., f32::min);
+            cannon_line(
+                light,
+                p + d * r * RAIL_MUZZLE,
+                view.screen(from.lerp(to, stop)),
+                BEAM_ROUND_RADIUS * 1.5 * z,
+                stage,
+                flow,
+                ION_LINE,
+            );
+        }
         for (index, round) in rounds.iter().enumerate() {
             let d = direction(round.angle);
             let start = p + d * (r + 6. * z);
             if round.damage >= BASTION_ROUND_DAMAGE {
-                let (muzzle, paint) = if round.damage >= LETHAL_DAMAGE {
+                let (muzzle, paint) = if railgunner {
+                    (RAIL_MUZZLE, ION_LINE)
+                } else if round.damage >= LETHAL_DAMAGE {
                     (SIEGE_MUZZLE, FIRE_LINE)
                 } else {
                     (BASTION_MUZZLE, STEEL_LINE)
@@ -125,7 +152,10 @@ impl BossFx {
     /// The dash a quick boss winds up for: chevrons running ahead of it,
     /// and speed lines streaming off it while it charges.
     pub fn dash(&self, light: &mut Emission, view: &View, boss: &Boss, at: V2, time: f32) {
-        if boss.tactic != BossTactic::Windup && boss.tactic != BossTactic::Charge {
+        // A Railgunner's tactic carries its beam and vents, not a dash.
+        if boss.kind == BossKind::Railgunner
+            || (boss.tactic != BossTactic::Windup && boss.tactic != BossTactic::Charge)
+        {
             return;
         }
         let z = view.zoom;

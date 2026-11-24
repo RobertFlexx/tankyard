@@ -22,9 +22,9 @@ pub use status::*;
 /// Version 34 carries the Even, Odd and Most gates, eight conditions a
 /// trigger, On input change, Gate to counter and rift events that name their
 /// owner, which version 33 can't hold, so clients and servers update
-/// together. Tank Yard 2.0.0 to 2.0.3 use it; 1.7.0 used version 33, 1.6.0 version
-/// 32, 1.5.0 to 1.5.2 version 31, 1.4.0 version 30, 1.3.0 version 29, and
-/// 1.1.0 and 1.2.0 version 28.
+/// together. Every Tank Yard 2.0 release uses it; 1.7.0 used version 33, 1.6.0
+/// version 32, 1.5.0 to 1.5.2 version 31, 1.4.0 version 30, 1.3.0 version 29,
+/// and 1.1.0 and 1.2.0 version 28.
 pub const PROTOCOL_VERSION: u32 = 34;
 /// The oldest client version servers accept.
 pub const MIN_PROTOCOL_VERSION: u32 = 34;
@@ -306,6 +306,15 @@ pub enum ServerControl {
     ModHud {
         widgets: Vec<tankyard_mods::HudWidget>,
     },
+    /// The answer to [`ServerCommand::ReadBans`]. Only clients that asked get
+    /// one, so older clients never see this message.
+    Bans {
+        bans: Vec<BanRow>,
+    },
+    /// The answer to [`ServerCommand::ReadHealth`].
+    Health {
+        health: ServerHealth,
+    },
 }
 /// Whether a HUD list from a server is one this client should draw.
 pub fn valid_mod_hud(widgets: &[tankyard_mods::HudWidget]) -> bool {
@@ -506,7 +515,11 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<Snapshot, DecodeError> {
     }
     let raw = lz4_flex::decompress_size_prepended(bytes)
         .map_err(|_| DecodeError("invalid compressed state"))?;
-    let state: Snapshot = decode(&raw, MAX_STATE_BYTES)?;
+    let mut state: Snapshot = decode(&raw, MAX_STATE_BYTES)?;
+    // The Railgunner travels as a Siege Engine of a size no other boss has.
+    for boss in &mut state.bosses {
+        boss.kind = boss.kind.from_wire(boss.radius);
+    }
     if !snapshot_valid(&state) {
         return Err(DecodeError("invalid snapshot values"));
     }
@@ -516,16 +529,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<Snapshot, DecodeError> {
 pub fn sanitize_name(name: &str) -> String {
     let clean: String = name
         .chars()
-        .filter(|c| {
-            !c.is_control()
-                && *c != '<'
-                && *c != '>'
-                && !matches!(
-                    *c,
-                    '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}'
-                        | '\u{2066}'..='\u{2069}'
-                )
-        })
+        .filter(|&c| !tankyard_core::invisible_char(c) && c != '<' && c != '>')
         .take(MAX_NAME_CHARS)
         .collect();
     let clean = clean.trim();
@@ -748,6 +752,7 @@ mod name_hardening_tests {
         assert_eq!(sanitize_name("\u{2066}Mira\u{2069}"), "Mira");
         assert_eq!(sanitize_name("世界 Sol"), "世界 Sol");
         assert_eq!(sanitize_name("<>\u{202e}"), "Pilot");
+        assert_eq!(sanitize_name("\u{3164}\u{200b}"), "Pilot");
     }
 }
 
@@ -856,6 +861,71 @@ mod tests {
                     decode_snapshot(&encode_snapshot(&snapshot).unwrap()).is_err(),
                     "{kind:?} accepted invalid warning timer {windup}",
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn a_railgunner_travels_as_a_siege_engine_older_clients_can_read() {
+        use tankyard_core::{BossKind, RAIL_RADIUS, World, WorldConfig};
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        world.add_player("Pilot", false);
+        assert_ne!(world.spawn_boss(BossKind::Railgunner), 0);
+        assert_ne!(world.spawn_boss(BossKind::SiegeEngine), 0);
+        assert_eq!(
+            BossKind::Railgunner.windup(),
+            BossKind::SiegeEngine.windup(),
+            "an older client checks the warning timer against the Siege Engine's"
+        );
+
+        let bytes = encode_snapshot(&world.snapshot()).unwrap();
+        // An older client stops here: no step turns the kind back.
+        let raw = lz4_flex::decompress_size_prepended(&bytes).unwrap();
+        let older: Snapshot = decode(&raw, MAX_STATE_BYTES).unwrap();
+        assert!(older.bosses.iter().all(|b| b.kind == BossKind::SiegeEngine));
+        assert!(snapshot_valid(&older));
+
+        let current = decode_snapshot(&bytes).unwrap();
+        let kinds: Vec<_> = current.bosses.iter().map(|b| (b.kind, b.radius)).collect();
+        assert_eq!(
+            kinds,
+            [
+                (BossKind::Railgunner, RAIL_RADIUS),
+                (BossKind::SiegeEngine, BossKind::SiegeEngine.radius()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_clash_stays_an_ordinary_parry_on_the_wire() {
+        use tankyard_core::{ClashStyle, EventKind, GameEvent, clash_names, clash_of, clash_value};
+        assert_eq!(PROTOCOL_VERSION, 34, "2.0 releases share one protocol");
+        for style in ClashStyle::ALL {
+            for boss in [41, 41 + 8192, u64::MAX - 1] {
+                let event = GameEvent {
+                    tick: 45,
+                    kind: EventKind::Parry,
+                    subject: 7,
+                    value: clash_value(style, boss, 76_540.),
+                    pos: V2::new(100., 200.),
+                    team: 1,
+                    elimination: None,
+                };
+                let bytes = encode(&event, MAX_EVENT_BYTES).unwrap();
+                let received: GameEvent = decode(&bytes, MAX_EVENT_BYTES).unwrap();
+                assert!(matches!(received.kind, EventKind::Parry));
+                assert_eq!(received.subject, event.subject);
+                let (read, bits, damage) = clash_of(received.value).unwrap();
+                assert_eq!(read, style);
+                assert!(clash_names(bits, boss));
+                assert_eq!(damage, 76_540);
             }
         }
     }

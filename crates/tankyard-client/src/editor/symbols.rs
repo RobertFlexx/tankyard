@@ -21,6 +21,8 @@ pub enum Symbol {
     Lever,
     Coin,
     Dice,
+    Chest,
+    Shuffle,
     Steps,
     Readout,
     Bell,
@@ -41,7 +43,7 @@ pub enum Symbol {
 
 /// Each Gates and Circuits piece by name, with its symbol and whether it's
 /// live, keeping its output up to date with no signal.
-pub(super) const PIECES: [(&str, Symbol, bool); 34] = [
+pub(super) const PIECES: [(&str, Symbol, bool); 36] = [
     ("Gate", Symbol::Switch, false),
     ("AND", Symbol::And, false),
     ("OR", Symbol::Or, false),
@@ -56,6 +58,8 @@ pub(super) const PIECES: [(&str, Symbol, bool); 34] = [
     ("Lever", Symbol::Lever, false),
     ("Coin flip", Symbol::Coin, false),
     ("Dice", Symbol::Dice, false),
+    ("Loot table", Symbol::Chest, false),
+    ("Shuffle", Symbol::Shuffle, false),
     ("Sequence", Symbol::Steps, false),
     ("Display", Symbol::Readout, false),
     ("Alarm", Symbol::Bell, false),
@@ -322,6 +326,33 @@ pub fn draw(ink: &mut Ink, symbol: Symbol, r: Rect, color: Color) {
             ]);
             for at in [(-0.34, -0.34), (0., 0.), (0.34, 0.34)] {
                 pen.dot(at, 0.14);
+            }
+        }
+        Symbol::Chest => {
+            pen.closed(&[
+                (-0.72, -0.12),
+                (-0.72, -0.42),
+                (-0.5, -0.64),
+                (0.5, -0.64),
+                (0.72, -0.42),
+                (0.72, -0.12),
+            ]);
+            pen.closed(&[(-0.72, -0.12), (0.72, -0.12), (0.72, 0.62), (-0.72, 0.62)]);
+            pen.solid(&[(-0.13, -0.24), (0.13, -0.24), (0.13, 0.1), (-0.13, 0.1)]);
+        }
+        Symbol::Shuffle => {
+            for side in [-1., 1.] {
+                pen.path(&[
+                    (-0.72, 0.42 * side),
+                    (-0.3, 0.42 * side),
+                    (0.3, -0.42 * side),
+                    (0.64, -0.42 * side),
+                ]);
+                pen.path(&[
+                    (0.42, -0.62 * side),
+                    (0.66, -0.42 * side),
+                    (0.42, -0.22 * side),
+                ]);
             }
         }
         Symbol::Steps => {

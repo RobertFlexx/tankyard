@@ -20,6 +20,7 @@ pub fn boss_color(kind: BossKind) -> Color {
         BossKind::SiegeEngine => Color::new(0.69, 0.62, 0.41, 1.),
         BossKind::Skirmisher => Color::new(0.25, 0.67, 0.77, 1.),
         BossKind::Trapper => Color::new(0.75, 0.47, 0.31, 1.),
+        BossKind::Railgunner => RAIL_ION,
     }
 }
 
@@ -127,6 +128,15 @@ pub struct Pose {
     /// The game draws a wounded hull's heat as real light, so the flat heat
     /// plates that stand in for it on model sheets are left out.
     pub lit: bool,
+    /// How far a shot has thrown the Railgunner's rails back, 0 to 1.
+    pub recoil: f32,
+    /// How hard its plasma beam is running, 0 to 1.
+    pub beam: f32,
+    /// How far its heat fins have opened, 0 to 1.
+    pub vent: f32,
+    /// How far its barrel has split open for the beam: 0 shut, 1 fully open,
+    /// and a little past either while it settles.
+    pub open: f32,
 }
 
 /// Each boss's main armor: its sides, its size against the boss radius and
@@ -141,6 +151,7 @@ pub fn armor(kind: BossKind, aim: f32, turn: f32) -> (u8, f32, f32) {
         BossKind::Bastion => (4, 1., FRAC_PI_4),
         BossKind::FallenOverlord | BossKind::FallenBooster | BossKind::Eclipse => (0, 1., 0.),
         BossKind::Sentinel | BossKind::Trapper => (6, 1., aim + PI / 6.),
+        BossKind::Railgunner => (8, 1., aim + PI / 8.),
     }
 }
 
@@ -175,6 +186,7 @@ pub fn boss_model_geometry(
         phase,
         charge,
         lit,
+        ..
     } = pose;
     if !r.is_finite() || r <= 0. || !aim.is_finite() || !turn.is_finite() || !time.is_finite() {
         return;
@@ -621,6 +633,566 @@ pub fn boss_model_geometry(
             poly(emit, p, 3, r * 0.24, aim, OUTLINE);
             poly(emit, p, 3, r * 0.24 - edge * 1.6, aim, glow);
         }
+        BossKind::Railgunner => railgunner_model(p, r, pose, team_color, emit),
+    }
+}
+
+/// The Railgunner's ion light, and the violet at the edge of it.
+pub const RAIL_ION: Color = Color::new(0.35, 0.92, 1., 1.);
+pub const RAIL_FRINGE: Color = Color::new(0.76, 0.35, 1., 1.);
+const RAIL_STEEL: Color = Color::new(0.30, 0.38, 0.52, 1.);
+/// Where the coil clamps sit along its barrel, in hull radii.
+pub const RAIL_COILS: [f32; 7] = [0.68, 0.92, 1.16, 1.4, 1.64, 1.88, 2.12];
+/// How far a shot throws its rails back, in hull radii.
+pub const RAIL_THROW: f32 = 0.2;
+/// Below this radius it's an icon, and fine detail would only be noise.
+const RAIL_FINE: f32 = 26.;
+/// The hinge each armored half of the barrel swings on, as (along, out).
+const RAIL_HINGE: (f32, f32) = (0.22, 0.34);
+/// The muzzle's claws on each half, as (how far out the hinge is, length, how
+/// far behind the other it opens).
+const RAIL_CLAWS: [(f32, f32, f32); 2] = [(0.075, 0.36, 0.), (0.17, 0.29, 0.24)];
+
+/// One part's share of the barrel's move: nothing before `from`, all of it by
+/// `to`, starting and stopping gently.
+fn rail_stage(open: f32, from: f32, to: f32) -> f32 {
+    let x = (open - from) / (to - from);
+    // Written so a NaN counts as not started.
+    let x = if x > 0. { x.min(1.) } else { 0. };
+    x * x * x * (x * (x * 6. - 15.) + 10.)
+}
+
+/// Where every moving part of the Railgunner's barrel is at one point of its
+/// opening. The parts go in order: the armor unlatches and swings wide, the
+/// rails stand off the bore, the coils part from breech to muzzle, and the
+/// claws unfold last. Shutting runs the same order backward. The model and its
+/// lights both read this, so a light is always on the part it belongs to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RailBarrel {
+    /// How far each armored half has swung off the bore, in radians.
+    pub swing: f32,
+    /// How far each rail stands off the middle at the breech and the muzzle.
+    pub rail_root: f32,
+    pub rail_tip: f32,
+    /// Where each coil's half starts, out from the middle, breech first.
+    pub gaps: [f32; RAIL_COILS.len()],
+    /// How far the claws have unfolded, in radians.
+    pub claw: f32,
+    /// How far the barrel's front section has run out on its slides.
+    pub reach: f32,
+}
+
+impl RailBarrel {
+    pub fn at(open: f32) -> Self {
+        let open = if open.is_finite() {
+            open.clamp(-0.1, 1.3)
+        } else {
+            0.
+        };
+        // A spring carries it a little past each end before it settles.
+        let (over, shy) = ((open - 1.).max(0.), open.min(0.));
+        let armor = rail_stage(open, 0., 0.55);
+        let rails = rail_stage(open, 0.16, 0.7);
+        let claws = rail_stage(open, 0.46, 1.);
+        let mut gaps = [0.; RAIL_COILS.len()];
+        for (index, gap) in gaps.iter_mut().enumerate() {
+            let u = index as f32 / (RAIL_COILS.len() - 1) as f32;
+            *gap = 0.012 + 0.1 * rail_stage(open, 0.14 + 0.42 * u, 0.4 + 0.52 * u) + 0.06 * over;
+        }
+        Self {
+            swing: 0.19 * armor + 0.16 * over + 0.03 * shy,
+            rail_root: 0.15 + 0.06 * rails + 0.04 * over,
+            rail_tip: 0.125 + 0.125 * rails + 0.08 * over,
+            gaps,
+            claw: 0.98 * claws + 0.5 * over,
+            reach: 0.1 * rail_stage(open, 0.3, 0.86) + 0.05 * over,
+        }
+    }
+
+    /// Where a coil sits along the barrel. The front ones ride the section
+    /// that runs out.
+    pub fn coil_along(&self, index: usize, along: f32) -> f32 {
+        along + self.reach * ((index as f32 - 3.) / 3.).clamp(0., 1.)
+    }
+
+    /// A point on one armored half, given as it lies shut, where it is now.
+    /// `side` is -1 or 1, `out` is measured away from the middle, and the
+    /// result is (along, out) with the side's sign.
+    pub fn on_armor(&self, side: f32, along: f32, out: f32) -> (f32, f32) {
+        let (x, y) = (along - RAIL_HINGE.0, out - RAIL_HINGE.1);
+        let (sin, cos) = self.swing.sin_cos();
+        (
+            RAIL_HINGE.0 + x * cos - y * sin,
+            side * (RAIL_HINGE.1 + x * sin + y * cos),
+        )
+    }
+
+    /// The hinge and tip of one of the muzzle's claws, as (along, out).
+    pub fn claw(&self, side: f32, which: usize) -> ((f32, f32), (f32, f32)) {
+        let (hinge_out, length, late) = RAIL_CLAWS[which.min(RAIL_CLAWS.len() - 1)];
+        let hinge = self.on_armor(side, 2.04 + self.reach, hinge_out);
+        let angle = self.swing - 0.13 + self.claw * (1. - late);
+        (
+            hinge,
+            (
+                hinge.0 + angle.cos() * length,
+                hinge.1 + side * angle.sin() * length,
+            ),
+        )
+    }
+}
+
+/// A tapered bar from `a` to `b`, outlined when `edge` is above zero.
+fn bar(
+    emit: &mut impl FnMut(Primitive),
+    (a, b): (Vec2, Vec2),
+    (half_a, half_b): (f32, f32),
+    color: Color,
+    edge: f32,
+) {
+    let way = (b - a).normalize_or_zero();
+    let out = vec2(-way.y, way.x);
+    let corners = |grow: f32| {
+        [
+            a - way * grow - out * (half_a + grow),
+            b + way * grow - out * (half_b + grow),
+            b + way * grow + out * (half_b + grow),
+            a - way * grow + out * (half_a + grow),
+        ]
+    };
+    if edge > 0. {
+        emit(Primitive::Quad {
+            vertices: corners(edge),
+            color: Color {
+                a: color.a,
+                ..OUTLINE
+            },
+        });
+    }
+    emit(Primitive::Quad {
+        vertices: corners(0.),
+        color,
+    });
+}
+
+/// An outlined four-sided armor plate.
+fn facet(emit: &mut impl FnMut(Primitive), corners: [Vec2; 4], color: Color, edge: f32) {
+    let middle = (corners[0] + corners[1] + corners[2] + corners[3]) / 4.;
+    emit(Primitive::Quad {
+        vertices: corners.map(|at| at + (at - middle).normalize_or_zero() * edge * 1.5),
+        color: Color {
+            a: color.a,
+            ..OUTLINE
+        },
+    });
+    emit(Primitive::Quad {
+        vertices: corners,
+        color,
+    });
+}
+
+/// A share from 0 to 1, whatever it was handed.
+fn share(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0., 1.)
+    } else {
+        0.
+    }
+}
+
+/// The Railgunner: an armored octagon on two engines, carrying a barrel longer
+/// than the rest of it. The barrel is two armored halves on hinges, closed
+/// around a pair of rails. For the beam they swing apart on hydraulic rams, the
+/// coils part, and claws unfold at the muzzle. The rails kick back when it
+/// fires, the fins fold out to dump heat, and the dish never stops. The game
+/// lays its light over this with `BossFx::rail_lights`, which reads the same
+/// [`RailBarrel`].
+fn railgunner_model(
+    p: Vec2,
+    r: f32,
+    pose: Pose,
+    team_color: Option<Color>,
+    emit: &mut impl FnMut(Primitive),
+) {
+    let Pose {
+        aim,
+        time,
+        charge,
+        recoil,
+        beam,
+        vent,
+        open: split,
+        ..
+    } = pose;
+    let ahead = vec2(aim.cos(), aim.sin());
+    let side = vec2(-ahead.y, ahead.x);
+    let at = |along: f32, out: f32| p + ahead * r * along + side * r * out;
+    let fine = r >= RAIL_FINE;
+    let edge = (r * 0.034).max(0.6);
+    let steel = team_color.map_or(RAIL_STEEL, |team| tint(team, 0.62));
+    let accent = team_color.unwrap_or(RAIL_ION);
+    let (mid, deep, pale) = (tint(steel, 0.8), tint(steel, 0.55), lighten(steel, 0.36));
+    let thrown = share(recoil) * RAIL_THROW;
+    let open = share(vent);
+    let live = share(charge).max(share(beam));
+    let lamp = tint(accent, 0.5 + 0.5 * live);
+    // Two engines, set back on its flanks.
+    for out in [-1., 1.] {
+        bar(
+            emit,
+            (at(-0.28, out * 0.58), at(-1.18, out * 0.68)),
+            (r * 0.28, r * 0.2),
+            mid,
+            edge,
+        );
+        bar(
+            emit,
+            (at(-1.1, out * 0.67), at(-1.32, out * 0.7)),
+            (r * 0.14, r * 0.19),
+            deep,
+            edge,
+        );
+        if fine {
+            bar(
+                emit,
+                (at(-0.42, out * 0.6), at(-1.02, out * 0.66)),
+                (r * 0.05, r * 0.035),
+                deep,
+                0.,
+            );
+            // Cooling ribs across the engine, and the ring of its nozzle.
+            for rib in 0..4 {
+                let along = -0.5 - rib as f32 * 0.15;
+                let width = 0.235 - rib as f32 * 0.016;
+                let middle = 0.6 + (along + 0.42) * -0.1;
+                bar(
+                    emit,
+                    (
+                        at(along, out * (middle - width)),
+                        at(along, out * (middle + width)),
+                    ),
+                    (r * 0.014, r * 0.014),
+                    deep,
+                    0.,
+                );
+            }
+            bar(
+                emit,
+                (at(-1.27, out * 0.555), at(-1.27, out * 0.845)),
+                (r * 0.02, r * 0.02),
+                pale,
+                0.,
+            );
+        }
+    }
+    // Heat fins, hinged at the hull. They fold out when it vents.
+    for out in [-1., 1.] {
+        for (index, root) in [1.94_f32, 2.36, 2.78].into_iter().enumerate() {
+            let hinge = aim + out * root;
+            let lean = aim + out * (root + open * (0.36 - index as f32 * 0.18));
+            let base = p + vec2(hinge.cos(), hinge.sin()) * r * 0.9;
+            let way = vec2(lean.cos(), lean.sin());
+            let across = vec2(-way.y, way.x) * r * 0.1;
+            shard(
+                emit,
+                [
+                    base + across,
+                    base + way * r * (0.5 + 0.17 * open),
+                    base - across,
+                ],
+                if index == 1 { pale } else { mid },
+                edge * 0.8,
+            );
+        }
+    }
+    // Flank guns: all it has for anyone who gets close.
+    for out in [-1., 1.] {
+        cannon_profile(
+            emit,
+            at(0.18, out * 0.77),
+            aim,
+            r * 0.58,
+            r * 0.15,
+            steel,
+            0.,
+            1.14,
+            Some(edge),
+        );
+    }
+    hull(emit, p, 8, r, aim + PI / 8., steel, edge);
+    hull(emit, p, 8, r * 0.83, aim + PI / 8., mid, edge * 0.5);
+    for out in [-1., 1.] {
+        // Cheek armor either side of the barrel.
+        facet(
+            emit,
+            [
+                at(0.3, out * 0.33),
+                at(0.74, out * 0.3),
+                at(0.5, out * 0.66),
+                at(0.04, out * 0.72),
+            ],
+            steel,
+            edge * 0.7,
+        );
+        // Plates along the rear deck.
+        facet(
+            emit,
+            [
+                at(-0.12, out * 0.72),
+                at(-0.3, out * 0.3),
+                at(-0.68, out * 0.26),
+                at(-0.56, out * 0.6),
+            ],
+            deep,
+            edge * 0.55,
+        );
+    }
+    if fine {
+        // Chevrons running up the spine, pointing where it means to shoot.
+        for step in 0..3 {
+            let tip = -0.5 + step as f32 * 0.11;
+            for out in [-1., 1.] {
+                bar(
+                    emit,
+                    (at(tip, 0.), at(tip - 0.17, out * 0.2)),
+                    (r * 0.026, r * 0.026),
+                    lamp,
+                    0.,
+                );
+            }
+        }
+    }
+    let barrel = RailBarrel::at(split);
+    let (back, front) = (0.3 - thrown, 2.31 - thrown);
+    // The armor rides back a little with the rails, on its hinge.
+    let armor_back = thrown * 0.3;
+    let black = Color {
+        a: steel.a,
+        ..OUTLINE
+    };
+    // The bore, dark until there's something in it.
+    bar(
+        emit,
+        (at(back, 0.), at(front - 0.02, 0.)),
+        (r * (barrel.rail_root + 0.07), r * (barrel.rail_tip + 0.06)),
+        black,
+        0.,
+    );
+    if fine {
+        // Rungs across the bore, seen once the armor has parted.
+        for rung in 0..9 {
+            let along = back + 0.16 + rung as f32 * 0.205;
+            let u = (along - back) / (front - back);
+            let half = barrel.rail_root + (barrel.rail_tip - barrel.rail_root) * u;
+            bar(
+                emit,
+                (at(along, -half), at(along, half)),
+                (r * 0.013, r * 0.013),
+                deep,
+                0.,
+            );
+        }
+    }
+    for out in [-1., 1.] {
+        bar(
+            emit,
+            (
+                at(back, out * barrel.rail_root),
+                at(front, out * barrel.rail_tip),
+            ),
+            (r * 0.05, r * 0.04),
+            pale,
+            edge * 0.8,
+        );
+        if fine {
+            bar(
+                emit,
+                (
+                    at(back + 0.04, out * (barrel.rail_root - 0.014)),
+                    at(front - 0.04, out * (barrel.rail_tip - 0.012)),
+                ),
+                (r * 0.014, r * 0.011),
+                lighten(pale, 0.5),
+                0.,
+            );
+        }
+    }
+    // The two armored halves, swinging on their hinges at the breech.
+    for out in [-1., 1.] {
+        let on = |along: f32, off: f32| {
+            let (run, across) = barrel.on_armor(out, along - armor_back, off);
+            at(run, across)
+        };
+        facet(
+            emit,
+            [
+                on(0.24, 0.09),
+                on(0.18, 0.38),
+                on(1.52, 0.31),
+                on(1.6, 0.082),
+            ],
+            steel,
+            edge,
+        );
+        facet(
+            emit,
+            [
+                on(1.57 + barrel.reach, 0.082),
+                on(1.53 + barrel.reach, 0.296),
+                on(1.98 + barrel.reach, 0.22),
+                on(2.07 + barrel.reach, 0.07),
+            ],
+            mid,
+            edge * 0.8,
+        );
+        if fine {
+            // A slit down the plate that lights as it charges.
+            bar(
+                emit,
+                (on(0.42, 0.255), on(1.46, 0.232)),
+                (r * 0.015, r * 0.011),
+                lamp,
+                0.,
+            );
+            // A latch on the seam, the first thing to let go.
+            let latch = rail_stage(split, 0., 0.14) * 0.05;
+            plate(
+                emit,
+                {
+                    let (run, across) = barrel.on_armor(out, 1.57 - armor_back, 0.1 + latch);
+                    at(run, across)
+                },
+                vec2(r * 0.15, r * 0.075),
+                aim,
+                pale,
+            );
+        }
+    }
+    // Each coil is two halves that ride the armor and part down the barrel.
+    for (index, along) in RAIL_COILS.into_iter().enumerate() {
+        let reach = 0.335 - index as f32 * 0.014;
+        let along = barrel.coil_along(index, along);
+        for out in [-1., 1.] {
+            let on = |off: f32| {
+                let (run, across) = barrel.on_armor(out, along - thrown, off);
+                at(run, across)
+            };
+            let gap = barrel.gaps[index];
+            bar(
+                emit,
+                (on(gap), on(reach)),
+                (r * 0.042, r * 0.042),
+                steel,
+                edge * 0.75,
+            );
+            if fine {
+                bar(
+                    emit,
+                    (on(gap + 0.04), on(reach - 0.04)),
+                    (r * 0.012, r * 0.012),
+                    lamp,
+                    0.,
+                );
+            }
+        }
+    }
+    // The rams that do the work, from the hull to each half.
+    for out in [-1., 1.] {
+        let base = at(0.26, out * 0.63);
+        let (run, across) = barrel.on_armor(out, 1.14 - armor_back, 0.335);
+        let end = at(run, across);
+        let sleeve = base.lerp(end, 0.52);
+        bar(
+            emit,
+            (sleeve, end),
+            (r * 0.024, r * 0.024),
+            lighten(pale, 0.3),
+            edge * 0.5,
+        );
+        bar(
+            emit,
+            (base, sleeve),
+            (r * 0.052, r * 0.046),
+            mid,
+            edge * 0.7,
+        );
+        if fine {
+            hull(emit, base, 0, r * 0.05, 0., steel, edge * 0.5);
+            poly(emit, base, 0, r * 0.018, 0., pale);
+            hull(emit, end, 0, r * 0.036, 0., pale, edge * 0.5);
+        }
+    }
+    // The muzzle's claws. They close into a point and unfold for the beam.
+    for out in [-1., 1.] {
+        for which in 0..RAIL_CLAWS.len() {
+            let (hinge, tip) = barrel.claw(out, which);
+            let (hinge, tip) = (at(hinge.0 - thrown, hinge.1), at(tip.0 - thrown, tip.1));
+            let way = (tip - hinge).normalize_or_zero();
+            let across = vec2(-way.y, way.x) * r * (0.062 - which as f32 * 0.012);
+            shard(
+                emit,
+                [hinge + across, tip, hinge - across],
+                if which == 0 { pale } else { steel },
+                edge * 0.7,
+            );
+            if fine {
+                let middle = hinge.lerp(tip, 0.62);
+                bar(emit, (hinge, middle), (r * 0.012, r * 0.004), lamp, 0.);
+            }
+        }
+    }
+    // The turret, ringed with capacitors, with the core in the middle.
+    hull(emit, p, 12, r * 0.62, aim, steel, edge);
+    hull(emit, p, 12, r * 0.47, aim + PI / 12., deep, edge * 0.6);
+    const CELLS: usize = 10;
+    for cell in 0..CELLS {
+        let turn = aim + (cell as f32 + 0.5) / CELLS as f32 * TAU;
+        hull(
+            emit,
+            p + vec2(turn.cos(), turn.sin()) * r * 0.545,
+            4,
+            r * 0.062,
+            turn + FRAC_PI_4,
+            lamp,
+            edge * 0.45,
+        );
+    }
+    hull(emit, p, 8, r * 0.3, aim + PI / 8., mid, edge * 0.7);
+    poly(emit, p, 0, r * 0.17, 0., OUTLINE);
+    poly(
+        emit,
+        p,
+        0,
+        r * 0.17 - edge,
+        0.,
+        lighten(accent, 0.45 + 0.5 * live),
+    );
+    if fine {
+        // The dish that finds them, turning on the turret's back.
+        let dish = at(-0.38, 0.);
+        hull(emit, dish, 0, r * 0.13, 0., steel, edge * 0.5);
+        plate(emit, dish, vec2(r * 0.24, r * 0.05), time * 1.7, pale);
+        poly(emit, dish, 0, r * 0.04, 0., lamp);
+        // The rangefinder on its shoulder, with a lens that watches you.
+        let optic = at(0.12, 0.3);
+        plate(
+            emit,
+            optic,
+            vec2(r * 0.26 + edge * 2., r * 0.11 + edge * 2.),
+            aim,
+            OUTLINE,
+        );
+        plate(emit, optic, vec2(r * 0.26, r * 0.11), aim, mid);
+        let lens = at(0.22, 0.3);
+        poly(emit, lens, 0, r * 0.043, 0., OUTLINE);
+        poly(
+            emit,
+            lens,
+            0,
+            r * 0.03,
+            0.,
+            lighten(accent, 0.2 + 0.7 * live),
+        );
     }
 }
 
@@ -837,6 +1409,65 @@ mod tests {
     }
 
     #[test]
+    fn the_railgunner_barrel_opens_in_order_and_stays_in_bounds() {
+        let shut = RailBarrel::at(0.);
+        let full = RailBarrel::at(1.);
+        assert_eq!(shut.swing, 0.);
+        assert_eq!(shut.claw, 0.);
+        assert!(full.swing > 0.15 && full.claw > 0.9);
+        assert!(full.rail_tip > shut.rail_tip + 0.1, "the rails stand off");
+        // The armor leads and the claws come last.
+        let part = RailBarrel::at(0.42);
+        assert!(part.swing > 0.6 * full.swing);
+        assert_eq!(part.claw, 0.);
+        // The coils part from the breech toward the muzzle.
+        let halfway = RailBarrel::at(0.45);
+        for pair in halfway.gaps.windows(2) {
+            assert!(pair[0] >= pair[1], "{:?}", halfway.gaps);
+        }
+        for open in [-3., -0.08, 0., 0.3, 0.7, 1., 1.2, 9., f32::NAN] {
+            let barrel = RailBarrel::at(open);
+            for side in [-1., 1.] {
+                for which in 0..2 {
+                    let (hinge, tip) = barrel.claw(side, which);
+                    assert!(hinge.0.is_finite() && tip.0.is_finite());
+                    assert!((tip.0 * tip.0 + tip.1 * tip.1).sqrt() < 2.6, "{open}");
+                    assert!(tip.1 * side > -0.02, "a claw crossed the bore at {open}");
+                }
+                let (_, out) = barrel.on_armor(side, 1., 0.2);
+                assert!(out * side > 0., "the armor stays on its own side");
+            }
+            let pose = Pose {
+                aim: 0.7,
+                open,
+                vent: 1.,
+                beam: 1.,
+                recoil: 1.,
+                ..Pose::default()
+            };
+            boss_model_geometry(
+                BossKind::Railgunner,
+                Vec2::ZERO,
+                100.,
+                pose,
+                None,
+                &mut |primitive| {
+                    let points = match primitive {
+                        Primitive::Polygon { center, radius, .. } => {
+                            vec![center - Vec2::splat(radius), center + Vec2::splat(radius)]
+                        }
+                        Primitive::Triangle { vertices, .. } => vertices.to_vec(),
+                        Primitive::Quad { vertices, .. } => vertices.to_vec(),
+                    };
+                    for point in points {
+                        assert!(point.is_finite() && point.length() < 275., "{open}");
+                    }
+                },
+            );
+        }
+    }
+
+    #[test]
     fn all_boss_silhouettes_are_finite_bounded_and_distinct() {
         let mut signatures = std::collections::HashSet::new();
         for kind in BossKind::ALL {
@@ -852,6 +1483,7 @@ mod tests {
                     phase: 2,
                     charge: 0.5,
                     lit: false,
+                    ..Pose::default()
                 },
                 None,
                 &mut |primitive| {

@@ -1082,15 +1082,22 @@ fn toggle_switch(rect: Rect, on: &mut bool, s: f32) -> bool {
     if clicked {
         *on = !*on;
     }
-    capsule(rect, if *on { accent() } else { line_color() });
-    let knob = rect.h * 0.5 - 3.0 * s;
-    let cx = if *on {
+    draw_switch(rect, *on, s);
+    clicked
+}
+
+/// The switch alone, for a row that has to claim the click before its own
+/// background does.
+fn draw_switch(rect: Rect, on: bool, s: f32) {
+    capsule(rect, if on { accent() } else { line_color() });
+    let lift = if contains(rect) { 1.5 * s } else { 0. };
+    let knob = rect.h * 0.5 - 3.0 * s + lift;
+    let cx = if on {
         rect.right() - rect.h * 0.5
     } else {
         rect.x + rect.h * 0.5
     };
     draw_circle(cx, rect.center().y, knob, WHITE);
-    clicked
 }
 
 #[cfg(test)]

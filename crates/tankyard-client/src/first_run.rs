@@ -22,6 +22,7 @@ pub async fn choose_theme(automated: bool) -> Option<bool> {
     let mut focus_dark = settings.dark_arena;
     let mut committed = None;
     loop {
+        begin_frame();
         if is_quit_requested() {
             return None;
         }
@@ -143,6 +144,7 @@ pub async fn choose_theme(automated: bool) -> Option<bool> {
                 }
             }
         }
+        end_frame();
         next_frame().await;
     }
 }

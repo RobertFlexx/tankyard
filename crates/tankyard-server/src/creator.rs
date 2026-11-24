@@ -61,6 +61,16 @@ pub enum Command {
     Moderate {
         command: ServerCommand,
     },
+    /// Fill every living tank's health.
+    HealAll,
+    /// Set every boss to this percentage of its health.
+    BossHealth {
+        percent: f32,
+    },
+    /// Jump to a spot beside a living player.
+    GoTo {
+        player: EntityId,
+    },
 }
 
 pub(crate) fn handle(
@@ -198,6 +208,21 @@ pub fn apply(
             x.is_finite() && y.is_finite() && world.config.bounds().contains(V2::new(*x, *y))
         }
         Command::Heal => world.tanks[index].alive,
+        Command::BossHealth { percent } => {
+            if world.bosses.is_empty() {
+                return Err("There's no boss to adjust.".into());
+            }
+            percent.is_finite() && (1.0..=100.0).contains(percent)
+        }
+        Command::GoTo { player: other } => {
+            if !world.tanks[index].alive {
+                return Err("Respawn first.".into());
+            }
+            if !world.tanks.iter().any(|t| t.id == *other && t.alive) {
+                return Err("That player isn't in play.".into());
+            }
+            *other != player
+        }
         Command::Moderate { .. } | Command::Map { .. } => false,
         _ => true,
     };
@@ -284,6 +309,34 @@ pub fn apply(
             world.tanks[index].damage_scale = 1.;
             world.tanks[index].reload_scale = 1.;
         }
+        Command::HealAll => {
+            for tank in world.tanks.iter_mut().filter(|t| t.alive) {
+                tank.health = tank.max_health;
+            }
+        }
+        Command::BossHealth { percent } => {
+            for boss in &mut world.bosses {
+                boss.health = boss.max_health * percent / 100.;
+            }
+        }
+        Command::GoTo { player: other } => {
+            let (at, reach) = world
+                .tanks
+                .iter()
+                .find(|t| t.id == other)
+                .map(|t| (t.pos, t.radius))
+                .ok_or("That player isn't in play.")?;
+            let radius = world.tanks[index].radius;
+            let pos = tankyard_core::physics::clear_circle_position(
+                at + V2::new(reach + radius + 24., 0.),
+                radius,
+                world.config.bounds(),
+                &world.walls,
+            )
+            .ok_or("No clear destination.")?;
+            world.tanks[index].pos = pos;
+            world.tanks[index].vel = V2::ZERO;
+        }
         Command::Moderate { .. } | Command::Map { .. } => unreachable!(),
     }
     world.config.modded = true;
@@ -293,6 +346,47 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_new_creator_commands_check_their_targets() {
+        let mut local = LocalSession::new(
+            tankyard_core::WorldConfig {
+                target_count: 0,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            0,
+        );
+        let creator = local.world.add_player("Owner", false);
+        let friend = local.world.add_player("Friend", false);
+        local.world.tanks[0].game_creator = true;
+
+        for command in [
+            Command::BossHealth { percent: 50. },
+            Command::GoTo { player: creator },
+            Command::GoTo { player: 9999 },
+        ] {
+            assert!(apply(&mut local, creator, command).is_err());
+        }
+        assert!(!local.world.config.modded, "a refusal changes nothing");
+
+        assert_ne!(local.world.spawn_boss(BossKind::Railgunner), 0);
+        for percent in [f32::NAN, 0., 100.5] {
+            assert!(apply(&mut local, creator, Command::BossHealth { percent }).is_err());
+        }
+        apply(&mut local, creator, Command::BossHealth { percent: 25. }).unwrap();
+        let boss = &local.world.bosses[0];
+        assert!((boss.health - boss.max_health * 0.25).abs() < 0.01);
+
+        local.world.tanks[1].health = 1.;
+        apply(&mut local, creator, Command::HealAll).unwrap();
+        assert_eq!(local.world.tanks[1].health, local.world.tanks[1].max_health);
+
+        apply(&mut local, creator, Command::GoTo { player: friend }).unwrap();
+        let (me, them) = (&local.world.tanks[0], &local.world.tanks[1]);
+        assert!(me.pos.distance(them.pos) < 300., "landed beside them");
+        assert!(local.world.position_clear(me.pos, me.radius));
+        assert!(local.world.config.modded);
+    }
     #[test]
     fn command_validation_precedes_world_mutation() {
         let mut local = LocalSession::new(

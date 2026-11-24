@@ -893,9 +893,51 @@ pub enum MapSound {
     Fanfare,
     /// A soft, low pulse, like a heartbeat or a distant drum.
     Thump,
+    // Added in 2.0.5. Events number sounds in this order, so newer ones go
+    // last; players on older versions hear `fallback` instead.
+    /// Two quick bright notes, for picking something up.
+    Coin,
+    /// A round little pop, like a bubble or a cork.
+    Pop,
+    /// One clean electronic beep.
+    Beep,
+    /// A soft, short click, like a button.
+    Click,
+    /// The tick of a clock.
+    Tick,
+    /// A zap that drops in pitch.
+    Laser,
+    /// A bright sweep climbing up through a chord.
+    PowerUp,
+    /// The same sweep, falling and running out of steam.
+    PowerDown,
+    /// A flat, rasping wrong-answer buzz.
+    Buzzer,
+    /// A quick chord that resolves upward, with a sparkle on top.
+    Success,
+    /// A heavy door sliding along and shutting.
+    Door,
+    /// A boom with debris falling after it.
+    Explosion,
+    /// A warbling shimmer that rises and vanishes.
+    Teleport,
+    /// Glittering bells running up the scale.
+    Magic,
+    /// Something hitting water, with a few bubbles after.
+    Splash,
+    /// A deep, shimmering gong.
+    Gong,
+    /// A crack of thunder rolling away into the distance.
+    Thunder,
+    /// Three short beeps and a long, higher one, for a race start.
+    Countdown,
+    /// A punchy drum hit.
+    Drum,
+    /// A low, brassy horn blast.
+    Horn,
 }
 impl MapSound {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 28] = [
         Self::Chime,
         Self::Bell,
         Self::Alarm,
@@ -904,7 +946,29 @@ impl MapSound {
         Self::Rumble,
         Self::Fanfare,
         Self::Thump,
+        Self::Coin,
+        Self::Pop,
+        Self::Beep,
+        Self::Click,
+        Self::Tick,
+        Self::Laser,
+        Self::PowerUp,
+        Self::PowerDown,
+        Self::Buzzer,
+        Self::Success,
+        Self::Door,
+        Self::Explosion,
+        Self::Teleport,
+        Self::Magic,
+        Self::Splash,
+        Self::Gong,
+        Self::Thunder,
+        Self::Countdown,
+        Self::Drum,
+        Self::Horn,
     ];
+    /// The sounds every version since 1.1.0 knows.
+    pub const CLASSIC: usize = 8;
     pub fn name(self) -> &'static str {
         match self {
             Self::Chime => "Chime",
@@ -915,6 +979,45 @@ impl MapSound {
             Self::Rumble => "Rumble",
             Self::Fanfare => "Fanfare",
             Self::Thump => "Thump",
+            Self::Coin => "Coin",
+            Self::Pop => "Pop",
+            Self::Beep => "Beep",
+            Self::Click => "Click",
+            Self::Tick => "Tick",
+            Self::Laser => "Laser",
+            Self::PowerUp => "Power up",
+            Self::PowerDown => "Power down",
+            Self::Buzzer => "Buzzer",
+            Self::Success => "Success",
+            Self::Door => "Door",
+            Self::Explosion => "Explosion",
+            Self::Teleport => "Teleport",
+            Self::Magic => "Magic",
+            Self::Splash => "Splash",
+            Self::Gong => "Gong",
+            Self::Thunder => "Thunder",
+            Self::Countdown => "Countdown",
+            Self::Drum => "Drum",
+            Self::Horn => "Horn",
+        }
+    }
+    /// The name scripts use: `power_up`.
+    pub fn id(self) -> String {
+        self.name().to_ascii_lowercase().replace(' ', "_")
+    }
+    /// The nearest of the first eight, for players whose game predates
+    /// this sound.
+    pub fn fallback(self) -> Self {
+        match self {
+            Self::Coin | Self::Beep | Self::Magic => Self::Chime,
+            Self::Pop | Self::Click | Self::Tick | Self::Door => Self::Switch,
+            Self::Laser | Self::Teleport | Self::Splash => Self::Whoosh,
+            Self::PowerUp | Self::Success => Self::Fanfare,
+            Self::PowerDown | Self::Explosion | Self::Thunder => Self::Rumble,
+            Self::Buzzer | Self::Countdown | Self::Horn => Self::Alarm,
+            Self::Gong => Self::Bell,
+            Self::Drum => Self::Thump,
+            classic => classic,
         }
     }
     /// Its place in [`MapSound::ALL`], as events carry it.
@@ -925,6 +1028,68 @@ impl MapSound {
         Self::ALL.get(usize::from(index)).copied()
     }
 }
+
+/// Who hears a Play sound.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoundRange {
+    /// Players near it, fading out a little past the edge of the screen.
+    #[default]
+    Near,
+    /// Players well across the arena, fading slowly with distance.
+    Far,
+    /// Everyone in the arena, at full volume wherever they are.
+    Everywhere,
+    /// Only the tank that set it off, at full volume.
+    Cause,
+}
+impl SoundRange {
+    pub const ALL: [Self; 4] = [Self::Near, Self::Far, Self::Everywhere, Self::Cause];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Near => "Nearby",
+            Self::Far => "Far away",
+            Self::Everywhere => "Everywhere",
+            Self::Cause => "Tank that set it off",
+        }
+    }
+}
+
+/// How a Random signal picks its channel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RandomPick {
+    /// Any channel, every time, even the one it just sent.
+    #[default]
+    Any,
+    /// Never the channel it sent last.
+    Fresh,
+    /// Every channel once, in a shuffled order, before any comes round again.
+    Shuffle,
+    /// By each channel's weight in `weights`.
+    Weighted,
+}
+impl RandomPick {
+    pub const ALL: [Self; 4] = [Self::Any, Self::Fresh, Self::Shuffle, Self::Weighted];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Any => "Any",
+            Self::Fresh => "No repeats",
+            Self::Shuffle => "Shuffle",
+            Self::Weighted => "Weighted",
+        }
+    }
+}
+/// The most channels a weighted Random signal weighs.
+pub const RANDOM_WEIGHTS: usize = 32;
+/// The most semitones Play sound shifts its pitch.
+pub const SOUND_PITCH: i8 = 12;
+/// The most Play sound's pitch wanders, in tenths of a semitone.
+pub const SOUND_VARY: u8 = 60;
+/// The most times one Play sound plays.
+pub const SOUND_REPEATS: u8 = 8;
+/// The longest gap between Play sound's repeats, in seconds.
+pub const SOUND_GAP: f32 = 3.;
 
 /// How Calculate changes its counter with the other value.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1114,14 +1279,18 @@ pub enum TestKind {
     /// Whole seconds since the round started, against `value` or counter
     /// `against`.
     Time,
+    // Added in 2.0.5.
+    /// Holds `value` percent of the times it's checked, at random.
+    Chance,
 }
 impl TestKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Counter,
         Self::Shown,
         Self::Hidden,
         Self::Inside,
         Self::Time,
+        Self::Chance,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -1130,6 +1299,7 @@ impl TestKind {
             Self::Hidden => "Group hidden",
             Self::Inside => "Tanks inside",
             Self::Time => "Round time",
+            Self::Chance => "Chance",
         }
     }
     /// Whether it compares a number, rather than looking at a group.
@@ -1226,6 +1396,9 @@ pub struct GateState<'a> {
     pub time: f32,
     /// Noticed tanks inside the trigger's area.
     pub inside: usize,
+    /// Where this check's dice fall: Chance conditions each read their own
+    /// roll from it, so one check is one draw however often it's asked.
+    pub dice: u32,
 }
 
 /// Most conditions one trigger checks.
@@ -1268,15 +1441,30 @@ impl TriggerTest {
             hidden,
             time: 0.,
             inside: 0,
+            dice: 0,
         })
     }
     /// Whether the condition holds in `state`.
     pub fn holds(&self, state: &GateState) -> bool {
+        self.holds_at(state, 0)
+    }
+    /// Whether the condition holds in `state`, as the `position`th of its
+    /// gate. A Chance condition rolls once per position, so two of them in
+    /// one gate roll apart.
+    pub fn holds_at(&self, state: &GateState, position: usize) -> bool {
         let counter = |n: u8| {
             usize::from(n)
                 .checked_sub(1)
                 .and_then(|slot| state.counters.get(slot).copied())
         };
+        if self.kind == TestKind::Chance {
+            let percent = if self.against > 0 {
+                counter(self.against).unwrap_or(0)
+            } else {
+                self.value
+            };
+            return roll(state.dice, position) * 100. < percent.clamp(0, 100) as f32;
+        }
         let a = match self.kind {
             TestKind::Counter => match counter(self.index) {
                 Some(a) => a,
@@ -1286,6 +1474,7 @@ impl TriggerTest {
             TestKind::Time => state.time.max(0.).floor().min(COUNTER_LIMIT as f32) as i32,
             TestKind::Shown => return state.hidden & MapDef::group_bit(self.index) == 0,
             TestKind::Hidden => return state.hidden & MapDef::group_bit(self.index) != 0,
+            TestKind::Chance => unreachable!("rolled above"),
         };
         let b = if self.against > 0 {
             counter(self.against).unwrap_or(0)
@@ -1294,6 +1483,17 @@ impl TriggerTest {
         };
         self.compare.holds(a, b)
     }
+}
+
+/// A number from 0 to 1 for the `position`th roll of `dice`.
+pub fn roll(dice: u32, position: usize) -> f32 {
+    let mut x = dice ^ (position as u32).wrapping_add(1).wrapping_mul(0x9e37_79b9);
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^= x >> 16;
+    (x >> 8) as f32 / 16_777_216.
 }
 
 /// Which tanks an Enter or Exit trigger notices.
@@ -1838,6 +2038,34 @@ pub struct MapTrigger {
     /// half a second.
     #[serde(default, skip_serializing_if = "is_default")]
     pub ease: f32,
+    // Added in 2.0.5, and likewise left out when unused.
+    /// Play sound's pitch in semitones, -12 to 12.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub pitch: i8,
+    /// How far Play sound's pitch wanders each time it plays, either way,
+    /// in tenths of a semitone (0 to 60).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub vary: u8,
+    /// Who hears Play sound.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub range: SoundRange,
+    /// How many times Play sound plays, up to 8; 0 and 1 play it once.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub repeat: u8,
+    /// Seconds between Play sound's repeats.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub gap: f32,
+    /// How Random signal picks.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub pick: RandomPick,
+    /// A weighted Random signal's weight for each of its channels, in
+    /// order, 0 to 100. Channels past the list weigh nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weights: Vec<u8>,
+    /// How many different channels Random signal sends on at once; 0 and 1
+    /// send on one.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub picks: u8,
 }
 impl MapTrigger {
     /// Every signal channel acting can send on: its action's, each choice's
@@ -1928,6 +2156,14 @@ impl Default for MapTrigger {
             hold: false,
             focus: 0,
             ease: 0.,
+            pitch: 0,
+            vary: 0,
+            range: SoundRange::Near,
+            repeat: 0,
+            gap: 0.,
+            pick: RandomPick::Any,
+            weights: Vec::new(),
+            picks: 0,
         }
     }
 }
@@ -1971,11 +2207,15 @@ impl MapTrigger {
     /// Whether the gate lets the trigger act in `state`. No conditions is open.
     pub fn gate_open(&self, state: &GateState) -> bool {
         let (mut passed, mut total) = (0, 0);
-        for test in self.conditions() {
+        for (position, test) in self.conditions().enumerate() {
             total += 1;
-            passed += usize::from(test.holds(state));
+            passed += usize::from(test.holds_at(state, position));
         }
         total == 0 || self.gate.open(passed, total)
+    }
+    /// Whether a condition rolls dice, so checking the gate draws a number.
+    pub fn rolls(&self) -> bool {
+        self.conditions().any(|test| test.kind == TestKind::Chance)
     }
     /// Whether a condition counts the tanks inside the trigger's area.
     pub fn counts_inside(&self) -> bool {
@@ -2243,7 +2483,7 @@ pub const ZOOM_SECONDS: f32 = 60.;
 pub const ZOOM_EASE: f32 = 10.;
 /// Stable IDs accepted by map boss triggers. Core verifies this catalog stays
 /// in sync with its boss enum.
-pub const BOSS_IDS: [&str; 14] = [
+pub const BOSS_IDS: [&str; 15] = [
     "sentinel",
     "prism",
     "foundry",
@@ -2258,6 +2498,7 @@ pub const BOSS_IDS: [&str; 14] = [
     "siege_engine",
     "skirmisher",
     "trapper",
+    "railgunner",
 ];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -3000,6 +3241,7 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
                     && (-COUNTER_LIMIT..=COUNTER_LIMIT).contains(&test.value)
             }
             TestKind::Shown | TestKind::Hidden => (1..=MAP_GROUPS).contains(&test.index),
+            TestKind::Chance => counter_or_none(test.against) && (0..=100).contains(&test.value),
         };
         if !fits {
             return Err(format!(
@@ -3016,6 +3258,34 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         return Err(format!(
             "offset by a counter from 1 to {MAP_COUNTERS}, or 0 for none"
         ));
+    }
+    if !(-SOUND_PITCH..=SOUND_PITCH).contains(&trigger.pitch)
+        || trigger.vary > SOUND_VARY
+        || trigger.repeat > SOUND_REPEATS
+        || !(0. ..=SOUND_GAP).contains(&trigger.gap)
+    {
+        return Err(format!(
+            "play a sound within {SOUND_PITCH} semitones either way, wandering at most {} of one, {SOUND_REPEATS} times at most, at most {SOUND_GAP} s apart",
+            f32::from(SOUND_VARY) / 10.
+        ));
+    }
+    let channels = usize::try_from(trigger.amount).unwrap_or(0);
+    if trigger.weights.len() > RANDOM_WEIGHTS
+        || trigger.weights.iter().any(|&weight| weight > 100)
+        || (trigger.action == TriggerAction::Random
+            && trigger.pick == RandomPick::Weighted
+            && !trigger
+                .weights
+                .iter()
+                .take(channels)
+                .any(|&weight| weight > 0))
+    {
+        return Err(format!(
+            "weigh at most {RANDOM_WEIGHTS} channels from 0 to 100, at least one of them above 0"
+        ));
+    }
+    if trigger.action == TriggerAction::Random && usize::from(trigger.picks) > channels {
+        return Err("send on no more channels at once than the signal picks from".into());
     }
     if trigger.focus > 100 || !range(trigger.ease, 0., ZOOM_EASE) {
         return Err(format!(
@@ -3401,6 +3671,106 @@ mod tests {
             Default::default(),
             "no gate, no settings"
         );
+    }
+
+    #[test]
+    fn sounds_and_random_picks_check_their_settings_and_stay_out_of_files_unused() {
+        let plain = serde_json::to_value(MapTrigger::default()).unwrap();
+        for key in [
+            "pitch", "vary", "range", "repeat", "gap", "pick", "weights", "picks",
+        ] {
+            assert!(plain.get(key).is_none(), "{key} is left out when unused");
+        }
+        let sound = MapTrigger {
+            action: TriggerAction::Sound,
+            amount: 80,
+            sound: MapSound::Gong,
+            pitch: -7,
+            vary: 30,
+            range: SoundRange::Cause,
+            repeat: 3,
+            gap: 0.5,
+            ..Default::default()
+        };
+        validate_trigger(&sound).unwrap();
+        let json = serde_json::to_string(&sound).unwrap();
+        assert_eq!(serde_json::from_str::<MapTrigger>(&json).unwrap(), sound);
+        for bad in [
+            MapTrigger {
+                pitch: SOUND_PITCH + 1,
+                ..sound.clone()
+            },
+            MapTrigger {
+                vary: SOUND_VARY + 1,
+                ..sound.clone()
+            },
+            MapTrigger {
+                repeat: SOUND_REPEATS + 1,
+                ..sound.clone()
+            },
+            MapTrigger {
+                gap: f32::NAN,
+                ..sound.clone()
+            },
+            MapTrigger {
+                gap: SOUND_GAP + 0.1,
+                ..sound.clone()
+            },
+        ] {
+            assert!(validate_trigger(&bad).is_err(), "{bad:?}");
+        }
+        let random = MapTrigger {
+            action: TriggerAction::Random,
+            group: 2,
+            amount: 4,
+            pick: RandomPick::Weighted,
+            weights: vec![0, 30, 0, 70],
+            picks: 2,
+            ..Default::default()
+        };
+        validate_trigger(&random).unwrap();
+        for bad in [
+            MapTrigger {
+                weights: vec![0; 4],
+                ..random.clone()
+            },
+            MapTrigger {
+                weights: vec![101, 0, 0, 0],
+                ..random.clone()
+            },
+            MapTrigger {
+                weights: vec![1; RANDOM_WEIGHTS + 1],
+                ..random.clone()
+            },
+            MapTrigger {
+                picks: 5,
+                ..random.clone()
+            },
+        ] {
+            assert!(validate_trigger(&bad).is_err(), "{bad:?}");
+        }
+        // Every sound falls back to one of the first eight, which every
+        // version has, and has a name of its own for scripts.
+        let mut ids = std::collections::HashSet::new();
+        for sound in MapSound::ALL {
+            assert!(usize::from(sound.fallback().index()) < MapSound::CLASSIC);
+            assert_eq!(MapSound::from_index(sound.index()), Some(sound));
+            assert!(ids.insert(sound.id()), "{} is taken", sound.id());
+        }
+        // A chance is a percent, written or read from a counter.
+        let chance = |value, against| MapTrigger {
+            only_if: Some(TriggerTest {
+                kind: TestKind::Chance,
+                value,
+                against,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        validate_trigger(&chance(25, 0)).unwrap();
+        validate_trigger(&chance(50, 3)).unwrap();
+        assert!(validate_trigger(&chance(101, 0)).is_err());
+        assert!(validate_trigger(&chance(-1, 0)).is_err());
     }
 
     #[test]

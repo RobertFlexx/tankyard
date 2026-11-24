@@ -63,6 +63,7 @@ impl BossFx {
                 fade * fade * level,
             );
         }
+        self.rail_tracers(light, view);
     }
 
     /// Everything happening apart from the bosses and their rounds: flame,
@@ -79,6 +80,7 @@ impl BossFx {
             }
         }
         self.draw_casts(light, view, level);
+        self.draw_clashes(light, view, level);
         for spark in &self.sparks {
             if !view.visible(spark.pos, 40.) {
                 continue;
@@ -226,7 +228,7 @@ fn muzzle(light: &mut Emission, p: Vec2, d: Vec2, burst: &Burst, s: f32, t: f32,
                 alpha(light.hot(AXIOM_TEAL, 0.4), 0.7 * fade * fade * level),
             );
         }
-        Fuel::Plasma | Fuel::Fire => {
+        Fuel::Plasma | Fuel::Fire | Fuel::Ion => {
             for side in [-1., 1.] {
                 let petal = (d + n * side * 0.6).normalize_or_zero();
                 light.streak(
@@ -454,6 +456,21 @@ fn draw_burst(light: &mut Emission, view: &View, burst: &Burst, level: f32) {
                 p,
                 s * (1.6 + 1.1 * settle),
                 alpha(c, 0.3 * (t * PI).sin() * level),
+            );
+        }
+        Flash::Bloom => {
+            let grow = ease_out(t);
+            light.spot(
+                Layer::Wash,
+                p,
+                s * (2.4 + 1.9 * grow),
+                alpha(c, 0.52 * fade * fade * level),
+            );
+            light.spot(
+                Layer::Core,
+                p,
+                s * (0.72 + 0.34 * grow),
+                alpha(light.hot(c, 0.9), 0.86 * fade.powi(3) * level),
             );
         }
         Flash::Smoke => {

@@ -58,6 +58,11 @@ impl BossFx {
         };
         let fuel = self.fuel_of(round);
         let clock = self.flicker(round);
+        // The Railgunner's cannon, and the echo that follows it.
+        if fuel == Fuel::Ion && kind == ProjectileKind::Shell {
+            self.rail_round(light, round);
+            return;
+        }
         let path = self.path_of(view, round);
         if damage >= LETHAL_DAMAGE {
             fireball(light, round, &path, clock, level);
@@ -394,8 +399,8 @@ fn slug(light: &mut Emission, round: &Round, path: &Path, clock: f32, level: f32
         twist(
             light,
             &line,
-            reach,
-            r,
+            path,
+            (reach, r),
             clock,
             alpha(heated(paint(0.1), 0.5, pale), o),
         );
@@ -409,19 +414,20 @@ fn slug(light: &mut Emission, round: &Round, path: &Path, clock: f32, level: f32
 }
 
 /// Two bright threads winding around each other down a heavy round's wake,
-/// brighter on the near side of each turn.
+/// brighter on the near side of each turn. The winding is fixed to the air, so
+/// the round draws it out rather than dragging it along.
 fn twist(
     light: &mut Emission,
     line: &super::ribbon::Line,
-    reach: f32,
-    r: f32,
+    path: &Path,
+    (reach, r): (f32, f32),
     clock: f32,
     color: Color,
 ) {
     for strand in [0., PI] {
         line.band(light, Layer::Core, |_, at| {
             let u = (at / reach.max(1.)).clamp(0., 1.);
-            let turn = at / (r * 1.5) - clock * 9. + strand;
+            let turn = path.in_air(at) / (r * 1.5) - clock * 1.7 + strand;
             let near = 0.45 + 0.55 * turn.cos().max(0.);
             let body = swell(at, r * 1.2) * (1. - u).powf(1.3);
             Section {
@@ -493,7 +499,10 @@ fn fireball(light: &mut Emission, round: &Round, path: &Path, clock: f32, level:
         let (half, t, strength) = keyed(&heart, at);
         // The hot middle weaves a little inside the flame around it.
         let weave = if moving {
-            (at / (r * 1.7) - clock * 13.).sin() * r * 0.12 * (at / reach).clamp(0., 1.)
+            (path.in_air(at) / (r * 1.7) - clock * 3.4).sin()
+                * r
+                * 0.12
+                * (at / reach).clamp(0., 1.)
         } else {
             0.
         };
@@ -504,7 +513,14 @@ fn fireball(light: &mut Emission, round: &Round, path: &Path, clock: f32, level:
         }
     });
     if moving && light.rich() {
-        twist(light, &line, reach, r, clock, alpha(heat(0.12), 0.8 * o));
+        twist(
+            light,
+            &line,
+            path,
+            (reach, r),
+            clock,
+            alpha(heat(0.12), 0.8 * o),
+        );
     }
     // Tongues of flame, each one peeling off the road the round has flown.
     for lick in 0..7 {
@@ -548,7 +564,7 @@ fn flourish(light: &mut Emission, round: &Round, path: &Path, fuel: Fuel, clock:
     let n = perpendicular(d);
     let o = opacity * level.min(1.);
     match fuel {
-        Fuel::Plasma | Fuel::Star => {}
+        Fuel::Plasma | Fuel::Star | Fuel::Ion => {}
         Fuel::Fire => {
             // Burning fuel: flame licking off the back of the round.
             for lick in 0..3 {
@@ -630,9 +646,11 @@ fn flourish(light: &mut Emission, round: &Round, path: &Path, fuel: Fuel, clock:
     }
 }
 
-/// A jagged line of electricity from `from` to `to`.
+/// A line of electricity from `from` to `to`, pinned at both ends and crooked
+/// at three scales at once, so it looks grown rather than drawn, in a soft glow
+/// of its own.
 pub(super) fn bolt(light: &mut Emission, from: Vec2, to: Vec2, half: f32, color: Color, seed: f32) {
-    const POINTS: usize = 6;
+    const POINTS: usize = 11;
     let along = to - from;
     let length = along.length();
     if length < 1. {
@@ -646,17 +664,22 @@ pub(super) fn bolt(light: &mut Emission, from: Vec2, to: Vec2, half: f32, color:
     }; POINTS];
     for (index, stop) in stops.iter_mut().enumerate() {
         let u = index as f32 / (POINTS - 1) as f32;
-        let jag = if index == 0 || index + 1 == POINTS {
-            0.
-        } else {
-            (seed * (index as f32 * 7.3 + 1.)).sin() * length * 0.17
-        };
+        let crook = (u * 6.1 + seed).sin()
+            + 0.5 * (u * 13.7 + seed * 1.7).sin()
+            + 0.26 * (u * 29.3 - seed * 2.3).sin();
+        let jag = (u * PI).sin().sqrt() * crook * length * 0.085;
         *stop = Stop {
             at: from + along * u + n * jag,
-            half: half * (1. - u * 0.6),
-            color: alpha(color, color.a * (1. - u * 0.75)),
+            half: half * (1. - u * 0.72),
+            color: alpha(color, color.a * (1. - u * u * 0.85)),
         };
     }
+    let mut glow = stops;
+    for stop in &mut glow {
+        stop.half = stop.half * 3.4 + 0.6;
+        stop.color.a *= 0.24;
+    }
+    light.band(Layer::Wash, &glow);
     light.band(Layer::Core, &stops);
 }
 
@@ -709,16 +732,26 @@ pub(super) fn band_from_trail(
         (c, Color::new(c.r * 0.52, c.g * 0.52, c.b * 0.52, 1.))
     };
     let pale = light.pale_floor();
-    let sections = if light.rich() { FINE } else { PLAIN };
+    let rich = light.rich();
+    let sections = if rich { FINE } else { PLAIN };
     let clock = trail.clock + trail.seed;
     let line = path.line(0., reach, sections, Sway::of(trail.fuel, r, clock));
     // It opens over about the round's own width, behind its body.
     let start = (r * 0.8 / reach).clamp(0.05, 0.32);
-    line.band(light, Layer::Wash, |t, _| {
+    // Thicker and thinner patches of gas, which stay where they were left.
+    let dense = |at: f32| {
+        let place = path.in_air(at) / (r * 2.4).max(5.) + trail.seed;
+        0.8 + 0.2 * (0.6 * place.sin() + 0.4 * (place * 2.3 + clock * 1.1).sin())
+    };
+    line.band(light, Layer::Wash, |t, at| {
         let (body, open) = (1. - t, swell(t, start));
         Section {
-            half: r * (1.3 * body + 0.14) * (0.42 + 0.58 * open),
-            color: alpha(mix(color, deep, t), 0.5 * open * body.powf(1.25) * strength),
+            // Spreading as it ages, so it fades out wide rather than to a point.
+            half: r * (1.06 * body + 0.6 * t + 0.14) * (0.42 + 0.58 * open),
+            color: alpha(
+                mix(color, deep, t),
+                0.5 * open * body.powf(1.25) * strength * dense(at),
+            ),
             side: 0.,
         }
     });
@@ -728,10 +761,33 @@ pub(super) fn band_from_trail(
             half: r * (0.52 * body + 0.05) * (0.42 + 0.58 * open),
             color: alpha(
                 heated(mix(color, deep, t), 0.5 * body, pale),
-                0.85 * open * body.powf(1.5) * strength,
+                0.85 * open * body.powf(1.5) * strength * dense(at),
             ),
             // The bright thread wanders a little inside its glow.
-            side: (at / (r * 2.1).max(4.) - clock * 8.).sin() * r * 0.1 * t,
+            side: (path.in_air(at) / (r * 2.1).max(4.) - clock * 2.).sin() * r * 0.1 * t,
         }
     });
+    if !rich {
+        return;
+    }
+    // Two wisps peeling away from it as the gas comes apart.
+    for (side, start_at) in [(-1., 0.7), (1., 2.9)] {
+        line.band(light, Layer::Wash, |t, at| {
+            let place = path.in_air(at) / (r * 1.9).max(4.) + start_at + trail.seed;
+            Section {
+                half: r * (0.1 + 0.16 * t),
+                color: alpha(
+                    mix(color, deep, t * 0.7),
+                    0.36 * swell(t, start * 1.6)
+                        * (1. - t).powf(1.6)
+                        * strength
+                        * (0.55 + 0.45 * place.sin()),
+                ),
+                side: side
+                    * r
+                    * (0.3 + 0.75 * t.powf(0.8))
+                    * (0.72 + 0.28 * (place * 1.7 - clock * 1.2).sin()),
+            }
+        });
+    }
 }

@@ -433,6 +433,9 @@ mod tests {
         menu.boss_rush = vec![Prism, Trapper];
         assert_eq!(menu.rush_line(), "2 bosses, Prism first");
         menu.boss_rush = BossKind::ALL.to_vec();
-        assert_eq!(menu.rush_line(), "All 14 bosses");
+        assert_eq!(
+            menu.rush_line(),
+            format!("All {} bosses", BossKind::ALL.len())
+        );
     }
 }

@@ -119,6 +119,8 @@ fn command() -> bool {
 }
 
 pub struct Editor {
+    /// The preview's sounds, and the repeats still to come.
+    sound_player: crate::map_sounds::CuePlayer,
     doc: Document,
     undo: Vec<Document>,
     redo: Vec<Document>,
@@ -276,6 +278,7 @@ impl Editor {
         }
         let fitted = saved_view.is_some();
         let mut editor = Self {
+            sound_player: Default::default(),
             doc,
             undo: vec![],
             redo: vec![],
@@ -1068,9 +1071,13 @@ impl Editor {
         self.preview.advance(&self.doc.map, &config, dt, self.probe);
     }
 
-    /// The preview's Play sound triggers since the last call, with volume.
-    pub fn take_sounds(&mut self) -> Vec<(tankyard_content::MapSound, f32)> {
-        std::mem::take(&mut self.preview.sounds)
+    /// The sounds due to play by `now`: the preview's Play sound triggers,
+    /// the inspector's sound previews and their repeats.
+    pub fn take_sounds(&mut self, now: f64) -> Vec<(std::sync::Arc<[f32]>, f32, f32)> {
+        for cue in std::mem::take(&mut self.preview.sounds) {
+            self.sound_player.play(&cue, cue.volume, now);
+        }
+        self.sound_player.due(now)
     }
 
     /// Back from a playtest.

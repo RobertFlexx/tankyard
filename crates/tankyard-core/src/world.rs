@@ -1486,7 +1486,8 @@ impl World {
                 .map_or(0, |c| c.0);
             // A boss fight runs for a minute or more, so everyone who helped
             // in the last one counts, not only the last few seconds.
-            self.reward_within(id, killer, BOSS_REWARD, BOSS_REWARD, BOSS_CREDIT_TICKS);
+            let reward = BOSS_REWARD * kind.bounty();
+            self.reward_within(id, killer, reward, reward, BOSS_CREDIT_TICKS);
             if self.config.mode == Mode::BossRush {
                 let allies: Vec<_> = self.tanks.iter().map(|t| t.id).collect();
                 for ally in allies {
@@ -1517,7 +1518,7 @@ impl World {
                     EventKind::Kill,
                     pos,
                     killer,
-                    BOSS_REWARD,
+                    reward,
                     hunter_team,
                     Some(elimination),
                 );
@@ -1961,6 +1962,7 @@ impl World {
                         );
                     }
                     Body::Boss(j) => {
+                        let applied = applied * self.bosses[j].damage_taken();
                         self.bosses[j].health -= applied;
                         self.bosses[j].last_attacker = owner;
                         self.record_damage(id, owner, applied);
@@ -2355,17 +2357,23 @@ fn clone_filtered<T: Clone>(
     }
     destination.truncate(count);
 }
+/// Characters that draw nothing or rearrange the text around them. A name made
+/// of these is a blank on the leaderboard, or a perfect copy of someone else's.
+pub fn invisible_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{ad}' | '\u{34f}' | '\u{61c}' | '\u{115f}' | '\u{1160}' | '\u{17b4}' | '\u{17b5}'
+                | '\u{180b}'..='\u{180f}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}'
+                | '\u{2060}'..='\u{206f}' | '\u{2800}' | '\u{3164}' | '\u{fe00}'..='\u{fe0f}'
+                | '\u{feff}' | '\u{ffa0}' | '\u{fff0}'..='\u{fffb}' | '\u{1d173}'..='\u{1d17a}'
+                | '\u{e0000}'..='\u{e0fff}'
+        )
+}
 pub fn sanitize_name(name: &str) -> String {
     let clean: String = name
         .chars()
-        .filter(|c| {
-            !c.is_control()
-                && !matches!(
-                    *c,
-                    '<' | '>' | '\u{061c}' | '\u{200e}' | '\u{200f}'
-                        | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
-                )
-        })
+        .filter(|&c| !invisible_char(c) && c != '<' && c != '>')
         .take(24)
         .collect();
     let clean = clean.trim();
@@ -2447,6 +2455,9 @@ mod name_hardening_tests {
         assert_eq!(sanitize_name("\u{2066}Pilot\u{2069}"), "Pilot");
         assert_eq!(sanitize_name("bob\u{202e}txt"), "bobtxt");
         assert_eq!(sanitize_name("世界 艾"), "世界 艾");
+        // Nothing that draws as a blank can stand in for a name.
+        assert_eq!(sanitize_name("\u{200b}\u{3164}\u{2800}\u{feff}"), "Pilot");
+        assert_eq!(sanitize_name("Mi\u{200d}ra\u{e0041}"), "Mira");
     }
 }
 

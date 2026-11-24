@@ -96,6 +96,7 @@ impl Presence {
     pub(super) fn axiom(item: &ShownAxiom, color: Color) -> Self {
         let share = (item.health / item.max_health.max(1.)).clamp(0., 1.);
         Self {
+            kind: None,
             pos: item.pos,
             radius: item.radius,
             color,
@@ -119,6 +120,8 @@ impl Presence {
             flame: 0.,
             guns: [0.; CANNONS],
             drive: Vec2::ZERO,
+            rail: super::railgun::RailShown::default(),
+            exhaust: super::exhaust_for(item.pos, color, Fuel::Star),
         }
     }
 }

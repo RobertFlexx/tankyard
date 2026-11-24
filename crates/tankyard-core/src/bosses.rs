@@ -19,15 +19,15 @@ const READ_RATE: f32 = 7.;
 /// The furthest ahead it will lead a target, in seconds.
 const MOST_LEAD: f32 = 1.4;
 /// How long before a special it starts bringing the gun round for that shot.
-const LINING_UP: f32 = 0.6;
+pub(crate) const LINING_UP: f32 = 0.6;
 /// How close its aim must be, in radians, before it locks a special.
-const LINED_UP: f32 = 0.1;
+pub(crate) const LINED_UP: f32 = 0.1;
 /// How far around its target one leg takes a circling boss, in radians.
 const LEG_TURN: f32 = 0.62;
 /// About how far a boss drives in a straight line before it picks a new one.
 const LEG_LENGTH: f32 = 200.;
 
-fn boss_clear_steering(
+pub(crate) fn boss_clear_steering(
     pos: V2,
     desired: V2,
     current: V2,
@@ -67,7 +67,14 @@ fn boss_clear_steering(
 /// Where a boss moving by `step` ends up, and its velocity after: a move into
 /// a wall keeps the part that runs along it, so the hull glides past corners
 /// instead of stopping dead.
-fn boss_glide(pos: V2, step: V2, vel: V2, radius: f32, bounds: Rect, walls: &[Rect]) -> (V2, V2) {
+pub(crate) fn boss_glide(
+    pos: V2,
+    step: V2,
+    vel: V2,
+    radius: f32,
+    bounds: Rect,
+    walls: &[Rect],
+) -> (V2, V2) {
     let clear = |at: V2| walls.iter().all(|&w| circle_rect(at, radius, w).is_none());
     let next = pos + step;
     let (mut at, mut vel) = if clear(next) {
@@ -123,7 +130,7 @@ fn intercept_time(gap: V2, moving: V2, speed: f32) -> Option<f32> {
 /// Where to point a gun at `from` so a round at `speed`, fired `warned`
 /// seconds from now, meets a target at `at`. If cover stands between the gun
 /// and that spot, it aims at the target itself.
-fn lead_point(
+pub(crate) fn lead_point(
     from: V2,
     (at, moving): (V2, V2),
     speed: f32,
@@ -150,6 +157,7 @@ fn lead_point(
 fn aimed_speed(kind: BossKind) -> f32 {
     match kind {
         BossKind::SiegeEngine => 390.,
+        BossKind::Railgunner => 1700.,
         BossKind::Skirmisher => 450.,
         BossKind::Trapper => 240.,
         BossKind::Guardian => 270.,
@@ -169,6 +177,7 @@ fn aimed_speed(kind: BossKind) -> f32 {
 fn special_speed(kind: BossKind) -> f32 {
     match kind {
         BossKind::SiegeEngine => SIEGE_ROUND_SPEED,
+        BossKind::Railgunner => RAIL_ROUND_SPEED,
         BossKind::Bastion => BASTION_ROUND_SPEED,
         BossKind::Sentinel => 560.,
         BossKind::Skirmisher => 420.,
@@ -210,6 +219,10 @@ fn next_leg(b: &Boss, tactic: BossTactic, foe: V2, ring: f32, bounds: Rect, wall
     // Boxed in both ways: head on, and let the steering find a way past.
     bounds.clamp_circle(foe + out.rotate(way * LEG_TURN) * ring, b.radius + 8.)
 }
+
+/// A round a boss fires this tick: its owner, team, origin, velocity, kind,
+/// damage, radius, life, penetration and bounces.
+pub(crate) type Volley = (EntityId, u8, V2, V2, ProjectileKind, f32, f32, f32, f32, u8);
 
 /// One round of a boss's volley.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -271,6 +284,7 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
     let turn = f32::from(attack) * 0.33;
     let mut rounds = Vec::with_capacity(24);
     match kind {
+        BossKind::Railgunner => return crate::railgunner::rail_volley(attack, aim, phase),
         BossKind::SiegeEngine => {
             // One giant round down the locked line destroys whatever it
             // hits; cover stops it. Wounded, it flanks the line with shells.
@@ -514,8 +528,9 @@ impl World {
         }
         // One aggregate 0.25% roll per second, independent of simulation FPS.
         if self.random() < 0.0025 {
-            let index = (self.random() * BossKind::ALL.len() as f32) as usize;
-            self.spawn_boss(BossKind::ALL[index.min(BossKind::ALL.len() - 1)]);
+            let (rare, pick) = (self.random(), self.random());
+            let strength = self.arena_strength();
+            self.spawn_boss(crate::railgunner::natural_boss(rare, pick, strength));
         }
     }
 
@@ -660,6 +675,8 @@ impl World {
             read: V2::ZERO,
             leg: pos,
             leg_time: 0.,
+            rail: RailWork::default(),
+            clash: crate::clash::ClashWork::default(),
         });
         self.event(EventKind::BossSpawn, pos, id, kind as u32, 0);
         id
@@ -668,7 +685,8 @@ impl World {
         if self.bosses.is_empty() {
             return;
         }
-        let mut volleys = Vec::new();
+        self.land_clashes();
+        let mut volleys: Vec<Volley> = Vec::new();
         let mut warnings = Vec::new();
         // A swarm grows with the arena: one player can still cut through to
         // the hull, and it reaches its full size against a party of four.
@@ -691,6 +709,10 @@ impl World {
         for i in 0..self.bosses.len() {
             let b = &self.bosses[i];
             if b.health <= 0. {
+                continue;
+            }
+            if b.kind == BossKind::Railgunner {
+                self.update_railgunner(i, &mut volleys, &mut warnings);
                 continue;
             }
             let owned = self
@@ -997,6 +1019,8 @@ impl World {
                 continue;
             }
             match b.kind {
+                // Runs its own guns in `update_railgunner`.
+                BossKind::Railgunner => {}
                 BossKind::SiegeEngine => {
                     emit(b.aim, ProjectileKind::Shell, 390., 34., 15., 3., 2.5, 0);
                     b.timer = 1.65;
@@ -1243,7 +1267,10 @@ impl World {
                 self.simple_projectile(owner, team, pos, vel, kind, damage, radius, life, pen);
             p.ricochets = bounces;
             self.projectiles.push(p);
-            self.event(EventKind::Shot, pos, owner, kind as u32, team);
+            // A plasma stream is one long shot, not thirty a second.
+            if !crate::railgunner::is_beam_round(kind, vel) {
+                self.event(EventKind::Shot, pos, owner, kind as u32, team);
+            }
         }
     }
 }
@@ -1647,7 +1674,7 @@ mod tests {
     }
 
     #[test]
-    fn a_parried_siege_round_returns_as_a_heavy_shot_not_a_one_shot() {
+    fn a_parried_siege_round_hurts_its_owner_and_never_one_shots_it() {
         let mut world = arena();
         world.config.mode = Mode::Sandbox;
         assert!(world.sandbox_class(world.tanks[0].id, "riposte"));
@@ -1667,10 +1694,21 @@ mod tests {
             .position(|p| p.owner == id && p.damage >= LETHAL_DAMAGE)
             .unwrap();
         let impact = world.tanks[0].pos;
+        let full = world.bosses[0].max_health;
+        world.bosses[0].health = full;
         assert!(world.parry_projectile(index, 0, impact));
-        let returned = &world.projectiles[index];
-        assert_eq!(returned.owner, world.tanks[0].id);
-        assert!(returned.damage <= 240., "{}", returned.damage);
+        assert!(
+            world.projectiles[index].lifetime <= 0.,
+            "the round is spent"
+        );
+        for _ in 0..60 {
+            world.land_clashes();
+        }
+        let dealt = full - world.bosses[0].health;
+        assert!(
+            dealt > full * 0.05 && dealt < full * 0.1,
+            "{dealt} of {full}"
+        );
     }
 
     #[test]
@@ -1836,7 +1874,14 @@ mod tests {
                     },
                 ];
                 world.tanks[0].max_health = 1e9;
-                world.spawn_boss(kind);
+                if world.spawn_boss(kind) == 0 {
+                    // The Railgunner's larger hull cannot fit between this
+                    // tiny arena's cover. Refusing the spawn is the safe result.
+                    assert_eq!(kind, BossKind::Railgunner);
+                    assert_eq!((width, height), (700., 520.));
+                    assert!(world.bosses.is_empty());
+                    continue;
+                }
                 world.bosses[0].arrival = 0.;
                 let top = world.bosses[0].max_health;
                 for tick in 0..2400 {

@@ -20,7 +20,7 @@ pub struct Challenge {
     pub seconds: u32,
     pub goal: Goal,
 }
-pub const CHALLENGES: [Challenge; 11] = [
+pub const CHALLENGES: [Challenge; 12] = [
     Challenge {
         id: "shape_sprint",
         title: "Shape sprint",
@@ -142,6 +142,17 @@ pub const CHALLENGES: [Challenge; 11] = [
         seconds: 240,
         goal: Goal::Boss,
     },
+    Challenge {
+        id: "rail_duel",
+        title: "Get under the rail",
+        description: "Defeat the Railgunner in six minutes with a complete Reprisal build.",
+        tip: "Distance is what it wants, so get close. When the barrel splits open, parry the beam and hit it while it vents.",
+        class: "reprisal",
+        level: 55,
+        bots: 0,
+        seconds: 360,
+        goal: Goal::Boss,
+    },
 ];
 impl Challenge {
     pub fn boss(self) -> Option<tankyard_core::BossKind> {
@@ -151,6 +162,7 @@ impl Challenge {
             "siege_school" => Some(BossKind::SiegeEngine),
             "skirmisher_hunt" => Some(BossKind::Skirmisher),
             "trapper_hunt" => Some(BossKind::Trapper),
+            "rail_duel" => Some(BossKind::Railgunner),
             _ => None,
         }
     }

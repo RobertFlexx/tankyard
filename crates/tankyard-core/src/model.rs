@@ -1,3 +1,4 @@
+use crate::railgunner::{RAIL_RADIUS, RailWork};
 use crate::{Rect, V2};
 use serde::{Deserialize, Serialize};
 use tankyard_content::ProjectileKind;
@@ -677,9 +678,31 @@ pub enum BossKind {
     SiegeEngine,
     Skirmisher,
     Trapper,
+    /// New in 2.0.5. It stays last so every kind before it keeps its number,
+    /// and it never goes out on the wire under its own: see [`Self::from_wire`].
+    Railgunner,
 }
 impl BossKind {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
+        Self::Sentinel,
+        Self::Prism,
+        Self::Foundry,
+        Self::Tempest,
+        Self::Bastion,
+        Self::Eclipse,
+        Self::Guardian,
+        Self::Summoner,
+        Self::Defender,
+        Self::FallenOverlord,
+        Self::FallenBooster,
+        Self::SiegeEngine,
+        Self::Skirmisher,
+        Self::Trapper,
+        Self::Railgunner,
+    ];
+    /// The bosses random events bring. The Railgunner comes on its own,
+    /// very rarely.
+    pub const COMMON: [Self; 14] = [
         Self::Sentinel,
         Self::Prism,
         Self::Foundry,
@@ -711,6 +734,7 @@ impl BossKind {
             Self::SiegeEngine => "Siege Engine",
             Self::Skirmisher => "Skirmisher",
             Self::Trapper => "Trapper",
+            Self::Railgunner => "Railgunner",
         }
     }
     /// The lowercase id maps and commands use, such as `fallen_overlord`.
@@ -730,6 +754,7 @@ impl BossKind {
             Self::SiegeEngine => "siege_engine",
             Self::Skirmisher => "skirmisher",
             Self::Trapper => "trapper",
+            Self::Railgunner => "railgunner",
         }
     }
     pub fn from_id(id: &str) -> Option<Self> {
@@ -747,6 +772,7 @@ impl BossKind {
             Self::SiegeEngine => 104.,
             Self::Skirmisher => 72.,
             Self::Trapper => 88.,
+            Self::Railgunner => RAIL_RADIUS,
             _ => 90.,
         }
     }
@@ -763,6 +789,7 @@ impl BossKind {
     /// need less of it to last as long.
     pub fn toughness(self) -> f32 {
         match self {
+            Self::Railgunner => 3.,
             Self::Bastion | Self::Defender | Self::SiegeEngine => 1.2,
             Self::Sentinel | Self::Prism | Self::Eclipse => 1.1,
             Self::FallenBooster | Self::Trapper => 1.,
@@ -790,12 +817,18 @@ impl BossKind {
     /// Seconds of warning before its special attack, with its aim locked.
     pub fn windup(self) -> f32 {
         match self {
-            // Its cannon destroys whatever it hits, so it gives longer.
-            Self::SiegeEngine => 1.5,
+            // Its cannon destroys whatever it hits, so it gives longer. The
+            // Railgunner's must not pass this: older clients read it as this
+            // boss and check the warning against it.
+            Self::SiegeEngine | Self::Railgunner => 1.5,
             // Its lighter cannon still gets a proper look down the barrel.
             Self::Bastion => 1.15,
             _ => 0.9,
         }
+    }
+    /// How many usual boss rewards defeating it is worth.
+    pub fn bounty(self) -> u32 {
+        if self == Self::Railgunner { 3 } else { 1 }
     }
 }
 /// Damage that destroys any tank outright, as the Siege Engine's cannon
@@ -830,6 +863,7 @@ pub struct Boss {
     pub radius: f32,
     pub health: f32,
     pub max_health: f32,
+    #[serde(serialize_with = "boss_kind_on_the_wire")]
     pub kind: BossKind,
     pub phase: u8,
     pub timer: f32,
@@ -861,6 +895,21 @@ pub struct Boss {
     pub leg: V2,
     #[serde(skip)]
     pub leg_time: f32,
+    /// What a Railgunner is in the middle of; nothing for any other boss.
+    #[serde(skip)]
+    pub rail: RailWork,
+    /// A parried strike on its way back to it. Host only, like the above.
+    #[serde(skip)]
+    pub clash: crate::clash::ClashWork,
+}
+/// Protocol 34 has no number for the Railgunner, so it goes out as a Siege
+/// Engine. Its size, which no other boss has, turns it back on arrival.
+fn boss_kind_on_the_wire<S: serde::Serializer>(kind: &BossKind, out: S) -> Result<S::Ok, S::Error> {
+    match kind {
+        BossKind::Railgunner => BossKind::SiegeEngine,
+        other => *other,
+    }
+    .serialize(out)
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Objective {

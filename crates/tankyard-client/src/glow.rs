@@ -62,7 +62,10 @@ void main() {
 // takes the remainder smoothly to zero at the edge so no rim shows. A wide,
 // faint glow would still step visibly through an 8-bit frame, so it is nudged
 // by under one step of fixed noise, which is scaled to the brightest channel
-// and fades out with the light so that dark floor stays clean.
+// and fades out with the light so that dark floor stays clean. The noise also
+// takes its phase from where the pixel falls inside this shape: dozens of puffs
+// can lie on one pixel, and if each nudged it the same way the nudges would add
+// up into visible stripes instead of averaging out.
 macro_rules! falloff {
     ($at:expr, $position:expr) => {
         concat!(
@@ -75,7 +78,9 @@ macro_rules! falloff {
     float a = edge * edge * (0.25 + 0.75 / (1.0 + 10.0 * d));
     float grain = fract(52.9829189 * fract(dot(",
             $position,
-            ", VEC(0.06711056, 0.00583715))));
+            ", VEC(0.06711056, 0.00583715)) + dot(",
+            $at,
+            ", VEC(1.618034, 2.414214))));
     float light = TINT.a * a;
     float peak = max(max(TINT.r, TINT.g), max(TINT.b, 0.2));
     light = max(light + (grain - 0.5) * min(light * 64.0, 1.0) / (255.0 * peak), 0.0);"

@@ -890,9 +890,9 @@ fn apply(world: &mut World, actor: EntityId, effect: Effect) {
         }
         Effect::Fling { velocity } => world.fling_tank(actor, V2::new(velocity[0], velocity[1])),
         Effect::PlaySound { sound, at, percent } => {
-            let value = crate::sound_event(sound, percent / 100.);
+            let (value, subject) = crate::SoundCue::new(sound, percent / 100.).encode();
             let at = V2::new(at[0] * world.config.width, at[1] * world.config.height);
-            world.event(EventKind::MapSound, at, 0, value, 0);
+            world.event(EventKind::MapSound, at, subject, value, 0);
         }
     }
 }

@@ -392,6 +392,35 @@ impl Access {
     pub fn ban_account(&mut self, client: u64, until: u64) -> Result<(), String> {
         self.sanction(client, until, true)
     }
+    /// The verified account behind a connection, if it has one.
+    pub(crate) fn account_of(&self, client: u64) -> Option<String> {
+        self.members
+            .get(&client)?
+            .account
+            .as_ref()
+            .map(|a| a.id.clone())
+    }
+    /// End an account's ban early. Works while the account is away.
+    pub(crate) fn lift_account_ban(&mut self, account: &str) -> Result<(), String> {
+        let Some(old) = self.sanctions.get(account).copied() else {
+            return Ok(());
+        };
+        if old.banned_until == 0 {
+            return Ok(());
+        }
+        self.sanctions.insert(
+            account.to_owned(),
+            Sanction {
+                banned_until: 0,
+                ..old
+            },
+        );
+        if let Err(error) = self.save() {
+            self.sanctions.insert(account.to_owned(), old);
+            return Err(error);
+        }
+        Ok(())
+    }
     fn sanction(&mut self, client: u64, until: u64, ban: bool) -> Result<(), String> {
         let member = self.members.get(&client).ok_or("player is not connected")?;
         let Some(id) = member.account.as_ref().map(|a| a.id.clone()) else {
@@ -459,13 +488,19 @@ fn text(s: &str, max: usize) -> bool {
     !s.trim().is_empty() && s.len() <= max && !s.chars().any(char::is_control)
 }
 
-#[derive(Serialize)]
+/// One line of the audit log. The names are what people were called at the
+/// time; `actor` and `target` stay the stable connection or entity numbers.
+#[derive(Default, Serialize)]
 pub struct AuditRecord<'a> {
     pub time: u64,
     pub actor: &'a str,
     pub action: &'a str,
     pub target: &'a str,
     pub reason: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    pub actor_name: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    pub target_name: &'a str,
 }
 pub fn audit(path: &str, record: &AuditRecord<'_>) -> Result<(), String> {
     if path.is_empty() {
@@ -492,6 +527,8 @@ pub fn audit(path: &str, record: &AuditRecord<'_>) -> Result<(), String> {
         .and_then(|()| file.write_all(b"\n"))
         .map_err(|e| e.to_string())
 }
+/// The longest audit line sent to staff.
+const MOST_AUDIT_LINE_BYTES: usize = 1000;
 pub fn read_audit(path: &str) -> Result<Vec<String>, String> {
     if path.is_empty() || !Path::new(path).exists() {
         return Ok(vec![]);
@@ -513,7 +550,18 @@ pub fn read_audit(path: &str) -> Result<Vec<String>, String> {
         .skip(usize::from(start > 0))
         .rev()
         .take(32)
-        .map(|line| line.chars().filter(|c| !c.is_control()).take(240).collect())
+        .map(|line| {
+            // Clients since 2.0 refuse a line over 1 KiB, so stop short of it
+            // on a character boundary.
+            let mut kept = String::new();
+            for c in line.chars().filter(|c| !c.is_control()) {
+                if kept.len() + c.len_utf8() > MOST_AUDIT_LINE_BYTES {
+                    break;
+                }
+                kept.push(c);
+            }
+            kept
+        })
         .collect();
     lines.reverse();
     Ok(lines)

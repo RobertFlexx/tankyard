@@ -1,6 +1,6 @@
 # Bosses, arenas, voice, and learning
 
-Random boss events run in Free For All, Two Teams, Four Teams, Maze, and Random Events. After a 60-second initial grace period, the server makes **one aggregate 0.25% roll per simulation second**. A successful roll chooses uniformly among all fourteen boss types. This is not a per-frame or per-type probability. Only one random boss can be active, with a 90-second grace period after it disappears. Dedicated Boss Rush and Co-op waves keep their own schedules; Sandbox bosses remain manual.
+Random boss events run in Free For All, Two Teams, Four Teams, Maze, and Random Events. After a 60-second initial grace period, the server makes **one aggregate 0.25% roll per simulation second**. A successful roll chooses uniformly among the fourteen regular bosses. About one arrival in eighty is a Railgunner instead, as long as the arena is worth at least two full-level tanks. This is not a per-frame or per-type probability. Only one random boss can be active, with a 90-second grace period after it disappears. Dedicated Boss Rush and Co-op waves keep their own schedules; Sandbox bosses remain manual.
 
 Boss arrivals use a reliable, deduplicated event: an original 48 kHz alarm, a brief red pulse, and a top-center banner that expires after five seconds. Reduced Motion suppresses the red flash. Audio Disabled and the master/effects volume controls apply to the alarm independently of microphone mute and voice volume. Bosses remain stationary and cannot deal contact damage during their first two seconds. Spawns search for free space away from tanks and fail safely if the map cannot accommodate them.
 
@@ -20,6 +20,7 @@ Boss arrivals use a reliable, deduplicated event: an original 48 kHz alarm, a br
 | Siege Engine | Tracked chassis and a huge cannon whose shot destroys any tank it reaches | 104 |
 | Skirmisher | Twin cannons, fast orbit and a straight charge | 72 |
 | Trapper | Twin trap launchers and side-pocket mines | 88 |
+| Railgunner | Huge armored hull, a barrel that splits open for its plasma beam, hunts the furthest player | 132 |
 
 Every boss is drawn in one style: an outlined hull, darker armor plates, grey guns where its rounds leave, and one bright core that whitens as a special attack charges. Tank Yard's bosses use their own sizes, damage values, phases, spawn schedule and combat rules.
 
@@ -58,6 +59,10 @@ Before a special attack, a boss shows exactly where its rounds will go: lanes fo
 The **Siege Engine's cannon** winds up for 1.5 seconds, drawing a red line to the first wall in its way, then fires a huge, very fast round that destroys any tank it reaches, shields included. Get off the line or get behind cover. Walls stop it, a perfect parry turns it back at a capped damage, and it can't one-shot another boss.
 
 **Bastion's cannon** is the smaller relation. It winds up for 1.15 seconds behind a steel line, then fires a fast slug for 125 damage. That won't always kill you, but it will make you reconsider standing there. Walls stop it too.
+
+**Railgunner** is the one that picks you because you thought you were safe. It hunts the furthest player it can see, leads them, and locks its aim for the last 0.55 seconds of each warning. Its barrel tells you what's coming: a rail shot barely moves it, while the plasma beam splits the armor, spreads the coils and unfolds the muzzle claws. After the beam it vents for about two seconds with its barrel open and takes 40% more damage. It's poor at close range, so getting under the gun is usually the right answer.
+
+**Parrying a heavy shot** starts a clash. The strike runs back along the attack and takes a share of the boss's full health: 10% for the beam, 9% for Railgunner's cannon, 7% for Siege Engine and 4% for Bastion. Railgunner's lighter echo round is worth half a cannon clash, and bots deal 40% of a player's amount. One volley can only clash once.
 
 Bosses aim where you're going, not where you were: they work out where a round will meet a moving tank. They drive in straight lines between decisions and would rather finish a wounded target than start on a healthy one. Running in a straight line is how you get hit. Changing direction is the counterplay.
 

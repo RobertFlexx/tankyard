@@ -217,6 +217,9 @@ impl Menu {
             );
             let enabled = entry.enabled(settings);
             let selected = self.mod_selected == index;
+            let switch = Rect::new(r.right() - 58.0 * s, r.y + 15.0 * s, 46.0 * s, 26.0 * s);
+            // The switch sits on the row, so it gets first claim on a click.
+            let switched = entry.error.is_none() && contains(switch) && take_click();
             // An outline marks the selection, keeping status colors readable.
             if button(r, "", false, true, s) {
                 self.mod_selected = index;
@@ -231,7 +234,6 @@ impl Menu {
             self.mod_icon(index, icon, s);
             let entry = &self.mod_entries[index];
             let text_x = icon.right() + 12.0 * s;
-            let switch = Rect::new(r.right() - 58.0 * s, r.y + 15.0 * s, 46.0 * s, 26.0 * s);
             let text_w = switch.x - text_x - 10.0 * s;
             let version = entry
                 .version()
@@ -257,8 +259,10 @@ impl Menu {
                 12.0 * s,
                 if entry.error.is_some() { RED } else { color },
             );
-            let mut on = enabled;
-            if entry.error.is_none() && toggle_switch(switch, &mut on, s) {
+            if entry.error.is_none() {
+                draw_switch(switch, enabled, s);
+            }
+            if switched {
                 self.mod_selected = index;
                 if !enabled && !entry.approved(settings) {
                     self.mod_review = Some(index);

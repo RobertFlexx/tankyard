@@ -1,6 +1,7 @@
 use crate::{AdminReply, NetError, UdpServer, difficulty_from_name, mode_from_name, unix_time};
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Read, net::IpAddr, path::Path};
+use tankyard_protocol::{BanRow, MOST_BAN_ROWS, ServerHealth};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Ban {
@@ -8,8 +9,51 @@ pub(crate) struct Ban {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client: Option<u64>,
     pub expires_at: u64,
+    /// Who it was, for the list staff read. Bans saved before this field
+    /// existed show their masked address alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The verified account banned along with the address, so lifting the
+    /// ban lifts both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 impl Ban {
+    /// Names this ban to staff without saying where it connects from.
+    fn id(&self) -> u64 {
+        format!("{}|{:?}|{}", self.ip, self.client, self.expires_at)
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
+            })
+    }
+    fn row(&self, now: u64) -> BanRow {
+        let plain = |text: &str, most: usize| -> String {
+            text.chars()
+                .filter(|c| !c.is_control())
+                .take(most)
+                .collect()
+        };
+        let address = masked_address(self.ip);
+        let who = match self.name.as_deref().map(str::trim) {
+            Some(name) if !name.is_empty() => {
+                plain(&format!("{} ({address})", plain(name, 64)), 96)
+            }
+            _ => address,
+        };
+        BanRow {
+            id: self.id(),
+            who,
+            reason: plain(self.reason.as_deref().unwrap_or(""), 160),
+            minutes_left: self
+                .expires_at
+                .saturating_sub(now)
+                .div_ceil(60)
+                .min(u64::from(u32::MAX)) as u32,
+        }
+    }
     pub(crate) fn matches(&self, ip: IpAddr, client: u64, shared: bool, now: u64) -> bool {
         self.ip == ip
             && self.expires_at > now
@@ -18,6 +62,20 @@ impl Ban {
                 // Ignore legacy address-wide bans on shared relay addresses.
                 None => !shared,
             }
+    }
+}
+
+/// Enough of an address to tell two bans apart, and not enough to find anyone.
+fn masked_address(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, ..] = ip.octets();
+            format!("{a}.{b}.x.x")
+        }
+        IpAddr::V6(ip) => {
+            let [a, b, ..] = ip.segments();
+            format!("{a:x}:{b:x}:…")
+        }
     }
 }
 
@@ -221,10 +279,18 @@ impl UdpServer {
         if self.bans.len() >= 4096 {
             return Err(NetError("ban list is full".into()));
         }
+        let name = self.peers.get(&client).and_then(|peer| {
+            let world = &self.arenas.get(peer.arena)?.session.world;
+            let tank = world.tanks.iter().find(|t| Some(t.id) == peer.entity)?;
+            Some(tank.name.clone())
+        });
         self.bans.push(Ban {
             ip: address.ip(),
             client: scope,
             expires_at: now.saturating_add(minutes * 60),
+            name,
+            reason: (!reason.is_empty()).then(|| reason.to_owned()),
+            account: self.access.account_of(client),
         });
         if let Err(error) = self.save_bans() {
             self.bans = previous;
@@ -255,6 +321,73 @@ impl UdpServer {
         } else {
             format!("Banned {} for {minutes} minutes.", address.ip())
         })
+    }
+    /// The bans in force, longest first.
+    pub(crate) fn ban_rows(&self) -> Vec<BanRow> {
+        let now = unix_time().as_secs();
+        let mut live: Vec<_> = self.bans.iter().filter(|b| b.expires_at > now).collect();
+        live.sort_by_key(|ban| std::cmp::Reverse(ban.expires_at));
+        live.into_iter()
+            .take(MOST_BAN_ROWS)
+            .map(|ban| ban.row(now))
+            .collect()
+    }
+    /// End one ban early, for its address and any account it covers.
+    pub(crate) fn lift_ban(&mut self, id: u64) -> Result<(), NetError> {
+        let index = self
+            .bans
+            .iter()
+            .position(|ban| ban.id() == id)
+            .ok_or_else(|| NetError("That ban has already ended.".into()))?;
+        let lifted = self.bans.remove(index);
+        if let Err(error) = self.save_bans() {
+            self.bans.insert(index, lifted);
+            return Err(error);
+        }
+        if let Some(account) = &lifted.account
+            && let Err(error) = self.access.lift_account_ban(account)
+        {
+            // The account save rolls its own state back. Restore the
+            // address ban too, so staff can retry the same operation.
+            self.bans.insert(index, lifted);
+            if let Err(restore) = self.save_bans() {
+                return Err(NetError(format!(
+                    "Account ban was not lifted: {error}. The address ban remains active, \
+                         but its file could not be restored: {restore}"
+                )));
+            }
+            return Err(NetError(error));
+        }
+        Ok(())
+    }
+    /// How this server is running, for the staff panel.
+    pub(crate) fn health(&self) -> ServerHealth {
+        let short = |n: usize| n.min(usize::from(u16::MAX)) as u16;
+        let timing = self.metrics.tick_timing();
+        let now = unix_time().as_secs();
+        ServerHealth {
+            uptime_seconds: self.elapsed.as_secs(),
+            humans: short(self.player_count()),
+            bots: short(
+                self.arenas
+                    .iter()
+                    .map(|a| a.session.world.tanks.iter().filter(|t| t.bot).count())
+                    .sum(),
+            ),
+            arenas: short(self.arenas.len()),
+            bosses: short(
+                self.arenas
+                    .iter()
+                    .map(|a| a.session.world.bosses.len())
+                    .sum(),
+            ),
+            tick_average_micros: timing.average_micros as u32,
+            tick_p95_micros: timing.p95_micros.min(u64::from(u32::MAX)) as u32,
+            tick_budget_micros: (tankyard_core::DT * 1_000_000.) as u32,
+            snapshot_kib: self.metrics.snapshot_bytes / 1024,
+            rejected_packets: self.metrics.rejected_packets,
+            bans: short(self.bans.iter().filter(|b| b.expires_at > now).count()),
+        }
     }
     fn save_bans(&self) -> Result<(), NetError> {
         if self.settings.ban_file.is_empty() {
@@ -297,12 +430,83 @@ fn validate_arguments(verb: &str, count: usize) -> Result<(), NetError> {
 mod tests {
     use super::*;
     #[test]
+    fn lifting_a_ban_preserves_both_records_when_either_save_fails() {
+        let root = std::env::temp_dir().join(format!(
+            "tankyard-lift-ban-{}",
+            u64::from_le_bytes(renet_netcode::generate_random_bytes())
+        ));
+        let access_dir = root.join("accounts");
+        fs::create_dir_all(&access_dir).unwrap();
+        let mut settings = crate::ServerSettings {
+            bind: "127.0.0.1:0".into(),
+            server_id: "ban-rollback".into(),
+            access_file: access_dir.join("access.json").to_string_lossy().into(),
+            ban_file: root.join("bans.json").to_string_lossy().into(),
+            audit_file: String::new(),
+            bot_count: 0,
+            adaptive_bots: false,
+            bot_memory_file: Some(String::new()),
+            ..Default::default()
+        };
+        settings.world.target_count = 0;
+        let mut server = UdpServer::bind(settings).unwrap();
+        let now = unix_time().as_secs();
+        let claim = || {
+            Some(crate::access::VerifiedAccount {
+                id: "banned_account".into(),
+                expires_at: now + 3600,
+            })
+        };
+        server.access.add(1, claim(), now).unwrap();
+        server.access.ban_account(1, now + 600).unwrap();
+        server.access.remove(1);
+        server.bans.push(Ban {
+            ip: "203.0.113.7".parse().unwrap(),
+            client: None,
+            expires_at: now + 600,
+            name: None,
+            reason: None,
+            account: Some("banned_account".into()),
+        });
+        server.save_bans().unwrap();
+        let id = server.bans[0].id();
+        let ban_path = root.join("bans.json");
+        let saved_bans = root.join("saved-bans.json");
+        fs::rename(&ban_path, &saved_bans).unwrap();
+        fs::create_dir(&ban_path).unwrap();
+        assert!(server.lift_ban(id).is_err());
+        assert_eq!(server.bans.len(), 1);
+        assert!(server.access.add(2, claim(), now).is_err());
+        fs::remove_dir(&ban_path).unwrap();
+        fs::rename(&saved_bans, &ban_path).unwrap();
+
+        let saved_accounts = root.join("saved-accounts");
+        fs::rename(&access_dir, &saved_accounts).unwrap();
+        fs::write(&access_dir, b"not a directory").unwrap();
+        assert!(server.lift_ban(id).is_err());
+        assert_eq!(server.bans.len(), 1);
+        assert_eq!(load_bans(&server.settings.ban_file).unwrap().len(), 1);
+        assert!(server.access.add(2, claim(), now).is_err());
+        fs::remove_file(&access_dir).unwrap();
+        fs::rename(&saved_accounts, &access_dir).unwrap();
+
+        server.lift_ban(id).unwrap();
+        assert!(server.bans.is_empty());
+        assert!(load_bans(&server.settings.ban_file).unwrap().is_empty());
+        server.access.add(2, claim(), now).unwrap();
+        drop(server);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn shared_relay_bans_cannot_block_another_client_or_revive_legacy_blanket_bans() {
         let ip = "127.0.0.1".parse().unwrap();
         let ban = Ban {
             ip,
             client: Some(42),
             expires_at: 200,
+            name: None,
+            reason: None,
+            account: None,
         };
         assert!(ban.matches(ip, 42, true, 100));
         assert!(!ban.matches(ip, 43, true, 100));
@@ -315,6 +519,35 @@ mod tests {
         assert!(legacy.matches(ip, 42, false, 100));
         let decoded: Ban = serde_json::from_str(r#"{"ip":"127.0.0.1","expires_at":200}"#).unwrap();
         assert!(!decoded.matches(ip, 43, true, 100));
+    }
+    #[test]
+    fn a_ban_row_masks_the_address_and_keeps_old_ban_files_readable() {
+        let old: Ban = serde_json::from_str(r#"{"ip":"203.0.113.77","expires_at":700}"#).unwrap();
+        let row = old.row(100);
+        assert_eq!(row.who, "203.0.x.x");
+        assert_eq!(row.minutes_left, 10);
+        assert!(row.valid());
+
+        let named = Ban {
+            name: Some("Mira\u{202e}".repeat(40)),
+            reason: Some("Griefing\nteammates".into()),
+            ip: "2001:db8::5".parse().unwrap(),
+            ..old
+        };
+        let row = named.row(699);
+        assert!(!row.who.contains("db8::5"));
+        assert!(row.who.contains("2001:db8"));
+        assert_eq!(row.minutes_left, 1);
+        assert_eq!(row.reason, "Griefingteammates");
+        assert!(row.valid(), "{row:?}");
+        assert_ne!(
+            named.id(),
+            Ban {
+                expires_at: 701,
+                ..named.clone()
+            }
+            .id()
+        );
     }
     #[test]
     fn admin_commands_reject_missing_and_trailing_arguments_before_mutation() {

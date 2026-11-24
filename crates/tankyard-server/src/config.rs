@@ -500,7 +500,10 @@ mod tests {
         use tankyard_core::BossKind::{Prism, SiegeEngine, Trapper};
         assert_eq!(super::boss_rush_from_text("classic").unwrap(), []);
         assert_eq!(super::boss_rush_from_text("  ").unwrap(), []);
-        assert_eq!(super::boss_rush_from_text("ALL").unwrap().len(), 14);
+        assert_eq!(
+            super::boss_rush_from_text("ALL").unwrap(),
+            tankyard_core::BossKind::ALL
+        );
         assert_eq!(
             super::boss_rush_from_text("prism, Siege-Engine,trapper").unwrap(),
             [Prism, SiegeEngine, Trapper]

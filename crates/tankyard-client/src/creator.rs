@@ -484,6 +484,9 @@ impl CreatorUi {
                 true,
                 s * 0.7,
             ) {
+                if self.tab != index {
+                    self.page = 0;
+                }
                 self.tab = index;
                 self.reason_focus = false;
                 self.announcement_focus = false;
@@ -755,25 +758,27 @@ impl CreatorUi {
                 }
             }
             1 => {
-                label("BOSS", x, y + 15. * s, 13. * s, muted_color());
+                label("BOSS", x, y + 13. * s, 13. * s, muted_color());
+                let gap = 7. * s;
+                let cell = (width - gap * (BOSS_COLUMNS - 1) as f32) / BOSS_COLUMNS as f32;
                 for (i, kind) in BossKind::ALL.into_iter().enumerate() {
                     if button(
                         Rect::new(
-                            x + (i % 3) as f32 * (width + 9. * s) / 3.,
-                            y + (30. + (i / 3) as f32 * 40.) * s,
-                            (width - 18. * s) / 3.,
-                            32. * s,
+                            x + (i % BOSS_COLUMNS) as f32 * (cell + gap),
+                            y + (22. + (i / BOSS_COLUMNS) as f32 * 35.) * s,
+                            cell,
+                            30. * s,
                         ),
                         kind.name(),
                         self.boss == i,
                         available,
-                        s * 0.6,
+                        s * 0.56,
                     ) {
                         self.boss = i;
                     }
                 }
                 if button(
-                    Rect::new(x, y + 198. * s, width, 36. * s),
+                    Rect::new(x, y + 166. * s, width, 34. * s),
                     "Spawn selected boss",
                     true,
                     available,
@@ -786,8 +791,26 @@ impl CreatorUi {
                         },
                     );
                 }
+                label("Boss health", x, y + 226. * s, 13. * s, muted_color());
+                let share = (width - 104. * s - 18. * s) / 4.;
+                for (i, (title, percent)) in BOSS_HEALTH.into_iter().enumerate() {
+                    if button(
+                        Rect::new(
+                            x + 104. * s + i as f32 * (share + 6. * s),
+                            y + 207. * s,
+                            share,
+                            27. * s,
+                        ),
+                        title,
+                        false,
+                        available,
+                        s * 0.6,
+                    ) {
+                        self.send(session, Command::BossHealth { percent });
+                    }
+                }
                 if slider_integer_value(
-                    Rect::new(x, y + 254. * s, width, 48. * s),
+                    Rect::new(x, y + 238. * s, width, 48. * s),
                     "Bot population",
                     &mut self.bots,
                     [0., 64.],
@@ -804,12 +827,13 @@ impl CreatorUi {
                     "Clear projectiles",
                     "Remove bosses + their shots",
                     "Eliminate opposing tanks",
+                    "Heal every player",
                 ]
                 .into_iter()
                 .enumerate()
                 {
                     if button(
-                        Rect::new(x, y + (330. + i as f32 * 44.) * s, width, 36. * s),
+                        Rect::new(x, y + (298. + i as f32 * 40.) * s, width, 34. * s),
                         name,
                         i == 0 && self.freeze,
                         available,
@@ -824,7 +848,8 @@ impl CreatorUi {
                             }
                             1 => Command::ClearProjectiles,
                             2 => Command::ClearBosses,
-                            _ => Command::EliminateEnemies,
+                            3 => Command::EliminateEnemies,
+                            _ => Command::HealAll,
                         };
                         self.send(session, command);
                     }
@@ -885,23 +910,33 @@ impl CreatorUi {
                     13. * s,
                     muted_color(),
                 );
-                label("Reason", x, y + 43. * s, 10. * s, muted_color());
+                label("Reason", x, y + 49. * s, 11. * s, muted_color());
                 text_field(
-                    Rect::new(x, y + 47. * s, width, 30. * s),
+                    Rect::new(x, y + 54. * s, width, 30. * s),
                     &mut self.reason,
                     &mut self.reason_focus,
                     160,
                     s * 0.8,
                     false,
                 );
+                crate::staff_ui::reason_chips(
+                    Rect::new(x, y + 88. * s, width, 24. * s),
+                    &mut self.reason,
+                    s,
+                );
                 slider_integer_value(
-                    Rect::new(x, y + 91. * s, width, 48. * s),
-                    "Duration (minutes)",
+                    Rect::new(x, y + 118. * s, width, 48. * s),
+                    "Ban duration (mutes: max 1 day)",
                     &mut self.minutes,
-                    [1., 1440.],
+                    [1., crate::staff_ui::MOST_MINUTES],
                     1.,
                     s * 0.8,
-                    |v| format!("{v:.0}"),
+                    |v| crate::staff_ui::span(v as u64),
+                );
+                crate::staff_ui::duration_chips(
+                    Rect::new(x, y + 168. * s, width, 24. * s),
+                    &mut self.minutes,
+                    s,
                 );
                 let players: Vec<_> = session
                     .display
@@ -911,32 +946,55 @@ impl CreatorUi {
                             .tanks
                             .iter()
                             .filter(|t| !t.bot && t.id != session.player)
-                            .map(|t| (t.id, t.display_name()))
+                            .map(|t| {
+                                let class = session
+                                    .bundle
+                                    .content
+                                    .class(&t.class)
+                                    .map_or(t.class.as_str(), |class| class.name.as_str());
+                                let state = if t.alive { "" } else { " · down" };
+                                (
+                                    t.id,
+                                    t.display_name(),
+                                    format!(
+                                        "Level {} {class} · {} points{state}",
+                                        t.level, t.score
+                                    ),
+                                    t.alive,
+                                )
+                            })
                             .collect()
                     })
                     .unwrap_or_default();
                 let pages = players.len().div_ceil(4).max(1);
                 self.page = self.page.min(pages - 1);
-                for (slot, (id, name)) in players.iter().skip(self.page * 4).take(4).enumerate() {
-                    let row = y + (154. + slot as f32 * 70.) * s;
-                    let name = fitted_label(name, 14. * s, width);
+                for (slot, (id, name, detail, alive)) in
+                    players.iter().skip(self.page * 4).take(4).enumerate()
+                {
+                    let row = y + (198. + slot as f32 * 63.) * s;
+                    let name = fitted_label(name, 14. * s, width * 0.46);
                     label(&name, x, row + 15. * s, 14. * s, text_color());
-                    for (i, caption) in ["Warn", "Kick", "Mute", "Ban"].into_iter().enumerate() {
+                    let detail = fitted_label(detail, 11. * s, width * 0.52);
+                    right_label(&detail, x + width, row + 15. * s, 11. * s, muted_color());
+                    let cell = (width - 25. * s) / 6.;
+                    for (i, caption) in ["Warn", "Kick", "Mute", "Unmute", "Ban", "Go to"]
+                        .into_iter()
+                        .enumerate()
+                    {
                         if button(
-                            Rect::new(
-                                x + i as f32 * (width + 6. * s) / 4.,
-                                row + 24. * s,
-                                (width - 18. * s) / 4.,
-                                30. * s,
-                            ),
+                            Rect::new(x + i as f32 * (cell + 5. * s), row + 23. * s, cell, 30. * s),
                             caption,
                             false,
-                            available,
-                            s * 0.75,
+                            available && (i != 5 || *alive),
+                            s * 0.7,
                         ) {
                             let reason = self.reason.trim().to_owned();
                             if i == 0 && reason.is_empty() {
                                 self.notice = "Enter a reason for the warning.".into();
+                                continue;
+                            }
+                            if i == 5 {
+                                self.send(session, Command::GoTo { player: *id });
                                 continue;
                             }
                             let command = match i {
@@ -950,7 +1008,11 @@ impl CreatorUi {
                                 },
                                 2 => tankyard_protocol::ServerCommand::Mute {
                                     player: *id,
-                                    minutes: self.minutes as u32,
+                                    minutes: crate::staff_ui::mute_minutes(self.minutes),
+                                },
+                                3 => tankyard_protocol::ServerCommand::Mute {
+                                    player: *id,
+                                    minutes: 0,
                                 },
                                 _ => tankyard_protocol::ServerCommand::Ban {
                                     player: *id,
@@ -966,7 +1028,7 @@ impl CreatorUi {
                     label(
                         "No other human players connected.",
                         x,
-                        y + 174. * s,
+                        y + 218. * s,
                         16. * s,
                         muted_color(),
                     );
@@ -1045,6 +1107,16 @@ impl CreatorUi {
         );
     }
 }
+/// The boss picker's columns: fifteen bosses in four rows.
+const BOSS_COLUMNS: usize = 4;
+/// Sets a boss just inside each phase, for rehearsing a fight.
+const BOSS_HEALTH: [(&str, f32); 4] = [
+    ("Full", 100.),
+    ("Phase 2", 64.),
+    ("Phase 3", 29.),
+    ("Nearly dead", 3.),
+];
+
 fn classes_len(session: &Session) -> usize {
     session.bundle.content.classes.len()
 }

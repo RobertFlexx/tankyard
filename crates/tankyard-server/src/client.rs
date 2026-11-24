@@ -49,6 +49,14 @@ pub struct NetworkClient {
     pub voice_muted: bool,
     pub voice_packets: std::collections::VecDeque<VoicePacket>,
     pub audit_lines: Vec<String>,
+    /// The last ban list a server sent to this staff member.
+    pub ban_rows: Vec<tankyard_protocol::BanRow>,
+    /// Set when a ban list arrives, so the panel can stop waiting for one.
+    pub ban_rows_fresh: bool,
+    pub server_health: Option<tankyard_protocol::ServerHealth>,
+    /// An older server cannot decode this optional request. Probe once;
+    /// polling starts only after a response establishes support.
+    health_requested: Option<std::time::Instant>,
     pub creator_challenge: Option<[u8; 32]>,
     pub creator_server_id: Option<String>,
     pub owner_extension_available: bool,
@@ -288,6 +296,10 @@ impl NetworkClient {
             voice_muted: false,
             voice_packets: std::collections::VecDeque::with_capacity(32),
             audit_lines: Vec::new(),
+            ban_rows: Vec::new(),
+            ban_rows_fresh: false,
+            server_health: None,
+            health_requested: None,
             creator_challenge: None,
             creator_server_id: None,
             owner_extension_available: false,
@@ -409,6 +421,16 @@ impl NetworkClient {
                     }
                     self.audit_lines = lines;
                 }
+                ServerControl::Bans { bans } => {
+                    if bans.len() > tankyard_protocol::MOST_BAN_ROWS
+                        || !bans.iter().all(|ban| ban.valid())
+                    {
+                        return self.fail("Invalid server ban list.".into());
+                    }
+                    self.ban_rows = bans;
+                    self.ban_rows_fresh = true;
+                }
+                ServerControl::Health { health } => self.server_health = Some(health),
                 ServerControl::Access {
                     kind,
                     chat_enabled,
@@ -748,6 +770,13 @@ impl NetworkClient {
         self.chat_enabled && self.queue_control(ClientControl::JoinRoom { room: room.into() })
     }
     pub fn admin(&mut self, command: ServerCommand) -> bool {
+        if !command.valid() || !self.permissions.contains(&command.permission()) {
+            return false;
+        }
+        let health = matches!(command, ServerCommand::ReadHealth);
+        if health && self.server_health.is_none() && self.health_requested.is_some() {
+            return false;
+        }
         let Some(round) = self.snapshot.as_ref().map(|s| s.match_state.round) else {
             return false;
         };
@@ -772,19 +801,28 @@ impl NetworkClient {
             &payload,
         );
         let signature = self.admin_key.sign(&message).as_ref().to_vec();
-        if self.permissions.contains(&command.permission())
-            && self.queue_control(ClientControl::Admin {
-                round,
-                sequence: self.admin_sequence,
-                command,
-                signature,
-            })
-        {
+        if self.queue_control(ClientControl::Admin {
+            round,
+            sequence: self.admin_sequence,
+            command,
+            signature,
+        }) {
             self.admin_sequence = next;
+            if health {
+                self.health_requested = Some(std::time::Instant::now());
+            }
             true
         } else {
             false
         }
+    }
+    /// Whether the optional health probe has gone unanswered long enough to
+    /// show the older-server hint, without submitting more unknown commands.
+    pub fn health_unavailable(&self) -> bool {
+        self.server_health.is_none()
+            && self
+                .health_requested
+                .is_some_and(|at| at.elapsed() >= Duration::from_secs(5))
     }
     pub fn admin_public_key(&self) -> [u8; 32] {
         self.admin_key

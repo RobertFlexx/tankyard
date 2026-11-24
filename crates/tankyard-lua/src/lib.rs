@@ -873,13 +873,14 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
                     let name = s.to_string_lossy();
                     MapSound::ALL
                         .into_iter()
-                        .find(|sound| sound.name().eq_ignore_ascii_case(&name))
+                        .find(|sound| {
+                            sound.name().eq_ignore_ascii_case(&name)
+                                || sound.id().eq_ignore_ascii_case(&name)
+                        })
                         .ok_or_else(|| {
                             rt(format!(
                                 "unknown sound {name:?}; use {}",
-                                MapSound::ALL
-                                    .map(|sound| sound.name().to_ascii_lowercase())
-                                    .join(", ")
+                                MapSound::ALL.map(MapSound::id).join(", ")
                             ))
                         })?
                 }

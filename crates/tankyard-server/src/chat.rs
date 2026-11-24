@@ -6,6 +6,15 @@ struct Room {
     members: BTreeSet<u64>,
     history: VecDeque<ChatMessage>,
 }
+/// What a player typed, minus anything that draws as nothing. Control
+/// characters stay in so that [`Chat::publish`] can refuse the message.
+pub(crate) fn clean_text(text: &str) -> String {
+    let kept: String = text
+        .chars()
+        .filter(|&c| c.is_control() || !tankyard_core::invisible_char(c))
+        .collect();
+    kept.trim().replace('\u{2014}', "-")
+}
 pub struct Chat {
     enabled: bool,
     rooms: HashMap<String, Room>,
@@ -173,6 +182,24 @@ mod tests {
             text: "Hello".into(),
             time: 1,
         }
+    }
+    #[test]
+    fn blank_looking_chat_comes_out_empty_and_is_refused() {
+        assert_eq!(clean_text(" \u{3164}\u{200b}\u{2800} "), "");
+        assert_eq!(clean_text("gg\u{202e} wp"), "gg wp");
+        assert_eq!(clean_text("a\u{2014}b"), "a-b");
+        let mut chat = Chat::new(ServerKind::Community, true);
+        chat.join(1, "lobby", ServerRole::Player).unwrap();
+        let blank = ChatMessage {
+            text: clean_text("\u{3164}"),
+            ..message()
+        };
+        assert!(chat.publish(1, ServerRole::Player, blank, 1).is_err());
+        let line = ChatMessage {
+            text: clean_text("two\nlines"),
+            ..message()
+        };
+        assert!(chat.publish(1, ServerRole::Player, line, 1).is_err());
     }
     #[test]
     fn official_quick_play_never_allows_chat_even_when_requested_in_config() {

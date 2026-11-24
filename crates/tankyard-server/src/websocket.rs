@@ -544,8 +544,18 @@ pub(crate) fn relay_connection_with_parties(
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(CONNECT_TIMEOUT));
     let _ = stream.set_write_timeout(Some(CONNECT_TIMEOUT));
-    // This header is diagnostic only. Accept it only from a local proxy and
-    // parse a real IP so arbitrary headers cannot spoof or inject log lines.
+    // A direct address is certain, so count it before doing any work for it.
+    let mut source = peer.and_then(|address| crate::party_relay::counted(address.ip()));
+    let mut _slot = None;
+    if let Some(ip) = source {
+        _slot = parties.claim(ip);
+        if _slot.is_none() {
+            log::debug!("Refusing {from}: that address holds too many connections");
+            return;
+        }
+    }
+    // Accept this header only from a local proxy and parse a real IP, so
+    // arbitrary headers cannot spoof or inject log lines.
     let mut client = from.clone();
     let mut path = String::new();
     let callback = |request: &Request, response: Response| {
@@ -564,6 +574,16 @@ pub(crate) fn relay_connection_with_parties(
                 .and_then(|value| value.parse::<std::net::IpAddr>().ok())
         {
             client = ip.to_string();
+            source = crate::party_relay::counted(ip);
+            if let Some(ip) = source {
+                _slot = parties.claim(ip);
+                if _slot.is_none() {
+                    return Err(tungstenite::http::Response::builder()
+                        .status(429)
+                        .body(Some("Too many connections from this address".into()))
+                        .expect("valid response"));
+                }
+            }
         }
         Ok(response)
     };
@@ -581,7 +601,7 @@ pub(crate) fn relay_connection_with_parties(
     ws.get_mut().deadline = None;
     if let Some((hosting, room)) = crate::party_relay::route(&path) {
         if ws.get_ref().tcp.set_nonblocking(true).is_ok() {
-            match crate::party_relay::serve(&mut ws, parties, hosting, room, stop) {
+            match crate::party_relay::serve(&mut ws, parties, hosting, room, source, stop) {
                 Ok(()) => {
                     let _ = ws.close(None);
                     let _ = ws.flush();

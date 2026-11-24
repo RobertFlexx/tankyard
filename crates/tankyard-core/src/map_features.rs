@@ -8,9 +8,10 @@ use crate::*;
 use tankyard_content::{
     AnimateStyle, CONVEYOR_SPEED, COUNTER_LIMIT, Curve, EVERY_LEAST, EaseMode, Easing, GateState,
     GroupPoses, ICE_GRIP, LAUNCH_SPEED, MAP_CHANNELS, MAP_COUNTERS, MAP_GROUPS, MapCounters,
-    MapDef, MapSound, MapTrigger, MapZone, MathOp, PULL_SPEED, SCALE_LIMIT, SHAKE_SECONDS,
-    TRIGGER_AWARD, TRIGGER_SHAPES, TriggerAction, TriggerWhen, TriggerWho, Tween, TweenChannel,
-    TweenValue, UiAudience, ZOOM_EASE, ZOOM_RANGE, ZOOM_SECONDS, ZoneKind,
+    MapDef, MapSound, MapTrigger, MapZone, MathOp, PULL_SPEED, RandomPick, SCALE_LIMIT,
+    SHAKE_SECONDS, SOUND_GAP, SOUND_PITCH, SOUND_REPEATS, SOUND_VARY, SoundRange, TRIGGER_AWARD,
+    TRIGGER_SHAPES, TriggerAction, TriggerWhen, TriggerWho, Tween, TweenChannel, TweenValue,
+    UiAudience, ZOOM_EASE, ZOOM_RANGE, ZOOM_SECONDS, ZoneKind,
 };
 
 mod bodies;
@@ -281,10 +282,9 @@ pub enum LogicEffect {
         strength: f32,
         seconds: f32,
     },
-    /// Play `sound` at `at`, `volume` from 0 to 1.
+    /// Play `cue` at `at`.
     Sound {
-        sound: MapSound,
-        volume: f32,
+        cue: SoundCue,
         at: V2,
     },
     /// Push body `group` at `velocity`, in world units a second.
@@ -464,7 +464,8 @@ pub fn shake_of(value: u32) -> (f32, f32) {
     )
 }
 /// A Play sound as an event value: the sound in the low byte, volume in
-/// percent above it.
+/// percent above it. This is what every version reads; [`SoundCue`] adds
+/// the rest.
 pub fn sound_event(sound: MapSound, volume: f32) -> u32 {
     u32::from(sound.index()) | ((volume * 100.).round().clamp(1., 100.) as u32) << 8
 }
@@ -472,6 +473,103 @@ pub fn sound_event(sound: MapSound, volume: f32) -> u32 {
 pub fn sound_of(value: u32) -> Option<(MapSound, f32)> {
     let sound = MapSound::from_index((value & 0xff) as u8)?;
     Some((sound, ((value >> 8).min(100)) as f32 / 100.))
+}
+
+/// Marks a sound event's subject as carrying a [`SoundCue`].
+const CUE_MARK: u64 = 1 << 63;
+
+/// One Play sound as players receive it. The event's value keeps the
+/// classic layout, holding the nearest of the first eight sounds, so older
+/// versions still play something close; the rest rides in the event's
+/// subject, which they don't read for sounds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SoundCue {
+    pub sound: MapSound,
+    /// 0 to 1.
+    pub volume: f32,
+    /// Semitones, -12 to 12.
+    pub pitch: i8,
+    /// How far each play wanders either way, in tenths of a semitone.
+    pub vary: u8,
+    pub range: SoundRange,
+    /// How many times it plays, 1 to 8.
+    pub plays: u8,
+    /// Seconds between plays.
+    pub gap: f32,
+    /// For [`SoundRange::Cause`], the one tank that hears it; 0 is nobody.
+    pub listener: EntityId,
+}
+impl SoundCue {
+    pub fn new(sound: MapSound, volume: f32) -> Self {
+        Self {
+            sound,
+            volume: volume.clamp(0.01, 1.),
+            pitch: 0,
+            vary: 0,
+            range: SoundRange::Near,
+            plays: 1,
+            gap: 0.,
+            listener: 0,
+        }
+    }
+    /// A Play sound trigger's cue, set off by `cause`.
+    pub fn of(trigger: &MapTrigger, cause: EntityId) -> Self {
+        Self {
+            pitch: trigger.pitch.clamp(-SOUND_PITCH, SOUND_PITCH),
+            vary: trigger.vary.min(SOUND_VARY),
+            range: trigger.range,
+            plays: trigger.repeat.clamp(1, SOUND_REPEATS),
+            gap: if trigger.gap.is_finite() {
+                trigger.gap.clamp(0., SOUND_GAP)
+            } else {
+                0.
+            },
+            listener: cause,
+            ..Self::new(trigger.sound, trigger.amount.clamp(1, 100) as f32 / 100.)
+        }
+    }
+    /// The event value and subject that carry it.
+    pub fn encode(self) -> (u32, u64) {
+        let value = sound_event(self.sound.fallback(), self.volume);
+        // A listener too large to pack can't be told apart, so nobody hears
+        // it rather than everyone.
+        let listener = match self.range {
+            SoundRange::Cause => u32::try_from(self.listener).unwrap_or(0),
+            _ => 0,
+        };
+        let pitch = (self.pitch.clamp(-SOUND_PITCH, SOUND_PITCH) + SOUND_PITCH) as u64;
+        let gap = (self.gap.clamp(0., SOUND_GAP) * 20.).round() as u64;
+        let subject = CUE_MARK
+            | u64::from(listener)
+            | u64::from(self.sound.index()) << 32
+            | pitch << 40
+            | u64::from(self.vary.min(SOUND_VARY)) << 45
+            | (self.range as u64) << 51
+            | u64::from(self.plays.clamp(1, SOUND_REPEATS) - 1) << 53
+            | gap << 56;
+        (value, subject)
+    }
+    /// The cue a sound event carries. Events from scripts and older servers
+    /// have no subject, and play once, nearby, as written.
+    pub fn decode(value: u32, subject: u64) -> Option<Self> {
+        let (classic, volume) = sound_of(value)?;
+        if subject & CUE_MARK == 0 {
+            return Some(Self::new(classic, volume));
+        }
+        let bits = |shift: u32, width: u32| (subject >> shift) & ((1 << width) - 1);
+        Some(Self {
+            // A sound from a newer version than this one plays as the
+            // classic sound it falls back to.
+            sound: MapSound::from_index(bits(32, 8) as u8).unwrap_or(classic),
+            volume,
+            pitch: (bits(40, 5) as i8 - SOUND_PITCH).clamp(-SOUND_PITCH, SOUND_PITCH),
+            vary: (bits(45, 6) as u8).min(SOUND_VARY),
+            range: SoundRange::ALL[bits(51, 2) as usize],
+            plays: bits(53, 3) as u8 + 1,
+            gap: (bits(56, 6) as f32 / 20.).min(SOUND_GAP),
+            listener: bits(0, 32),
+        })
+    }
 }
 
 /// What scripts ask map logic to do; it happens at the start of the next
@@ -644,6 +742,12 @@ pub struct MapLogic {
     inside: Vec<Vec<EntityId>>,
     /// The next channel of each sequence, from 0.
     steps: Vec<u8>,
+    /// What's left in each shuffled Random signal's bag, by trigger.
+    bags: Vec<(usize, Draws)>,
+    /// The trigger acting now and the dice its gate rolled.
+    rolled: Option<(usize, u32)>,
+    /// The channels each Random signal sent on last, by trigger.
+    sent_last: Vec<(usize, Draws)>,
     /// The hidden groups watchers last saw.
     seen: u32,
     listeners: Listeners,
@@ -691,6 +795,68 @@ pub struct MapLogic {
     /// Where pushed bodies sit, by group, in arena fractions; the world
     /// fills this in before each step so areas ride along with them.
     pub body_offsets: Vec<(u8, [f32; 2])>,
+}
+
+/// The dice `trigger`'s gate rolls this time: a fresh draw when a Chance
+/// condition reads it, and none otherwise, so gates without one leave the
+/// round's random numbers as they were.
+fn dice_for(trigger: &MapTrigger, random: &mut dyn FnMut() -> f32) -> u32 {
+    if trigger.rolls() {
+        (random() * 4_294_967_296.) as u32
+    } else {
+        0
+    }
+}
+
+/// A set of a Random signal's channels, as offsets from its first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Draws([u64; 4]);
+impl Draws {
+    const EMPTY: Self = Self([0; 4]);
+    /// Offsets 0 to `count - 1`.
+    fn first(count: usize) -> Self {
+        let mut set = Self::EMPTY;
+        for (word, bits) in set.0.iter_mut().enumerate() {
+            let filled = count.saturating_sub(word * 64).min(64);
+            *bits = if filled == 64 {
+                u64::MAX
+            } else {
+                (1 << filled) - 1
+            };
+        }
+        set
+    }
+    fn one(offset: usize) -> Self {
+        Self::EMPTY.with(offset)
+    }
+    fn with(mut self, offset: usize) -> Self {
+        if let Some(bits) = self.0.get_mut(offset / 64) {
+            *bits |= 1 << (offset % 64);
+        }
+        self
+    }
+    fn without(self, other: Self) -> Self {
+        Self(std::array::from_fn(|i| self.0[i] & !other.0[i]))
+    }
+    fn within(self, other: Self) -> Self {
+        Self(std::array::from_fn(|i| self.0[i] & other.0[i]))
+    }
+    fn count(self) -> usize {
+        self.0.iter().map(|bits| bits.count_ones() as usize).sum()
+    }
+    fn iter(self) -> impl Iterator<Item = usize> {
+        (0..4).flat_map(move |word| {
+            let mut bits = self.0[word];
+            std::iter::from_fn(move || {
+                if bits == 0 {
+                    return None;
+                }
+                let bit = bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                Some(word * 64 + bit)
+            })
+        })
+    }
 }
 
 /// The tanks an area trigger or tank action notices.
@@ -905,6 +1071,8 @@ impl MapLogic {
         self.spent = vec![false; count];
         self.inside = vec![Vec::new(); count];
         self.steps = vec![0; count];
+        self.bags.clear();
+        self.sent_last.clear();
         self.acted = vec![0; count];
         self.touching = vec![None; count];
         self.paths.clear();
@@ -1217,7 +1385,11 @@ impl MapLogic {
         if MapDef::group_bit(trigger.member) & *hidden != 0 {
             return false;
         }
-        if trigger.only_if.is_some() && !self.gate_open(trigger, config, now, *hidden, tanks) {
+        // A gate with Chance conditions rolls once as the trigger fires, and
+        // a gate to counter acting now stores that same roll's answer.
+        let dice = dice_for(trigger, random);
+        if trigger.only_if.is_some() && !self.gate_open(trigger, config, now, *hidden, tanks, dice)
+        {
             // The otherwise signal counts against the step's budget, so a
             // shut gate signalling itself still stops.
             if trigger.otherwise > 0 && self.budget > 0 {
@@ -1240,12 +1412,15 @@ impl MapLogic {
                 self.pending.push((now + trigger.delay, index, self.cause));
             }
         } else {
+            self.rolled = Some((index, dice));
             self.act(index, map, config, now, hidden, tanks, random, effects);
+            self.rolled = None;
         }
         true
     }
 
-    /// Whether `trigger`'s gate is open now.
+    /// Whether `trigger`'s gate is open now, with its Chance conditions
+    /// reading `dice`.
     fn gate_open(
         &self,
         trigger: &MapTrigger,
@@ -1253,16 +1428,20 @@ impl MapLogic {
         now: f32,
         hidden: u32,
         tanks: &[Occupant],
+        dice: u32,
     ) -> bool {
-        trigger.gate_open(&gate_state(
-            trigger,
-            config,
-            &self.counters,
-            now,
-            hidden,
-            &self.poses,
-            tanks,
-        ))
+        trigger.gate_open(&GateState {
+            dice,
+            ..gate_state(
+                trigger,
+                config,
+                &self.counters,
+                now,
+                hidden,
+                &self.poses,
+                tanks,
+            )
+        })
     }
 
     /// The tanks `trigger`'s action reaches: the noticed tanks in `area`,
@@ -1524,6 +1703,8 @@ impl MapLogic {
     fn reset(&mut self, map: &MapDef, group: u8, now: f32) {
         let chosen = |index: usize| group == 0 || map.triggers[index].member == group;
         self.pending.retain(|&(_, index, _)| !chosen(index));
+        self.bags.retain(|&(index, _)| !chosen(index));
+        self.sent_last.retain(|&(index, _)| !chosen(index));
         for (index, trigger) in map.triggers.iter().enumerate() {
             if chosen(index) {
                 self.spent[index] = false;
@@ -1531,6 +1712,99 @@ impl MapLogic {
                 self.steps[index] = 0;
             }
         }
+    }
+
+    /// The channels, as offsets from the first, that Random signal
+    /// `index` sends on this time.
+    fn pick_random(
+        &mut self,
+        index: usize,
+        trigger: &MapTrigger,
+        channels: usize,
+        random: &mut dyn FnMut() -> f32,
+    ) -> Vec<u8> {
+        let picks = usize::from(trigger.picks).clamp(1, channels);
+        // One pick from any channel draws exactly as it always has, so maps
+        // made before the other ways keep their dice.
+        if trigger.pick == RandomPick::Any && picks == 1 {
+            let pick = (random() * channels as f32).floor() as usize;
+            return vec![pick.min(channels - 1) as u8];
+        }
+        let all = Draws::first(channels);
+        let last = self.last_sent(index);
+        let shuffle = trigger.pick == RandomPick::Shuffle;
+        // A shuffle deals from what's left of its bag; the rest draw from
+        // every channel each time.
+        let mut bag = if shuffle {
+            self.bag(index).within(all)
+        } else {
+            all
+        };
+        let weight = |offset: usize| match trigger.pick {
+            RandomPick::Weighted => trigger.weights.get(offset).map_or(0., |&w| f32::from(w)),
+            _ => 1.,
+        };
+        let mut sent = Draws::EMPTY;
+        let mut order = Vec::with_capacity(picks);
+        while order.len() < picks {
+            if shuffle && bag.without(sent).count() == 0 {
+                // Every channel has had its turn: a new round.
+                bag = all;
+            }
+            let open = bag.without(sent);
+            // No repeats, and a shuffle as its bag turns over, leave out
+            // what went last time while anything else is left.
+            let open = match trigger.pick {
+                RandomPick::Fresh | RandomPick::Shuffle => match open.without(last) {
+                    rest if rest.count() > 0 => rest,
+                    _ => open,
+                },
+                _ => open,
+            };
+            let total: f32 = open.iter().map(weight).sum();
+            if total <= 0. {
+                break;
+            }
+            let mut left = random() * total;
+            let mut chosen = None;
+            for offset in open.iter() {
+                let w = weight(offset);
+                if w <= 0. {
+                    continue;
+                }
+                chosen = Some(offset);
+                if left < w {
+                    break;
+                }
+                left -= w;
+            }
+            let Some(offset) = chosen else { break };
+            bag = bag.without(Draws::one(offset));
+            sent = sent.with(offset);
+            order.push(offset as u8);
+        }
+        if shuffle {
+            self.bags.retain(|&(i, _)| i != index);
+            self.bags.push((index, bag));
+        }
+        self.sent_last.retain(|&(i, _)| i != index);
+        self.sent_last.push((index, sent));
+        order
+    }
+
+    /// The channels Random signal `index` sent on last, as offsets.
+    fn last_sent(&self, index: usize) -> Draws {
+        self.sent_last
+            .iter()
+            .find(|&&(i, _)| i == index)
+            .map_or(Draws::EMPTY, |&(_, set)| set)
+    }
+    /// What's left in shuffled Random signal `index`'s bag.
+    fn bag(&self, index: usize) -> Draws {
+        self.bags
+            .iter()
+            .find(|&&(i, _)| i == index)
+            .map_or(Draws::EMPTY, |&(_, set)| set)
     }
 
     /// Store `value` in counter `counter` (1 to 255) and queue the triggers
@@ -1624,8 +1898,7 @@ impl MapLogic {
             TriggerAction::Sound => {
                 let area = self.area(config, trigger);
                 effects.push(LogicEffect::Sound {
-                    sound: trigger.sound,
-                    volume: trigger.amount.clamp(1, 100) as f32 / 100.,
+                    cue: SoundCue::of(trigger, self.cause),
                     at: V2::new(area.x + area.w * 0.5, area.y + area.h * 0.5),
                 });
             }
@@ -1700,9 +1973,10 @@ impl MapLogic {
             }),
             TriggerAction::Signal => self.signal(trigger.group),
             TriggerAction::Random => {
-                let choices = trigger.amount.clamp(1, i32::from(MAP_CHANNELS)) as f32;
-                let pick = (random() * choices).floor().clamp(0., choices - 1.) as u8;
-                self.signal(trigger.group.saturating_add(pick));
+                let channels = trigger.amount.clamp(1, i32::from(MAP_CHANNELS)) as usize;
+                for offset in self.pick_random(index, trigger, channels, random) {
+                    self.signal(trigger.group.saturating_add(offset));
+                }
             }
             TriggerAction::Sequence => {
                 let choices = trigger.amount.clamp(1, i32::from(MAP_CHANNELS)) as u8;
@@ -1719,8 +1993,12 @@ impl MapLogic {
             }
             TriggerAction::Set => self.set_counter(map, trigger.group, trigger.amount),
             TriggerAction::Output => {
+                let dice = match self.rolled.take() {
+                    Some((rolled, dice)) if rolled == index => dice,
+                    _ => dice_for(trigger, random),
+                };
                 let open = trigger.only_if.is_none()
-                    || self.gate_open(trigger, config, now, *hidden, tanks);
+                    || self.gate_open(trigger, config, now, *hidden, tanks, dice);
                 let value = if open { trigger.amount } else { 0 };
                 self.set_counter(map, trigger.group, value);
             }
@@ -1915,6 +2193,7 @@ pub fn gate_state<'a>(
         hidden,
         time: now,
         inside,
+        dice: 0,
     }
 }
 
@@ -2320,8 +2599,9 @@ impl World {
                         }
                     }
                 }
-                LogicEffect::Sound { sound, volume, at } => {
-                    self.event(EventKind::MapSound, at, 0, sound_event(sound, volume), 0);
+                LogicEffect::Sound { cue, at } => {
+                    let (value, subject) = cue.encode();
+                    self.event(EventKind::MapSound, at, subject, value, 0);
                 }
                 LogicEffect::Shove { group, velocity } => {
                     self.shove_body(group, velocity);
@@ -2480,6 +2760,7 @@ fn swept_by(pos: V2, radius: f32, from: Rect, to: Rect, vertical: bool) -> Optio
 mod tests {
     use super::*;
     use tankyard_content::{Compare, MapBlock, MapDecor, MapTrigger, TestKind, TriggerTest};
+    // RandomPick and SoundRange come in with the module's own imports.
 
     fn world_with(edit: impl FnOnce(&mut MapDef)) -> World {
         let mut maps = tankyard_content::builtin_maps();
@@ -2961,7 +3242,7 @@ mod tests {
                     strength,
                     seconds,
                 } => shaken = Some((tanks.clone(), *strength, *seconds)),
-                LogicEffect::Sound { sound, volume, at } => heard = Some((*sound, *volume, *at)),
+                LogicEffect::Sound { cue, at } => heard = Some((cue.sound, cue.volume, *at)),
                 _ => {}
             }
         }
@@ -3584,6 +3865,198 @@ mod tests {
         let picks = &bench.logic.counters[1..4];
         assert_eq!(picks.iter().sum::<i32>(), 60, "one channel each second");
         assert!(picks.iter().all(|&n| n >= 8), "{picks:?} spread out");
+    }
+
+    /// What a Random signal on channels 2 to 5 sends each second for
+    /// `draws` seconds, as the channels each draw reached.
+    fn draws(pick: RandomPick, picks: u8, weights: Vec<u8>, draws: usize) -> Vec<Vec<u8>> {
+        let mut triggers = vec![MapTrigger {
+            seconds: 1.,
+            group: 2,
+            amount: 4,
+            pick,
+            picks,
+            weights,
+            ..trigger(TriggerWhen::Every, TriggerAction::Random)
+        }];
+        for channel in 2..=5 {
+            triggers.push(MapTrigger {
+                source: channel,
+                group: channel,
+                amount: 1,
+                ..trigger(TriggerWhen::Signal, TriggerAction::Count)
+            });
+        }
+        let mut bench = Bench::new(triggers);
+        bench.run(0.5, &[]);
+        let mut seen = [0; 4];
+        (0..draws)
+            .map(|_| {
+                bench.run(1., &[]);
+                let now: [i32; 4] = bench.logic.counters[1..5].try_into().unwrap();
+                let reached = (0..4)
+                    .filter(|&i| now[i] > seen[i])
+                    .map(|i| i as u8 + 2)
+                    .collect();
+                seen = now;
+                reached
+            })
+            .collect()
+    }
+
+    #[test]
+    fn random_signals_skip_repeats_deal_shuffled_rounds_and_follow_weights() {
+        let fresh = draws(RandomPick::Fresh, 0, vec![], 80);
+        assert!(fresh.iter().all(|draw| draw.len() == 1));
+        assert!(fresh.windows(2).all(|pair| pair[0] != pair[1]), "{fresh:?}");
+        for channel in 2..=5 {
+            assert!(fresh.iter().any(|draw| draw[0] == channel));
+        }
+        let shuffled = draws(RandomPick::Shuffle, 0, vec![], 80);
+        for (round, deal) in shuffled.chunks(4).enumerate() {
+            let mut deal: Vec<u8> = deal.iter().map(|draw| draw[0]).collect();
+            deal.sort_unstable();
+            assert_eq!(deal, [2, 3, 4, 5], "round {round} of {shuffled:?}");
+        }
+        assert!(
+            shuffled.windows(2).all(|pair| pair[0] != pair[1]),
+            "a new round never starts with the last one: {shuffled:?}"
+        );
+        // Three of four at a time: every two deals reach every channel.
+        let dealt = draws(RandomPick::Shuffle, 3, vec![], 40);
+        for pair in dealt.chunks(2) {
+            let mut reached: Vec<u8> = pair.concat();
+            reached.sort_unstable();
+            reached.dedup();
+            assert_eq!(reached, [2, 3, 4, 5], "{dealt:?}");
+        }
+        let weighed = draws(RandomPick::Weighted, 0, vec![0, 30, 0, 70], 200);
+        let fives = weighed.iter().filter(|draw| draw[..] == [5]).count();
+        assert!(
+            weighed
+                .iter()
+                .all(|draw| draw[..] == [3] || draw[..] == [5])
+        );
+        assert!((110..=170).contains(&fives), "{fives} of 200 at 70%");
+        let pairs = draws(RandomPick::Any, 2, vec![], 40);
+        assert!(
+            pairs.iter().all(|draw| draw.len() == 2),
+            "two different channels"
+        );
+    }
+
+    #[test]
+    fn chance_conditions_open_their_share_and_a_gate_to_counter_keeps_the_roll() {
+        let chance = |value| TriggerTest {
+            kind: TestKind::Chance,
+            value,
+            ..Default::default()
+        };
+        let mut triggers = Vec::new();
+        for (counter, percent) in [(1, 25), (2, 0), (3, 100)] {
+            let mut count = MapTrigger {
+                seconds: 0.25,
+                group: counter,
+                amount: 1,
+                ..trigger(TriggerWhen::Every, TriggerAction::Count)
+            };
+            count.set_conditions(vec![chance(percent)]);
+            triggers.push(count);
+        }
+        // Sets counter 4 to 1 when its roll comes up and signals 9 when it
+        // doesn't, which counts counter 5.
+        let mut output = MapTrigger {
+            seconds: 1.,
+            group: 4,
+            amount: 1,
+            otherwise: 9,
+            ..trigger(TriggerWhen::Every, TriggerAction::Output)
+        };
+        output.set_conditions(vec![chance(50)]);
+        triggers.push(output);
+        triggers.push(MapTrigger {
+            source: 9,
+            group: 5,
+            amount: 1,
+            ..trigger(TriggerWhen::Signal, TriggerAction::Count)
+        });
+        let mut bench = Bench::new(triggers);
+        bench.run(0.5, &[]);
+        let (mut shut, mut open) = (0, 0);
+        for _ in 0..100 {
+            let before = bench.logic.counters[4];
+            bench.run(1., &[]);
+            let otherwise = bench.logic.counters[4] - before;
+            match bench.logic.counters[3] {
+                1 => {
+                    open += 1;
+                    assert_eq!(otherwise, 0, "open, so no otherwise signal");
+                }
+                _ => {
+                    shut += 1;
+                    assert_eq!(otherwise, 1, "shut by the same roll it stored");
+                }
+            }
+        }
+        assert!(open > 20 && shut > 20, "{open} open, {shut} shut");
+        let counters = &bench.logic.counters;
+        // Four tries a second for 100.5 seconds.
+        assert_eq!(counters[2], 402, "100% always");
+        assert_eq!(counters[1], 0, "0% never");
+        assert!(
+            (60..=140).contains(&counters[0]),
+            "{} of 402 at 25%",
+            counters[0]
+        );
+    }
+
+    #[test]
+    fn sound_cues_ride_in_events_and_older_readers_hear_a_classic_sound() {
+        let cue = SoundCue {
+            sound: MapSound::Coin,
+            volume: 0.6,
+            pitch: -5,
+            vary: 25,
+            range: SoundRange::Cause,
+            plays: 3,
+            gap: 0.5,
+            listener: 77,
+        };
+        let (value, subject) = cue.encode();
+        // 2.0.4 reads only the value: the classic sound and the volume.
+        assert_eq!(sound_of(value), Some((MapSound::Chime, 0.6)));
+        assert_eq!(value >> 16, 0, "nothing above the volume");
+        assert_eq!(SoundCue::decode(value, subject), Some(cue));
+        // Scripts and older servers send no subject: once, nearby, as is.
+        assert_eq!(
+            SoundCue::decode(sound_event(MapSound::Bell, 0.7), 0),
+            Some(SoundCue::new(MapSound::Bell, 0.7))
+        );
+        // Only a sound for one tank says which.
+        let near = SoundCue {
+            range: SoundRange::Near,
+            ..cue
+        };
+        let (value, subject) = near.encode();
+        assert_eq!(SoundCue::decode(value, subject).unwrap().listener, 0);
+        // A sound from a newer version plays as the classic one it names.
+        let unknown = (subject & !(0xff << 32)) | (250 << 32);
+        assert_eq!(
+            SoundCue::decode(value, unknown).unwrap().sound,
+            MapSound::Chime
+        );
+        // Every setting at its limits survives the trip.
+        for (pitch, vary, plays, gap) in [(-12, 60, 8, 3.), (12, 0, 1, 0.), (0, 1, 2, 0.05)] {
+            let cue = SoundCue {
+                pitch,
+                vary,
+                plays,
+                gap,
+                ..cue
+            };
+            let (value, subject) = cue.encode();
+            assert_eq!(SoundCue::decode(value, subject), Some(cue));
+        }
     }
 
     #[test]

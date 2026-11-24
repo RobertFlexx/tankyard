@@ -9,7 +9,7 @@ use ring::signature::{self, Ed25519KeyPair, KeyPair};
 use std::{
     collections::HashMap,
     io::{self, Read, Write},
-    net::{SocketAddr, UdpSocket},
+    net::{IpAddr, Ipv6Addr, SocketAddr, UdpSocket},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -23,6 +23,12 @@ use tungstenite::{Message, WebSocket};
 pub const RELAY: &str = "wss://tankyard.kokonico.me";
 const MAX_ROOMS: usize = 32;
 const MAX_GUESTS: usize = 8;
+/// Party rooms one address can keep open. A room takes no account, only a key
+/// anyone can make, so without this one person could hold all of them.
+const MOST_ROOMS_PER_ADDRESS: usize = 4;
+/// Relay connections one address can hold: room for a school lab behind one
+/// router, not enough to fill the relay and keep everybody else out.
+const MOST_PER_ADDRESS: u32 = 48;
 const TIMEOUT: Duration = Duration::from_secs(5);
 type Error = tungstenite::Error;
 type Queue = SyncSender<Vec<u8>>;
@@ -137,8 +143,26 @@ pub(crate) fn authenticate_guest<S: Read + Write>(
     answer(ws, key, room, b'J', &[])
 }
 
+/// The address to count a connection against. IPv6 hands a whole block to one
+/// customer, so a block counts once. This machine isn't counted at all.
+pub(crate) fn counted(ip: IpAddr) -> Option<IpAddr> {
+    let ip = ip.to_canonical();
+    if ip.is_loopback() {
+        return None;
+    }
+    Some(match ip {
+        IpAddr::V6(ip) => {
+            let [a, b, c, d, ..] = ip.segments();
+            IpAddr::V6(Ipv6Addr::new(a, b, c, d, 0, 0, 0, 0))
+        }
+        ip => ip,
+    })
+}
+
 struct Room {
     entry: [u8; 32],
+    /// Who opened it, if they came from anywhere but this machine.
+    opened_by: Option<IpAddr>,
     incoming: Queue,
     guests: HashMap<u64, Queue>,
 }
@@ -181,8 +205,51 @@ impl Room {
 pub(crate) struct Hub {
     rooms: Mutex<HashMap<[u8; 32], Room>>,
     next: AtomicU64,
+    /// Open connections per address. Entries go when their last one closes.
+    addresses: Mutex<HashMap<IpAddr, u32>>,
+}
+/// One connection's share of its address's allowance, handed back when it ends.
+pub(crate) struct AddressSlot {
+    hub: Arc<Hub>,
+    ip: IpAddr,
+}
+impl Drop for AddressSlot {
+    fn drop(&mut self) {
+        if let Ok(mut held) = self.hub.addresses.lock()
+            && let Some(count) = held.get_mut(&self.ip)
+        {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                held.remove(&self.ip);
+            }
+        }
+    }
+}
+/// Whether another room can open for someone at `from`.
+fn room_for(rooms: &HashMap<[u8; 32], Room>, from: Option<IpAddr>) -> bool {
+    rooms.len() < MAX_ROOMS
+        && from.is_none_or(|ip| {
+            rooms
+                .values()
+                .filter(|room| room.opened_by == Some(ip))
+                .count()
+                < MOST_ROOMS_PER_ADDRESS
+        })
 }
 impl Hub {
+    /// A place for one more connection from `ip`, if it hasn't used them all.
+    pub(crate) fn claim(self: &Arc<Self>, ip: IpAddr) -> Option<AddressSlot> {
+        let mut held = self.addresses.lock().ok()?;
+        let count = held.entry(ip).or_insert(0);
+        if *count >= MOST_PER_ADDRESS {
+            return None;
+        }
+        *count += 1;
+        Some(AddressSlot {
+            hub: self.clone(),
+            ip,
+        })
+    }
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<[u8; 32], Room>>, Error> {
         self.rooms
             .lock()
@@ -302,6 +369,7 @@ pub(crate) fn serve<S: Read + Write>(
     hub: &Arc<Hub>,
     hosting: bool,
     key: [u8; 32],
+    from: Option<IpAddr>,
     stop: &AtomicBool,
 ) -> Result<(), Error> {
     let (sender, receiver) = mpsc::sync_channel(if hosting { 256 } else { 32 });
@@ -318,13 +386,14 @@ pub(crate) fn serve<S: Read + Write>(
         let mut entry = [0; 32];
         entry.copy_from_slice(&proof[..32]);
         let mut rooms = hub.lock()?;
-        if rooms.len() >= MAX_ROOMS || rooms.contains_key(&key) || entry == [0; 32] {
+        if !room_for(&rooms, from) || rooms.contains_key(&key) || entry == [0; 32] {
             return Err(invalid("Party relay is full or room already exists"));
         }
         rooms.insert(
             key,
             Room {
                 entry,
+                opened_by: from,
                 incoming: sender,
                 guests: HashMap::new(),
             },
@@ -792,6 +861,7 @@ mod tests {
             [1; 32],
             Room {
                 entry: [2; 32],
+                opened_by: None,
                 incoming: sender,
                 guests: HashMap::from([(1, guest)]),
             },
@@ -906,11 +976,76 @@ mod tests {
     }
 
     #[test]
+    fn addresses_are_counted_by_who_is_really_behind_them() {
+        let v4: IpAddr = "203.0.113.8".parse().unwrap();
+        assert_eq!(counted(v4), Some(v4));
+        assert_eq!(counted("::ffff:203.0.113.8".parse().unwrap()), Some(v4));
+        assert_eq!(counted("127.0.0.1".parse().unwrap()), None);
+        assert_eq!(counted("::1".parse().unwrap()), None);
+        assert_eq!(counted("::ffff:127.0.0.1".parse().unwrap()), None);
+        // One customer's IPv6 block is one address, however many it picks from.
+        assert_eq!(
+            counted("2001:db8:1:2:aaaa::1".parse().unwrap()),
+            counted("2001:db8:1:2:bbbb::9".parse().unwrap())
+        );
+        assert_ne!(
+            counted("2001:db8:1:2::1".parse().unwrap()),
+            counted("2001:db8:1:3::1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn one_address_cannot_hold_every_connection_and_gets_them_back() {
+        let hub = Arc::new(Hub::default());
+        let (one, two): (IpAddr, IpAddr) = (
+            "203.0.113.8".parse().unwrap(),
+            "203.0.113.9".parse().unwrap(),
+        );
+        let mut held: Vec<_> = (0..MOST_PER_ADDRESS)
+            .map(|_| hub.claim(one).unwrap())
+            .collect();
+        assert!(hub.claim(one).is_none());
+        assert!(hub.claim(two).is_some(), "someone else still gets in");
+        held.pop();
+        assert!(hub.claim(one).is_some());
+        held.clear();
+        assert!(hub.addresses.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn one_address_cannot_open_every_party_room() {
+        let (sender, _keep) = mpsc::sync_channel(1);
+        let room = |opened_by| Room {
+            entry: [1; 32],
+            opened_by,
+            incoming: sender.clone(),
+            guests: HashMap::new(),
+        };
+        let (one, two): (IpAddr, IpAddr) = (
+            "203.0.113.8".parse().unwrap(),
+            "203.0.113.9".parse().unwrap(),
+        );
+        let mut rooms = HashMap::new();
+        for index in 0..MOST_ROOMS_PER_ADDRESS {
+            assert!(room_for(&rooms, Some(one)));
+            rooms.insert([index as u8 + 1; 32], room(Some(one)));
+        }
+        assert!(!room_for(&rooms, Some(one)));
+        assert!(room_for(&rooms, Some(two)));
+        assert!(room_for(&rooms, None), "this machine isn't limited");
+        for index in rooms.len()..MAX_ROOMS {
+            rooms.insert([index as u8 + 1; 32], room(None));
+        }
+        assert!(!room_for(&rooms, None), "the whole relay still has a limit");
+    }
+
+    #[test]
     fn a_full_guest_queue_preserves_membership_and_recovers_after_a_burst() {
         let (incoming, _) = mpsc::sync_channel(1);
         let (sender, receiver) = mpsc::sync_channel(1);
         let mut room = Room {
             entry: [1; 32],
+            opened_by: None,
             incoming,
             guests: HashMap::from([(7, sender)]),
         };
@@ -931,6 +1066,7 @@ mod tests {
         let (incoming, receiver) = mpsc::sync_channel(1);
         let mut room = Room {
             entry: [1; 32],
+            opened_by: None,
             incoming,
             guests: HashMap::new(),
         };
@@ -1096,6 +1232,7 @@ mod tests {
         let (healthy, healthy_rx) = mpsc::sync_channel(1);
         let mut room = Room {
             entry: [1; 32],
+            opened_by: None,
             incoming,
             guests: HashMap::from([(7, stale), (8, healthy)]),
         };

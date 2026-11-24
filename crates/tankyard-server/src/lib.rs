@@ -16,6 +16,7 @@ mod netcode;
 pub mod netem;
 pub mod party;
 pub mod party_relay;
+mod password_guard;
 pub mod probe;
 mod rotation;
 mod session;

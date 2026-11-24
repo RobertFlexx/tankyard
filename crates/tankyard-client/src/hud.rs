@@ -2098,6 +2098,7 @@ fn boss_gloat(kind: BossKind) -> &'static str {
         BossKind::SiegeEngine => "There was a big red line. We did draw it.",
         BossKind::Skirmisher => "Hit and run. Mostly hit.",
         BossKind::Trapper => "It put those there on purpose.",
+        BossKind::Railgunner => "Distance was not your friend.",
     }
 }
 /// Where an arrow pointing `direction` from the middle of the screen meets its
@@ -2155,6 +2156,260 @@ pub(crate) fn boss_arrows(snapshot: &Snapshot, view: &render::View, s: f32, colo
         );
     }
 }
+/// How much room a big boss bar takes at the top of the screen.
+pub(crate) const RAIL_BAR_HEIGHT: f32 = 61.;
+
+/// What the Railgunner is up to, for the line under its bar, and how urgent
+/// that is: 0 for routine, 1 for get moving, 2 for now. Nothing when there's
+/// nothing to say.
+fn rail_status(boss: &tankyard_core::Boss, marked: bool) -> Option<(&'static str, u8)> {
+    if boss.venting() {
+        Some(("Venting. Hit it now.", 1))
+    } else if boss.beaming() {
+        Some((
+            if marked {
+                "Beam's on you. Move."
+            } else {
+                "Beam's on."
+            },
+            2,
+        ))
+    } else if boss.attack_windup > 0. {
+        if boss.attack_windup < tankyard_core::RAIL_LOCK {
+            Some((
+                if marked {
+                    "Locked on to you."
+                } else {
+                    "Locked on."
+                },
+                2,
+            ))
+        } else {
+            Some((
+                match boss.attack {
+                    1 => "Charging the rail",
+                    2 => "Charging the beam",
+                    _ => "Loading sabots",
+                },
+                1,
+            ))
+        }
+    } else if marked {
+        Some(("You're the furthest away. Sorry.", 1))
+    } else if boss.target == 0 {
+        Some(("Looking for someone far away", 0))
+    } else {
+        None
+    }
+}
+
+/// The line under a boss's bar. Only the Railgunner narrates its whole attack.
+fn bar_status(boss: &tankyard_core::Boss, marked: bool) -> Option<(&'static str, u8)> {
+    if boss.kind == tankyard_core::BossKind::Railgunner {
+        return rail_status(boss, marked);
+    }
+    marked.then_some(("It's after you.", 1))
+}
+
+/// One boss's big health bar.
+pub(crate) struct BossBar<'a> {
+    /// Which boss, for the little model by its name; Axiom has none.
+    pub kind: Option<tankyard_core::BossKind>,
+    pub name: &'a str,
+    pub health: f32,
+    pub max_health: f32,
+    /// Where the pale just-lost stretch ends, as a share of the whole.
+    pub lost: f32,
+    pub tint: Color,
+    pub marks: &'a [f32],
+    pub status: Option<(&'a str, u8)>,
+    /// Whether it's aiming at the player, which reddens the bar's rim.
+    pub marked: bool,
+}
+
+/// A boss's bar across the top of the screen. It's drawn the way the health
+/// bars on the tanks are, only heavier, with no card behind it, so it reads as
+/// part of the fight rather than a window that opened over it.
+pub(crate) fn boss_bar(bar: &BossBar<'_>, x: f32, top: f32, w: f32, s: f32) {
+    let center = x + w * 0.5;
+    let beat = if crate::accessibility::motion_time(1.) == 0. {
+        1.
+    } else {
+        0.6 + 0.4 * (get_time() as f32 * 9.).sin()
+    };
+    let size = 20. * s;
+    let name = fitted_label(bar.name, size, (w - 60. * s).max(40. * s));
+    arcade_center(&name, center, top + 15. * s, size);
+    // The boss itself beside its name, facing into it.
+    let icon = vec2(
+        center - label_width(&name, size) * 0.5 - 27. * s,
+        top + 9. * s,
+    );
+    match bar.kind {
+        Some(kind) => tankyard_client::boss_model::boss_model_geometry(
+            kind,
+            icon,
+            8. * s,
+            tankyard_client::boss_model::Pose {
+                phase: 1,
+                ..Default::default()
+            },
+            None,
+            &mut render::draw_model_primitive,
+        ),
+        None => tankyard_client::boss_model::axiom_geometry(
+            icon,
+            8. * s,
+            0.,
+            0.,
+            &mut render::draw_model_primitive,
+        ),
+    }
+    let track = Rect::new(x + 3. * s, top + 23. * s, w - 6. * s, 16. * s);
+    let share = (bar.health / bar.max_health.max(1.)).clamp(0., 1.);
+    boss_track(
+        track,
+        (share, bar.lost.clamp(0., 1.)),
+        bar.tint,
+        bar.marks,
+        if bar.marked { beat } else { 0. },
+        s,
+    );
+    let numbers = format!(
+        "{} / {}",
+        grouped(bar.health.max(0.) as u64),
+        grouped(bar.max_health as u64)
+    );
+    arcade_center(&numbers, center, track.y + track.h * 0.5 + 4.4 * s, 12. * s);
+    if let Some((status, urgency)) = bar.status {
+        let color = match urgency {
+            0 => Color::new(0.74, 0.77, 0.82, 1.),
+            1 => AMBER,
+            _ => alpha(Color::new(1., 0.42, 0.38, 1.), 0.72 + 0.28 * beat),
+        };
+        arcade_center_in(
+            &fitted_label(status, 13. * s, w),
+            center,
+            top + 55. * s,
+            13. * s,
+            color,
+        );
+    }
+}
+
+/// The bar itself: a heavy dark rim, the color with a little shape to it, a
+/// pale stretch for what was just lost, and a nick at each phase.
+fn boss_track(
+    rect: Rect,
+    (share, lost): (f32, f32),
+    tint: Color,
+    marks: &[f32],
+    alarm: f32,
+    s: f32,
+) {
+    let ink = Color::new(0.15, 0.15, 0.16, 1.);
+    let rim = (2.8 * s).max(1.5);
+    let outer = Rect::new(
+        rect.x - rim,
+        rect.y - rim,
+        rect.w + rim * 2.,
+        rect.h + rim * 2.,
+    );
+    capsule(outer, mix(ink, Color::new(0.93, 0.2, 0.2, 1.), alarm * 0.9));
+    capsule(rect, Color::new(0.25, 0.26, 0.3, 1.));
+    let up_to = |ratio: f32| Rect::new(rect.x, rect.y, (rect.w * ratio).max(rect.h), rect.h);
+    if lost > share {
+        capsule(up_to(lost), mix(tint, WHITE, 0.68));
+    }
+    if share > 0. {
+        let body = up_to(share);
+        capsule(body, tint);
+        // A shaded underside and a catch of light along the top.
+        let h = body.h;
+        capsule(
+            Rect::new(
+                body.x + h * 0.12,
+                body.y + h * 0.6,
+                body.w - h * 0.24,
+                h * 0.34,
+            ),
+            Color::new(0., 0., 0., 0.16),
+        );
+        capsule(
+            Rect::new(
+                body.x + h * 0.3,
+                body.y + h * 0.13,
+                body.w - h * 0.6,
+                h * 0.26,
+            ),
+            Color::new(1., 1., 1., 0.3),
+        );
+        if lost > share {
+            // A bright edge where the last hit bit in.
+            draw_rectangle(
+                (body.right() - 1.5 * s).max(body.x),
+                body.y + 1.,
+                2.5 * s,
+                body.h - 2.,
+                WHITE,
+            );
+        }
+    }
+    let nick = 4.5 * s;
+    for mark in marks {
+        let at = rect.x + rect.w * mark;
+        let (high, low) = (outer.y, outer.bottom());
+        draw_triangle(
+            vec2(at - nick, high),
+            vec2(at + nick, high),
+            vec2(at, rect.y + nick),
+            ink,
+        );
+        draw_triangle(
+            vec2(at - nick, low),
+            vec2(at + nick, low),
+            vec2(at, rect.bottom() - nick),
+            ink,
+        );
+        draw_rectangle(
+            at - 0.75 * s,
+            rect.y,
+            1.5 * s,
+            rect.h,
+            Color::new(0.15, 0.15, 0.16, 0.5),
+        );
+    }
+}
+
+/// The headline bar for a boss in the arena.
+pub(crate) fn headline_boss_bar(
+    boss: &tankyard_core::Boss,
+    trail: f32,
+    marked: bool,
+    top: f32,
+    s: f32,
+    colorblind: bool,
+) {
+    let layout = boss_banner_layout(screen_width(), s);
+    boss_bar(
+        &BossBar {
+            kind: Some(boss.kind),
+            name: boss.kind.name(),
+            health: boss.health,
+            max_health: boss.max_health,
+            lost: trail,
+            tint: render::boss_tint(boss, colorblind),
+            marks: &tankyard_core::BOSS_PHASES,
+            status: bar_status(boss, marked),
+            marked,
+        },
+        layout.x,
+        top,
+        layout.w,
+        s,
+    );
+}
+
 pub(crate) fn boss_banner_layout(width: f32, s: f32) -> Rect {
     let left = 320. * s;
     let right = width - 320. * s;

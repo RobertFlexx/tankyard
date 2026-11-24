@@ -697,6 +697,36 @@ fn palettes() -> Vec<Vec<Brush>> {
             )
             .hint("Sends one of three signals at random"),
             logic(
+                "Loot table",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Signal,
+                    action: TriggerAction::Random,
+                    group: 2,
+                    amount: 4,
+                    pick: RandomPick::Weighted,
+                    weights: vec![60, 25, 10, 5],
+                    ..Default::default()
+                },
+            )
+            .hint(
+                "On signal 1, sends one of signals 2 to 5: the first most often, the last rarely",
+            ),
+            logic(
+                "Shuffle",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Every,
+                    action: TriggerAction::Random,
+                    seconds: 10.,
+                    group: 1,
+                    amount: 4,
+                    pick: RandomPick::Shuffle,
+                    ..Default::default()
+                },
+            )
+            .hint("Sends signals 1 to 4 in a shuffled order, every one before any comes up again"),
+            logic(
                 "Sequence",
                 small,
                 MapTrigger {
@@ -1191,6 +1221,33 @@ fn palettes() -> Vec<Vec<Brush>> {
                 },
             )
             .hint("Sounds an alarm here on signal 1"),
+            logic(
+                "Coin pickup",
+                [120., 120.],
+                MapTrigger {
+                    when: TriggerWhen::Enter,
+                    action: TriggerAction::Sound,
+                    sound: MapSound::Coin,
+                    amount: 80,
+                    vary: 15,
+                    range: SoundRange::Cause,
+                    ..Default::default()
+                },
+            )
+            .hint("Plays a coin sound that only the tank driving in hears"),
+            logic(
+                "Countdown",
+                small,
+                MapTrigger {
+                    when: TriggerWhen::Signal,
+                    action: TriggerAction::Sound,
+                    sound: MapSound::Countdown,
+                    amount: 90,
+                    range: SoundRange::Everywhere,
+                    ..Default::default()
+                },
+            )
+            .hint("Counts down for everyone on signal 1"),
         ],
         vec![
             logic(

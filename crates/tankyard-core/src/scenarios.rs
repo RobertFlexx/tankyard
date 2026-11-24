@@ -850,7 +850,10 @@ fn a_boss_rush_fights_its_lineup_in_order_and_ends_with_it() {
     let (fought, world) = run(BossKind::ALL.to_vec());
     assert_eq!(fought, BossKind::ALL);
     assert_eq!(world.match_state.boss_wave, SHOWN_RUSH_WAVES);
-    assert_eq!(world.match_state.rush_wave, 14);
+    assert_eq!(
+        usize::from(world.match_state.rush_wave),
+        BossKind::ALL.len()
+    );
     // More than a lineup may hold is cut, not trusted.
     let (fought, _) = run(vec![BossKind::Sentinel; MOST_RUSH_BOSSES + 40]);
     assert_eq!(fought.len(), MOST_RUSH_BOSSES);

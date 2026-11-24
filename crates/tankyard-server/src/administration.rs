@@ -58,6 +58,7 @@ impl UdpServer {
                 action: "central_owner_identity",
                 target: &self.settings.server_id,
                 reason: "verified",
+                ..Default::default()
             },
         )
         .map_err(NetError)?;
@@ -177,6 +178,7 @@ impl UdpServer {
                 action: "central_owner_policy",
                 target: &self.settings.server_id,
                 reason: if enabled { "enabled" } else { "disabled" },
+                ..Default::default()
             },
         );
         if enabled {

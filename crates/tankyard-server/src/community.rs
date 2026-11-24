@@ -1,5 +1,9 @@
 use crate::{NetError, UdpServer, unix_time};
 use tankyard_protocol::{ChatMessage, ServerCommand, ServerControl, ServerKind, ServerRole};
+
+/// Staff can summon bosses up to this many at once, the same as Sandbox.
+const MOST_SUMMONED_BOSSES: usize = 12;
+
 impl UdpServer {
     pub(crate) fn match_settings(&self) -> tankyard_protocol::MatchSettings {
         tankyard_protocol::MatchSettings {
@@ -102,7 +106,7 @@ impl UdpServer {
             name: tank.name.clone(),
             game_creator: tank.game_creator,
             server_badge: tank.server_badge,
-            text: text.trim().replace('\u{2014}', "-"),
+            text: crate::chat::clean_text(&text),
             time: now,
         };
         let (message, recipients) = self
@@ -172,17 +176,47 @@ impl UdpServer {
                 "You cannot moderate a player with equal or higher server authority.".into(),
             ));
         }
-        crate::access::audit(
-            self.settings.creator_audit_file(),
-            &crate::access::AuditRecord {
-                time: now,
-                actor: &actor.to_string(),
-                action: "server_moderation",
-                target: &target.map_or_else(|| "server".into(), |t| t.to_string()),
-                reason: &format!("{command:?}"),
-            },
-        )
-        .map_err(NetError)?;
+        // The staff panel polls health while it's open, and reading the log
+        // would only push real actions out of view. Neither changes anything.
+        if !matches!(
+            command,
+            ServerCommand::ReadHealth | ServerCommand::ReadAudit
+        ) {
+            let named = |entity: u64| match self.tank_name(entity) {
+                Some(name) => format!("{name} (#{entity})"),
+                None => format!("#{entity}"),
+            };
+            let banned = |id: u64| {
+                self.ban_rows()
+                    .into_iter()
+                    .find(|row| row.id == id)
+                    .map_or_else(|| "an expired ban".to_owned(), |row| row.who)
+            };
+            let actor_name = self
+                .peers
+                .get(&actor)
+                .and_then(|peer| peer.entity)
+                .and_then(|entity| self.tank_name(entity))
+                .unwrap_or_default();
+            let target_name = target
+                .and_then(|client| self.peers.get(&client))
+                .and_then(|peer| peer.entity)
+                .and_then(|entity| self.tank_name(entity))
+                .unwrap_or_default();
+            crate::access::audit(
+                self.settings.creator_audit_file(),
+                &crate::access::AuditRecord {
+                    time: now,
+                    actor: &actor.to_string(),
+                    action: "server_moderation",
+                    target: &target.map_or_else(|| "server".into(), |t| t.to_string()),
+                    reason: &command.describe(named, banned),
+                    actor_name: &actor_name,
+                    target_name: &target_name,
+                },
+            )
+            .map_err(NetError)?;
+        }
         match command {
             ServerCommand::Warn { reason, .. } => self.warn_client(target.unwrap(), reason),
             ServerCommand::Announce { text } => self.announce(text.trim().to_owned()),
@@ -296,12 +330,50 @@ impl UdpServer {
             ServerCommand::RestartRound => self.restart_round(),
             ServerCommand::ConfigureRules { rules } => self.configure_rules(rules)?,
             ServerCommand::ReadAudit => {
-                if self.settings.audit_file.is_empty() {
+                if self.settings.creator_audit_file().is_empty() {
                     return Err(NetError("Audit logging is disabled by the host.".into()));
                 }
-                let lines =
-                    crate::access::read_audit(&self.settings.audit_file).map_err(NetError)?;
+                let lines = crate::access::read_audit(self.settings.creator_audit_file())
+                    .map_err(NetError)?;
                 self.send_control(actor, &ServerControl::Audit { lines });
+            }
+            ServerCommand::ReadBans => {
+                let bans = self.ban_rows();
+                self.send_control(actor, &ServerControl::Bans { bans });
+            }
+            ServerCommand::LiftBan { ban } => {
+                self.lift_ban(ban)?;
+                let bans = self.ban_rows();
+                self.send_control(actor, &ServerControl::Bans { bans });
+            }
+            ServerCommand::ReadHealth => {
+                let health = self.health();
+                self.send_control(actor, &ServerControl::Health { health });
+            }
+            ServerCommand::SummonBoss { boss } => {
+                let kind = tankyard_core::BossKind::from_id(&boss)
+                    .ok_or_else(|| NetError("That boss doesn't exist.".into()))?;
+                let arena = self.arena_of(actor);
+                let world = &mut self.arenas[arena].session.world;
+                if world.bosses.len() >= MOST_SUMMONED_BOSSES {
+                    return Err(NetError(format!(
+                        "This arena already has {MOST_SUMMONED_BOSSES} bosses."
+                    )));
+                }
+                if world.spawn_boss(kind) == 0 {
+                    return Err(NetError("No clear space for another boss.".into()));
+                }
+                world.config.modded = true;
+                self.replicate_events(arena);
+            }
+            ServerCommand::DismissBosses => {
+                let arena = self.arena_of(actor);
+                let world = &mut self.arenas[arena].session.world;
+                let bosses: std::collections::HashSet<_> =
+                    world.bosses.iter().map(|boss| boss.id).collect();
+                world.projectiles.retain(|p| !bosses.contains(&p.owner));
+                world.bosses.clear();
+                world.config.modded = true;
             }
         }
         Ok(())
@@ -312,6 +384,12 @@ impl UdpServer {
                 "Server roles are limited to community servers.".into(),
             ));
         }
+        let target_name = self
+            .peers
+            .get(&client)
+            .and_then(|peer| peer.entity)
+            .and_then(|entity| self.tank_name(entity))
+            .unwrap_or_default();
         crate::access::audit(
             self.settings.creator_audit_file(),
             &crate::access::AuditRecord {
@@ -320,6 +398,8 @@ impl UdpServer {
                 action: "server_role",
                 target: &client.to_string(),
                 reason: &format!("{role:?}"),
+                target_name: &target_name,
+                ..Default::default()
             },
         )
         .map_err(NetError)?;
