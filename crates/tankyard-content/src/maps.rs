@@ -871,8 +871,8 @@ impl TriggerAction {
     }
 }
 
-/// A sound a Play sound trigger makes. Each is synthesised by the game, so a
-/// map carries no audio.
+/// A sound a Play sound trigger makes. The game includes the sound bank, so a
+/// map carries only cue choices and playback settings.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MapSound {
@@ -889,7 +889,7 @@ pub enum MapSound {
     Whoosh,
     /// A deep, rolling rumble.
     Rumble,
-    /// Three quick rising tones, for a win or a reward.
+    /// Quick rising bell strikes, for a win or a reward.
     Fanfare,
     /// A soft, low pulse, like a heartbeat or a distant drum.
     Thump,
@@ -899,7 +899,7 @@ pub enum MapSound {
     Coin,
     /// A round little pop, like a bubble or a cork.
     Pop,
-    /// One clean electronic beep.
+    /// One short, bright pitched ping.
     Beep,
     /// A soft, short click, like a button.
     Click,
@@ -929,7 +929,7 @@ pub enum MapSound {
     Gong,
     /// A crack of thunder rolling away into the distance.
     Thunder,
-    /// Three short beeps and a long, higher one, for a race start.
+    /// Three short pings and a long, higher one, for a race start.
     Countdown,
     /// A punchy drum hit.
     Drum,
@@ -2500,6 +2500,8 @@ pub const BOSS_IDS: [&str; 15] = [
     "trapper",
     "railgunner",
 ];
+/// Hidden encounters that authored maps and packs may explicitly request.
+pub const SECRET_BOSS_IDS: [&str; 1] = ["sunderworm"];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3040,10 +3042,12 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         {
             return Err("add a condition on a counter or group for it to watch".into());
         }
-        TriggerWhen::Defeated if usize::from(trigger.source) > BOSS_IDS.len() => {
+        TriggerWhen::Defeated
+            if usize::from(trigger.source) > BOSS_IDS.len() + SECRET_BOSS_IDS.len() =>
+        {
             return Err(format!(
                 "wait for boss 1 to {}, or 0 for any boss",
-                BOSS_IDS.len()
+                BOSS_IDS.len() + SECRET_BOSS_IDS.len()
             ));
         }
         _ => {}
@@ -3055,7 +3059,10 @@ pub fn validate_trigger(trigger: &MapTrigger) -> Result<(), String> {
         TriggerAction::Announce if trigger.text.trim().is_empty() => {
             return Err("write the announcement".into());
         }
-        TriggerAction::Boss if !BOSS_IDS.contains(&trigger.boss.as_str()) => {
+        TriggerAction::Boss
+            if !BOSS_IDS.contains(&trigger.boss.as_str())
+                && !SECRET_BOSS_IDS.contains(&trigger.boss.as_str()) =>
+        {
             return Err(format!("unknown boss {:?}", trigger.boss));
         }
         TriggerAction::Signal if !(1..=MAP_CHANNELS).contains(&trigger.group) => {
@@ -3803,7 +3810,7 @@ mod tests {
         validate_trigger(&sequence).unwrap();
         let boss = MapTrigger {
             when: TriggerWhen::Defeated,
-            source: BOSS_IDS.len() as u8 + 1,
+            source: (BOSS_IDS.len() + SECRET_BOSS_IDS.len()) as u8 + 1,
             ..base
         };
         assert!(validate_trigger(&boss).is_err());

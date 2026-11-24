@@ -24,6 +24,8 @@ pub(crate) const LINING_UP: f32 = 0.6;
 pub(crate) const LINED_UP: f32 = 0.1;
 /// How far around its target one leg takes a circling boss, in radians.
 const LEG_TURN: f32 = 0.62;
+/// How long a boss keeps hunting for a target that slipped out of sight.
+const LOST_SECONDS: f32 = 6.;
 /// About how far a boss drives in a straight line before it picks a new one.
 const LEG_LENGTH: f32 = 200.;
 
@@ -108,25 +110,6 @@ pub(crate) fn boss_glide(
     (at, vel)
 }
 
-/// Seconds until a round at `speed` meets a target `gap` away moving at
-/// `moving`, if it ever can.
-fn intercept_time(gap: V2, moving: V2, speed: f32) -> Option<f32> {
-    let a = moving.length_squared() - speed * speed;
-    let b = 2. * gap.dot(moving);
-    let c = gap.length_squared();
-    if a.abs() < 0.001 {
-        return (b < 0.).then(|| -c / b);
-    }
-    let room = b * b - 4. * a * c;
-    if room < 0. {
-        return None;
-    }
-    let root = room.sqrt();
-    let (one, two) = ((-b - root) / (2. * a), (-b + root) / (2. * a));
-    let (near, far) = (one.min(two), one.max(two));
-    [near, far].into_iter().find(|&time| time > 0.)
-}
-
 /// Where to point a gun at `from` so a round at `speed`, fired `warned`
 /// seconds from now, meets a target at `at`. If cover stands between the gun
 /// and that spot, it aims at the target itself.
@@ -139,7 +122,7 @@ pub(crate) fn lead_point(
     walls: &[Rect],
 ) -> V2 {
     let later = at + moving * warned;
-    let flight = intercept_time(later - from, moving, speed)
+    let flight = crate::boss_brain::intercept_time(later - from, moving, speed)
         .unwrap_or(0.)
         .min(MOST_LEAD);
     let point = bounds.clamp_circle(later + moving * flight, 1.);
@@ -153,11 +136,87 @@ pub(crate) fn lead_point(
     }
 }
 
+/// [`lead_point`] for a target that is turning by `swerve`, so a boss can
+/// meet a curved path where it will be, not where a straight line says.
+pub(crate) fn bent_lead_point(
+    from: V2,
+    (at, moving, swerve): (V2, V2, V2),
+    speed: f32,
+    warned: f32,
+    bounds: Rect,
+    walls: &[Rect],
+) -> V2 {
+    if swerve == V2::ZERO {
+        return lead_point(from, (at, moving), speed, warned, bounds, walls);
+    }
+    let point = bounds.clamp_circle(
+        crate::boss_brain::curved_lead(from, at, moving, swerve, speed, warned),
+        1.,
+    );
+    if walls
+        .iter()
+        .any(|&wall| sweep_rect(from, point, 5., wall).is_some())
+    {
+        at
+    } else {
+        point
+    }
+}
+
+/// A point `ring` from `seen` with a clear line to it, as near `from` as
+/// there is one: where a boss goes to look round the cover its target
+/// slipped behind.
+pub(crate) fn flank_point(
+    from: V2,
+    seen: V2,
+    ring: f32,
+    radius: f32,
+    bounds: Rect,
+    walls: &[Rect],
+) -> V2 {
+    let out = (from - seen).normalized();
+    let out = if out == V2::ZERO {
+        V2::new(1., 0.)
+    } else {
+        out
+    };
+    let mut best = None;
+    let mut nearest = f32::INFINITY;
+    for step in 0..12 {
+        let side = if step % 2 == 0 { 1. } else { -1. };
+        let turn = (step / 2 + step % 2) as f32 * 0.52 * side;
+        let point = bounds.clamp_circle(seen + out.rotate(turn) * ring, radius + 8.);
+        let open = walls.iter().all(|&wall| {
+            sweep_rect(point, seen, 6., wall).is_none()
+                && circle_rect(point, radius, wall).is_none()
+        });
+        let distance = point.distance(from);
+        if open && distance < nearest {
+            nearest = distance;
+            best = Some(point);
+        }
+    }
+    best.unwrap_or(seen)
+}
+
+/// What a boss can see of the fight beyond its target.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Outlook {
+    /// What it weighs its specials by.
+    pub special: crate::boss_brain::Scene,
+    /// How hurt its target is, from 0 to 1.
+    pub weak: f32,
+    /// Which way round it should circle so another boss on the same target
+    /// ends up across from it: 1, -1, or 0 for either.
+    pub flank: f32,
+}
+
 /// How fast the round a boss aims with flies.
 fn aimed_speed(kind: BossKind) -> f32 {
     match kind {
         BossKind::SiegeEngine => 390.,
         BossKind::Railgunner => 1700.,
+        BossKind::Sunderworm => 660.,
         BossKind::Skirmisher => 450.,
         BossKind::Trapper => 240.,
         BossKind::Guardian => 270.,
@@ -188,7 +247,15 @@ fn special_speed(kind: BossKind) -> f32 {
 /// The end of a boss's next straight leg: on the line to `foe` when it's
 /// closing in or backing off, or a chord around it when circling, keeping the
 /// way it's already going unless that way is blocked.
-fn next_leg(b: &Boss, tactic: BossTactic, foe: V2, ring: f32, bounds: Rect, walls: &[Rect]) -> V2 {
+fn next_leg(
+    b: &Boss,
+    tactic: BossTactic,
+    foe: V2,
+    ring: f32,
+    bounds: Rect,
+    walls: &[Rect],
+    flank: f32,
+) -> V2 {
     let away = b.pos - foe;
     let out = if away.length_squared() > 1. {
         away.normalized()
@@ -199,7 +266,11 @@ fn next_leg(b: &Boss, tactic: BossTactic, foe: V2, ring: f32, bounds: Rect, wall
         return bounds.clamp_circle(foe + out * ring, b.radius + 8.);
     }
     let spin = out.x * b.vel.y - out.y * b.vel.x;
-    let way = if spin.abs() > 1. {
+    // With another boss on the same tank, it circles the other way round, so
+    // the two close on it from both sides.
+    let way = if flank != 0. {
+        flank
+    } else if spin.abs() > 1. {
         spin.signum()
     } else if b.id.is_multiple_of(2) {
         1.
@@ -274,18 +345,32 @@ const fn round(
     }
 }
 
-/// The rounds of a boss's special attack: the `attack`th it has made,
-/// aimed at `aim`, in `phase`. Its warning shows these same lanes. Each
-/// complements the boss's normal fire, every ring leaves a turning gap, and
-/// every round meets walls, parries and the round limit as any other.
+/// The rounds of a boss's special attack: the `attack`th of its three,
+/// aimed at `aim`, in `phase`. Its warning shows these same lanes. The first
+/// is each boss's signature, the one it opens with; the other two suit other
+/// fights, and the third is what it reaches for when badly hurt. Every ring
+/// leaves a gap, and every round meets walls, parries and the round limit as
+/// any other.
 pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<BossRound> {
     use ProjectileKind::*;
     use std::f32::consts::{FRAC_PI_2, TAU};
-    let turn = f32::from(attack) * 0.33;
-    let mut rounds = Vec::with_capacity(24);
-    match kind {
-        BossKind::Railgunner => return crate::railgunner::rail_volley(attack, aim, phase),
-        BossKind::SiegeEngine => {
+    let attack = attack.min(2);
+    // Wounded, everything comes thicker.
+    let more = usize::from(phase.clamp(1, 3) - 1);
+    let mut rounds = Vec::with_capacity(32);
+    fn fan(rounds: &mut Vec<BossRound>, count: usize, spread: f32, shot: BossRound) {
+        for n in 0..count {
+            let offset = (n as f32 - (count - 1) as f32 * 0.5) * spread;
+            rounds.push(BossRound {
+                angle: shot.angle + offset,
+                ..shot
+            });
+        }
+    }
+    match (kind, attack) {
+        (BossKind::Railgunner, _) => return crate::railgunner::rail_volley(attack, aim, phase),
+        (BossKind::Sunderworm, _) => {}
+        (BossKind::SiegeEngine, 0) => {
             // One giant round down the locked line destroys whatever it
             // hits; cover stops it. Wounded, it flanks the line with shells.
             rounds.push(round(
@@ -313,40 +398,44 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
                 }
             }
         }
-        BossKind::Skirmisher => {
-            for n in [-2., -1., 1., 2.] {
-                rounds.push(round(aim + n * 0.18, Bullet, 420., 18., 7., 2.4, 1.2, 0));
-            }
+        (BossKind::SiegeEngine, 1) => {
+            // Heavy shells bracketing the line, for a target that won't sit
+            // still: wherever it dodges, one lands near.
+            fan(
+                &mut rounds,
+                5 + 2 * more,
+                0.13,
+                round(aim, Shell, 760., 62., 16., 2.2, 3., 0),
+            );
         }
-        BossKind::Trapper => {
-            // Two side pockets leave the whole forward lane open.
+        (BossKind::SiegeEngine, _) => {
+            // The big gun, and a carpet of charges either side of it.
+            rounds.push(round(
+                aim,
+                Shell,
+                SIEGE_ROUND_SPEED,
+                LETHAL_DAMAGE,
+                SIEGE_ROUND_RADIUS,
+                1.8,
+                40.,
+                0,
+            ));
             for side in [-1., 1.] {
-                for n in -1..=1 {
+                for n in 0..2 + more {
                     rounds.push(round(
-                        aim + side * FRAC_PI_2 + n as f32 * 0.19,
-                        Mine,
-                        230.,
-                        23.,
-                        11.,
-                        5.,
-                        2.2,
+                        aim + side * (0.26 + n as f32 * 0.17),
+                        Explosive,
+                        470. + n as f32 * 40.,
+                        38.,
+                        13.,
+                        2.4,
+                        1.8,
                         0,
                     ));
                 }
             }
         }
-        BossKind::Guardian | BossKind::Summoner | BossKind::FallenOverlord => {
-            let shot = if kind == BossKind::FallenOverlord {
-                Homing
-            } else {
-                Bullet
-            };
-            for n in 0..12 {
-                let angle = aim + turn + (n as f32 - 5.5) * 0.24;
-                rounds.push(round(angle, shot, 340., 18., 8., 2.8, 1.3, 0));
-            }
-        }
-        BossKind::Bastion => {
+        (BossKind::Bastion, 0) => {
             // A lighter cannon than the Siege Engine's: it hurts badly rather
             // than ends you. Wounded, it brackets the line with charges.
             rounds.push(round(
@@ -374,10 +463,161 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
                 }
             }
         }
-        BossKind::Defender => {
+        (BossKind::Bastion, 1) => {
+            // A wall of mines thrown across the way in, landing in a line.
+            for n in 0..9 + 2 * more {
+                let side = (n as f32 / (8 + 2 * more) as f32 - 0.5) * 1.5;
+                rounds.push(round(
+                    aim + side,
+                    Mine,
+                    300. + side.abs() * 140.,
+                    27.,
+                    13.,
+                    6.5,
+                    2.,
+                    0,
+                ));
+            }
+        }
+        (BossKind::Bastion, _) => {
+            rounds.push(round(
+                aim,
+                Shell,
+                BASTION_ROUND_SPEED,
+                BASTION_ROUND_DAMAGE,
+                BASTION_ROUND_RADIUS,
+                1.7,
+                8.,
+                0,
+            ));
+            for n in 1..10 {
+                rounds.push(round(
+                    aim + n as f32 * TAU / 10.,
+                    Mine,
+                    240.,
+                    25.,
+                    12.,
+                    6.,
+                    2.,
+                    0,
+                ));
+            }
+        }
+        (BossKind::Skirmisher, 0) => {
+            for n in [-2., -1., 1., 2.] {
+                rounds.push(round(aim + n * 0.18, Bullet, 420., 18., 7., 2.4, 1.2, 0));
+            }
+        }
+        (BossKind::Skirmisher, 1) => {
+            // Two pairs angled in from either side: crossfire.
+            for side in [-1., 1.] {
+                fan(
+                    &mut rounds,
+                    3 + more,
+                    0.06,
+                    round(aim + side * 0.42, Bullet, 480., 17., 7., 2.2, 1.2, 0),
+                );
+            }
+        }
+        (BossKind::Skirmisher, _) => {
+            fan(
+                &mut rounds,
+                9 + 2 * more,
+                0.12,
+                round(aim, Bullet, 500., 16., 7., 2.2, 1.2, 0),
+            );
+        }
+        (BossKind::Trapper, 0) => {
+            // Two side pockets leave the whole forward lane open.
+            for side in [-1., 1.] {
+                for n in -1..=1 {
+                    rounds.push(round(
+                        aim + side * FRAC_PI_2 + n as f32 * 0.19,
+                        Mine,
+                        230.,
+                        23.,
+                        11.,
+                        5.,
+                        2.2,
+                        0,
+                    ));
+                }
+            }
+        }
+        (BossKind::Trapper, 1) => {
+            // An arc of traps ahead, to hem a tank in.
+            fan(
+                &mut rounds,
+                7 + 2 * more,
+                0.24,
+                round(aim, Trap, 320., 22., 11., 5., 2.5, 0),
+            );
+        }
+        (BossKind::Trapper, _) => {
+            // Mines strung down the lane at rising speeds, landing in a row.
+            for n in 0..5 + more {
+                rounds.push(round(
+                    aim + if n % 2 == 0 { 0.05 } else { -0.05 },
+                    Mine,
+                    180. + n as f32 * 75.,
+                    24.,
+                    11.,
+                    5.,
+                    2.2,
+                    0,
+                ));
+            }
+        }
+        (BossKind::Guardian | BossKind::Summoner | BossKind::FallenOverlord, 0) => {
+            let shot = if kind == BossKind::FallenOverlord {
+                Homing
+            } else {
+                Bullet
+            };
+            for n in 0..12 {
+                let angle = aim + (n as f32 - 5.5) * 0.24;
+                rounds.push(round(angle, shot, 340., 18., 8., 2.8, 1.3, 0));
+            }
+        }
+        (BossKind::Guardian | BossKind::Summoner | BossKind::FallenOverlord, 1) => {
+            // A ring all round, with a gap where it's looking.
+            let count = 20 + 4 * more;
+            for n in 1..count {
+                rounds.push(round(
+                    aim + n as f32 * TAU / count as f32,
+                    Bullet,
+                    300.,
+                    16.,
+                    8.,
+                    3.,
+                    1.2,
+                    0,
+                ));
+            }
+        }
+        (BossKind::Guardian | BossKind::Summoner | BossKind::FallenOverlord, _) => {
+            // Lances: tight lines of quick rounds down a few lanes.
+            let lanes = 3 + 2 * more;
+            for lane in 0..lanes {
+                let angle = aim + (lane as f32 - (lanes - 1) as f32 * 0.5) * 0.3;
+                for n in 0..4 {
+                    rounds.push(round(
+                        angle,
+                        Piercing,
+                        520. + n as f32 * 70.,
+                        17.,
+                        7.,
+                        2.4,
+                        1.5,
+                        0,
+                    ));
+                }
+            }
+        }
+        (BossKind::Defender, 0) => {
             for n in 1..12 {
                 rounds.push(round(
-                    aim + turn + n as f32 * TAU / 12.,
+                    aim + n as f32 * TAU / 12.,
                     Trap,
                     320.,
                     27.,
@@ -389,7 +629,35 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
             }
             rounds.push(round(aim, Shell, 460., 38., 14., 2.5, 2., 0));
         }
-        BossKind::FallenBooster | BossKind::Tempest => {
+        (BossKind::Defender, 1) => {
+            fan(
+                &mut rounds,
+                5 + more,
+                0.16,
+                round(aim, Shell, 560., 40., 14., 2.5, 2., 0),
+            );
+        }
+        (BossKind::Defender, _) => {
+            for n in 1..12 {
+                rounds.push(round(
+                    aim + 0.26 + n as f32 * TAU / 12.,
+                    Trap,
+                    360.,
+                    27.,
+                    12.,
+                    5.,
+                    3.5,
+                    0,
+                ));
+            }
+            fan(
+                &mut rounds,
+                3 + more,
+                0.22,
+                round(aim, Explosive, 420., 34., 12., 2.4, 1.6, 0),
+            );
+        }
+        (BossKind::FallenBooster | BossKind::Tempest, 0) => {
             for n in 0..5 {
                 rounds.push(round(
                     aim + (n as f32 - 2.) * 0.22,
@@ -403,7 +671,31 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
                 ));
             }
         }
-        BossKind::Sentinel => {
+        (BossKind::FallenBooster | BossKind::Tempest, 1) => {
+            // A burst all round, for whatever is close.
+            let count = 14 + 4 * more;
+            for n in 1..count {
+                rounds.push(round(
+                    aim + n as f32 * TAU / count as f32,
+                    Bullet,
+                    420.,
+                    16.,
+                    7.,
+                    1.6,
+                    1.,
+                    0,
+                ));
+            }
+        }
+        (BossKind::FallenBooster | BossKind::Tempest, _) => {
+            fan(
+                &mut rounds,
+                8 + 2 * more,
+                0.2,
+                round(aim, Homing, 400., 17., 8., 3., 1.2, 0),
+            );
+        }
+        (BossKind::Sentinel, 0) => {
             for n in 0..7 {
                 rounds.push(round(
                     aim + (n as f32 - 3.) * 0.13,
@@ -417,8 +709,43 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
                 ));
             }
         }
-        BossKind::Prism | BossKind::Eclipse => {
+        (BossKind::Sentinel, 1) => {
+            // Three quick rounds down one line, then two either side.
+            for n in 0..3 + more {
+                rounds.push(round(
+                    aim,
+                    Piercing,
+                    820. + n as f32 * 90.,
+                    34.,
+                    9.,
+                    2.,
+                    2.,
+                    0,
+                ));
+            }
+            for side in [-1., 1.] {
+                rounds.push(round(aim + side * 0.09, Piercing, 760., 30., 8., 2., 2., 0));
+            }
+        }
+        (BossKind::Sentinel, _) => {
+            fan(
+                &mut rounds,
+                11 + 2 * more,
+                0.11,
+                round(aim, Piercing, 540., 26., 8., 2.5, 2., 0),
+            );
+            if phase >= 3 {
+                fan(
+                    &mut rounds,
+                    6,
+                    0.11,
+                    round(aim, Piercing, 420., 24., 8., 2.5, 2., 0),
+                );
+            }
+        }
+        (BossKind::Prism | BossKind::Eclipse, 0 | 1) => {
             let shot = if attack == 1 { Homing } else { Piercing };
+            let turn = f32::from(attack) * 0.33;
             for n in 1..16 {
                 rounds.push(round(
                     aim + turn + n as f32 * TAU / 16.,
@@ -432,7 +759,25 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
                 ));
             }
         }
-        BossKind::Foundry => {
+        (BossKind::Prism | BossKind::Eclipse, _) => {
+            // Two rings at two speeds, turned against each other: a spiral.
+            for layer in 0..2 + more.min(1) {
+                let twist = layer as f32 * 0.2;
+                for n in 1..14 {
+                    rounds.push(round(
+                        aim + 0.66 + twist + n as f32 * TAU / 14.,
+                        Piercing,
+                        260. + layer as f32 * 90. + n as f32 * 6.,
+                        16.,
+                        7.,
+                        3.,
+                        1.5,
+                        1,
+                    ));
+                }
+            }
+        }
+        (BossKind::Foundry, 0) => {
             for n in 0..5 {
                 rounds.push(round(
                     aim + (n as f32 - 2.) * 0.35,
@@ -457,6 +802,27 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
                     0,
                 ));
             }
+        }
+        (BossKind::Foundry, 1) => {
+            // A carpet of mines thrown forward.
+            fan(
+                &mut rounds,
+                8 + 2 * more,
+                0.2,
+                round(aim, Mine, 330., 25., 11., 5.5, 2.5, 0),
+            );
+        }
+        (BossKind::Foundry, _) => {
+            // Two guns set down either side, and charges down the middle.
+            for side in [-1., 1.] {
+                rounds.push(round(aim + side * 0.7, Turret, 150., 19., 17., 7., 4., 0));
+            }
+            fan(
+                &mut rounds,
+                5 + more,
+                0.18,
+                round(aim, Explosive, 360., 32., 12., 3., 1.5, 0),
+            );
         }
     }
     rounds
@@ -506,6 +872,139 @@ impl World {
             })
             .min_by(|(a, _), (b, _)| a.total_cmp(b))
             .map_or(guard, |(_, pos)| pos)
+    }
+
+    /// Who boss `i` goes after this tick, and what else it can see. It weighs
+    /// everyone in sight now and then and keeps after its choice in between:
+    /// see `boss_brain`.
+    fn boss_target(&mut self, i: usize) -> (Option<(EntityId, V2, V2)>, Outlook) {
+        let b = &self.bosses[i];
+        let (kind, pos, aim, id, team, current) = (b.kind, b.pos, b.aim, b.id, b.team, b.target);
+        let phase = if b.health < b.max_health * BOSS_PHASES[1] {
+            3
+        } else if b.health < b.max_health * BOSS_PHASES[0] {
+            2
+        } else {
+            1
+        };
+        let busy =
+            b.attack_windup > 0. || matches!(b.tactic, BossTactic::Windup | BossTactic::Charge);
+        let visible: Vec<usize> = (0..self.tanks.len())
+            .filter(|&j| {
+                let t = &self.tanks[j];
+                t.tangible()
+                    && t.health > 0.
+                    && self.hostile(team, t.team)
+                    && t.protection <= 0.
+                    && !self.config.base_protected(t.team, t.pos, t.radius)
+                    && t.pos.distance(pos) < 1600.
+                    && (t.level >= 15
+                        || kind.drone_limit() == 0
+                        || t.id == b.last_attacker
+                        || t.pos.distance(pos) < 420.)
+                    && self
+                        .walls
+                        .iter()
+                        .all(|&w| sweep_rect(pos, t.pos, 5., w).is_none())
+            })
+            .collect();
+        let near_foes = self
+            .tanks
+            .iter()
+            .filter(|t| {
+                t.tangible()
+                    && t.health > 0.
+                    && self.hostile(team, t.team)
+                    && t.pos.distance(pos) < 750.
+            })
+            .count() as f32;
+        let reads: Vec<crate::boss_brain::Read> = visible
+            .iter()
+            .map(|&j| {
+                let t = &self.tanks[j];
+                let crowd = visible
+                    .iter()
+                    .filter(|&&k| k != j && self.tanks[k].pos.distance(t.pos) < 420.)
+                    .count() as f32;
+                let hunted = self
+                    .bosses
+                    .iter()
+                    .filter(|o| o.id != id && o.health > 0. && o.target == t.id)
+                    .count() as f32;
+                crate::boss_brain::Read {
+                    id: t.id,
+                    near: 1. - (t.pos.distance(pos) / 1600.).min(1.),
+                    threat: b.mind.threat(t.id, b.max_health * 0.03),
+                    weak: 1. - (t.health / t.max_health.max(1.)).clamp(0., 1.),
+                    focus: if t.id == current { 1. } else { 0. },
+                    crowd: (crowd / 4.).min(1.),
+                    strong: f32::from(t.level) / 45.,
+                    front: (V2::from_angle(aim).dot((t.pos - pos).normalized()) + 1.) * 0.5,
+                    fresh: b.mind.fresh(t.id, current),
+                    hunted: (hunted / 3.).min(1.),
+                    quick: (t.vel.length() / 420.).min(1.),
+                }
+            })
+            .collect();
+        let roll = self.random();
+        let think = self.random();
+        let records = self
+            .contributions
+            .get(&id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let b = &mut self.bosses[i];
+        b.mind.feel(records, DT);
+        let in_sight = reads.iter().any(|r| r.id == current);
+        if !in_sight {
+            b.mind.lost();
+        }
+        let mut chosen = if in_sight { current } else { 0 };
+        if ((!busy && b.mind.due()) || chosen == 0)
+            && let Some(pick) = crate::boss_brain::draw(kind, phase, &reads, roll)
+        {
+            b.mind.chose(pick, current, think);
+            chosen = pick;
+        }
+        let target = visible
+            .iter()
+            .map(|&j| &self.tanks[j])
+            .find(|t| t.id == chosen)
+            .map(|t| (t.id, t.pos, t.vel));
+        let mut outlook = Outlook {
+            special: crate::boss_brain::Scene {
+                range: 800.,
+                foes: near_foes,
+                across: 0.,
+                hurt: 1. - (b.health / b.max_health.max(1.)).clamp(0., 1.),
+            },
+            ..Outlook::default()
+        };
+        if let Some((target_id, at, moving)) = target {
+            b.mind.saw(at);
+            let line = (at - pos).normalized();
+            outlook.special.range = at.distance(pos);
+            outlook.special.across = (moving - line * moving.dot(line)).length();
+            outlook.weak = reads
+                .iter()
+                .find(|r| r.id == target_id)
+                .map_or(0., |r| r.weak);
+            // Another boss on the same tank: take the far side of it.
+            if let Some(other) = self
+                .bosses
+                .iter()
+                .find(|o| o.id != id && o.health > 0. && o.target == target_id && !o.mothership)
+            {
+                let mine = (pos - at).angle();
+                let theirs = (other.pos - at).angle();
+                let gap = (mine - theirs + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI;
+                if gap.abs() < 2.6 {
+                    outlook.flank = if gap >= 0. { 1. } else { -1. };
+                }
+            }
+        }
+        (target, outlook)
     }
 
     pub(crate) fn random_boss_event(&mut self) {
@@ -576,7 +1075,8 @@ impl World {
             * crowd
     }
 
-    /// Returns zero if the map cannot accommodate the boss safely.
+    /// Returns zero if the map cannot accommodate the boss safely, or the
+    /// encounter limit is full. A whole worm reserves room for both halves.
     pub fn spawn_boss(&mut self, kind: BossKind) -> EntityId {
         self.spawn_boss_from(kind, None)
     }
@@ -585,7 +1085,15 @@ impl World {
         self.spawn_boss_from(kind, Some(near))
     }
     fn spawn_boss_from(&mut self, kind: BossKind, near: Option<V2>) -> EntityId {
-        if self.bosses.len() >= 16 {
+        let occupied: usize = self
+            .bosses
+            .iter()
+            .map(|boss| {
+                1 + usize::from(boss.worm_part() == Some(crate::sunderworm::WormPart::Whole))
+            })
+            .sum();
+        let needed = 1 + usize::from(kind == BossKind::Sunderworm);
+        if occupied + needed > 16 {
             return 0;
         }
         let bounds = self.config.bounds();
@@ -649,6 +1157,21 @@ impl World {
         }
         let health = self.boss_health(kind);
         let id = self.id();
+        // The worm comes up out of the ground facing whoever is nearest.
+        let worm = (kind == BossKind::Sunderworm).then(|| {
+            let facing = self
+                .tanks
+                .iter()
+                .filter(|t| t.alive)
+                .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
+                .map_or(0., |t| (t.pos - pos).angle());
+            Box::new(crate::sunderworm::WormWork::rising(pos, facing))
+        });
+        let arrival = if worm.is_some() {
+            crate::sunderworm::RISE_SECONDS
+        } else {
+            2.
+        };
         self.bosses.push(Boss {
             id,
             pos,
@@ -667,7 +1190,7 @@ impl World {
             tactic: BossTactic::Patrol,
             tactic_time: 2.,
             last_attacker: 0,
-            arrival: 2.,
+            arrival,
             attack_timer: 7.,
             attack: 0,
             attack_windup: 0.,
@@ -677,7 +1200,14 @@ impl World {
             leg_time: 0.,
             rail: RailWork::default(),
             clash: crate::clash::ClashWork::default(),
+            mind: crate::boss_brain::Mind::default(),
+            worm,
         });
+        if let Some(boss) = self.bosses.last_mut()
+            && let Some(work) = boss.worm.as_deref()
+        {
+            work.sign().write(boss);
+        }
         self.event(EventKind::BossSpawn, pos, id, kind as u32, 0);
         id
     }
@@ -699,7 +1229,16 @@ impl World {
             if boss.mothership || boss.team != 0 {
                 continue;
             }
-            let full = self.boss_health_at(boss.kind, strength);
+            let half = matches!(
+                boss.worm_part(),
+                Some(crate::sunderworm::WormPart::Front | crate::sunderworm::WormPart::Back)
+            );
+            let full = self.boss_health_at(boss.kind, strength)
+                * if half {
+                    crate::sunderworm::HALF_HEALTH
+                } else {
+                    1.
+                };
             let boss = &mut self.bosses[i];
             if (full - boss.max_health).abs() > boss.max_health * 0.02 {
                 boss.health *= full / boss.max_health.max(1.);
@@ -715,6 +1254,10 @@ impl World {
                 self.update_railgunner(i, &mut volleys, &mut warnings);
                 continue;
             }
+            if b.kind == BossKind::Sunderworm {
+                self.update_worm(i, &mut volleys);
+                continue;
+            }
             let owned = self
                 .projectiles
                 .iter()
@@ -722,38 +1265,12 @@ impl World {
                     p.owner == b.id && p.kind.is_drone() && p.lifetime > 0. && p.penetration > 0.
                 })
                 .count();
-            let target = self
-                .tanks
-                .iter()
-                .filter(|t| {
-                    t.tangible()
-                        && t.health > 0.
-                        && self.hostile(b.team, t.team)
-                        && t.protection <= 0.
-                        && !self.config.base_protected(t.team, t.pos, t.radius)
-                        && t.pos.distance(b.pos) < 1600.
-                        && (t.level >= 15
-                            || b.kind.drone_limit() == 0
-                            || t.id == b.last_attacker
-                            || t.pos.distance(b.pos) < 420.)
-                        && self
-                            .walls
-                            .iter()
-                            .all(|&w| sweep_rect(b.pos, t.pos, 5., w).is_none())
-                })
-                .min_by(|a, c| {
-                    let cost = |t: &Tank| {
-                        t.pos.distance(b.pos)
-                            * if t.id == b.target { 0.75 } else { 1. }
-                            * if t.id == b.last_attacker { 0.65 } else { 1. }
-                            * (0.75 + t.health / t.max_health.max(1.) * 0.25)
-                    };
-                    cost(a).total_cmp(&cost(c))
-                })
-                .map(|t| (t.id, t.pos, t.vel));
+            let (target, scene) = self.boss_target(i);
+            let special_roll = self.random();
             let bounds = self.config.bounds();
             let b = &mut self.bosses[i];
             b.arrival = (b.arrival - DT).max(0.);
+            let before = b.phase;
             b.phase = if b.health < b.max_health * BOSS_PHASES[1] {
                 3
             } else if b.health < b.max_health * BOSS_PHASES[0] {
@@ -761,14 +1278,27 @@ impl World {
             } else {
                 1
             };
+            // A boss pushed into a harder phase answers at once with
+            // whatever it reaches for when hurt.
+            if b.phase > before && before > 0 && b.arrival <= 0. && b.attack_windup <= 0. {
+                b.attack_timer = b.attack_timer.min(LINING_UP * 0.5);
+            }
+            let rage = f32::from(b.phase.clamp(1, 3) - 1);
             if let Some((id, position, moving)) = target {
+                let rate = READ_RATE * (1. + 0.22 * rage);
                 b.read = if id == b.target {
-                    b.read.lerp(moving, 1. - (-DT * READ_RATE).exp())
+                    b.read.lerp(moving, 1. - (-DT * rate).exp())
                 } else {
                     moving
                 };
                 b.target = id;
                 b.goal = position;
+            } else if b.target != 0 && b.mind.hidden() < LOST_SECONDS {
+                // Its target slipped behind cover: it goes round to where it
+                // can see the last place it was, rather than straight at it.
+                let seen = b.mind.seen_at();
+                let ring = (b.pos.distance(seen)).clamp(b.radius + 220., 700.);
+                b.goal = flank_point(b.pos, seen, ring, b.radius, bounds, &self.walls);
             } else if b.pos.distance(b.goal) < 130.
                 || !bounds.contains_circle(b.goal, b.radius + 60.)
             {
@@ -778,6 +1308,9 @@ impl World {
                     bounds.center() + V2::from_angle(angle) * (bounds.w.min(bounds.h) * 0.3),
                     b.radius + 80.,
                 );
+            }
+            if let Some((_, _, moving)) = target {
+                b.mind.watch(moving, DT);
             }
             let to = b.goal - b.pos;
             let mut lined_up = true;
@@ -792,8 +1325,16 @@ impl World {
                 } else {
                     (aimed_speed(b.kind), 0.)
                 };
+                let swerve = b.mind.swerve * (rage * 0.5);
                 let point = target.map_or(b.goal, |(_, position, _)| {
-                    lead_point(b.pos, (position, b.read), shot, warned, bounds, &self.walls)
+                    bent_lead_point(
+                        b.pos,
+                        (position, b.read, swerve),
+                        shot,
+                        warned,
+                        bounds,
+                        &self.walls,
+                    )
                 });
                 let difference = ((point - b.pos).angle() - b.aim + std::f32::consts::PI)
                     .rem_euclid(std::f32::consts::TAU)
@@ -803,7 +1344,7 @@ impl World {
                     BossKind::SiegeEngine => 1.,
                     BossKind::Bastion => 1.7,
                     _ => 3.2,
-                };
+                } * (1. + 0.12 * rage);
                 b.aim += difference.clamp(-turn_rate * DT, turn_rate * DT);
             }
             b.tactic_time = (b.tactic_time - DT).max(0.);
@@ -811,21 +1352,24 @@ impl World {
             let speed = if b.mothership {
                 28.
             } else {
-                match b.kind {
-                    BossKind::Tempest => 125.,
-                    BossKind::Eclipse => 95.,
-                    BossKind::FallenBooster => 180.,
-                    BossKind::Guardian => 90.,
-                    BossKind::Summoner => 45.,
-                    BossKind::FallenOverlord => 65.,
-                    BossKind::SiegeEngine => 25.,
-                    BossKind::Skirmisher => 145.,
-                    BossKind::Trapper => 62.,
-                    BossKind::Bastion => 38.,
-                    BossKind::Foundry | BossKind::Defender => 32.,
-                    _ => 55.,
-                }
+                (1. + 0.08 * rage)
+                    * match b.kind {
+                        BossKind::Tempest => 125.,
+                        BossKind::Eclipse => 95.,
+                        BossKind::FallenBooster => 180.,
+                        BossKind::Guardian => 90.,
+                        BossKind::Summoner => 45.,
+                        BossKind::FallenOverlord => 65.,
+                        BossKind::SiegeEngine => 25.,
+                        BossKind::Skirmisher => 145.,
+                        BossKind::Trapper => 62.,
+                        BossKind::Bastion => 38.,
+                        BossKind::Foundry | BossKind::Defender => 32.,
+                        _ => 55.,
+                    }
             };
+            // A wounded target draws it in for the kill.
+            let finishing = scene.weak > 0.65 && !b.mothership;
             let preferred = match b.kind {
                 BossKind::FallenBooster => 0.,
                 BossKind::Guardian => 330.,
@@ -839,6 +1383,11 @@ impl World {
             let drone_limit = (b.kind.drone_limit() as f32 * swarm).ceil() as usize;
             let depleted = drone_limit > 0 && owned < drone_limit / 3;
             let range = to.length();
+            let preferred = if finishing {
+                preferred * 0.75
+            } else {
+                preferred
+            };
             let too_close = preferred * if depleted || b.phase == 3 { 1.15 } else { 0.7 };
             let too_far = preferred + 130.;
             let mut desired = if target.is_none() {
@@ -874,7 +1423,7 @@ impl World {
                         BossTactic::Retreat => (b.goal, too_close.max(preferred) + 30., hold),
                         _ => (b.goal, range.max(b.radius + 60.), hold),
                     };
-                    b.leg = next_leg(b, tactic, foe, ring, bounds, &self.walls);
+                    b.leg = next_leg(b, tactic, foe, ring, bounds, &self.walls, scene.flank);
                     b.leg_time = hold;
                 }
                 b.tactic = tactic;
@@ -935,9 +1484,9 @@ impl World {
                 // A ready special waits a moment for the gun to come round,
                 // so its warning points at something.
                 if b.attack_timer <= 0. && (lined_up || b.attack_timer < -BOSS_AIM_HOLD) {
-                    b.attack = (b.attack + 1) % 3;
+                    b.attack = b.mind.pick_special(b.kind, &scene.special, special_roll);
                     b.attack_windup = b.kind.windup();
-                    b.attack_timer = 9.5 - f32::from(b.phase) * 1.5;
+                    b.attack_timer = 9.2 - f32::from(b.phase) * 1.7;
                     warnings.push((b.pos, b.id, b.attack as u32, b.team));
                 }
             }
@@ -1019,8 +1568,8 @@ impl World {
                 continue;
             }
             match b.kind {
-                // Runs its own guns in `update_railgunner`.
-                BossKind::Railgunner => {}
+                // These run their own in `update_railgunner` and `update_worm`.
+                BossKind::Railgunner | BossKind::Sunderworm => {}
                 BossKind::SiegeEngine => {
                     emit(b.aim, ProjectileKind::Shell, 390., 34., 15., 3., 2.5, 0);
                     b.timer = 1.65;
@@ -1249,8 +1798,8 @@ impl World {
             // launched more slowly, so it isn't simply refilled at once.
             b.timer *= match b.phase {
                 1 => 1.,
-                2 => 0.9,
-                _ => 0.8,
+                2 => 0.86,
+                _ => 0.72,
             } / if b.kind.drone_limit() > 0 { swarm } else { 1. };
         }
         for (pos, id, attack, team) in warnings {
@@ -1278,6 +1827,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::boss_brain::intercept_time;
     use crate::world::BOSS_CREDIT_TICKS;
     use tankyard_content::Content;
 

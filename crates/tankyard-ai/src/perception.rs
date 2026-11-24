@@ -16,6 +16,9 @@ pub(crate) struct Perception {
     rows: usize,
     buckets: Vec<Vec<Seen>>,
     targets: HashMap<EntityId, u8>,
+    /// Extended bodies don't fit a head's single spatial bucket. There are
+    /// at most sixteen bosses, so a bounded broad phase handles these once.
+    extended: Vec<(usize, V2, f32)>,
 }
 
 impl Perception {
@@ -33,6 +36,7 @@ impl Perception {
             bucket.clear();
         }
         self.targets.clear();
+        self.extended.clear();
         for (index, tank) in world.tanks.iter().enumerate() {
             if tank.alive {
                 self.insert(tank.pos, Seen::Tank(index));
@@ -49,7 +53,13 @@ impl Perception {
         }
         for (index, boss) in world.bosses.iter().enumerate() {
             if boss.health > 0. {
-                self.insert(boss.pos, Seen::Boss(index));
+                if boss.kind == tankyard_core::BossKind::Sunderworm {
+                    if let Some((center, reach)) = boss.reach() {
+                        self.extended.push((index, center, reach));
+                    }
+                } else {
+                    self.insert(boss.pos, Seen::Boss(index));
+                }
                 self.targets.insert(boss.id, boss.team);
             }
         }
@@ -77,6 +87,11 @@ impl Perception {
         result.clear();
         if self.cols == 0 {
             return;
+        }
+        for &(index, center, reach) in &self.extended {
+            if position.distance(center) <= radius + reach {
+                result.push(Seen::Boss(index));
+            }
         }
         let min_x = ((position.x - radius) / Self::CELL).max(0.) as usize;
         let min_y = ((position.y - radius) / Self::CELL).max(0.) as usize;

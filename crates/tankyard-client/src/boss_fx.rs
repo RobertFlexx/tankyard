@@ -15,6 +15,7 @@ mod railgun;
 mod ribbon;
 mod shots;
 mod warnings;
+mod worm;
 
 pub use axiom::ShownAxiom;
 pub use clash::{clash_color, headline};
@@ -131,6 +132,8 @@ enum Fuel {
     Star,
     /// The Railgunner's ions: white at the heart, blue, violet at the edge.
     Ion,
+    /// The Sunderworm's bone, bile and blood: nothing it throws burns.
+    Flesh,
 }
 
 impl Fuel {
@@ -141,6 +144,7 @@ impl Fuel {
             BossKind::Prism => Self::Spectrum,
             BossKind::Eclipse | BossKind::FallenOverlord | BossKind::FallenBooster => Self::Void,
             BossKind::Railgunner => Self::Ion,
+            BossKind::Sunderworm => Self::Flesh,
             BossKind::Sentinel
             | BossKind::Bastion
             | BossKind::Guardian
@@ -154,6 +158,9 @@ impl Fuel {
 /// A boss as this frame shows it.
 #[derive(Clone, Copy)]
 pub struct Shown<'a> {
+    pub tick: u64,
+    pub body: Option<&'a tankyard_core::sunderworm::WormBody>,
+    pub fraction: f32,
     pub boss: &'a Boss,
     pub pos: V2,
     /// Its real aim, carried between ticks.
@@ -200,6 +207,8 @@ struct Presence {
     guns: [f32; CANNONS],
     /// How fast Axiom is driving, in world units a second.
     drive: Vec2,
+    /// Exhaust follows the last steady travel direction through stops and turns.
+    exhaust_aim: f32,
     /// A Railgunner's firing pose and what it was doing last frame.
     rail: railgun::RailShown,
     /// The gas its drive has left in the air.
@@ -234,6 +243,7 @@ impl Presence {
             flame: 0.,
             guns: [0.; CANNONS],
             drive: Vec2::ZERO,
+            exhaust_aim: shown.aim,
             rail: railgun::RailShown::default(),
             exhaust: exhaust_for(shown.pos, shown.color, Fuel::of(boss.kind)),
         }
@@ -607,7 +617,7 @@ pub struct BossFx {
     /// A clock for the air that trails drift on.
     air: f32,
     /// Sounds due, each from a place or, with none, right at the player.
-    cues: Vec<(crate::map_sounds::RailCue, Option<V2>)>,
+    cues: Vec<(crate::map_sounds::BossCue, Option<V2>)>,
     /// The player's tank, so a Railgunner's lock on them can be louder.
     local: EntityId,
     /// Where the camera is, so a clash far away doesn't shake it.
@@ -617,6 +627,8 @@ pub struct BossFx {
     /// Whether any of Axiom or its rounds are about, so that every other
     /// game skips looking for them.
     stars: bool,
+    /// The Sunderworms, their bodies and the mess they make.
+    worms: worm::Worms,
     look: Look,
     random: u32,
 }
@@ -645,6 +657,7 @@ impl Default for BossFx {
             camera: V2::ZERO,
             pending_shake: 0.,
             stars: false,
+            worms: worm::Worms::default(),
             look: Look::default(),
             random: 0x9e37_79b9,
         }
@@ -668,6 +681,7 @@ impl BossFx {
     pub fn set_look(&mut self, look: Look) {
         self.look = look;
         if !look.live() {
+            self.worm_quiet();
             self.sparks.clear();
             self.wakes.clear();
             self.trails.clear();
@@ -788,8 +802,23 @@ impl BossFx {
             let (y, vy) = settle(presence.kick.y, presence.kick_rate.y, KICK_RATE, dt);
             presence.kick = vec2(x, y);
             presence.kick_rate = vec2(vx, vy);
+            // A worm is flesh, not a machine: no exhaust, embers or flashes.
+            if boss.kind == BossKind::Sunderworm {
+                self.worm_frame(&item, dt);
+                continue;
+            }
             // Its exhaust stays in the air, so it bends where the boss turned.
-            let nozzles = exhaust_from(boss.kind, item.pos, presence.aim, boss.vel, boss.radius);
+            if boss.vel.length() > EXHAUST_SPEED * 0.5 {
+                presence.exhaust_aim +=
+                    turn_between(presence.exhaust_aim, boss.vel.angle()) * (1. - (-dt * 10.).exp());
+            }
+            let nozzles = exhaust_from(
+                boss.kind,
+                item.pos,
+                presence.aim,
+                V2::from_angle(presence.exhaust_aim),
+                boss.radius,
+            );
             let (driving, air, camera) = (boss.vel.length() > EXHAUST_SPEED, self.air, self.camera);
             for (wisp, nozzle) in presence.exhaust.iter_mut().zip(nozzles) {
                 wisp.clock += dt;
@@ -840,6 +869,7 @@ impl BossFx {
             self.wounds(pos, radius, phase, due);
         }
         self.bosses.retain(|_, presence| presence.unseen < 1.5);
+        self.worm_gone(dt);
     }
 
     /// Embers, flame and smoke coming off a wounded hull.
@@ -985,6 +1015,10 @@ impl BossFx {
     /// A boss's round has just left its gun. Returns how hard that shakes the
     /// camera, which is not at all for an ordinary shot.
     pub fn launched(&mut self, flight: &Flight) -> f32 {
+        if self.is_worm(flight.owner) {
+            self.worm_launched(flight.at, flight.vel, flight.kind);
+            return 0.;
+        }
         if self.is_axiom(flight.owner) {
             return self.star_launched(flight);
         }
@@ -1190,7 +1224,8 @@ impl BossFx {
     /// Note a boss's round at its place this frame.
     pub fn track(&mut self, flight: &Flight) {
         let look = self.look;
-        if !look.live() {
+        // Nothing a worm throws burns, so nothing leaves a trail of light.
+        if !look.live() || self.is_worm(flight.owner) {
             return;
         }
         if self.is_railgunner(flight.owner) {
@@ -1272,6 +1307,10 @@ impl BossFx {
 
     /// A boss's round is gone: hit something if it `struck`, or spent.
     pub fn landed(&mut self, flight: &Flight, struck: bool) {
+        if self.is_worm(flight.owner) {
+            self.trails.remove(&flight.id);
+            return;
+        }
         if self.is_railgunner(flight.owner) {
             self.trails.remove(&flight.id);
             self.rail_landed(flight, struck);
@@ -1428,6 +1467,7 @@ impl BossFx {
         self.run_clashes(dt);
         let dt = self.held(dt);
         self.air = (self.air + dt) % 3600.;
+        self.worm_update(dt);
         let (air, camera) = (self.air, self.camera);
         for burst in &mut self.bursts {
             burst.age += dt;
@@ -1554,6 +1594,9 @@ mod tests {
     fn sync(fx: &mut BossFx, boss: &Boss, dt: f32) {
         fx.sync(
             std::iter::once(Shown {
+                tick: 0,
+                body: None,
+                fraction: 1.,
                 boss,
                 pos: boss.pos,
                 aim: boss.aim,

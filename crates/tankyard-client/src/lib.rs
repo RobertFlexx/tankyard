@@ -13,3 +13,4 @@ pub mod staff_pack;
 pub mod tank_model;
 pub mod tank_tree_layout;
 pub mod text_edit;
+pub mod worm_model;

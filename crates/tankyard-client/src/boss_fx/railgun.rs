@@ -8,7 +8,7 @@ use super::fire::{self, Plume};
 use super::{BossFx, Flash, Flight, Fuel, Round, Spray, direction, ease_out, perpendicular};
 use crate::emission::{Emission, Layer, Stop};
 use crate::lighting::Light;
-use crate::map_sounds::RailCue;
+use crate::map_sounds::BossCue;
 use crate::render::{View, polygon};
 use crate::ui::{alpha, mix};
 use macroquad::prelude::*;
@@ -386,7 +386,7 @@ impl BossFx {
     }
 
     /// The sounds due this frame, and where each comes from.
-    pub fn take_cues(&mut self) -> Vec<(RailCue, Option<V2>)> {
+    pub fn take_cues(&mut self) -> Vec<(BossCue, Option<V2>)> {
         std::mem::take(&mut self.cues)
     }
 
@@ -410,11 +410,11 @@ impl BossFx {
         })
     }
 
-    fn cue(&mut self, cue: RailCue, at: V2) {
+    fn cue(&mut self, cue: BossCue, at: V2) {
         self.push_cue(cue, at);
     }
 
-    pub(super) fn push_cue(&mut self, cue: RailCue, at: V2) {
+    pub(super) fn push_cue(&mut self, cue: BossCue, at: V2) {
         if self.cues.len() < 8 {
             self.cues.push((cue, Some(at)));
         }
@@ -483,23 +483,23 @@ impl BossFx {
         }
         if known {
             if was.windup <= 0. && boss.attack_windup > 0. {
-                self.cue(RailCue::Charge, pos);
+                self.cue(BossCue::Charge, pos);
             }
             if was.windup >= RAIL_LOCK && boss.attack_windup > 0. && boss.attack_windup < RAIL_LOCK
             {
                 // Whoever it's locked onto hears it wherever they are.
                 if boss.target != 0 && boss.target == self.local {
-                    self.cues.push((RailCue::Lock, None));
+                    self.cues.push((BossCue::Lock, None));
                 } else {
-                    self.cue(RailCue::Lock, pos);
+                    self.cue(BossCue::Lock, pos);
                 }
             }
             if venting && !was.venting {
-                self.cue(RailCue::Vent, pos);
+                self.cue(BossCue::Vent, pos);
             }
         }
         if hum {
-            self.cue(RailCue::Beam, pos);
+            self.cue(BossCue::Beam, pos);
         }
         let way = direction(aim);
         let muzzle = pos + V2::new(way.x, way.y) * radius * RAIL_MUZZLE;
@@ -572,7 +572,7 @@ impl BossFx {
             presence.kick_rate -= heading * shove * 60.;
         }
         if cannon {
-            self.cue(RailCue::Shot, flight.at);
+            self.cue(BossCue::Shot, flight.at);
         }
         if !look.live() {
             return if cannon { 2. } else { 0. };
@@ -865,7 +865,7 @@ impl BossFx {
     fn wreck_goes_up(&mut self, wreck: Wreck) {
         let look = self.look;
         let (at, radius) = (wreck.at, wreck.radius);
-        self.cue(RailCue::Fall, at);
+        self.cue(BossCue::Fall, at);
         self.burst(at, Flash::Fall, radius * 1.15, RAIL_ION, 2.1);
         self.burst(at, Flash::Phase, radius * 1.6, RAIL_FRINGE, 1.3);
         // The barrel goes last, in a line of blasts from breech to muzzle.
@@ -1634,7 +1634,7 @@ mod tests {
             "it should shake the camera when it goes: {shook}"
         );
         assert!(
-            fx.take_cues().iter().any(|(cue, _)| *cue == RailCue::Fall),
+            fx.take_cues().iter().any(|(cue, _)| *cue == BossCue::Fall),
             "the last blast has a sound"
         );
     }

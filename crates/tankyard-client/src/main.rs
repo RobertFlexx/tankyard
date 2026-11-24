@@ -8,6 +8,7 @@ mod accessibility;
 mod ambient;
 mod axiom_dock;
 mod boss_fx;
+mod boss_sounds;
 mod central_owner;
 mod chat_recall;
 mod community_ui;
@@ -42,6 +43,7 @@ mod pocket_view;
 mod practice_ui;
 mod presentation;
 mod profile;
+mod recorded_sounds;
 mod render;
 mod rifts;
 mod rules_ui;
@@ -50,6 +52,7 @@ mod server_browser;
 mod server_status;
 mod session;
 mod settings;
+mod sound_kit;
 mod splash;
 mod sprites;
 mod staff_ui;
@@ -2009,6 +2012,9 @@ impl App {
                                 )
                             });
                     boss_fx::Shown {
+                        tick: snapshot.tick,
+                        body: snapshot.worm_bodies.iter().find(|body| body.id == boss.id),
+                        fraction: boss_fraction,
                         boss,
                         pos,
                         aim,
@@ -2091,7 +2097,7 @@ impl App {
                     map_sounds::falloff(at.distance(listener) * cue.carry())
                 });
                 self.voice
-                    .cue(map_sounds::rail_samples(cue), cue.gain() * falloff, volume);
+                    .cue(map_sounds::boss_samples(cue), cue.gain() * falloff, volume);
             }
         }
         if let Some(session) = &mut self.session {
@@ -2328,8 +2334,8 @@ impl App {
             .and_then(|session| session.display.as_ref())
             .and_then(|snapshot| snapshot.tanks.iter().find(|t| t.creator_boss && t.alive));
         let axiom_height = if axiom.is_some() { 61. * s } else { 0. };
-        // The Railgunner always gets a bar of its own, under Axiom's if both
-        // are out. In Boss Rush the boss of the wave gets one too.
+        // Rare encounters keep their health visible even off screen. Boss
+        // Rush also gives the current ordinary boss a headline.
         let headline_boss = self
             .session
             .as_ref()
@@ -2338,7 +2344,12 @@ impl App {
                 let bosses = &snapshot.bosses;
                 bosses
                     .iter()
-                    .find(|boss| boss.kind == tankyard_core::BossKind::Railgunner)
+                    .find(|boss| boss.kind == tankyard_core::BossKind::Sunderworm)
+                    .or_else(|| {
+                        bosses
+                            .iter()
+                            .find(|boss| boss.kind == tankyard_core::BossKind::Railgunner)
+                    })
                     .or_else(|| {
                         (snapshot.config.mode == tankyard_core::Mode::BossRush)
                             .then(|| bosses.first())
@@ -2536,8 +2547,16 @@ impl App {
                     let opacity = (life / 0.4).min(1.);
                     let mut rect = hud::boss_banner_layout(screen_width(), s);
                     rect.y += axiom_height;
+                    let half_destroyed = boss.starts_with("Sunderworm ")
+                        && snapshot.bosses.iter().any(|boss| {
+                            boss.kind == tankyard_core::BossKind::Sunderworm && boss.health > 0.
+                        });
                     arcade_center_in(
-                        "BOSS DEFEATED",
+                        if half_destroyed {
+                            "WORM HALF DESTROYED"
+                        } else {
+                            "BOSS DEFEATED"
+                        },
                         rect.center().x,
                         rect.y + 20. * s,
                         16. * s,

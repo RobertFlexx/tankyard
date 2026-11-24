@@ -19,15 +19,12 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 34 carries the Even, Odd and Most gates, eight conditions a
-/// trigger, On input change, Gate to counter and rift events that name their
-/// owner, which version 33 can't hold, so clients and servers update
-/// together. Every Tank Yard 2.0 release uses it; 1.7.0 used version 33, 1.6.0
-/// version 32, 1.5.0 to 1.5.2 version 31, 1.4.0 version 30, 1.3.0 version 29,
-/// and 1.1.0 and 1.2.0 version 28.
-pub const PROTOCOL_VERSION: u32 = 34;
+/// Version 35 adds authoritative Sunderworm body rings to snapshots. Clients
+/// and servers update together so the visible body matches collision geometry,
+/// including when joining an encounter already in progress.
+pub const PROTOCOL_VERSION: u32 = 35;
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 34;
+pub const MIN_PROTOCOL_VERSION: u32 = 35;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
 pub const SERVER_OUTDATED: &str =
     "This server runs an older Tank Yard. Its host needs to update it.";
@@ -685,6 +682,25 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && (1..=3).contains(&b.phase)
                 && b.team <= 4
         })
+        && s.worm_bodies.len() <= 16
+        && s.worm_bodies.iter().enumerate().all(|(index, body)| {
+            !s.worm_bodies[..index]
+                .iter()
+                .any(|other| other.id == body.id)
+                && s.bosses
+                    .iter()
+                    .find(|boss| boss.id == body.id)
+                    .and_then(|boss| boss.worm_part())
+                    .is_some_and(|part| body.centers.len() == part.rings().len())
+                && body
+                    .centers
+                    .iter()
+                    .all(|&(pos, depth)| vector(pos) && (0. ..=1.).contains(&depth))
+        })
+        && s.bosses
+            .iter()
+            .filter(|b| b.kind == BossKind::Sunderworm)
+            .all(|boss| s.worm_bodies.iter().any(|body| body.id == boss.id))
         && s.walls.iter().all(|w| {
             scalar(w.x) && scalar(w.y) && scalar(w.w) && scalar(w.h) && w.w >= 0. && w.h >= 0.
         })
@@ -866,6 +882,47 @@ mod tests {
     }
 
     #[test]
+    fn worm_body_roundtrips_and_malformed_shapes_are_rejected() {
+        let mut world = tankyard_core::World::new(
+            tankyard_core::WorldConfig {
+                width: 6000.,
+                height: 4000.,
+                target_count: 0,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        assert_ne!(world.spawn_boss(BossKind::Sunderworm), 0);
+        for _ in 0..240 {
+            world.step();
+        }
+        let snapshot = world.snapshot();
+        assert_eq!(snapshot.worm_bodies.len(), 1);
+        assert!(
+            snapshot.bosses[0].worm.is_none(),
+            "host work stays on the host"
+        );
+        let encoded = encode_snapshot(&snapshot).unwrap();
+        let raw: Snapshot =
+            postcard::from_bytes(&lz4_flex::decompress_size_prepended(&encoded).unwrap()).unwrap();
+        assert_eq!(raw.bosses[0].kind, BossKind::Sunderworm);
+        let copy = decode_snapshot(&encoded).unwrap();
+        assert_eq!(copy.worm_bodies, snapshot.worm_bodies);
+        for variant in 0..5 {
+            let mut bad = snapshot.clone();
+            match variant {
+                0 => bad.worm_bodies.clear(),
+                1 => bad.worm_bodies.push(bad.worm_bodies[0].clone()),
+                2 => bad.worm_bodies[0].centers[0].1 = f32::NAN,
+                3 => bad.worm_bodies[0].centers.pop().map(|_| ()).unwrap(),
+                _ => bad.worm_bodies[0].id = u64::MAX,
+            }
+            assert!(decode_snapshot(&encode_snapshot(&bad).unwrap()).is_err());
+        }
+    }
+
+    #[test]
     fn a_railgunner_travels_as_a_siege_engine_older_clients_can_read() {
         use tankyard_core::{BossKind, RAIL_RADIUS, World, WorldConfig};
         let mut world = World::new(
@@ -906,7 +963,10 @@ mod tests {
     #[test]
     fn a_clash_stays_an_ordinary_parry_on_the_wire() {
         use tankyard_core::{ClashStyle, EventKind, GameEvent, clash_names, clash_of, clash_value};
-        assert_eq!(PROTOCOL_VERSION, 34, "2.0 releases share one protocol");
+        assert_eq!(
+            PROTOCOL_VERSION, 35,
+            "authoritative worm bodies use protocol 35"
+        );
         for style in ClashStyle::ALL {
             for boss in [41, 41 + 8192, u64::MAX - 1] {
                 let event = GameEvent {

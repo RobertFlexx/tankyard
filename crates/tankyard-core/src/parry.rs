@@ -88,6 +88,9 @@ impl World {
             return false;
         }
         let ability = ability.unwrap_or(Ability::Parry);
+        if self.misses_rail(projectile, defender, ability) {
+            return false;
+        }
         if self.clash(projectile, defender, impact, ability) {
             return true;
         }

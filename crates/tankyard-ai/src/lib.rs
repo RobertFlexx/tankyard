@@ -1048,6 +1048,58 @@ mod tests {
     }
 
     #[test]
+    fn bots_see_aim_at_and_avoid_a_worms_body_when_its_head_is_far_away() {
+        use tankyard_core::sunderworm::{Ring, SURFACED};
+        let mut world = World::new(
+            WorldConfig {
+                mode: Mode::BossRush,
+                target_count: 0,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        world.add_player("Bot", true);
+        world.tanks[0].pos = V2::new(1000., 1200.);
+        let id = world.spawn_boss(BossKind::Sunderworm);
+        let boss = world.bosses.iter_mut().find(|b| b.id == id).unwrap();
+        boss.pos = V2::new(3000., 1000.);
+        boss.worm = Some(Box::new(tankyard_core::sunderworm::WormWork::rising(
+            boss.pos, 0.,
+        )));
+        let work = boss.worm.as_mut().unwrap();
+        work.rings = vec![Ring {
+            pos: V2::new(1000., 1000.),
+            radius: 100.,
+            depth: 0.,
+        }];
+        work.reach = (work.rings[0].pos, 100.);
+        let mut controller = BotController::new(Difficulty::Expert);
+        controller.update(&mut world);
+        let target = controller.brains[&world.tanks[0].id]
+            .target
+            .expect("the nearby body is visible");
+        assert_eq!(target.id, id);
+        assert_eq!(target.pos, V2::new(1000., 1000.));
+        let (dodge, urgency) = steering::worm_avoidance(&world, &world.tanks[0]);
+        assert!(dodge.y > 0. && urgency > 0.);
+        let work = world
+            .bosses
+            .iter_mut()
+            .find(|b| b.id == id)
+            .unwrap()
+            .worm
+            .as_mut()
+            .unwrap();
+        work.rings[0].depth = SURFACED + 0.01;
+        work.reach.1 = 0.;
+        assert_eq!(
+            steering::worm_avoidance(&world, &world.tanks[0]),
+            (V2::ZERO, 0.)
+        );
+    }
+
+    #[test]
     fn cooperative_bots_never_target_allies_and_engage_bosses() {
         let mut world = World::new(
             WorldConfig {

@@ -215,9 +215,13 @@ pub(super) fn decide(
                 if boss.health <= 0. || !hostile(tank.team, boss.team) {
                     continue;
                 }
-                let distance = tank.pos.distance(boss.pos);
+                let Some((position, radius)) = boss.nearest_part(tank.pos) else {
+                    // Buried rings cannot be hit.
+                    continue;
+                };
+                let distance = tank.pos.distance(position);
                 if distance > difficulty.perception_radius()
-                    || !cover.clear_path(tank.pos, boss.pos, tank.radius * 0.35)
+                    || !cover.clear_path(tank.pos, position, tank.radius * 0.35)
                 {
                     continue;
                 }
@@ -232,9 +236,9 @@ pub(super) fn decide(
                 (
                     TargetSample {
                         id: boss.id,
-                        pos: boss.pos,
+                        pos: position,
                         velocity: boss.vel,
-                        radius: boss.radius,
+                        radius,
                     },
                     priority / (1. + distance / 650.),
                     BotState::BossEngagement,

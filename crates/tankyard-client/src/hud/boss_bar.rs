@@ -121,12 +121,18 @@ impl Hud {
             &Bar {
                 id: boss.id,
                 kind: Some(boss.kind),
-                name: boss.kind.name(),
+                name: boss
+                    .worm_part()
+                    .map_or(boss.kind.name(), |part| part.name()),
                 health: boss.health,
                 max_health: boss.max_health,
                 lost: trail,
                 tint: render::boss_tint(boss, colorblind),
-                marks: &tankyard_core::BOSS_PHASES,
+                marks: match boss.worm_part() {
+                    Some(tankyard_core::WormPart::Whole) => &tankyard_core::sunderworm::WORM_MARKS,
+                    Some(_) => &[0.5],
+                    None => &tankyard_core::BOSS_PHASES,
+                },
                 status: bar_status(boss, marked),
                 marked,
             },

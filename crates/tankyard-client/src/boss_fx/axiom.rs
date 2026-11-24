@@ -120,6 +120,7 @@ impl Presence {
             flame: 0.,
             guns: [0.; CANNONS],
             drive: Vec2::ZERO,
+            exhaust_aim: item.aim,
             rail: super::railgun::RailShown::default(),
             exhaust: super::exhaust_for(item.pos, color, Fuel::Star),
         }

@@ -564,7 +564,7 @@ fn flourish(light: &mut Emission, round: &Round, path: &Path, fuel: Fuel, clock:
     let n = perpendicular(d);
     let o = opacity * level.min(1.);
     match fuel {
-        Fuel::Plasma | Fuel::Star | Fuel::Ion => {}
+        Fuel::Plasma | Fuel::Star | Fuel::Ion | Fuel::Flesh => {}
         Fuel::Fire => {
             // Burning fuel: flame licking off the back of the round.
             for lick in 0..3 {

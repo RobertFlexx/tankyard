@@ -21,6 +21,7 @@ pub fn boss_color(kind: BossKind) -> Color {
         BossKind::Skirmisher => Color::new(0.25, 0.67, 0.77, 1.),
         BossKind::Trapper => Color::new(0.75, 0.47, 0.31, 1.),
         BossKind::Railgunner => RAIL_ION,
+        BossKind::Sunderworm => crate::worm_model::FLESH,
     }
 }
 
@@ -152,6 +153,7 @@ pub fn armor(kind: BossKind, aim: f32, turn: f32) -> (u8, f32, f32) {
         BossKind::FallenOverlord | BossKind::FallenBooster | BossKind::Eclipse => (0, 1., 0.),
         BossKind::Sentinel | BossKind::Trapper => (6, 1., aim + PI / 6.),
         BossKind::Railgunner => (8, 1., aim + PI / 8.),
+        BossKind::Sunderworm => (0, 1., 0.),
     }
 }
 
@@ -240,6 +242,9 @@ pub fn boss_model_geometry(
         );
     };
     match kind {
+        // Its body runs the length of its path, drawn by `worm_model`; this
+        // is the curled-up version for cards and the model sheet.
+        BossKind::Sunderworm => crate::worm_model::worm_card_geometry(p, r, time, emit),
         BossKind::Sentinel => {
             // A hexagonal watchtower: two heavy guns side by side under a
             // visor with one burning slit.

@@ -564,20 +564,15 @@ impl VoiceChat {
                 return;
             }
         }
+        // Generate or fetch the cached clip before taking the audio lock.
+        let samples = crate::map_sounds::arrival_samples();
         if let Ok(mut mixer) = self.mixer.lock() {
-            let wav = include_bytes!("../../../assets/audio/boss-arrival.wav");
             mixer.alarm.clear();
-            mixer.alarm.extend(
-                wav[44..]
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|bytes| f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / 32768.),
-            );
+            mixer.alarm.extend(samples.iter().copied());
             mixer.alarm_volume = volume.clamp(0., 1.);
         }
     }
-    /// Play synthesized `samples` at `gain` and the current effects volume.
+    /// Play prepared `samples` at `gain` and the current effects volume.
     /// Bursts coalesce and already playing cues follow volume changes.
     pub fn cue(&mut self, samples: std::sync::Arc<[f32]>, gain: f32, volume: f32) {
         self.cue_at(samples, gain, volume, 1.);

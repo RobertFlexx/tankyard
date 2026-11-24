@@ -28,8 +28,8 @@ pub(super) const CARRY_DRAG: f32 = 7.;
 /// How long new gas holds together before the air starts to take it.
 pub(super) const HOLDS: f32 = 0.16;
 /// Sections along a ribbon, and how many lower shape quality spends.
-pub(super) const FINE: usize = 15;
-pub(super) const PLAIN: usize = 9;
+pub(super) const FINE: usize = 41;
+pub(super) const PLAIN: usize = 23;
 /// The cosine of the sharpest turn the curve rounds off. Past it the round
 /// bounced, and rounding the corner would swing the ribbon through the wall.
 const CORNER: f32 = 0.3;
@@ -232,8 +232,12 @@ impl Path {
     /// The ribbon's middle: from `lead` ahead of the round to `reach` behind
     /// it, in `sections` even steps, swaying as `sway` says.
     pub(super) fn line(&self, lead: f32, reach: f32, sections: usize, sway: Sway) -> Line {
-        let count = sections.clamp(2, FINE);
         let span = (lead + reach).max(1e-3);
+        // Tessellate in screen pixels. Short, distant ribbons stay cheap;
+        // a large curved exhaust must not expose fifteen straight bends.
+        let maximum = sections.clamp(4, FINE);
+        let spacing = if maximum == FINE { 5. } else { 9. };
+        let count = ((span / spacing).ceil() as usize + 1).clamp(4, maximum);
         let mut spine = [(self.points[0], vec2(0., 1.)); FINE];
         let mut cursor = 0;
         for (index, slot) in spine[..count].iter_mut().enumerate() {
@@ -283,6 +287,7 @@ impl Sway {
             Fuel::Star => (0.16, 3.9, 2.2),
             Fuel::Plasma => (0.11, 3.5, 1.8),
             Fuel::Ion => (0.13, 2.9, 2.6),
+            Fuel::Flesh => (0.2, 2.6, 2.4),
         };
         Self {
             size: size * r,
@@ -550,6 +555,17 @@ mod tests {
         assert!((path.age(15.) - 0.15).abs() < 1e-3);
         assert!((path.age(40.) - 0.4).abs() < 1e-3);
         assert!((path.age(900.) - 0.4).abs() < 1e-3);
+    }
+
+    #[test]
+    fn tessellation_follows_screen_size_and_stays_bounded() {
+        let path = Path::straight(Vec2::ZERO, vec2(-1., 0.), 1000.);
+        let short = path.line(0., 12., FINE, Sway::STILL);
+        let long = path.line(0., 150., FINE, Sway::STILL);
+        assert!(short.count < long.count);
+        assert!(150. / (long.count - 1) as f32 <= 5.);
+        assert_eq!(path.line(0., 1000., FINE, Sway::STILL).count, FINE);
+        assert!(path.line(0., 1000., PLAIN, Sway::STILL).count <= PLAIN);
     }
 
     #[test]

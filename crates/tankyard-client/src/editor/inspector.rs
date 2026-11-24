@@ -2533,15 +2533,19 @@ fn trigger_form(
         }
         TriggerWhen::Defeated => {
             let mut boss = defeated_boss(t).and_then(BossKind::from_id);
-            let options: Vec<Option<BossKind>> = std::iter::once(None)
+            let mut options: Vec<Option<BossKind>> = std::iter::once(None)
                 .chain(BossKind::ALL.into_iter().map(Some))
                 .collect();
+            if boss.is_some() && !options.contains(&boss) {
+                options.push(boss);
+            }
             f.cycle("Boss", &mut boss, &options, |b| {
                 b.map_or("Any boss".to_owned(), |b| b.name().to_owned())
             });
             t.source = boss.map_or(0, |b| {
                 BOSS_IDS
                     .iter()
+                    .chain(&tankyard_content::SECRET_BOSS_IDS)
                     .position(|&id| id == b.id())
                     .map_or(0, |i| i as u8 + 1)
             });
@@ -2571,7 +2575,11 @@ fn trigger_form(
         }
         TriggerAction::Boss => {
             let mut boss = BossKind::from_id(&t.boss).unwrap_or(BossKind::Sentinel);
-            f.cycle("Bring", &mut boss, &BossKind::ALL, |b| b.name().to_owned());
+            let mut choices = BossKind::ALL.to_vec();
+            if !choices.contains(&boss) {
+                choices.push(boss);
+            }
+            f.cycle("Bring", &mut boss, &choices, |b| b.name().to_owned());
             t.boss = boss.id().into();
             f.note("The boss arrives at the middle of this trigger's area.");
         }

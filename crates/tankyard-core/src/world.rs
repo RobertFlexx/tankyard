@@ -1166,7 +1166,11 @@ impl World {
         snapshot.tanks.clone_from(&self.tanks);
         snapshot.projectiles.clone_from(&self.projectiles);
         snapshot.targets.clone_from(&self.targets);
-        snapshot.bosses.clone_from(&self.bosses);
+        snapshot.bosses.clear();
+        snapshot
+            .bosses
+            .extend(self.bosses.iter().map(Boss::for_viewer));
+        crate::sunderworm::snapshot_bodies(&self.bosses, &mut snapshot.worm_bodies);
         snapshot.walls.clone_from(&self.walls);
         snapshot.wall_groups.clone_from(&self.wall_groups);
         snapshot.objectives.clone_from(&self.objectives);
@@ -1190,7 +1194,11 @@ impl World {
             visible(p.pos)
         });
         clone_filtered(&mut snapshot.targets, &self.targets, |t| visible(t.pos));
-        snapshot.bosses.clone_from(&self.bosses);
+        snapshot.bosses.clear();
+        snapshot
+            .bosses
+            .extend(self.bosses.iter().map(Boss::for_viewer));
+        crate::sunderworm::snapshot_bodies(&self.bosses, &mut snapshot.worm_bodies);
         snapshot.walls.clone_from(&self.rest_walls);
         snapshot.wall_groups.clone_from(&self.wall_groups);
         snapshot.objectives.clone_from(&self.objectives);
@@ -1215,10 +1223,13 @@ impl World {
         snapshot.walls_included = true;
     }
     fn make_snapshot(&self, view: Option<(V2, f32)>) -> Snapshot {
+        let mut worm_bodies = Vec::new();
+        crate::sunderworm::snapshot_bodies(&self.bosses, &mut worm_bodies);
         let visible = |pos: V2| {
             view.is_none_or(|(center, radius)| (pos - center).length_squared() < radius * radius)
         };
         Snapshot {
+            worm_bodies,
             tick: self.tick,
             config: self.config.clone(),
             tanks: self.tanks.clone(),
@@ -1234,7 +1245,7 @@ impl World {
                 .filter(|t| visible(t.pos))
                 .cloned()
                 .collect(),
-            bosses: self.bosses.clone(),
+            bosses: self.bosses.iter().map(Boss::for_viewer).collect(),
             walls: self.rest_walls.clone(),
             wall_groups: self.wall_groups.clone(),
             objectives: self.objectives.clone(),
@@ -1463,6 +1474,8 @@ impl World {
             self.reward_contributors(id, killer, xp, xp);
             self.event(EventKind::Destroy, pos, id, xp, 0);
         }
+        // A whole Sunderworm never simply dies: it tears in two.
+        self.tear_dying_worms();
         let dead_bosses: Vec<_> = self
             .bosses
             .iter()
@@ -1475,7 +1488,13 @@ impl World {
             .iter()
             .any(|trigger| trigger.when == tankyard_content::TriggerWhen::Defeated);
         for (id, pos, team, mother, kind) in dead_bosses {
-            if watched {
+            // A half pays out on its own. Completion belongs to the last
+            // living half; when both die this tick, the lower ID handles it
+            // once, including map triggers and the Boss Rush team bonus.
+            let completes_encounter = !self.bosses.iter().any(|b| {
+                (b.health > 0. || b.id < id) && b.worm.as_deref().is_some_and(|w| w.pair == id)
+            });
+            if watched && completes_encounter {
                 self.logic
                     .input(crate::map_features::LogicInput::Defeated(kind));
             }
@@ -1488,7 +1507,7 @@ impl World {
             // in the last one counts, not only the last few seconds.
             let reward = BOSS_REWARD * kind.bounty();
             self.reward_within(id, killer, reward, reward, BOSS_CREDIT_TICKS);
-            if self.config.mode == Mode::BossRush {
+            if self.config.mode == Mode::BossRush && completes_encounter {
                 let allies: Vec<_> = self.tanks.iter().map(|t| t.id).collect();
                 for ally in allies {
                     self.award(ally, 3500, 3500);
@@ -1509,7 +1528,13 @@ impl World {
             if let Some(hunter) = self.tanks.iter().find(|t| t.id == killer) {
                 let elimination = Elimination {
                     victim: id,
-                    name: kind.name().into(),
+                    name: self
+                        .bosses
+                        .iter()
+                        .find(|boss| boss.id == id)
+                        .and_then(Boss::worm_part)
+                        .map_or(kind.name(), |part| part.name())
+                        .into(),
                     game_creator: false,
                     server_badge: Default::default(),
                 };
@@ -1692,27 +1717,44 @@ impl World {
             .enumerate()
             .filter(|(_, boss)| boss.health > 0.0)
         {
+            let Some((middle, reach)) = boss.reach() else {
+                continue;
+            };
             for (i, tank) in self
                 .tanks
                 .iter()
                 .enumerate()
                 .filter(|(_, tank)| tank.tangible())
             {
-                let delta = boss.pos - tank.pos;
-                let radius = boss.radius + tank.radius;
-                if delta.length_squared() >= radius * radius {
+                if middle.distance(tank.pos) >= reach + tank.radius {
                     continue;
                 }
-                let distance = delta.length();
-                let normal = if distance > 0.001 {
-                    delta / distance
-                } else {
-                    V2::new(1.0, 0.0)
-                };
-                contacts.push((i, j, normal, radius - distance));
+                // The part it overlaps most: a hull, or one of the worm's
+                // rings, the first of which is its head.
+                let mut deepest: Option<(V2, f32, bool)> = None;
+                for (center, size) in boss.parts() {
+                    let delta = center - tank.pos;
+                    let radius = size + tank.radius;
+                    if delta.length_squared() >= radius * radius {
+                        continue;
+                    }
+                    let distance = delta.length();
+                    let overlap = radius - distance;
+                    if deepest.is_none_or(|(_, most, _)| overlap > most) {
+                        let normal = if distance > 0.001 {
+                            delta / distance
+                        } else {
+                            V2::new(1.0, 0.0)
+                        };
+                        deepest = Some((normal, overlap, center == boss.pos));
+                    }
+                }
+                if let Some((normal, overlap, head)) = deepest {
+                    contacts.push((i, j, normal, overlap, head));
+                }
             }
         }
-        for (i, j, normal, overlap) in contacts {
+        for (i, j, normal, overlap, head) in contacts {
             self.tanks[i].pos -= normal * (overlap + 0.01);
             if self.bosses[j].arrival <= 0. && self.hostile(self.tanks[i].team, self.bosses[j].team)
             {
@@ -1724,7 +1766,15 @@ impl World {
                     self.bosses[j].last_attacker = owner;
                     self.record_damage(boss_id, owner, damage);
                 }
-                self.damage_tank(i, 35. * DT, boss_id, normal * -7.);
+                // The worm's jaws bite harder than its body, and its body
+                // harder than a hull.
+                let (bite, shove) = match self.bosses[j].worm_part() {
+                    Some(crate::sunderworm::WormPart::Back) => (36., 11.),
+                    Some(_) if head => (55., 14.),
+                    Some(_) => (30., 10.),
+                    None => (35., 7.),
+                };
+                self.damage_tank(i, bite * DT, boss_id, normal * -shove);
             }
         }
     }
@@ -1968,7 +2018,7 @@ impl World {
                         self.record_damage(id, owner, applied);
                         self.event(
                             EventKind::Impact,
-                            self.bosses[j].pos,
+                            impact,
                             id,
                             applied as u32,
                             self.bosses[j].team,
@@ -2089,6 +2139,28 @@ impl World {
             }
             Body::Boss(j) => {
                 let b = &self.bosses[j];
+                if b.worm.is_some() {
+                    // Every ring above ground can be hit; the first one the
+                    // round reaches takes it.
+                    if b.health <= 0.
+                        || b.id == owner
+                        || !self.hostile(team, b.team)
+                        || self.projectiles[i].hit.contains(&b.id)
+                    {
+                        return None;
+                    }
+                    let (middle, reach) = b.reach()?;
+                    if segment_distance_squared(middle, start, end) > (reach + radius).powi(2) {
+                        return None;
+                    }
+                    return b
+                        .parts()
+                        .filter_map(|(center, size)| {
+                            sweep_circle(start, end, center, size + radius)
+                        })
+                        .min_by(f32::total_cmp)
+                        .map(|t| (t, body, b.id));
+                }
                 (
                     b.pos,
                     b.radius,
@@ -2236,10 +2308,13 @@ impl World {
             }
         }
         for b in &self.bosses {
-            let d = (pos - b.pos).length_squared();
+            let Some((center, _)) = b.nearest_part(pos) else {
+                continue;
+            };
+            let d = (pos - center).length_squared();
             if b.id != owner && b.health > 0. && self.hostile(team, b.team) && d < best {
                 best = d;
-                target = Some(b.pos);
+                target = Some(center);
             }
         }
         if target.is_none() {
@@ -2293,11 +2368,10 @@ impl World {
                 }
                 Body::Boss(i) => {
                     let b = &mut self.bosses[i];
-                    if b.id != owner
-                        && b.pos.distance(pos) < radius + b.radius
-                        && b.health > 0.
-                        && (team == 0 || team != b.team)
-                    {
+                    let near = b
+                        .nearest_part(pos)
+                        .is_some_and(|(center, size)| center.distance(pos) < radius + size);
+                    if b.id != owner && near && b.health > 0. && (team == 0 || team != b.team) {
                         b.health -= damage;
                         b.last_attacker = owner;
                         let id = b.id;

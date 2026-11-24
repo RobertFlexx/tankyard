@@ -13,7 +13,7 @@ use super::{
 };
 use crate::emission::{Emission, Layer, Stop};
 use crate::lighting::Light;
-use crate::map_sounds::{RailCue, falloff};
+use crate::map_sounds::{BossCue, falloff};
 use crate::render::View;
 use crate::ui::{AMBER, alpha, mix};
 use macroquad::prelude::*;
@@ -153,7 +153,7 @@ fn cut_of(style: ClashStyle) -> Cut {
 fn size_of(style: ClashStyle) -> f32 {
     match style {
         ClashStyle::Beam => 1.,
-        ClashStyle::Rail => 0.92,
+        ClashStyle::Rail => 1.1,
         ClashStyle::Siege => 0.8,
         ClashStyle::Bastion => 0.56,
     }
@@ -355,9 +355,10 @@ impl BossFx {
     /// A confirmed parry met the named boss's big gun.
     pub fn clash(&mut self, style: ClashStyle, at: V2, boss: EntityId, damage: u32, mine: bool) {
         let cue = match style {
-            ClashStyle::Beam | ClashStyle::Rail => RailCue::ClashIon,
-            ClashStyle::Siege => RailCue::ClashFire,
-            ClashStyle::Bastion => RailCue::ClashSteel,
+            ClashStyle::Beam => BossCue::ClashBeam,
+            ClashStyle::Rail => BossCue::ClashIon,
+            ClashStyle::Siege => BossCue::ClashFire,
+            ClashStyle::Bastion => BossCue::ClashSteel,
         };
         self.push_cue(cue, at);
         // The round that was parried doesn't also go off.
@@ -622,7 +623,7 @@ impl BossFx {
         let style = clash.style;
         let size = size_of(style);
         let at = clash.spine[usize::from(clash.count) - 1];
-        self.push_cue(RailCue::Backlash, at);
+        self.push_cue(BossCue::Backlash, at);
         let way = (at - clash.spine[usize::from(clash.count) - 2]).normalized();
         if let Some(presence) = self.bosses.get_mut(&clash.boss) {
             presence.heat = 1.;
@@ -1420,6 +1421,9 @@ mod tests {
     fn sync(fx: &mut BossFx, boss: &Boss) {
         fx.sync(
             std::iter::once(Shown {
+                tick: 0,
+                body: None,
+                fraction: 1.,
                 boss,
                 pos: boss.pos,
                 aim: boss.aim,
@@ -1454,7 +1458,7 @@ mod tests {
                 sync(&mut fx, &boss);
                 fx.update(1. / 60.);
                 let cues = fx.take_cues();
-                landed |= cues.iter().any(|(cue, _)| *cue == RailCue::Backlash);
+                landed |= cues.iter().any(|(cue, _)| *cue == BossCue::Backlash);
             }
             assert!(landed, "{style:?} reached the boss");
             assert!(fx.clashes.is_empty(), "{style:?}");
@@ -1468,7 +1472,11 @@ mod tests {
     #[test]
     fn a_weaker_gun_makes_a_smaller_clash() {
         let sizes = ClashStyle::ALL.map(size_of);
-        assert!(sizes.windows(2).all(|pair| pair[0] > pair[1]), "{sizes:?}");
+        // Rail recoil is now larger than the sustained beam's clash.
+        assert!(
+            sizes[1] > sizes[0] && sizes[0] > sizes[2] && sizes[2] > sizes[3],
+            "{sizes:?}"
+        );
         let shocks = ClashStyle::ALL.map(shocks_of);
         assert!(
             shocks.windows(2).all(|pair| pair[0] > pair[1]),
@@ -1547,7 +1555,7 @@ mod tests {
         assert!(
             fx.take_cues()
                 .iter()
-                .any(|(cue, _)| *cue == RailCue::ClashFire)
+                .any(|(cue, _)| *cue == BossCue::ClashFire)
         );
         for _ in 0..120 {
             // The game reapplies this setting before every update.
@@ -1594,6 +1602,9 @@ mod tests {
         other_rail.pos += V2::new(-1800., 900.);
         fx.sync(
             [&rail, &siege, &other_rail].into_iter().map(|boss| Shown {
+                tick: 0,
+                body: None,
+                fraction: 1.,
                 boss,
                 pos: boss.pos,
                 aim: boss.aim,

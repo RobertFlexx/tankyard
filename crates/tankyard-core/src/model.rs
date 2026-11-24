@@ -681,6 +681,9 @@ pub enum BossKind {
     /// New in 2.0.5. It stays last so every kind before it keeps its number,
     /// and it never goes out on the wire under its own: see [`Self::from_wire`].
     Railgunner,
+    /// The secret encounter, sent under its own kind in protocol 35.
+    /// See [`Self::SECRET`] for the separate encounter pool.
+    Sunderworm,
 }
 impl BossKind {
     pub const ALL: [Self; 15] = [
@@ -718,6 +721,32 @@ impl BossKind {
         Self::Skirmisher,
         Self::Trapper,
     ];
+    /// Bosses no menu or list shows. They are still found by their ids, so
+    /// saved lineups, maps and mods can bring them.
+    pub const SECRET: [Self; 1] = [Self::Sunderworm];
+    /// Every kind there is, the secret ones last.
+    pub const EVERY: [Self; 16] = [
+        Self::Sentinel,
+        Self::Prism,
+        Self::Foundry,
+        Self::Tempest,
+        Self::Bastion,
+        Self::Eclipse,
+        Self::Guardian,
+        Self::Summoner,
+        Self::Defender,
+        Self::FallenOverlord,
+        Self::FallenBooster,
+        Self::SiegeEngine,
+        Self::Skirmisher,
+        Self::Trapper,
+        Self::Railgunner,
+        Self::Sunderworm,
+    ];
+    /// The kind numbered `index`, as boss events carry it.
+    pub fn from_index(index: u32) -> Option<Self> {
+        Self::EVERY.get(index as usize).copied()
+    }
     pub fn name(self) -> &'static str {
         match self {
             Self::Sentinel => "Sentinel",
@@ -735,6 +764,7 @@ impl BossKind {
             Self::Skirmisher => "Skirmisher",
             Self::Trapper => "Trapper",
             Self::Railgunner => "Railgunner",
+            Self::Sunderworm => "Sunderworm",
         }
     }
     /// The lowercase id maps and commands use, such as `fallen_overlord`.
@@ -755,10 +785,11 @@ impl BossKind {
             Self::Skirmisher => "skirmisher",
             Self::Trapper => "trapper",
             Self::Railgunner => "railgunner",
+            Self::Sunderworm => "sunderworm",
         }
     }
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|kind| kind.id() == id)
+        Self::EVERY.into_iter().find(|kind| kind.id() == id)
     }
     pub fn radius(self) -> f32 {
         match self {
@@ -773,6 +804,7 @@ impl BossKind {
             Self::Skirmisher => 72.,
             Self::Trapper => 88.,
             Self::Railgunner => RAIL_RADIUS,
+            Self::Sunderworm => crate::sunderworm::WORM_RADIUS,
             _ => 90.,
         }
     }
@@ -782,6 +814,7 @@ impl BossKind {
             Self::Summoner => 28,
             Self::FallenOverlord => 16,
             Self::Foundry => 12,
+            Self::Sunderworm => crate::sunderworm::WORM_BROOD,
             _ => 0,
         }
     }
@@ -789,6 +822,7 @@ impl BossKind {
     /// need less of it to last as long.
     pub fn toughness(self) -> f32 {
         match self {
+            Self::Sunderworm => 7.5,
             Self::Railgunner => 3.,
             Self::Bastion | Self::Defender | Self::SiegeEngine => 1.2,
             Self::Sentinel | Self::Prism | Self::Eclipse => 1.1,
@@ -828,7 +862,12 @@ impl BossKind {
     }
     /// How many usual boss rewards defeating it is worth.
     pub fn bounty(self) -> u32 {
-        if self == Self::Railgunner { 3 } else { 1 }
+        match self {
+            Self::Railgunner => 3,
+            // Paid out twice, once for each half.
+            Self::Sunderworm => 4,
+            _ => 1,
+        }
     }
 }
 /// Damage that destroys any tank outright, as the Siege Engine's cannon
@@ -901,9 +940,54 @@ pub struct Boss {
     /// A parried strike on its way back to it. Host only, like the above.
     #[serde(skip)]
     pub clash: crate::clash::ClashWork,
+    /// Who it is after and why, and what it has used lately. Host only.
+    #[serde(skip)]
+    pub mind: crate::boss_brain::Mind,
+    /// A Sunderworm's body and what it is doing; none for any other boss.
+    /// Host only; snapshots carry its compact collision rings separately.
+    #[serde(skip)]
+    pub worm: Option<Box<crate::sunderworm::WormWork>>,
 }
-/// Protocol 34 has no number for the Railgunner, so it goes out as a Siege
-/// Engine. Its size, which no other boss has, turns it back on arrival.
+
+impl Boss {
+    /// A viewer never needs the host's brain, path history or attack work.
+    /// Avoid cloning those buffers for every player receiving a snapshot.
+    pub(crate) fn for_viewer(&self) -> Self {
+        Self {
+            id: self.id,
+            pos: self.pos,
+            vel: self.vel,
+            radius: self.radius,
+            health: self.health,
+            max_health: self.max_health,
+            kind: self.kind,
+            phase: self.phase,
+            timer: self.timer,
+            aim: self.aim,
+            team: self.team,
+            mothership: self.mothership,
+            target: self.target,
+            goal: self.goal,
+            tactic: self.tactic,
+            tactic_time: self.tactic_time,
+            last_attacker: self.last_attacker,
+            arrival: self.arrival,
+            attack_timer: self.attack_timer,
+            attack: self.attack,
+            attack_windup: self.attack_windup,
+            dodge: V2::ZERO,
+            read: V2::ZERO,
+            leg: V2::ZERO,
+            leg_time: 0.,
+            rail: Default::default(),
+            clash: Default::default(),
+            mind: Default::default(),
+            worm: None,
+        }
+    }
+}
+/// Keep the Railgunner's published wire representation. The Sunderworm
+/// arrived with protocol 35 and uses its own kind, with no size-based alias.
 fn boss_kind_on_the_wire<S: serde::Serializer>(kind: &BossKind, out: S) -> Result<S::Ok, S::Error> {
     match kind {
         BossKind::Railgunner => BossKind::SiegeEngine,
@@ -1081,6 +1165,8 @@ pub struct Snapshot {
     pub rifts: Vec<Rift>,
     #[serde(default)]
     pub rift_shots: Vec<RiftShot>,
+    /// Authoritative worm segments, bounded by the arena's boss count.
+    pub worm_bodies: Vec<crate::sunderworm::WormBody>,
 }
 
 /// Strip a distant opponent down to what the leaderboard and minimap need.

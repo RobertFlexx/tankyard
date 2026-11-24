@@ -198,7 +198,7 @@ pub struct Effects {
     pub boss_defeat: Option<(String, EntityId, f32)>,
     /// Bosses seen in recent snapshots, by ID, so a kill can be recognized
     /// after the boss itself is gone.
-    bosses: HashMap<EntityId, &'static str>,
+    bosses: HashMap<EntityId, (&'static str, tankyard_core::BossKind)>,
     /// Rifts' ages and time left, run on between snapshots.
     pub rift_clocks: crate::rifts::Clocks,
     /// How bosses and their rounds are being drawn from frame to frame.
@@ -264,7 +264,14 @@ impl Effects {
                 .retain(|id, _| bosses.iter().any(|b| b.id == *id));
         }
         for boss in bosses {
-            self.bosses.insert(boss.id, boss.kind.name());
+            self.bosses.insert(
+                boss.id,
+                (
+                    boss.worm_part()
+                        .map_or(boss.kind.name(), |part| part.name()),
+                    boss.kind,
+                ),
+            );
         }
     }
     /// Run the rifts in this snapshot on by `dt`.
@@ -297,7 +304,7 @@ impl Effects {
             }
             sounds.push(event.clone());
             if matches!(event.kind, EventKind::BossSpawn)
-                && let Some(&kind) = tankyard_core::BossKind::ALL.get(event.value as usize)
+                && let Some(kind) = tankyard_core::BossKind::from_index(event.value)
             {
                 self.boss_arrival = Some((kind, 5.));
             }
@@ -306,9 +313,21 @@ impl Effects {
                     self.recoil.insert(event.subject, 0.10);
                     (CYAN, 0, false)
                 }
+                EventKind::Impact if self.boss_fx.is_worm(event.subject) => {
+                    // It bleeds where it's hit, rather than sparking.
+                    self.boss_fx.worm_hit(event.pos, event.value as f32);
+                    (AMBER, 0, false)
+                }
                 EventKind::Impact => {
                     self.flashes.insert(event.subject, 0.12);
                     (AMBER, 2, false)
+                }
+                EventKind::Destroy
+                    if event.value == tankyard_core::BOSS_REWARD
+                        && self.boss_fx.is_worm(event.subject) =>
+                {
+                    self.boss_fx.worm_died(event.subject);
+                    (RED, 0, false)
                 }
                 EventKind::Destroy => (RED, 6, false),
                 EventKind::Kill => (RED, 0, false),
@@ -329,6 +348,9 @@ impl Effects {
                 },
                 EventKind::BodyParry => (AMBER, 30, true),
                 EventKind::StasisRelease => (CYAN, 24, true),
+                // The worm's physical breach and blood are drawn by its own
+                // effect system; don't add a generic glowing red blast too.
+                EventKind::BossAttack if self.boss_fx.is_worm(event.subject) => (RED, 0, false),
                 // Axiom's attacks each have a flare of their own.
                 EventKind::BossAttack => {
                     match self
@@ -460,8 +482,10 @@ impl Effects {
             // A boss is also the subject of each explosion it sets off; only
             // its own death carries the reward.
             if matches!(event.kind, EventKind::Destroy)
-                && event.value == tankyard_core::BOSS_REWARD
-                && self.bosses.contains_key(&event.subject)
+                && self.bosses.get(&event.subject).is_some_and(|&(_, kind)| {
+                    kind != tankyard_core::BossKind::Sunderworm
+                        && event.value == tankyard_core::BOSS_REWARD
+                })
             {
                 self.boss_fx.defeated(event.subject, event.pos);
             }
@@ -480,7 +504,7 @@ impl Effects {
                     .as_ref()
                     .and_then(|kill| self.bosses.get(&kill.victim))
             {
-                self.boss_defeat = Some(((*boss).to_owned(), event.subject, 5.));
+                self.boss_defeat = Some((boss.0.to_owned(), event.subject, 5.));
                 self.boss_arrival = None;
             }
             if matches!(event.kind, EventKind::Kill)
@@ -852,6 +876,9 @@ impl Effects {
             }
         }
         self.shake *= (-8.0 * dt).exp();
+        // A worm shakes the ground harder than any blast, and for as long
+        // as it is moving under it.
+        self.shake = self.shake.max(self.boss_fx.worm_quake());
         let (strength, left, total) = self.map_shake;
         if left > 0. {
             // Full strength until the last third, then easing away. Players'
@@ -1018,42 +1045,74 @@ mod tests {
 
     #[test]
     fn only_a_bosss_death_sets_off_its_defeat_blast() {
-        let mut world = tankyard_core::World::new(
-            tankyard_core::WorldConfig {
-                target_count: 0,
-                spawn_protection: 0.,
-                ..Default::default()
-            },
-            tankyard_content::Content::builtin(),
-        );
-        world.add_player("Pilot", false);
-        assert_ne!(world.spawn_boss(tankyard_core::BossKind::Foundry), 0);
-        let boss = world.bosses.remove(0);
-        let destroy = |tick, value| GameEvent {
-            tick,
-            kind: EventKind::Destroy,
-            pos: V2::ZERO,
-            subject: boss.id,
-            value,
-            team: 0,
-            elimination: None,
-        };
-        let mut effects = Effects::new();
-        effects.note_bosses(std::slice::from_ref(&boss));
-        effects.boss_fx.sync(
-            std::iter::once(crate::boss_fx::Shown {
-                boss: &boss,
-                pos: boss.pos,
-                aim: boss.aim,
-                color: WHITE,
-            }),
-            1. / 60.,
-        );
-        // Its own explosive going off has it as the subject too.
-        effects.ingest(&[destroy(5, 80)], (1, 0), 1.);
-        assert!(effects.boss_fx.is_boss(boss.id), "still alive and tracked");
-        effects.ingest(&[destroy(6, tankyard_core::BOSS_REWARD)], (1, 0), 1.);
-        assert!(!effects.boss_fx.is_boss(boss.id), "its death ends it");
+        for kind in [
+            tankyard_core::BossKind::Foundry,
+            tankyard_core::BossKind::Railgunner,
+            tankyard_core::BossKind::Sunderworm,
+        ] {
+            let mut world = tankyard_core::World::new(
+                tankyard_core::WorldConfig {
+                    target_count: 0,
+                    spawn_protection: 0.,
+                    ..Default::default()
+                },
+                tankyard_content::Content::builtin(),
+            );
+            world.add_player("Pilot", false);
+            assert_ne!(world.spawn_boss(kind), 0);
+            let mut boss = world.bosses.remove(0);
+            if kind == tankyard_core::BossKind::Sunderworm {
+                boss.radius = tankyard_core::sunderworm::WORM_FRONT_RADIUS;
+            }
+            let destroy = |tick, value| GameEvent {
+                tick,
+                kind: EventKind::Destroy,
+                pos: V2::ZERO,
+                subject: boss.id,
+                value,
+                team: 0,
+                elimination: None,
+            };
+            let mut effects = Effects::new();
+            effects.note_bosses(std::slice::from_ref(&boss));
+            effects.boss_fx.sync(
+                std::iter::once(crate::boss_fx::Shown {
+                    tick: 0,
+                    body: None,
+                    fraction: 1.,
+                    boss: &boss,
+                    pos: boss.pos,
+                    aim: boss.aim,
+                    color: WHITE,
+                }),
+                1. / 60.,
+            );
+            effects.boss_fx.take_cues();
+            // Its own explosive going off has it as the subject too.
+            effects.ingest(&[destroy(5, 80)], (1, 0), 1.);
+            assert!(effects.boss_fx.is_boss(boss.id), "still alive and tracked");
+            assert!(
+                !effects
+                    .boss_fx
+                    .take_cues()
+                    .iter()
+                    .any(|(cue, _)| *cue == crate::map_sounds::BossCue::WormDeath)
+            );
+            effects.ingest(&[destroy(6, tankyard_core::BOSS_REWARD)], (1, 0), 1.);
+            if kind == tankyard_core::BossKind::Sunderworm {
+                assert_eq!(
+                    effects
+                        .boss_fx
+                        .take_cues()
+                        .iter()
+                        .filter(|(cue, _)| *cue == crate::map_sounds::BossCue::WormDeath)
+                        .count(),
+                    1
+                );
+            } else {
+                assert!(!effects.boss_fx.is_boss(boss.id), "its death ends it");
+            }
+        }
     }
 
     #[test]

@@ -992,6 +992,7 @@ impl MapLogic {
                 LogicInput::Defeated(kind) => {
                     let number = tankyard_content::BOSS_IDS
                         .iter()
+                        .chain(&tankyard_content::SECRET_BOSS_IDS)
                         .position(|&id| id == kind.id())
                         .map_or(0, |i| i + 1);
                     for &index in &self.listeners.defeated {
@@ -3578,6 +3579,10 @@ mod tests {
     #[test]
     fn map_boss_ids_match_the_simulation_catalog() {
         assert_eq!(BossKind::ALL.map(BossKind::id), tankyard_content::BOSS_IDS);
+        assert_eq!(
+            BossKind::SECRET.map(BossKind::id),
+            tankyard_content::SECRET_BOSS_IDS
+        );
     }
 
     #[test]

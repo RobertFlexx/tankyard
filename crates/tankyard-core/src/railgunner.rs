@@ -129,7 +129,9 @@ impl BossKind {
     /// The kind a snapshot read as `self` really is, for a hull of `radius`.
     /// The Railgunner goes out as a Siege Engine of a size no other boss has.
     pub fn from_wire(self, radius: f32) -> Self {
-        if self == Self::SiegeEngine && radius == RAIL_RADIUS {
+        if self != Self::SiegeEngine {
+            self
+        } else if radius == RAIL_RADIUS {
             Self::Railgunner
         } else {
             self
@@ -146,6 +148,9 @@ pub fn is_beam_round(kind: ProjectileKind, vel: V2) -> bool {
 /// Which boss a random event brings: `rare` decides whether it's the
 /// Railgunner, and `pick` which of the rest it is otherwise.
 pub(crate) fn natural_boss(rare: f32, pick: f32, strength: f32) -> BossKind {
+    if let Some(kind) = crate::sunderworm::rare_boss(rare, strength) {
+        return kind;
+    }
     if rare < RAILGUNNER_ODDS && strength >= RAILGUNNER_STRENGTH {
         return BossKind::Railgunner;
     }
@@ -830,8 +835,11 @@ mod tests {
 
     #[test]
     fn it_shows_up_rarely_and_never_for_a_lobby_of_beginners() {
-        assert_eq!(natural_boss(0., 0.5, 8.), BossKind::Railgunner);
-        assert_ne!(natural_boss(0., 0.5, 0.9), BossKind::Railgunner);
+        // The very bottom of the roll belongs to something rarer still.
+        let rare = crate::sunderworm::WORM_ODDS * 2.;
+        assert_eq!(natural_boss(0., 0.5, 8.), BossKind::Sunderworm);
+        assert_eq!(natural_boss(rare, 0.5, 8.), BossKind::Railgunner);
+        assert_ne!(natural_boss(rare, 0.5, 0.9), BossKind::Railgunner);
         assert_ne!(natural_boss(RAILGUNNER_ODDS, 0.5, 8.), BossKind::Railgunner);
         for n in 0..=100 {
             let kind = natural_boss(0.9, n as f32 / 100., 8.);

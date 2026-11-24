@@ -24,7 +24,7 @@ Boss arrivals use a reliable, deduplicated event: an original 48 kHz alarm, a br
 
 Every boss is drawn in one style: an outlined hull, darker armor plates, grey guns where its rounds leave, and one bright core that whitens as a special attack charges. Tank Yard's bosses use their own sizes, damage values, phases, spawn schedule and combat rules.
 
-Bosses lead moving targets, prefer recent attackers, maintain target continuity, observe line of sight, avoid approaching projectiles, manage distance while replenishing swarms, steer around walls, and respect the current arena border. Drone populations and projectile queues are capped. Custom charge attacks show a directional warning before accelerating.
+Bosses weigh distance, recent damage, movement, nearby allies and the targets other bosses are chasing. Each species favors different situations and varies its choices without constantly switching targets. They lead moving targets, observe line of sight, dodge approaching projectiles, manage distance while replenishing swarms, steer around walls, and respect the current arena border. Drone populations and projectile queues are capped. Custom charge attacks show a directional warning before accelerating.
 
 Open arena modes animate their border around a fixed coordinate system. Both humans and bots count, including participants waiting to respawn, so deaths do not pulse the map size. Two or fewer participants use 65% of the configured width/height; the border smoothly grows to the full configured dimensions by 24 participants. Smaller configured maps retain at least 900 × 700 playable units. Each border edge moves at most 24 units per second with damped easing; the client also interpolates between network updates. Shape counts follow playable area. Team homes/objectives move with the border, while fixed walls stay in place. Hull constraints resolve a shrinking border pinching a tank against a wall. Maze, Survival, Sandbox, Boss Rush, and Co-op retain their designed layouts or elimination boundaries. Server owners can set `world.dynamic_arena = false`.
 
@@ -62,9 +62,55 @@ The **Siege Engine's cannon** winds up for 1.5 seconds, drawing a red line to th
 
 **Railgunner** is the one that picks you because you thought you were safe. It hunts the furthest player it can see, leads them, and locks its aim for the last 0.55 seconds of each warning. Its barrel tells you what's coming: a rail shot barely moves it, while the plasma beam splits the armor, spreads the coils and unfolds the muzzle claws. After the beam it vents for about two seconds with its barrel open and takes 40% more damage. It's poor at close range, so getting under the gun is usually the right answer.
 
+**Parrying Railgunner** requires facing the incoming rail or plasma stream and catching it within 75 milliseconds of starting the parry, inside a roughly 49° cone either side of your aim. Its smaller shots use the usual parry window. Other bosses retain their normal parry rules.
+
 **Parrying a heavy shot** starts a clash. The strike runs back along the attack and takes a share of the boss's full health: 10% for the beam, 9% for Railgunner's cannon, 7% for Siege Engine and 4% for Bastion. Railgunner's lighter echo round is worth half a cannon clash, and bots deal 40% of a player's amount. One volley can only clash once.
 
 Bosses aim where you're going, not where you were: they work out where a round will meet a moving tank. They drive in straight lines between decisions and would rather finish a wounded target than start on a healthy one. Running in a straight line is how you get hit. Changing direction is the counterplay.
+
+## Boss overhaul
+
+Each ordinary boss now chooses between three special attacks according to range,
+the crowd around it and the way its target moves. Later phases shorten its pauses
+and increase the pressure. Warnings still precede dangerous attacks, and cover,
+sharp changes of direction and well-timed defensive abilities remain useful.
+
+The sound designs layer foley and vocal performances with their own attacks,
+weight and room tails. Rail, plasma, burning shells and steel slugs have distinct
+parry cues. Volume changes also apply to effects already playing. Exhaust keeps a
+steady direction through stops and turns, with finer curves close to the camera.
+Reduced Motion suppresses decorative shake, flashes and moving trails.
+
+<details>
+<summary>Secret encounter: Sunderworm</summary>
+
+Sunderworm is a long, segmented creature with a three-second ground-shaking
+entrance. Cracks, dust and thrown floor tiles mark where it is surfacing. Its
+body can be hit or collide with tanks only where it is above ground. Watch the
+lunge lane and eruption ring; retreat sideways before the jaws strike or the
+floor opens.
+
+Five phases introduce bone fans, bile, burrowing, larvae, spine waves and tighter
+pursuit. At 16% health it tears into a head and tail, which fight independently.
+Both must be destroyed. A surviving half becomes more aggressive. Its boss bar
+shows phase boundaries and warns before lunges, eruptions and the split.
+
+The jaws fold back to expose fixed, hooked teeth and a contracting throat. Torn
+ends bleed in streams that break into falling drops and wet pools. Blood, flesh,
+dust and thrown tiles use the arena effects renderer and its lighting; they
+follow the Effects setting. Attack warnings remain visible with effects off.
+
+An eligible natural boss arrival has about a one-in-two-million chance of being
+Sunderworm, and requires an arena worth three full-level tanks. The Boss Rush
+roster has a one-in-24,000 roll when opened. Once selected, it stays in your saved
+lineup. Hosts may explicitly choose `sunderworm` in a dedicated-server lineup or
+a map Boss trigger. A local pack can keep the card available with
+`"menu": { "bosses": ["sunderworm"] }`.
+
+The overhaul uses **protocol 35**. Update the host and its players together.
+Snapshots carry its real body positions, including when joining mid-fight.
+
+</details>
 
 ## v0.2.16 combat update
 

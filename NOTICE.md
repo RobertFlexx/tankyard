@@ -20,8 +20,10 @@ SVG sources, rasterized HUD copies, and full license are in
 
 Proximity voice uses Opus 1.6.1 through the `opus` and `opusic-sys` crates.
 The bundled codec's full BSD notice is in [licenses/Opus.txt](licenses/Opus.txt)
-and is included in release archives. The boss arrival alarm is original audio,
-reproducible with `scripts/generate_boss_alarm.py`, covered by this project's license.
+and is included in release archives. Combat, map and rift cues use original Tank Yard mixes of CC0 foley and vocal
+recordings by rubberduck, bart and Brian MacIntosh (BMacZero). Exact sources,
+checksums and processing are in [the foley credits](assets/audio/foley/README.md);
+the full CC0 dedication is in [licenses/Foley-CC0.txt](licenses/Foley-CC0.txt).
 Boss models are original procedural geometry; behavior references are documented
 in [bosses and learning](docs/bosses-and-learning.md).
 

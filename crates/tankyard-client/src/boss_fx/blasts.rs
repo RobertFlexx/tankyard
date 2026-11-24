@@ -228,6 +228,8 @@ fn muzzle(light: &mut Emission, p: Vec2, d: Vec2, burst: &Burst, s: f32, t: f32,
                 alpha(light.hot(AXIOM_TEAL, 0.4), 0.7 * fade * fade * level),
             );
         }
+        // Nothing the worm throws burns.
+        Fuel::Flesh => {}
         Fuel::Plasma | Fuel::Fire | Fuel::Ion => {
             for side in [-1., 1.] {
                 let petal = (d + n * side * 0.6).normalize_or_zero();

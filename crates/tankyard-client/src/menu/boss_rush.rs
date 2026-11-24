@@ -36,9 +36,9 @@ fn moved(lineup: &[BossKind], index: usize, later: bool) -> Vec<BossKind> {
 
 /// The lineup cut or grown to `count`, growing with bosses not yet in it.
 fn resized(lineup: &[BossKind], count: usize) -> Vec<BossKind> {
-    let count = count.clamp(1, BossKind::ALL.len());
+    let count = count.clamp(1, BossKind::EVERY.len());
     let mut next: Vec<_> = lineup.iter().copied().take(count).collect();
-    for kind in BossKind::ALL {
+    for kind in BossKind::EVERY {
         if next.len() >= count {
             break;
         }
@@ -80,12 +80,47 @@ pub(super) fn lineup_from_ids(ids: &[String]) -> Vec<BossKind> {
     stored(
         ids.iter()
             .filter_map(|id| BossKind::from_id(id))
-            .take(BossKind::ALL.len())
+            .take(BossKind::EVERY.len())
             .collect(),
     )
 }
 
 impl Menu {
+    pub(super) fn roll_rush(&mut self, page: Page) {
+        if page == Page::BossRush {
+            // Cosmetic rolls must not restart from the same seed on every
+            // launch or consume the deterministic match random stream.
+            use ring::rand::SecureRandom;
+            let rng = ring::rand::SystemRandom::new();
+            self.rush_rare = false;
+            loop {
+                let mut bytes = [0; 4];
+                if rng.fill(&mut bytes).is_err() {
+                    break;
+                }
+                let value = u32::from_le_bytes(bytes);
+                let limit = u32::MAX - u32::MAX % 24_000;
+                if value < limit {
+                    self.rush_rare = value.is_multiple_of(24_000);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn rush_roster(&self) -> Vec<BossKind> {
+        let mut roster = BossKind::ALL.to_vec();
+        for kind in BossKind::SECRET {
+            if self.rush_rare
+                || self.boss_rush.contains(&kind)
+                || self.style.bosses.iter().any(|id| id == kind.id())
+            {
+                roster.push(kind);
+            }
+        }
+        roster
+    }
+
     /// The lineup as this page shows it. Cleared, it shows nothing yet.
     fn shown_rush(&self) -> &[BossKind] {
         if self.rush_blank {
@@ -115,7 +150,10 @@ impl Menu {
         match self.boss_rush.as_slice() {
             [] => "Classic six".to_owned(),
             [only] => format!("Just the {}", only.name()),
-            lineup if lineup.len() == BossKind::ALL.len() => {
+            lineup
+                if lineup.len() == BossKind::ALL.len()
+                    && !lineup.iter().any(|boss| BossKind::SECRET.contains(boss)) =>
+            {
                 format!("All {} bosses", lineup.len())
             }
             lineup => format!("{} bosses, {} first", lineup.len(), lineup[0].name()),
@@ -138,6 +176,7 @@ impl Menu {
         self.rush_presets(settings, x + w, y, s);
 
         let shown = self.shown_rush().to_vec();
+        let roster = self.rush_roster();
         let top = y + 42. * s;
         label("LINEUP", x, top + 18. * s, 13. * s, muted_color());
         let step_x = x + 70. * s;
@@ -161,10 +200,14 @@ impl Menu {
             Rect::new(step_x + 74. * s, top, 30. * s, 26. * s),
             "+",
             false,
-            shown.len() < BossKind::ALL.len(),
+            shown.len() < roster.len(),
             s * 0.8,
         ) {
-            self.set_rush(settings, resized(&shown, shown.len() + 1));
+            let mut lineup = shown.clone();
+            if let Some(&kind) = roster.iter().find(|kind| !lineup.contains(kind)) {
+                lineup.push(kind);
+            }
+            self.set_rush(settings, lineup);
         }
         label(
             &fitted_label(&self.rush_note(&shown), 13. * s, w - 200. * s),
@@ -223,7 +266,7 @@ impl Menu {
         let card_h = 66. * s;
         let card_top = roster_top + 18. * s;
         let time = crate::accessibility::motion_time(get_time() as f32);
-        for (index, kind) in BossKind::ALL.into_iter().enumerate() {
+        for (index, kind) in roster.into_iter().enumerate() {
             let card = Rect::new(
                 x + (index % columns) as f32 * (chip_w + gap),
                 card_top + (index / columns) as f32 * (card_h + gap),
@@ -350,7 +393,7 @@ impl Menu {
             "Nothing picked yet. Until you do, a rush plays the classic six.".to_owned()
         } else if self.boss_rush.is_empty() {
             "The classic six, gentlest first.".to_owned()
-        } else if shown.len() == BossKind::ALL.len() {
+        } else if shown == BossKind::ALL {
             "Every boss in the yard. Bring snacks.".to_owned()
         } else {
             let last = shown.last().map_or("", |kind| kind.name());
@@ -390,7 +433,7 @@ mod tests {
         assert_eq!(grown[..3], lineup);
         assert_eq!(grown[3], Sentinel);
         let full = resized(&lineup, 99);
-        assert_eq!(full.len(), BossKind::ALL.len());
+        assert_eq!(full.len(), BossKind::EVERY.len());
         assert!(BossKind::ALL.iter().all(|kind| full.contains(kind)));
     }
 
@@ -422,6 +465,24 @@ mod tests {
         assert!(lineup_from_ids(&[]).is_empty());
         let classic: Vec<_> = CLASSIC_RUSH.iter().map(|k| k.id().to_owned()).collect();
         assert!(lineup_from_ids(&classic).is_empty());
+    }
+
+    #[test]
+    fn secret_cards_follow_the_visit_pack_or_saved_lineup() {
+        let mut menu = Menu::new();
+        assert!(!menu.rush_roster().contains(&BossKind::Sunderworm));
+        menu.rush_rare = true;
+        assert!(menu.rush_roster().contains(&BossKind::Sunderworm));
+        menu.rush_rare = false;
+        menu.style.bosses.push("sunderworm".into());
+        assert!(menu.rush_roster().contains(&BossKind::Sunderworm));
+        menu.style.bosses.clear();
+        menu.boss_rush = vec![BossKind::Sunderworm];
+        assert!(menu.rush_roster().contains(&BossKind::Sunderworm));
+        assert_eq!(
+            lineup_from_ids(&["sunderworm".into()]),
+            [BossKind::Sunderworm]
+        );
     }
 
     #[test]

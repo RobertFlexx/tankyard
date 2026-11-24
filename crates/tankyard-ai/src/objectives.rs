@@ -217,22 +217,22 @@ fn boss_hunt(world: &World, tank: &Tank, priority: f32) -> Option<(f32, V2, BotS
         .bosses
         .iter()
         .filter(|boss| boss.health > 0. && hostile(tank.team, boss.team))
-        .min_by(|a, b| {
-            tank.pos
-                .distance(a.pos)
-                .total_cmp(&tank.pos.distance(b.pos))
-        })
         .map(|boss| {
-            let direction = (tank.pos - boss.pos).normalized();
+            boss.nearest_part(tank.pos)
+                .unwrap_or((boss.pos, boss.radius))
+        })
+        .min_by(|a, b| (tank.pos.distance(a.0) - a.1).total_cmp(&(tank.pos.distance(b.0) - b.1)))
+        .map(|(position, radius)| {
+            let direction = (tank.pos - position).normalized();
             let angle = (noise(tank.id) - 0.5) * 0.65;
-            let offset = direction.rotate(angle) * (boss.radius + 220.);
+            let offset = direction.rotate(angle) * (radius + 220.);
             (
-                if tank.pos.distance(boss.pos) > 400. {
+                if tank.pos.distance(position) > radius + 250. {
                     priority
                 } else {
                     0.15
                 },
-                boss.pos + offset,
+                position + offset,
                 BotState::BossEngagement,
             )
         })

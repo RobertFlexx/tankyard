@@ -412,7 +412,7 @@ impl Module {
 /// Bosses named by scripts and JSON hooks, by display or enum name.
 pub fn boss_by_name(name: &str) -> Option<BossKind> {
     let wanted = name.trim().to_ascii_lowercase().replace([' ', '_'], "");
-    BossKind::ALL.into_iter().find(|kind| {
+    BossKind::EVERY.into_iter().find(|kind| {
         kind.name().to_ascii_lowercase().replace(' ', "") == wanted
             || format!("{kind:?}").to_ascii_lowercase() == wanted
     })

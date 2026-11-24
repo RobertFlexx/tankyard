@@ -2,6 +2,7 @@
 pub mod administration;
 mod arena;
 mod arena_size;
+mod boss_brain;
 mod bosses;
 mod clash;
 #[cfg(test)]
@@ -42,6 +43,10 @@ pub use rifts::{
     MAX_RIFTS, RIFT_ARMED, RIFT_CLOSING, RIFT_FORMING, RIFT_RADIUS, RIFT_RANGE, RIFT_SECONDS,
     RIFT_SHOT_SPEED, RIFT_SPACING,
 };
+pub use sunderworm::{
+    ERUPT_RADIUS, HALF_HEALTH, RISE_SECONDS, WORM_PHASES, WORM_RADIUS, WORM_SPLIT, WormAct,
+    WormPart, WormPath, WormSign,
+};
 pub mod physics;
 pub mod progression;
 #[cfg(test)]
@@ -49,6 +54,7 @@ mod scenarios;
 mod special_modes;
 mod spectating;
 mod stasis;
+pub mod sunderworm;
 mod team_bases;
 pub use stasis::{STASIS_RADIUS, STASIS_SECONDS};
 pub use team_bases::{BASE_ALERT_DISTANCE, BASE_GUARD_OWNER, base_guard_owner, base_guard_team};

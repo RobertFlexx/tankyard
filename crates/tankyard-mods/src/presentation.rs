@@ -91,6 +91,8 @@ pub struct MenuStyle {
     pub background: Option<String>,
     /// The drifting arena behind the main menu; `false` hides it.
     pub ambient: Option<bool>,
+    /// Extra boss cards to keep available in the local Boss Rush roster.
+    pub bosses: Vec<String>,
 }
 
 /// Interface colors. Unset colors keep the player's light or dark theme.
@@ -137,6 +139,11 @@ impl Presentation {
         take!(self.menu, title, subtitle, showcase, background, ambient);
         self.menu.splashes.extend(menu.splashes);
         self.menu.splashes.truncate(MAX_SPLASHES);
+        for boss in menu.bosses {
+            if !self.menu.bosses.contains(&boss) && self.menu.bosses.len() < 16 {
+                self.menu.bosses.push(boss);
+            }
+        }
         let theme = later.theme;
         macro_rules! color {
             ($($field:ident),+) => {
@@ -162,6 +169,14 @@ impl Presentation {
         };
         text(&self.menu.title, 48, "title")?;
         text(&self.menu.subtitle, 120, "subtitle")?;
+        if self.menu.bosses.len() > 16
+            || self.menu.bosses.iter().any(|id| {
+                !tankyard_content::BOSS_IDS.contains(&id.as_str())
+                    && !tankyard_content::SECRET_BOSS_IDS.contains(&id.as_str())
+            })
+        {
+            return Err("menu bosses must contain at most 16 known boss ids".into());
+        }
         if self.menu.splashes.len() > MAX_SPLASHES {
             return Err(format!("at most {MAX_SPLASHES} menu splashes"));
         }

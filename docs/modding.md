@@ -625,6 +625,14 @@ tankyard.text({ ["Play offline"] = "Solo run" })  -- exact interface text
 | `text`, `muted` | main and secondary text |
 | `highlight` | headings, tags and splash text |
 
+`menu.bosses` is an optional list of up to 16 boss ids whose cards should stay
+available in the local Boss Rush roster. For example,
+`"menu": { "bosses": ["sunderworm"] }` makes that encounter selectable every
+visit. It does not change natural spawn odds or add it to the default lineup.
+Enabled packs combine their lists; disabling a pack removes its additions unless
+a boss is already selected in the saved lineup. This setting requires the
+boss-overhaul build (protocol 35).
+
 Data packs use the same fields as `"menu"`, `"theme"` and `"text"` objects in `mod.json`. Later packs win field by field, splashes add up (64 at most) and text replacements merge (256 at most). Unset theme colors keep the player's light or dark theme.
 
 ## Sandbox and limits

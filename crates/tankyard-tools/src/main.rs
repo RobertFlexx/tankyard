@@ -732,18 +732,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     for tick in 0..ticks {
                         ai.update(&mut world);
                         world.step();
-                        if !world.bosses.iter().any(|b| b.id == boss) {
+                        // A Sunderworm fights on in two halves; the fight is
+                        // over when nothing of it is left.
+                        if world.bosses.is_empty() {
                             lasted = tick;
                             defeated += 1;
                             break;
                         }
                     }
+                    let _ = boss;
                     time += lasted as f32 * DT;
                     left += world
                         .bosses
                         .iter()
-                        .find(|b| b.id == boss)
-                        .map_or(0., |b| b.health / b.max_health);
+                        .map(|b| b.health / b.max_health)
+                        .fold(0., f32::max);
                     deaths += world.tanks.iter().map(|tank| tank.deaths).sum::<u32>() - before;
                 }
                 let rounds = rounds.max(1) as f32;

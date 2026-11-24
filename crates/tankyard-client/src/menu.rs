@@ -144,6 +144,7 @@ pub struct Menu {
     pub boss_rush: Vec<tankyard_core::BossKind>,
     /// The lineup page was cleared and nothing has been picked since.
     rush_blank: bool,
+    rush_rare: bool,
     /// A map saved in the editor that hosted games play on instead of the
     /// arena list's choice.
     host_map: Option<host_map::SavedMap>,
@@ -255,6 +256,7 @@ impl Menu {
             maps,
             boss_rush: Vec::new(),
             rush_blank: false,
+            rush_rare: false,
             host_map: None,
             host_source: Default::default(),
             saved_maps: None,
@@ -316,6 +318,7 @@ impl Menu {
                 self.history.remove(0);
             }
             self.history.push(self.page);
+            self.roll_rush(page);
             self.page = page;
         }
         self.clear_focus();
@@ -323,6 +326,7 @@ impl Menu {
     }
     pub fn reset(&mut self, page: Page) {
         self.history.clear();
+        self.roll_rush(page);
         self.page = page;
         self.clear_focus();
         self.error.clear();
@@ -332,6 +336,7 @@ impl Menu {
         self.clear_focus();
         self.error.clear();
         if let Some(page) = self.history.pop() {
+            self.roll_rush(page);
             self.page = page;
             false
         } else {

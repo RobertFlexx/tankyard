@@ -1,0 +1,221 @@
+{
+  "format": "48000 Hz mono signed 16-bit little-endian PCM",
+  "processing": "Up to 4 seconds; leading silence trimmed; 35 Hz high-pass; 10 kHz low-pass; peak 25000/32768; 3 ms onset fade and up to 50 ms squared tail fade.",
+  "clips": [
+    {
+      "file": "metal-hit.pcm",
+      "pack": "metal",
+      "source_file": "metal_hit_03.ogg",
+      "source_sha256": "9daf6e7e1fc1871acfb063cb25ce050faab559ee6c42fed84bf18a4067f26a4d",
+      "pcm_sha256": "27d51652b968a512185810ae5f3980c3aa78a30380edfb7416967ef8111df90a",
+      "seconds": 0.3655
+    },
+    {
+      "file": "metal-slam.pcm",
+      "pack": "metal",
+      "source_file": "metal_slam_01.ogg",
+      "source_sha256": "a335ccf202578bd740f930f0648a4dcbbbce3ebb2519335be023532578f56176",
+      "pcm_sha256": "200b63aeec68589ccd268dff885acb9d91f43965031fced5650c6c3e98184fef",
+      "seconds": 0.5263958333333333
+    },
+    {
+      "file": "metal-sheet.pcm",
+      "pack": "metal",
+      "source_file": "metal_sheet_03.ogg",
+      "source_sha256": "f7938996a1271dcd4e54e0b3fcbbbaa9960ec93dcc745dd4d0dbd7d300b0a9bc",
+      "pcm_sha256": "1439bb4003f11b0a53fe6158540ed11fbd9e1a9f08b77b678457879bd2d08bb2",
+      "seconds": 0.5587708333333333
+    },
+    {
+      "file": "metal-spring.pcm",
+      "pack": "metal",
+      "source_file": "metal_spring_01.ogg",
+      "source_sha256": "bc7d84bf0353ef884c62dc0a9ef29e05864d452ac8509a40e125fb9d7507f98f",
+      "pcm_sha256": "de442759ba06f0999afa47d8ecc91beb2ce19c2456d4d42f83812c49c5e8b9ea",
+      "seconds": 0.5501041666666666
+    },
+    {
+      "file": "metal-fall.pcm",
+      "pack": "breaking",
+      "source_file": "bfh1_metal_falling_02.ogg",
+      "source_sha256": "e40e73a05a9b1ae7d45e24aa898bf610b32334dae80a5c00abe3e2ce0f7d207a",
+      "pcm_sha256": "6181b7efc1e8ec81189b00e3924cbb483a217ee0da56e058f41fb6eefc699413",
+      "seconds": 0.714625
+    },
+    {
+      "file": "stone-break.pcm",
+      "pack": "breaking",
+      "source_file": "bfh1_rock_breaking_02.ogg",
+      "source_sha256": "3e06b794511f693b6aaca5eee1d47491bab74d814746a68de6c8bf4eec744ccc",
+      "pcm_sha256": "4bdb97ae23dceaa315b835769034492081abc0b79b6c95a766e45e6b53ad449e",
+      "seconds": 0.860375
+    },
+    {
+      "file": "stone-fall.pcm",
+      "pack": "breaking",
+      "source_file": "bfh1_rock_falling_02.ogg",
+      "source_sha256": "c8421825c5e08e4bf4ed290232963aeffcf4e179c28d33a6714c5fb9704f799f",
+      "pcm_sha256": "75c74ec4793388141d9639373b815e124c1e12dc1af1ca2f88416e8264c655ae",
+      "seconds": 0.4951041666666667
+    },
+    {
+      "file": "crunch.pcm",
+      "pack": "metal",
+      "source_file": "wood_cracking_02.ogg",
+      "source_sha256": "128a798ebb92958c9bee5a71c420c3f61f59c241ecaca75f0bbde780bb086abd",
+      "pcm_sha256": "b5cf888e3d23d2f18238dcf13a5daecca92bafed35badd5aa2074ba8072a98a2",
+      "seconds": 0.23279166666666667
+    },
+    {
+      "file": "growl.pcm",
+      "pack": "creatures",
+      "source_file": "monster_03.ogg",
+      "source_sha256": "1208729886f3f66e7d8018e8880dff073275fd37b30e1016dd5b164161482df1",
+      "pcm_sha256": "1b07f91978a6cc23add93989df7cabba9e24286f373bd581a526459b52ee0c81",
+      "seconds": 0.7106041666666667
+    },
+    {
+      "file": "roar.pcm",
+      "pack": "creatures",
+      "source_file": "roar_02.ogg",
+      "source_sha256": "ceb532ee0fe775d6f86a821099b75f1790ab8022b963cb837c8c1fa4fffee5c2",
+      "pcm_sha256": "62677f925367e7047743b03534a21952be2870f132a0950d3d9bac8380cf2450",
+      "seconds": 0.8720833333333333
+    },
+    {
+      "file": "scream.pcm",
+      "pack": "creatures",
+      "source_file": "scream_01.ogg",
+      "source_sha256": "54da7bba4c4272b0b77dc3fe26a91d0a26d9280797fecb8197d716b47745eb85",
+      "pcm_sha256": "6f927ad7121f05ec7dcf4d8fb16fab3f548b40a718c34d1f5825af9d14380e47",
+      "seconds": 0.93425
+    },
+    {
+      "file": "breath.pcm",
+      "pack": "creatures",
+      "source_file": "breath.ogg",
+      "source_sha256": "d6ecfd092c261059701fe81581957ce6e67c1737978449bbd98ec6d4f30abb7f",
+      "pcm_sha256": "6915a57742167a24e7d5fc39dbbad7932bc4312bb61cee63f5462d2944255d3f",
+      "seconds": 0.6322916666666667
+    },
+    {
+      "file": "spit.pcm",
+      "pack": "creatures",
+      "source_file": "spit_01.ogg",
+      "source_sha256": "11185484afda924711008f5e565d0baa5ebb271457c028b7e19b9ed487f8c6bd",
+      "pcm_sha256": "c21c9982c9daff28190b20f9ea796f2e2eca3511cbc993cac1d7d8df89cfa825",
+      "seconds": 0.4371041666666667
+    },
+    {
+      "file": "wet.pcm",
+      "pack": "liquids",
+      "source_file": "slime_06.ogg",
+      "source_sha256": "4b01dbfa60ed6d134680023fe61911f91a04e0739c991d45338b004c4f230b6d",
+      "pcm_sha256": "71f907b43b90d520665b919d392a8d01a4605e551d9923adbfb7fa87cf6eb29f",
+      "seconds": 0.36725
+    },
+    {
+      "file": "splash.pcm",
+      "pack": "liquids",
+      "source_file": "splash_02.ogg",
+      "source_sha256": "eab0bb4bc01386528ba1e6244c6fd8940ee8d3c91ddb9e9cfea186e8560e04de",
+      "pcm_sha256": "799fdffcdffb0dc0d1ff14439729bc09daa50a7b53673dfa2ec39201aa6e92fe",
+      "seconds": 0.6924583333333333
+    },
+    {
+      "file": "bubble.pcm",
+      "pack": "liquids",
+      "source_file": "bubble_01.ogg",
+      "source_sha256": "1d03d72347019be889280efc6de5ca5ea439d0b24b235e6db87e5bf7583ecb2b",
+      "pcm_sha256": "7567df0d99736894d3ff2d669c5c6f1f5b19d8388cfe41481080aab1c7b22327",
+      "seconds": 0.691625
+    },
+    {
+      "file": "steam.pcm",
+      "pack": "steam",
+      "source_file": "steam hisses - Marker #2.wav",
+      "source_sha256": "e0f94117729588440da6f56fec934fc637b299266556fd6a27df68a03277ef6a",
+      "pcm_sha256": "c63cccb0a4ebf241460f5dba59d3cd6bf4a137b1c08913cf11f741865a140ef0",
+      "seconds": 1.8397083333333333
+    },
+    {
+      "file": "click.pcm",
+      "pack": "metal",
+      "source_file": "keys_03.ogg",
+      "source_sha256": "7feae62edb5f00bff8f798aca958413a058a3ec3c341677235834903291e6fe4",
+      "pcm_sha256": "9bc0e1a630f21c368be1f91b997ba7d56807e36804ae2f7f1f396b7db4765b88",
+      "seconds": 0.45608333333333334
+    },
+    {
+      "file": "bell.pcm",
+      "pack": "bells",
+      "source_file": "bing1.wav",
+      "source_sha256": "d14941ce27e6b409e0cd941eaad7201d613070a4c3eb9c3627fec4cf3ae686e4",
+      "pcm_sha256": "3cb5d67bf7500aa9ee7b439ddbfd7c57eb851c1ff2ae629e4a797969db10390f",
+      "seconds": 0.6931875
+    },
+    {
+      "file": "gong.pcm",
+      "pack": "bells",
+      "source_file": "bong1.wav",
+      "source_sha256": "a6558d186f2843aefa212d567963b0ad79a6f78614bcf650f519620fc1549a6d",
+      "pcm_sha256": "cb57d5040267386316d8cbf7fce714ccce5d05b91933c8651078f95dddfed4e6",
+      "seconds": 2.0814375
+    },
+    {
+      "file": "horn.pcm",
+      "pack": "horn",
+      "source_file": "steam_whistle.wav",
+      "source_sha256": "0c8c1115767140baa19adee9ce131b7b00555cc62907049d1ee918a5aa4ab5d4",
+      "pcm_sha256": "4a0c1fc2a4857a2121c2f297ccf63196ce4da1526720974c4fee177b81046cb8",
+      "seconds": 2.3154375
+    }
+  ],
+  "sources": {
+    "creatures": {
+      "page": "https://opengameart.org/content/80-cc0-creature-sfx",
+      "download": "https://opengameart.org/sites/default/files/80-CC0-creature-SFX_0.zip",
+      "author": "rubberduck",
+      "license": "CC0-1.0",
+      "archive_sha256": "5d4002eea42f278e76543bb36e8ddd2cb978588a13271984191d8228f5d26768"
+    },
+    "metal": {
+      "page": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+      "download": "https://opengameart.org/sites/default/files/100-CC0-wood-metal-SFX.zip",
+      "author": "rubberduck",
+      "license": "CC0-1.0",
+      "archive_sha256": "be6eba63b03409ac0c77787a956b1503a7c186403d04aef9725c52644a4b7878"
+    },
+    "liquids": {
+      "page": "https://opengameart.org/content/40-cc0-water-splash-slime-sfx",
+      "download": "https://opengameart.org/sites/default/files/water-splash-slime-sfx.zip",
+      "author": "rubberduck",
+      "license": "CC0-1.0",
+      "archive_sha256": "7cd39abb49d4362a37ba18dc0e454c7dc1d08029d4e5b683149046bc237b2eba"
+    },
+    "breaking": {
+      "page": "https://opengameart.org/content/75-cc0-breaking-falling-hit-sfx",
+      "download": "https://opengameart.org/sites/default/files/sfx_breaking_and_falling.zip",
+      "author": "rubberduck",
+      "license": "CC0-1.0",
+      "archive_sha256": "e6ee04d91c5f4d30cfda1260d2c9d1faf96fda36319287215fbd07bcb1a80451"
+    },
+    "steam": {
+      "page": "https://opengameart.org/node/5243",
+      "download": "https://opengameart.org/sites/default/files/steam_hisses.zip",
+      "author": "bart",
+      "license": "CC0-1.0",
+      "archive_sha256": "7dc5ae6f43ef0e9a47b8333e1e1508463cb64877ab06baa0259c643a9ab4677f"
+    },
+    "bells": {
+      "page": "https://opengameart.org/content/metal-impact-sounds",
+      "author": "Brian MacIntosh (BMacZero)",
+      "license": "CC0-1.0"
+    },
+    "horn": {
+      "page": "https://opengameart.org/content/steam-whistle",
+      "author": "bart",
+      "license": "CC0-1.0"
+    }
+  }
+}

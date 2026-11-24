@@ -690,6 +690,7 @@ pub fn world(
         }
     });
     effects.boss_fx.scars(view);
+    effects.boss_fx.worm_floor(view, dark);
     crate::rifts::draw(
         snapshot,
         view,
@@ -934,6 +935,14 @@ pub fn world(
             age: projectile.age,
             z,
         };
+        if projectile.frozen.is_none()
+            && boss.is_some_and(|b| b.kind == tankyard_core::BossKind::Sunderworm)
+        {
+            effects
+                .boss_fx
+                .worm_round(&round, &mut draw_model_primitive);
+            continue;
+        }
         let gunfire = matches!(
             projectile.kind,
             ProjectileKind::Bullet
@@ -1036,6 +1045,13 @@ pub fn world(
             .map_or(boss.pos, |&(previous, _)| {
                 crate::session::interpolate_position(previous, boss.pos, interpolation)
             });
+        if boss.kind == tankyard_core::BossKind::Sunderworm {
+            effects
+                .boss_fx
+                .worm_body(&mut light, view, boss, boss_time, dark);
+            worm_label(boss, position, view, effects, dark);
+            continue;
+        }
         let railgunner = boss.kind == tankyard_core::BossKind::Railgunner;
         if railgunner {
             // It shoots from off screen, so its sight and warning are drawn
@@ -1513,6 +1529,8 @@ pub fn world(
             );
         }
     }
+    // Floor and flesh thrown into the air come down over the tanks.
+    effects.boss_fx.worm_air(view, dark);
     if let Some(map) = map {
         crate::profile::phase("decor above", || {
             crate::scenery::decorations(
@@ -1823,6 +1841,49 @@ pub(crate) fn health_bar(p: Vec2, r: f32, ratio: f32, z: f32, color: Color) {
         Rect::new(p.x - w * 0.5, p.y + r + 8.0 * z, w, h),
         ratio,
         color,
+    );
+}
+
+/// Where a whole worm's phases begin, and where it tears, as health shares.
+const WORM_MARKS: [f32; 5] = tankyard_core::sunderworm::WORM_MARKS;
+
+/// A worm's bar and name ride over its head, wherever its head is.
+fn worm_label(
+    boss: &tankyard_core::Boss,
+    position: V2,
+    view: &View,
+    effects: &Effects,
+    dark: bool,
+) {
+    let head = effects.boss_fx.worm_head(boss.id).unwrap_or(position);
+    let r = tankyard_core::sunderworm::ring_radius(0);
+    if !view.visible(head, r * 2.) {
+        return;
+    }
+    let z = view.zoom;
+    let p = view.screen(head);
+    let part = boss.worm_part().unwrap_or_default();
+    let marks: &[f32] = if part == tankyard_core::WormPart::Whole {
+        &WORM_MARKS
+    } else {
+        &[]
+    };
+    boss_health_bar(
+        p,
+        r * z,
+        (
+            boss.health / boss.max_health.max(1.),
+            effects.boss_fx.health_trail(boss),
+        ),
+        z,
+        marks,
+    );
+    center_label(
+        part.name(),
+        p.x,
+        p.y - r * z - 14.0 * z,
+        18.0 * z,
+        if dark { text_color() } else { WORLD_TEXT },
     );
 }
 

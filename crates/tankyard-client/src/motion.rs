@@ -207,6 +207,30 @@ impl History {
                 }
             }
             for boss in &snapshot.bosses {
+                if boss.kind == tankyard_core::BossKind::Sunderworm {
+                    let mut colors = [None; tankyard_core::sunderworm::WORM_RINGS];
+                    for (ring, position, radius) in boss_fx.worm_motion(boss.id) {
+                        // Each ring has its own history. Tags 0–4 belong to
+                        // the other entity types above and below this pass.
+                        colors[ring] = motion(8 + ring as u8, boss.id, position, radius)
+                            .map(|(_, color)| color);
+                    }
+                    boss_fx.worm_geometry(
+                        boss.id,
+                        view,
+                        crate::accessibility::motion_time(time as f32),
+                        &mut |ring, primitive| {
+                            // Soft shadows belong to the arena; opaque flesh,
+                            // bristles, teeth and torn ends carry body motion.
+                            if primitive.color().a >= 0.6
+                                && let Some(color) = colors[ring]
+                            {
+                                silhouette(primitive, color, 0.5 * now.zoom);
+                            }
+                        },
+                    );
+                    continue;
+                }
                 let radius = boss.radius * 1.7;
                 // A hull shoved back by its own shot is drawn there, so its
                 // motion includes the shove.

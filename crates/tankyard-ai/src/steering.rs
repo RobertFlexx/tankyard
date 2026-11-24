@@ -194,7 +194,88 @@ pub(super) fn projectile_avoidance(
             danger = danger.max((pursuit * severity).min(1.));
         }
     }
+    let (worm_dodge, worm_danger) = worm_avoidance(world, tank);
+    dodge += worm_dodge;
+    escape += worm_dodge * 0.6;
+    danger = danger.max(worm_danger);
     (dodge.clamp_length(2.), danger, escape.clamp_length(1.))
+}
+
+/// Where to go to get out of a Sunderworm's way, and how urgently. Its
+/// strikes aren't rounds: its jaws come down a lane, and the ground breaks
+/// where it comes up. Bots read the same signs a player sees.
+pub(super) fn worm_avoidance(world: &World, tank: &Tank) -> (V2, f32) {
+    use tankyard_core::{ERUPT_RADIUS, WORM_RADIUS, WormAct, WormSign};
+    let mut dodge = V2::ZERO;
+    let mut danger: f32 = 0.;
+    for boss in &world.bosses {
+        if boss.kind != tankyard_core::BossKind::Sunderworm
+            || boss.health <= 0.
+            || !hostile(tank.team, boss.team)
+        {
+            continue;
+        }
+        // Its head can be far away while a surfaced bend is beside us.
+        // Read the same ring collision shapes that bullets and tanks use.
+        if let Some((at, radius)) = boss.nearest_part(tank.pos) {
+            let gap = tank.pos - at;
+            let distance = gap.length();
+            let reach = radius + tank.radius + 120.;
+            if distance < reach {
+                let urgency = ((reach - distance) / 120.).clamp(0., 1.);
+                let away = if distance > 1. {
+                    gap / distance
+                } else {
+                    V2::from_angle(boss.aim + std::f32::consts::FRAC_PI_2)
+                };
+                dodge += away * urgency * 2.;
+                danger = danger.max(urgency);
+            }
+        }
+        let sign = WormSign::of(boss);
+        let gap = tank.pos - boss.pos;
+        let distance = gap.length();
+        let radial = if distance > 1. {
+            gap / distance
+        } else {
+            V2::new(1., 0.)
+        };
+        let (urgency, away) = match (sign.act, sign.stage) {
+            (WormAct::Lunge, 0 | 1) => {
+                let ahead = V2::from_angle(boss.aim);
+                let along = gap.dot(ahead);
+                let side = gap - ahead * along;
+                let half = WORM_RADIUS * 0.8 + tank.radius + 45.;
+                if !(-80. ..820.).contains(&along) || side.length() >= half {
+                    continue;
+                }
+                let away = if side.length() > 1. {
+                    side.normalized()
+                } else {
+                    V2::new(-ahead.y, ahead.x)
+                };
+                (1. - side.length() / half * 0.6, away)
+            }
+            (WormAct::Erupt | WormAct::Rise, 0) => {
+                let reach = ERUPT_RADIUS + tank.radius + 60.;
+                if distance >= reach {
+                    continue;
+                }
+                (1. - distance / reach * 0.5, radial)
+            }
+            (WormAct::Hunt | WormAct::Coil | WormAct::Whip, _) if sign.depth < 0.4 => {
+                let reach = WORM_RADIUS + tank.radius + 110.;
+                if distance >= reach {
+                    continue;
+                }
+                ((1. - distance / reach) * 0.8, radial)
+            }
+            _ => continue,
+        };
+        dodge += away * urgency * 2.;
+        danger = danger.max(urgency.min(1.));
+    }
+    (dodge, danger)
 }
 
 /// Movement habits that make a bot read as a person: circle-strafing instead

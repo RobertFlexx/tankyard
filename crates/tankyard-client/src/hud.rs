@@ -2105,6 +2105,7 @@ fn boss_gloat(kind: BossKind) -> &'static str {
         BossKind::Skirmisher => "Hit and run. Mostly hit.",
         BossKind::Trapper => "It put those there on purpose.",
         BossKind::Railgunner => "Distance was not your friend.",
+        BossKind::Sunderworm => "The ground was hungry.",
     }
 }
 /// Where an arrow pointing `direction` from the middle of the screen meets its
@@ -2211,6 +2212,17 @@ fn rail_status(boss: &tankyard_core::Boss, marked: bool) -> Option<(&'static str
 
 /// The line under a boss's bar. Only the Railgunner narrates its whole attack.
 fn bar_status(boss: &tankyard_core::Boss, marked: bool) -> Option<(&'static str, u8)> {
+    if boss.kind == BossKind::Sunderworm {
+        use tankyard_core::WormAct;
+        let sign = tankyard_core::WormSign::of(boss);
+        match (sign.act, sign.stage) {
+            (WormAct::Rise, _) => return Some(("The ground is moving.", 1)),
+            (WormAct::Lunge, 0) => return Some(("Get out of its path.", 2)),
+            (WormAct::Erupt, 0) => return Some(("The floor's breaking. Move.", 2)),
+            (WormAct::Tear, _) => return Some(("It's tearing in two.", 2)),
+            _ => {}
+        }
+    }
     if boss.kind == tankyard_core::BossKind::Railgunner {
         return rail_status(boss, marked);
     }

@@ -23,6 +23,11 @@ const REEL_SECONDS: f32 = 0.9;
 const BROKEN_VENT: f32 = 0.7;
 /// The shortest and longest a strike takes to get back.
 const FLIGHT: (f32, f32) = (0.05, 0.6);
+/// The Railgunner's rail and beam only turn for a parry made at the last
+/// moment: within this many seconds of pressing it.
+pub const RAIL_PARRY_WINDOW: f32 = 0.075;
+/// And only for a tank turned toward them, within this many radians.
+pub const RAIL_PARRY_ARC: f32 = 0.85;
 
 const STYLE_BITS: u32 = 3;
 const BOSS_BITS: u32 = 13;
@@ -143,6 +148,26 @@ fn style_of(
 }
 
 impl World {
+    /// Whether `defender`'s parry is too late, or turned the wrong way, for
+    /// the Railgunner's rail or beam round `projectile`. Those go straight
+    /// through anything but a parry made at the last moment facing them.
+    pub(crate) fn misses_rail(&self, projectile: usize, defender: usize, ability: Ability) -> bool {
+        let shot = &self.projectiles[projectile];
+        let railgunner = self
+            .bosses
+            .iter()
+            .any(|boss| boss.id == shot.owner && boss.kind == BossKind::Railgunner);
+        if !railgunner || style_of(BossKind::Railgunner, shot.kind, shot.vel, shot.damage).is_none()
+        {
+            return false;
+        }
+        let tank = &self.tanks[defender];
+        let held = ability.parry_window().unwrap_or(0.) - tank.shield;
+        let toward = (shot.vel * -1.).normalized();
+        let facing = V2::from_angle(tank.aim).dot(toward) >= RAIL_PARRY_ARC.cos();
+        held > RAIL_PARRY_WINDOW || !facing
+    }
+
     /// Answers `projectile` with a clash if it's a boss's big gun and that
     /// boss isn't still reeling from the last one. The round is spent, and
     /// so is the rest of a beam.
@@ -261,6 +286,8 @@ mod tests {
         assert_ne!(world.spawn_boss(kind), 0);
         world.tanks[0].pos = TANK;
         world.tanks[0].vel = V2::ZERO;
+        // Facing the boss, just as the parry starts.
+        world.tanks[0].aim = std::f32::consts::PI;
         world.tanks[0].shield = Ability::Parry.parry_window().unwrap();
         let boss = &mut world.bosses[0];
         boss.pos = BOSS;
@@ -342,6 +369,58 @@ mod tests {
         let boss = &world.bosses[0];
         assert!((boss.health - full * 0.9).abs() < 1., "{}", boss.health);
         assert_eq!(boss.last_attacker, world.tanks[0].id);
+    }
+
+    #[test]
+    fn the_railgunner_only_yields_to_a_last_moment_parry_facing_it() {
+        let window = Ability::Parry.parry_window().unwrap();
+        for (shield, aim, kind, speed, damage, yields) in [
+            // Late: the rail goes through.
+            (
+                window - RAIL_PARRY_WINDOW - 0.02,
+                std::f32::consts::PI,
+                ProjectileKind::Shell,
+                1700.,
+                LETHAL_DAMAGE,
+                false,
+            ),
+            // Turned away: so does the beam.
+            (
+                window,
+                0.,
+                ProjectileKind::Piercing,
+                BEAM_ROUND_SPEED,
+                BEAM_ROUND_DAMAGE,
+                false,
+            ),
+            // On time and facing it: a clash.
+            (
+                window - RAIL_PARRY_WINDOW * 0.5,
+                std::f32::consts::PI + 0.5,
+                ProjectileKind::Shell,
+                1700.,
+                LETHAL_DAMAGE,
+                true,
+            ),
+            // Its small guns still take any parry.
+            (window - 0.15, 0., ProjectileKind::Bullet, 500., 20., true),
+        ] {
+            let mut world = duel(BossKind::Railgunner);
+            world.tanks[0].shield = shield;
+            world.tanks[0].aim = aim;
+            let index = round(&mut world, kind, speed, damage);
+            assert_eq!(
+                world.parry_projectile(index, 0, TANK),
+                yields,
+                "{kind:?} with {shield} left facing {aim}"
+            );
+        }
+        // Nothing else asks this much.
+        let mut world = duel(BossKind::SiegeEngine);
+        world.tanks[0].shield = window - 0.15;
+        world.tanks[0].aim = 0.;
+        let index = round(&mut world, ProjectileKind::Shell, 900., LETHAL_DAMAGE);
+        assert!(world.parry_projectile(index, 0, TANK));
     }
 
     #[test]
