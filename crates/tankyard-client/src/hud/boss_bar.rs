@@ -360,8 +360,15 @@ fn gradient_vertices(rect: Rect, tint: Color, boundary: Option<(f32, f32)>) -> [
         let angle = -FRAC_PI_2 + PI * (i / COLUMNS) as f32 / ROWS as f32;
         let y = (angle.sin() + 1.) * 0.5;
         let cap = angle.cos().max(0.) * r;
-        let left = rect.x + r - cap;
-        let right = rect.right() - r + cap;
+        // At the ends of a square gradient, `rect.x + r` and
+        // `rect.right() - r` are the same point in exact maths but can land a
+        // float step apart here. `f32::clamp` panics on crossed bounds, so
+        // keep them ordered before using them.
+        let (left, right) = {
+            let a = rect.x + r - cap;
+            let b = rect.right() - r + cap;
+            if a <= b { (a, b) } else { (b, a) }
+        };
         let x = match (i % COLUMNS, boundary) {
             (0, _) => left,
             (4, _) => right,
@@ -508,6 +515,23 @@ mod tests {
                 assert!(p.y >= rect.y && p.y <= rect.bottom());
             }
             assert!(INDICES.iter().all(|&i| usize::from(i) < vertices.len()));
+        }
+    }
+
+    #[test]
+    fn a_damage_boundary_at_a_rounded_square_end_stays_drawable() {
+        // When the lost-health fill is exactly as wide as it is tall, the two
+        // cap ends are the same point. At some x positions `rect.x + r` and
+        // `rect.right() - r` round a float step apart; clamping between them
+        // used to panic and take the game down on the killing blow.
+        let side = 16. * 0.62;
+        let rect = Rect::new(758., 100., side, side);
+        let vertices = gradient_vertices(rect, BLUE, Some((rect.x + side * 0.5, 1.)));
+        for vertex in &vertices {
+            let p = vertex.position;
+            assert!(p.is_finite());
+            assert!(p.x >= rect.x && p.x <= rect.right());
+            assert!(p.y >= rect.y && p.y <= rect.bottom());
         }
     }
 }

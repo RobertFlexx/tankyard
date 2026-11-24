@@ -107,7 +107,7 @@ lineup. Hosts may explicitly choose `sunderworm` in a dedicated-server lineup or
 a map Boss trigger. A local pack can keep the card available with
 `"menu": { "bosses": ["sunderworm"] }`.
 
-Tank Yard 2.1.0 uses **protocol 35**. Update the host and its players together.
+Tank Yard 2.1.1 uses **protocol 35**, the same as 2.1.0. Update the host and its players together; those two releases can play together.
 Snapshots carry its real body positions, including when joining mid-fight.
 
 </details>
