@@ -2976,6 +2976,8 @@ thread_local! {
     /// the entrance.
     static UI_PREVIEW: std::cell::RefCell<(Option<HudWidget>, f64)> =
         const { std::cell::RefCell::new((None, 0.)) };
+    static UI_LOOK: std::cell::RefCell<Option<HudWidget>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// A Show UI trigger's widget: words, look, place, bar, choices and who
@@ -2990,110 +2992,113 @@ fn ui_form(
     let s = f.s;
     // The picture first, so every change below shows straight away.
     let frame = Rect::new(f.x, f.y + 4. * s, f.w, f.w * 9. / 16.);
-    draw_rectangle(
-        frame.x,
-        frame.y,
-        frame.w,
-        frame.h,
-        Color::new(0.07, 0.09, 0.12, 1.),
-    );
-    let step = frame.w / 16.;
-    for i in 1..16 {
-        let x = frame.x + i as f32 * step;
-        draw_line(
-            x,
-            frame.y,
-            x,
-            frame.bottom(),
-            1.,
-            Color::new(1., 1., 1., 0.04),
-        );
-    }
-    for i in 1..9 {
-        let y = frame.y + i as f32 * step;
-        draw_line(
+    let screen = ui_layout::position(frame.point());
+    if ui_layout::visible_y(screen.y, screen.y + frame.h) {
+        draw_rectangle(
             frame.x,
-            y,
-            frame.right(),
-            y,
-            1.,
-            Color::new(1., 1., 1., 0.04),
+            frame.y,
+            frame.w,
+            frame.h,
+            Color::new(0.07, 0.09, 0.12, 1.),
         );
-    }
-    // A tank in the middle, for scale, and the area a widget pinned over
-    // its area floats over.
-    let tank = vec2(frame.center().x, frame.y + frame.h * 0.62);
-    if ui.pin == UiPin::Area {
-        let area = Rect::new(
-            frame.center().x - step * 2.5,
-            frame.center().y - step * 1.5,
-            step * 5.,
-            step * 3.,
-        );
-        draw_rectangle(area.x, area.y, area.w, area.h, alpha(brushes::LOGIC, 0.12));
-        draw_rectangle_lines(
-            area.x,
-            area.y,
-            area.w,
-            area.h,
-            1.5,
-            alpha(brushes::LOGIC, 0.7),
-        );
-    }
-    draw_circle(tank.x, tank.y, step * 0.4, Color::new(0.0, 0.70, 0.88, 0.9));
-    let pinned = match ui.pin {
-        UiPin::Screen => None,
-        UiPin::Area => Some(crate::hud_widgets::Pinned {
-            at: frame.center(),
-            above: None,
-        }),
-        UiPin::Cause => Some(crate::hud_widgets::Pinned {
-            at: tank,
-            above: Some(step * 0.4),
-        }),
-    };
-    let mut shown = ui.widget.clone();
-    if ui.bar > 0 || ui.timer {
-        shown.progress = Some(0.6);
-    }
-    shown.text = fill_preview(&shown.text);
-    shown.title = fill_preview(&shown.title);
-    if let Some(board) = &mut shown.board {
-        super::board_design::sample(board, &sample_counters(), fill_preview);
-    }
-    let age = UI_PREVIEW.with(|cell| {
-        let mut cell = cell.borrow_mut();
-        let mut design = ui.widget.clone();
-        design.progress = None;
-        if cell.0.as_ref() != Some(&design) {
-            *cell = (Some(design), get_time());
+        let step = frame.w / 16.;
+        for i in 1..16 {
+            let x = frame.x + i as f32 * step;
+            draw_line(
+                x,
+                frame.y,
+                x,
+                frame.bottom(),
+                1.,
+                Color::new(1., 1., 1., 0.04),
+            );
         }
-        (get_time() - cell.1) as f32
-    });
-    // Somewhat larger than its share of a real screen, so the words in the
-    // picture stay readable.
-    let scale = frame.w / 1000.;
-    if shown.valid() {
-        let pointer = ui_layout::pointer();
-        crate::hud_widgets::preview(
-            &shown,
-            frame,
-            scale,
-            age,
-            0.6,
-            frame.contains(pointer).then_some(pointer),
-            pinned,
-        );
-    } else {
-        center_label(
-            "Give the widget a title, text, a bar, choices or board cells",
-            frame.center().x,
-            frame.center().y + 20. * s,
-            12. * s,
-            muted_color(),
-        );
+        for i in 1..9 {
+            let y = frame.y + i as f32 * step;
+            draw_line(
+                frame.x,
+                y,
+                frame.right(),
+                y,
+                1.,
+                Color::new(1., 1., 1., 0.04),
+            );
+        }
+        // A tank in the middle, for scale, and the area a widget pinned over
+        // its area floats over.
+        let tank = vec2(frame.center().x, frame.y + frame.h * 0.62);
+        if ui.pin == UiPin::Area {
+            let area = Rect::new(
+                frame.center().x - step * 2.5,
+                frame.center().y - step * 1.5,
+                step * 5.,
+                step * 3.,
+            );
+            draw_rectangle(area.x, area.y, area.w, area.h, alpha(brushes::LOGIC, 0.12));
+            draw_rectangle_lines(
+                area.x,
+                area.y,
+                area.w,
+                area.h,
+                1.5,
+                alpha(brushes::LOGIC, 0.7),
+            );
+        }
+        draw_circle(tank.x, tank.y, step * 0.4, Color::new(0.0, 0.70, 0.88, 0.9));
+        let pinned = match ui.pin {
+            UiPin::Screen => None,
+            UiPin::Area => Some(crate::hud_widgets::Pinned {
+                at: frame.center(),
+                above: None,
+            }),
+            UiPin::Cause => Some(crate::hud_widgets::Pinned {
+                at: tank,
+                above: Some(step * 0.4),
+            }),
+        };
+        let mut shown = ui.widget.clone();
+        if ui.bar > 0 || ui.timer {
+            shown.progress = Some(0.6);
+        }
+        shown.text = fill_preview(&shown.text);
+        shown.title = fill_preview(&shown.title);
+        if let Some(board) = &mut shown.board {
+            super::board_design::sample(board, &sample_counters(), fill_preview);
+        }
+        let age = UI_PREVIEW.with(|cell| {
+            let mut cell = cell.borrow_mut();
+            let mut design = ui.widget.clone();
+            design.progress = None;
+            if cell.0.as_ref() != Some(&design) {
+                *cell = (Some(design), get_time());
+            }
+            (get_time() - cell.1) as f32
+        });
+        // Somewhat larger than its share of a real screen, so the words in the
+        // picture stay readable.
+        let scale = frame.w / 1000.;
+        if shown.valid() {
+            let pointer = ui_layout::pointer();
+            crate::hud_widgets::preview(
+                &shown,
+                frame,
+                scale,
+                age,
+                0.6,
+                frame.contains(pointer).then_some(pointer),
+                pinned,
+            );
+        } else {
+            center_label(
+                "Give the widget a title, text, a bar, choices or board cells",
+                frame.center().x,
+                frame.center().y + 20. * s,
+                12. * s,
+                muted_color(),
+            );
+        }
+        draw_rectangle_lines(frame.x, frame.y, frame.w, frame.h, 1.5, line_color());
     }
-    draw_rectangle_lines(frame.x, frame.y, frame.w, frame.h, 1.5, line_color());
     f.y = frame.bottom() + 10. * s;
     if f.buttons(&["Replay entrance"], true).is_some() {
         UI_PREVIEW.with(|cell| cell.borrow_mut().1 = get_time());
@@ -3129,6 +3134,25 @@ fn ui_form(
     f.note("{1} shows counter 1, up to {255}; {left} the seconds before it goes, {time} the round's clock, {name} and {score} the player's own, and {cause} the tank that set it off. {1:04} pads to 4 digits, {1:,} groups thousands, {1:b} and {1:x} show binary and hex, and {3|2|1:4} joins counters as 4-digit parts of one big number.");
     f.heading("Look");
     f.note("A look sets the colors, shape, border, fill, lettering, bar and buttons in one click. You can change any of them afterwards.");
+    let has_look = UI_LOOK.with(|look| look.borrow().is_some());
+    let actions: &[&str] = if has_look {
+        &["Copy look", "Paste look"]
+    } else {
+        &["Copy look"]
+    };
+    match f.buttons(actions, true) {
+        Some(0) => UI_LOOK.with(|look| {
+            let mut saved = HudWidget::default();
+            saved.copy_look_from(w);
+            *look.borrow_mut() = Some(saved);
+        }),
+        Some(1) => UI_LOOK.with(|look| {
+            if let Some(saved) = look.borrow().as_ref() {
+                w.copy_look_from(saved);
+            }
+        }),
+        _ => {}
+    }
     for row in HudLook::ALL.chunks(4) {
         let names: Vec<&str> = row.iter().map(|look| look.name()).collect();
         if let Some(index) = f.buttons(&names, true) {
@@ -4092,6 +4116,10 @@ fn effect_preview(f: &mut Form, e: &ParticleEffect, area: Vec2) {
     let s = f.s;
     let r = Rect::new(f.x, f.y, f.w, 150. * s);
     f.y += r.h + 10. * s;
+    let screen = ui_layout::position(r.point());
+    if !ui_layout::visible_y(screen.y, screen.y + r.h) {
+        return;
+    }
     draw_rectangle(r.x, r.y, r.w, r.h, Color::from_rgba(21, 25, 31, 255));
     let step = 24. * s;
     let grid = alpha(WHITE, 0.035);

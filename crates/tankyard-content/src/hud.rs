@@ -178,6 +178,31 @@ impl Default for HudWidget {
     }
 }
 impl HudWidget {
+    /// Copy presentation without replacing content, placement, bindings or
+    /// board cells. The editor uses this to share a style between widgets.
+    pub fn copy_look_from(&mut self, other: &Self) {
+        self.style = other.style;
+        self.size = other.size;
+        self.color = other.color;
+        self.bar_color = other.bar_color;
+        self.panel = other.panel;
+        self.opacity = other.opacity;
+        self.accent = other.accent;
+        self.enter = other.enter;
+        self.pulse = other.pulse;
+        self.segments = other.segments;
+        self.glow = other.glow;
+        self.shape = other.shape;
+        self.border = other.border;
+        self.fill = other.fill;
+        self.fill_color = other.fill_color;
+        self.lettering = other.lettering;
+        self.caps = other.caps;
+        self.title_color = other.title_color;
+        self.bar_style = other.bar_style;
+        self.buttons = other.buttons;
+    }
+
     fn default_x() -> f32 {
         0.5
     }
@@ -625,9 +650,13 @@ pub enum HudLook {
     Frost,
     Ember,
     Jungle,
+    Blueprint,
+    Graphite,
+    Signal,
+    Rose,
 }
 impl HudLook {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 16] = [
         Self::Theme,
         Self::Neon,
         Self::Arcade,
@@ -640,6 +669,10 @@ impl HudLook {
         Self::Frost,
         Self::Ember,
         Self::Jungle,
+        Self::Blueprint,
+        Self::Graphite,
+        Self::Signal,
+        Self::Rose,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -655,6 +688,10 @@ impl HudLook {
             Self::Frost => "Frost",
             Self::Ember => "Ember",
             Self::Jungle => "Jungle",
+            Self::Blueprint => "Blueprint",
+            Self::Graphite => "Graphite",
+            Self::Signal => "Signal",
+            Self::Rose => "Rose",
         }
     }
     /// Restyle `widget`. A plain widget gets a panel, since every look but
@@ -742,6 +779,34 @@ impl HudLook {
                 Some([236, 246, 222]),
                 Some([204, 242, 124]),
                 Some([44, 96, 44]),
+            ),
+            Self::Blueprint => (
+                Some([15, 37, 62]),
+                Some([108, 198, 230]),
+                Some([224, 240, 248]),
+                Some([255, 255, 255]),
+                Some([48, 85, 118]),
+            ),
+            Self::Graphite => (
+                Some([31, 35, 40]),
+                Some([170, 190, 202]),
+                Some([236, 240, 244]),
+                Some([255, 255, 255]),
+                Some([20, 23, 27]),
+            ),
+            Self::Signal => (
+                Some([20, 34, 31]),
+                Some([128, 222, 170]),
+                Some([236, 250, 241]),
+                Some([255, 224, 136]),
+                Some([35, 64, 53]),
+            ),
+            Self::Rose => (
+                Some([56, 29, 44]),
+                Some([230, 156, 178]),
+                Some([255, 238, 242]),
+                Some([255, 214, 184]),
+                Some([88, 45, 65]),
             ),
         };
         let (shape, border, fill, lettering, caps, glow, opacity, bar, buttons) = match self {
@@ -876,6 +941,50 @@ impl HudLook {
                 0.93,
                 Bar::Pips,
                 Buttons::Capsule,
+            ),
+            Self::Blueprint => (
+                Shape::Square,
+                Edge::Corners,
+                Fill::Grid,
+                Letters::Clean,
+                true,
+                false,
+                0.95,
+                Bar::Thin,
+                Buttons::Underline,
+            ),
+            Self::Graphite => (
+                Shape::Rounded,
+                Edge::Line,
+                Fill::Gradient,
+                Letters::Clean,
+                false,
+                false,
+                0.96,
+                Bar::Thin,
+                Buttons::Box,
+            ),
+            Self::Signal => (
+                Shape::Square,
+                Edge::Corners,
+                Fill::Solid,
+                Letters::Clean,
+                true,
+                false,
+                0.95,
+                Bar::Pips,
+                Buttons::Outline,
+            ),
+            Self::Rose => (
+                Shape::Tag,
+                Edge::Line,
+                Fill::Gradient,
+                Letters::Shadow,
+                false,
+                false,
+                0.95,
+                Bar::Capsule,
+                Buttons::Underline,
             ),
         };
         if self != Self::Theme && widget.style == HudStyle::Plain {
@@ -1379,6 +1488,83 @@ impl HudCell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copying_a_look_preserves_content_placement_and_actions() {
+        let mut source = HudWidget::default();
+        HudLook::Blueprint.apply(&mut source);
+        source.size = 26.;
+        source.enter = HudEnter::Fade;
+        let mut target = HudWidget {
+            title: "Workshop shop".into(),
+            text: "Choose a repair".into(),
+            choices: vec!["Repair".into(), "Leave".into()],
+            x: 0.2,
+            y: 0.8,
+            width: 0.35,
+            menu: 42,
+            progress: Some(0.6),
+            icon: HudIcon::Coin,
+            layout: HudLayout::Grid,
+            point: true,
+            ..Default::default()
+        };
+        let before = target.clone();
+        target.copy_look_from(&source);
+        assert!(target.valid());
+        assert_eq!(
+            (&target.title, &target.text, &target.choices),
+            (&before.title, &before.text, &before.choices)
+        );
+        assert_eq!(
+            (
+                target.x,
+                target.y,
+                target.width,
+                target.menu,
+                target.progress
+            ),
+            (
+                before.x,
+                before.y,
+                before.width,
+                before.menu,
+                before.progress
+            )
+        );
+        assert_eq!(
+            (
+                target.icon,
+                target.layout,
+                target.pin,
+                target.point,
+                &target.board
+            ),
+            (
+                before.icon,
+                before.layout,
+                before.pin,
+                before.point,
+                &before.board
+            )
+        );
+        assert_eq!(
+            (
+                target.size,
+                target.panel,
+                target.fill,
+                target.border,
+                target.bar_style
+            ),
+            (
+                source.size,
+                source.panel,
+                source.fill,
+                source.border,
+                source.bar_style
+            )
+        );
+    }
 
     #[test]
     fn looks_restyle_without_touching_words_place_or_choices() {

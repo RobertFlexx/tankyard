@@ -7,7 +7,7 @@ Give a Show UI widget a look of its own: start from a preset, then change single
 ## Start from a look
 
 1. In the Arena Workshop, select a **Show UI** trigger and open **Object**. Press **P** to run the logic preview. When the trigger fires, its widget appears over the canvas as players will see it.
-2. Under **Look**, click one of the twelve presets: **Theme**, **Neon**, **Arcade**, **Parchment**, **Terminal**, **Royal**, **Glass**, **Hazard**, **Sticker**, **Frost**, **Ember** or **Jungle**. A look sets the colors, shape, border, fill, lettering, bar and buttons. The words, the place and the choices stay as they were.
+2. Under **Look**, click one of the sixteen presets: **Theme**, **Neon**, **Arcade**, **Parchment**, **Terminal**, **Royal**, **Glass**, **Hazard**, **Sticker**, **Frost**, **Ember**, **Jungle**, **Blueprint**, **Graphite**, **Signal** or **Rose**. A look sets the colors, shape, border, fill, lettering, bar and buttons. The words, the place and the choices stay as they were.
 3. Press **Shift+P** to restart the logic preview with the new look. The inspector's own preview, above **Words**, changes at once.
 
 **Theme** puts the widget back on each player's own light or dark colors.
@@ -20,6 +20,10 @@ Give a Show UI widget a look of its own: start from a preset, then change single
 - **Lettering:** **Auto**, **Clean**, **Shadow**, **Block**, **Outline** or **Glow**. **Capital letters** applies to the title, the text and the choices, and **Own title color** colors the title.
 - **Bar look:** **Capsule**, **Flat**, **Thin**, **Striped**, **Glow** or **Pips**. Pips show one dot per piece, or 10 when the bar isn't split.
 - **Buttons:** once the widget has choices, **Choices** offers **Capsule**, **Box**, **Outline** or **Underline**.
+
+## Reuse a style
+
+In Tank Yard 2.0.5 or later, choose **Copy look**, select another Show UI trigger, then choose **Paste look**. This copies colors, type size, panel, bar, buttons and entrance settings. Text, icons, choices, channels, board cells and placement stay with the destination. Undo restores the previous design. The copied style stays available until you close the game.
 
 ## Play it
 

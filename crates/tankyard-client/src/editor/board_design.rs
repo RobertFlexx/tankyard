@@ -38,9 +38,9 @@ thread_local! {
 pub(super) fn fit_cells(board: &mut HudBoard) {
     let side = [board.columns.max(1), board.rows.max(1)];
     for cell in &mut board.cells {
-        for axis in 0..2 {
-            cell.span[axis] = cell.span[axis].clamp(1, side[axis]);
-            cell.at[axis] = cell.at[axis].min(side[axis] - cell.span[axis]);
+        for (axis, limit) in side.into_iter().enumerate() {
+            cell.span[axis] = cell.span[axis].clamp(1, limit);
+            cell.at[axis] = cell.at[axis].min(limit - cell.span[axis]);
         }
     }
 }

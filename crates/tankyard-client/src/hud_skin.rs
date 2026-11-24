@@ -5,6 +5,7 @@ use crate::ui::{alpha, label, mix};
 // Page-space shapes, so widgets scroll with an editor page like its text.
 use crate::ui::{ui_circle as draw_circle, ui_line as draw_line, ui_rectangle as draw_rectangle};
 use macroquad::prelude::*;
+use std::cell::RefCell;
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 use tankyard_content::{HudBar, HudBorder, HudButtons, HudFill, HudLettering, HudShape};
 
@@ -13,6 +14,14 @@ use tankyard_content::{HudBar, HudBorder, HudButtons, HudFill, HudLettering, Hud
 const SLANT: f32 = 0.24;
 const TAG: f32 = 0.4;
 const NOTCH: f32 = 0.26;
+
+thread_local! {
+    // draw_mesh copies the geometry into macroquad's batch before returning.
+    // Reuse this storage for panel fills and the many clipped pattern pieces.
+    static FILL_MESH: RefCell<Mesh> = const { RefCell::new(Mesh {
+        vertices: Vec::new(), indices: Vec::new(), texture: None,
+    }) };
+}
 
 /// Room a shape needs beside the content, on the left and the right, for a
 /// panel `height` tall.
@@ -200,17 +209,16 @@ pub fn fill(points: &[Vec2], top: Color, bottom: Color) {
         Vertex::new(at.x, at.y, 0., 0., 0., shade(p))
     };
     let middle = points.iter().copied().sum::<Vec2>() / points.len() as f32;
-    let mut vertices = Vec::with_capacity(points.len() + 1);
-    vertices.push(vertex(middle));
-    vertices.extend(points.iter().map(|p| vertex(*p)));
-    let n = points.len() as u16;
-    let indices = (1..=n)
-        .flat_map(|i| [0, i, if i == n { 1 } else { i + 1 }])
-        .collect();
-    draw_mesh(&Mesh {
-        vertices,
-        indices,
-        texture: None,
+    FILL_MESH.with(|storage| {
+        let mut mesh = storage.borrow_mut();
+        mesh.vertices.clear();
+        mesh.indices.clear();
+        mesh.vertices.push(vertex(middle));
+        mesh.vertices.extend(points.iter().map(|p| vertex(*p)));
+        let n = points.len() as u16;
+        mesh.indices
+            .extend((1..=n).flat_map(|i| [0, i, if i == n { 1 } else { i + 1 }]));
+        draw_mesh(&mesh);
     });
 }
 

@@ -36,6 +36,7 @@ pub struct CuePlayer {
 #[derive(Clone, Copy)]
 struct Waiting {
     at: f64,
+    first: bool,
     sound: MapSound,
     gain: f32,
     /// Semitones.
@@ -51,10 +52,24 @@ impl CuePlayer {
         }
         for play in 0..cue.plays.max(1) {
             if self.waiting.len() >= MOST_WAITING {
-                break;
+                // A long repeat sequence must not swallow a new button or
+                // pickup sound. Sacrifice its latest repeat for this cue.
+                let repeat = if play == 0 {
+                    self.waiting
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, pending)| !pending.first)
+                        .max_by(|(_, a), (_, b)| a.at.total_cmp(&b.at))
+                        .map(|(index, _)| index)
+                } else {
+                    None
+                };
+                let Some(repeat) = repeat else { break };
+                self.waiting.swap_remove(repeat);
             }
             self.waiting.push(Waiting {
                 at: now + f64::from(play) * f64::from(cue.gap),
+                first: play == 0,
                 sound: cue.sound,
                 gain,
                 pitch: f32::from(cue.pitch),
@@ -919,6 +934,36 @@ fn rail_synth(cue: RailCue) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeat_sequences_leave_room_for_new_cues() {
+        let mut player = CuePlayer::default();
+        let repeating = SoundCue {
+            plays: 8,
+            gap: 1.,
+            ..SoundCue::new(MapSound::Chime, 0.5)
+        };
+        for _ in 0..MOST_WAITING / 8 {
+            player.play(&repeating, 0.5, 10.);
+        }
+        assert_eq!(player.waiting.len(), MOST_WAITING);
+        player.play(&SoundCue::new(MapSound::Thump, 0.8), 0.8, 10.);
+        assert_eq!(player.waiting.len(), MOST_WAITING);
+        assert!(
+            player
+                .waiting
+                .iter()
+                .any(|play| play.sound == MapSound::Thump && play.first)
+        );
+        assert_eq!(
+            player.waiting.iter().filter(|play| play.first).count(),
+            MOST_WAITING / 8 + 1
+        );
+        assert_eq!(player.due(10.).len(), MOST_WAITING / 8 + 1);
+        assert!(player.waiting.iter().all(|play| play.at > 10.));
+        assert!(!player.due(100.).is_empty());
+        assert!(player.waiting.is_empty());
+    }
 
     #[test]
     fn rail_cues_are_finite_bounded_and_end_in_silence() {
