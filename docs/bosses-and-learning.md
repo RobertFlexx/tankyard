@@ -68,7 +68,7 @@ The **Siege Engine's cannon** winds up for 1.5 seconds, drawing a red line to th
 
 Bosses aim where you're going, not where you were: they work out where a round will meet a moving tank. They drive in straight lines between decisions and would rather finish a wounded target than start on a healthy one. Running in a straight line is how you get hit. Changing direction is the counterplay.
 
-## Boss overhaul
+## Boss combat in 2.1
 
 Each ordinary boss now chooses between three special attacks according to range,
 the crowd around it and the way its target moves. Later phases shorten its pauses
@@ -107,7 +107,7 @@ lineup. Hosts may explicitly choose `sunderworm` in a dedicated-server lineup or
 a map Boss trigger. A local pack can keep the card available with
 `"menu": { "bosses": ["sunderworm"] }`.
 
-The overhaul uses **protocol 35**. Update the host and its players together.
+Tank Yard 2.1.0 uses **protocol 35**. Update the host and its players together.
 Snapshots carry its real body positions, including when joining mid-fight.
 
 </details>

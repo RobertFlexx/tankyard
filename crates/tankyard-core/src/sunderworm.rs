@@ -1,5 +1,5 @@
 //! The Sunderworm: something vast that lives under the arena floor. It is in
-//! no list and on no menu. It comes up on its own about once in two million
+//! no ordinary roster. It comes up on its own about once in two million
 //! boss events, and the Boss Rush roster turns its card up about once in
 //! twenty-four thousand visits.
 //!

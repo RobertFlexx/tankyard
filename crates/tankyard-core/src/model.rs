@@ -721,8 +721,8 @@ impl BossKind {
         Self::Skirmisher,
         Self::Trapper,
     ];
-    /// Bosses no menu or list shows. They are still found by their ids, so
-    /// saved lineups, maps and mods can bring them.
+    /// Encounters outside the ordinary roster. Rare menu rolls, saved
+    /// lineups, maps and mods can still select them by id.
     pub const SECRET: [Self; 1] = [Self::Sunderworm];
     /// Every kind there is, the secret ones last.
     pub const EVERY: [Self; 16] = [

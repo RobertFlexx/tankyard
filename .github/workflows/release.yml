@@ -51,6 +51,8 @@ jobs:
       - name: Fetch the NVIDIA DLSS SDK
         # Pinned by SHA-256; with it, clippy and the tests cover DLSS too.
         run: python scripts/fetch_dlss_sdk.py
+      - name: Verify sound recordings
+        run: python scripts/prepare_foley.py
       - name: Check source
         run: |
           cargo fmt --all -- --check

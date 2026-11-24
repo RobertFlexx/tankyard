@@ -51,6 +51,10 @@ def package(binary_dir: Path, output: Path, platform: str, version: str) -> Path
         # The tutorial video stays on GitHub; it would add 15 MB to every package.
         shutil.copytree(ROOT / "docs", payload / "docs", ignore=shutil.ignore_patterns("*.mp4"))
         shutil.copytree(ROOT / "licenses", payload / "licenses", dirs_exist_ok=True)
+        foley = payload / "assets/audio/foley"
+        foley.mkdir(parents=True)
+        for filename in ("README.md", "sources.json"):
+            shutil.copy2(ROOT / "assets/audio/foley" / filename, foley)
         shutil.copy2(ROOT / "assets/fonts/LICENSE-DejaVu.txt", payload / "licenses/DejaVu.txt")
         shutil.copy2(ROOT / "assets/icons/lucide/LICENSE", payload / "licenses/Lucide.txt")
         shutil.copy2(ROOT / "assets/tankyard.svg", payload)
