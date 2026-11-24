@@ -2501,8 +2501,9 @@ impl App {
                 if let Some(axiom) = axiom {
                     let r = hud::boss_banner_layout(screen_width(), s);
                     let share = (axiom.health / axiom.max_health.max(1.)).clamp(0., 1.);
-                    hud::boss_bar(
+                    self.hud.boss_bar(
                         &hud::BossBar {
+                            id: axiom.id,
                             kind: None,
                             name: tankyard_core::creator_boss::NAME,
                             health: axiom.health,
@@ -2522,7 +2523,7 @@ impl App {
                     );
                 }
                 if let Some(boss) = headline_boss {
-                    hud::headline_boss_bar(
+                    self.hud.headline_boss_bar(
                         boss,
                         self.effects.boss_fx.health_trail(boss),
                         boss.target != 0 && boss.target == session.player,
