@@ -19,6 +19,7 @@ pub struct DamageRecord {
 pub struct World {
     /// Trusted host state; never accepted from input packets or snapshots.
     pub admin_modifiers: BTreeMap<EntityId, crate::administration::Modifiers>,
+    pub(crate) owner_tanks: BTreeMap<EntityId, crate::administration::OwnerTankOverride>,
     /// Incoming damage multipliers set by behavior mods.
     pub incoming_damage: BTreeMap<EntityId, f32>,
     /// HUD widgets from behavior mods by pack, viewer (0 for everyone) and
@@ -198,6 +199,7 @@ impl World {
         let mut world = Self {
             pocket_plan: None,
             admin_modifiers: BTreeMap::new(),
+            owner_tanks: BTreeMap::new(),
             incoming_damage: BTreeMap::new(),
             hud: BTreeMap::new(),
             damage_log: Vec::with_capacity(64),
@@ -442,6 +444,7 @@ impl World {
     }
     pub fn remove_player(&mut self, id: EntityId) {
         self.admin_modifiers.remove(&id);
+        self.owner_tanks.remove(&id);
         self.incoming_damage.remove(&id);
         self.tanks.retain(|t| t.id != id);
         if !self.tanks.iter().any(|tank| tank.game_creator && !tank.bot) {

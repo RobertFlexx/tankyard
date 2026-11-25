@@ -1,5 +1,5 @@
 use crate::{LocalSession, NetError, ServerSettings, unix_time};
-use bastion_anticheat::{InputHistory, Violation};
+use bastion_anticheat::{InputHistory, Ledger, PROOFS_TO_REMOVE, Proof, Verdict};
 use renet::{Bytes, RenetServer, ServerEvent};
 use renet_netcode::{ServerAuthentication, ServerConfig};
 use std::{
@@ -20,9 +20,9 @@ pub(crate) struct Peer {
     pub last_input_at: Duration,
     pub last_sequence: Option<u32>,
     input_history: InputHistory,
-    /// In observe mode, write each kind of finding once per connection after
-    /// a successful report; a failed audit leaves it available to retry.
-    reported_violations: u8,
+    /// Bastion's distinct proofs against this connection, kept across
+    /// rounds, and which kinds have reached the audit.
+    bastion: Ledger,
     pub control_tokens: f32,
     pub queued_control: Option<Bytes>,
     pub input_tokens: f32,
@@ -65,7 +65,7 @@ impl Peer {
             last_input_at: now,
             last_sequence: None,
             input_history: InputHistory::default(),
-            reported_violations: 0,
+            bastion: Ledger::default(),
             control_tokens: 24.,
             queued_control: None,
             input_tokens: 256.,
@@ -618,8 +618,23 @@ impl UdpServer {
                         self.reject(client, "Invalid handshake.");
                         return;
                     }
-                    if self.bastion_violation(client, Violation::ControlValues) {
-                        return;
+                    // Staff requests are checked against game data, such as
+                    // rule ranges, that can move between patch releases of
+                    // one protocol. A mismatch is refused, never a proof.
+                    if matches!(message, ClientControl::Admin { .. }) {
+                        self.metrics.rejected_packets += 1;
+                        self.bastion.note_rejected_request();
+                        self.community_result(
+                            client,
+                            Err(crate::NetError(
+                                "The server could not accept that request.".into(),
+                            )),
+                        );
+                    } else if let Some(peer) = self.peers.get_mut(&client) {
+                        let proof = peer.bastion.control_proof();
+                        if self.bastion_proof(client, proof) {
+                            return;
+                        }
                     }
                 }
                 Err(_) => {
@@ -679,8 +694,8 @@ impl UdpServer {
             if peer.entity.is_none() {
                 continue;
             }
-            if let Err(violation) = peer.input_history.check(&inputs, self.elapsed) {
-                if self.bastion_violation(client, violation) {
+            if let Err(proof) = peer.input_history.check(&inputs, self.elapsed) {
+                if self.bastion_proof(client, proof) {
                     return;
                 }
                 continue;
@@ -831,9 +846,11 @@ impl UdpServer {
         peer.strikes > 12
     }
 
-    /// Refuse the complete offending message. Only a joined connection can
-    /// reach this path. No account, address or other relay user is sanctioned.
-    fn bastion_violation(&mut self, client: u64, violation: Violation) -> bool {
+    /// Refuse the complete offending message and count its proof. Only a
+    /// joined connection can reach this path, and only the connection is
+    /// removed: no account, address or other relay user is sanctioned.
+    /// Returns whether the connection is being removed.
+    fn bastion_proof(&mut self, client: u64, proof: Proof) -> bool {
         self.metrics.rejected_packets += 1;
         self.bastion.note_rejected_request();
         let enforce = self.settings.bastion_mode == crate::BastionMode::Enforce;
@@ -843,10 +860,16 @@ impl UdpServer {
         if peer.disconnect_at.is_some() {
             return true;
         }
-        let bit = 1 << violation as u8;
-        let first_report = peer.reported_violations & bit == 0;
-        if enforce || first_report {
-            let action = if enforce { "Disconnected" } else { "Observed" };
+        let verdict = peer.bastion.record(proof, self.elapsed);
+        let Verdict::Recorded { count } = verdict else {
+            return false;
+        };
+        let remove = enforce && verdict.removes();
+        let violation = proof.violation;
+        // Enforcing, every distinct proof is written: at most a few before
+        // removal. Observing, each kind once per connection; a failed write
+        // leaves it to the next proof of that kind.
+        if enforce || peer.bastion.unreported(violation) {
             let name = peer
                 .entity
                 .and_then(|id| {
@@ -860,10 +883,22 @@ impl UdpServer {
                         .map(|tank| tank.name.as_str())
                 })
                 .unwrap_or("player");
-            let reason = format!(
-                "{action} {name} (connection {client}). {}",
-                violation.reason()
-            );
+            let reason = if remove {
+                format!(
+                    "Disconnected {name} (connection {client}) after {count} proofs. {}",
+                    violation.reason()
+                )
+            } else if enforce {
+                format!(
+                    "Recorded proof {count} of {PROOFS_TO_REMOVE} against {name} (connection {client}). {}",
+                    violation.reason()
+                )
+            } else {
+                format!(
+                    "Observed {name} (connection {client}). {}",
+                    violation.reason()
+                )
+            };
             log::warn!("Bastion: {reason}");
             match crate::access::audit(
                 self.settings.creator_audit_file(),
@@ -877,17 +912,17 @@ impl UdpServer {
                     reason: &reason,
                 },
             ) {
-                Ok(()) => peer.reported_violations |= bit,
+                Ok(()) => peer.bastion.mark_reported(violation),
                 Err(error) => log::warn!("Could not write the Bastion audit entry: {error}"),
             }
         }
-        if enforce {
+        if remove {
             self.reject(
                 client,
                 &format!("Bastion disconnected this session. {}", violation.reason()),
             );
         }
-        enforce
+        remove
     }
 
     fn take_token(&mut self, client: u64, control: bool) -> bool {
@@ -1202,8 +1237,10 @@ impl UdpServer {
                     ServerCommand::LiftBan { .. } => "Ban lifted.",
                     ServerCommand::SummonBoss { .. } => "Boss summoned.",
                     ServerCommand::DismissBosses => "Bosses dismissed.",
+                    ServerCommand::SetOwnTank { .. } => "Your tank settings were applied.",
                     // A read answers with its data, which is reply enough.
                     ServerCommand::ReadAudit
+                    | ServerCommand::ReadOwnTank
                     | ServerCommand::ReadBans
                     | ServerCommand::ReadHealth => "",
                     _ => "Server command applied.",
@@ -2375,18 +2412,33 @@ impl Drop for UdpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn bastion_observes_once_per_reason_or_disconnects_only_that_peer() {
-        let audit = std::env::temp_dir().join(format!(
-            "tankyard-bastion-{:x}.jsonl",
-            u64::from_le_bytes(renet_netcode::generate_random_bytes())
-        ));
+    use bastion_anticheat::Violation;
+    fn proof(server: &mut UdpServer, client: u64, violation: Violation) -> Proof {
+        let mut history = InputHistory::default();
+        let peer = server.peers.get_mut(&client).unwrap();
+        match violation {
+            Violation::ControlValues => peer.bastion.control_proof(),
+            _ => {
+                // A fresh frame each time, so each is a distinct proof.
+                peer.last_input_at += Duration::from_millis(1);
+                let mut bundle = tankyard_protocol::InputBundle::default();
+                bundle.push(PlayerInput {
+                    sequence: peer.last_input_at.as_millis() as u32,
+                    aim_distance: 1e9,
+                    ..Default::default()
+                });
+                history.check(&bundle, Duration::ZERO).unwrap_err()
+            }
+        }
+    }
+
+    fn bastion_server(audit: &std::path::Path, mode: crate::BastionMode) -> UdpServer {
         let mut server = UdpServer::bind(ServerSettings {
             bind: "127.0.0.1:0".into(),
             ban_file: String::new(),
             bot_count: 0,
             audit_file: audit.to_string_lossy().into(),
-            bastion_mode: crate::BastionMode::Observe,
+            bastion_mode: mode,
             ..Default::default()
         })
         .unwrap();
@@ -2395,21 +2447,30 @@ mod tests {
         peer.entity = Some(player);
         server.peers.insert(7, peer);
         server.peers.insert(8, Peer::new(Duration::ZERO));
-        for _ in 0..3 {
-            assert!(!server.bastion_violation(7, Violation::ConflictingFrame));
+        server
+    }
+
+    #[test]
+    fn bastion_observes_once_per_reason_or_removes_only_that_peer_after_three_proofs() {
+        let audit = std::env::temp_dir().join(format!(
+            "tankyard-bastion-{:x}.jsonl",
+            u64::from_le_bytes(renet_netcode::generate_random_bytes())
+        ));
+        let mut server = bastion_server(&audit, crate::BastionMode::Observe);
+        for _ in 0..5 {
+            let found = proof(&mut server, 7, Violation::InputValues);
+            assert!(!server.bastion_proof(7, found));
         }
         assert!(server.peers[&7].disconnect_at.is_none());
         server.settings.bastion_mode = crate::BastionMode::Enforce;
-        assert!(server.bastion_violation(7, Violation::ControlValues));
+        // The five observed proofs still count: the sixth distinct one is
+        // past the threshold.
+        let found = proof(&mut server, 7, Violation::ControlValues);
+        assert!(server.bastion_proof(7, found));
         assert!(server.peers[&7].disconnect_at.is_some());
         assert!(server.peers[&8].disconnect_at.is_none());
         assert!(server.bans.is_empty());
-        let text = std::fs::read_to_string(&audit).unwrap();
-        std::fs::remove_file(audit).unwrap();
-        let rows: Vec<serde_json::Value> = text
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+        let rows = audit_rows(&audit);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["target_name"], "Pilot");
         assert!(rows[0]["reason"].as_str().unwrap().starts_with("Observed"));
@@ -2419,6 +2480,46 @@ mod tests {
                 .unwrap()
                 .starts_with("Disconnected")
         );
+    }
+
+    #[test]
+    fn enforcing_bastion_refuses_and_records_two_proofs_and_removes_at_the_third() {
+        let audit = std::env::temp_dir().join(format!(
+            "tankyard-bastion-enforce-{:x}.jsonl",
+            u64::from_le_bytes(renet_netcode::generate_random_bytes())
+        ));
+        let mut server = bastion_server(&audit, crate::BastionMode::Enforce);
+        let first = proof(&mut server, 7, Violation::InputValues);
+        assert!(!server.bastion_proof(7, first));
+        // The same frame again, as the next packets repeat it: no new count.
+        assert!(!server.bastion_proof(7, first));
+        let second = proof(&mut server, 7, Violation::ControlValues);
+        assert!(!server.bastion_proof(7, second));
+        assert!(server.peers[&7].disconnect_at.is_none());
+        let third = proof(&mut server, 7, Violation::InputValues);
+        assert!(server.bastion_proof(7, third));
+        assert!(server.peers[&7].disconnect_at.is_some());
+        assert!(server.peers[&8].disconnect_at.is_none());
+        // Anything still queued from it changes nothing more.
+        let late = proof(&mut server, 7, Violation::ControlValues);
+        assert!(server.bastion_proof(7, late));
+        let rows = audit_rows(&audit);
+        let reasons: Vec<_> = rows
+            .iter()
+            .map(|row| row["reason"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(reasons.len(), 3, "{reasons:?}");
+        assert!(reasons[0].starts_with("Recorded proof 1 of 3"));
+        assert!(reasons[1].starts_with("Recorded proof 2 of 3"));
+        assert!(reasons[2].starts_with("Disconnected Pilot"));
+    }
+
+    fn audit_rows(audit: &std::path::Path) -> Vec<serde_json::Value> {
+        let text = std::fs::read_to_string(audit).unwrap();
+        std::fs::remove_file(audit).unwrap();
+        text.lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
     }
 
     #[test]
@@ -2432,28 +2533,26 @@ mod tests {
             u64::from_le_bytes(renet_netcode::generate_random_bytes())
         ));
         std::fs::create_dir_all(&blocked_dir).unwrap();
-        let mut server = UdpServer::bind(ServerSettings {
-            bind: "127.0.0.1:0".into(),
-            ban_file: String::new(),
-            bot_count: 0,
-            audit_file: blocked_dir.to_string_lossy().into(),
-            bastion_mode: crate::BastionMode::Observe,
-            ..Default::default()
-        })
-        .unwrap();
-        let player = server.arenas[0].session.world.add_player("Pilot", false);
-        let mut peer = Peer::new(Duration::ZERO);
-        peer.entity = Some(player);
-        server.peers.insert(7, peer);
-        let bit = 1 << Violation::ControlValues as u8;
+        let mut server = bastion_server(&blocked_dir, crate::BastionMode::Observe);
         for _ in 0..2 {
-            assert!(!server.bastion_violation(7, Violation::ControlValues));
-            assert_eq!(server.peers[&7].reported_violations & bit, 0);
+            let found = proof(&mut server, 7, Violation::ControlValues);
+            assert!(!server.bastion_proof(7, found));
+            assert!(
+                server.peers[&7]
+                    .bastion
+                    .unreported(Violation::ControlValues)
+            );
         }
         server.settings.audit_file = audit.to_string_lossy().into();
-        assert!(!server.bastion_violation(7, Violation::ControlValues));
-        assert_ne!(server.peers[&7].reported_violations & bit, 0);
-        assert!(!server.bastion_violation(7, Violation::ControlValues));
+        let found = proof(&mut server, 7, Violation::ControlValues);
+        assert!(!server.bastion_proof(7, found));
+        assert!(
+            !server.peers[&7]
+                .bastion
+                .unreported(Violation::ControlValues)
+        );
+        let found = proof(&mut server, 7, Violation::ControlValues);
+        assert!(!server.bastion_proof(7, found));
         let text = std::fs::read_to_string(&audit).unwrap();
         std::fs::remove_file(audit).unwrap();
         std::fs::remove_dir(blocked_dir).unwrap();

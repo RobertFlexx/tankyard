@@ -54,6 +54,8 @@ pub struct NetworkClient {
     /// Set when a ban list arrives, so the panel can stop waiting for one.
     pub ban_rows_fresh: bool,
     pub server_health: Option<tankyard_protocol::ServerHealth>,
+    pub own_tank: Option<OwnerTank>,
+    own_tank_requested: Option<std::time::Instant>,
     /// An older server cannot decode this optional request. Probe once;
     /// polling starts only after a response establishes support.
     health_requested: Option<std::time::Instant>,
@@ -299,6 +301,8 @@ impl NetworkClient {
             ban_rows: Vec::new(),
             ban_rows_fresh: false,
             server_health: None,
+            own_tank: None,
+            own_tank_requested: None,
             health_requested: None,
             creator_challenge: None,
             creator_server_id: None,
@@ -431,6 +435,13 @@ impl NetworkClient {
                     self.ban_rows_fresh = true;
                 }
                 ServerControl::Health { health } => self.server_health = Some(health),
+                ServerControl::OwnTank { tank } => {
+                    if !tank.valid() || self.bundle.content.class(&tank.class).is_none() {
+                        return self.fail("Invalid owner tank settings.".into());
+                    }
+                    self.own_tank = Some(tank);
+                    self.own_tank_requested = None;
+                }
                 ServerControl::Access {
                     kind,
                     chat_enabled,
@@ -449,6 +460,10 @@ impl NetworkClient {
                     self.kind = kind;
                     self.chat_enabled = kind == ServerKind::Community && chat_enabled;
                     self.role = role;
+                    if role != ServerRole::Owner {
+                        self.own_tank = None;
+                        self.own_tank_requested = None;
+                    }
                     self.permissions = permissions;
                 }
                 ServerControl::Rooms { rooms } => {
@@ -521,6 +536,8 @@ impl NetworkClient {
                     }
                     self.mod_hud.clear();
                     if self.player_id != Some(player) || self.player_round != Some(round) {
+                        self.own_tank = None;
+                        self.own_tank_requested = None;
                         self.snapshot = None;
                         self.previous_snapshot = None;
                         self.event_queue.clear();
@@ -573,6 +590,8 @@ impl NetworkClient {
                     }
                     self.admin_server_id = Some(server_id);
                     self.admin_nonce = Some(nonce);
+                    self.own_tank = None;
+                    self.own_tank_requested = None;
                     self.admin_sequence = 0;
                     self.central_owner_challenge = central_owner.then_some(nonce);
                 }
@@ -780,6 +799,12 @@ impl NetworkClient {
             return false;
         }
         let health = matches!(command, ServerCommand::ReadHealth);
+        let read_tank = matches!(command, ServerCommand::ReadOwnTank);
+        if read_tank && self.own_tank_requested.is_some()
+            || matches!(command, ServerCommand::SetOwnTank { .. }) && self.own_tank.is_none()
+        {
+            return false;
+        }
         if health && self.server_health.is_none() && self.health_requested.is_some() {
             return false;
         }
@@ -817,6 +842,10 @@ impl NetworkClient {
             if health {
                 self.health_requested = Some(std::time::Instant::now());
             }
+            if read_tank {
+                self.own_tank = None;
+                self.own_tank_requested = Some(std::time::Instant::now());
+            }
             true
         } else {
             false
@@ -829,6 +858,16 @@ impl NetworkClient {
             && self
                 .health_requested
                 .is_some_and(|at| at.elapsed() >= Duration::from_secs(5))
+    }
+    pub fn own_tank_unavailable(&self) -> bool {
+        self.own_tank_requested
+            .is_some_and(|at| at.elapsed() >= Duration::from_secs(5))
+    }
+    pub fn retry_own_tank(&mut self) {
+        if self.own_tank_unavailable() {
+            self.own_tank_requested = None;
+            self.admin(ServerCommand::ReadOwnTank);
+        }
     }
     pub fn admin_public_key(&self) -> [u8; 32] {
         self.admin_key

@@ -23,6 +23,13 @@ pub use status::*;
 /// and servers update together so the visible body matches collision geometry,
 /// including when joining an encounter already in progress.
 pub const PROTOCOL_VERSION: u32 = 35;
+// Bastion counts a request outside `ClientControl::valid` as proof that it
+// did not come from the game, so every client of one protocol must agree on
+// those limits. Two come from game data: pin them to the version.
+const _: () = assert!(
+    PROTOCOL_VERSION == 35 && tankyard_core::MAX_LEVEL == 55 && tankyard_mods::HUD_CHOICES == 6,
+    "the level cap and HUD choice count are wire limits: change them with PROTOCOL_VERSION"
+);
 /// The oldest client version servers accept.
 pub const MIN_PROTOCOL_VERSION: u32 = 35;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
@@ -313,6 +320,10 @@ pub enum ServerControl {
     /// The answer to [`ServerCommand::ReadHealth`].
     Health {
         health: ServerHealth,
+    },
+    /// Sent only in response to a signed own-tank request.
+    OwnTank {
+        tank: OwnerTank,
     },
 }
 /// Whether a HUD list from a server is one this client should draw.

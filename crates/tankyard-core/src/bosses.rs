@@ -29,6 +29,20 @@ const LOST_SECONDS: f32 = 6.;
 /// About how far a boss drives in a straight line before it picks a new one.
 const LEG_LENGTH: f32 = 200.;
 
+/// The padded hull can touch cover while the real hull is clear. A slide
+/// along or away from that face is a legal escape, including from a corner.
+fn clear_leg(from: V2, to: V2, radius: f32, walls: &[Rect]) -> bool {
+    walls
+        .iter()
+        .all(|&wall| match sweep_rect(from, to, radius + 4., wall) {
+            None => true,
+            Some((0., normal)) => {
+                (to - from).dot(normal) >= 0. && circle_rect(to, radius, wall).is_none()
+            }
+            Some(_) => false,
+        })
+}
+
 pub(crate) fn boss_clear_steering(
     pos: V2,
     desired: V2,
@@ -43,11 +57,7 @@ pub(crate) fn boss_clear_steering(
     for angle in [0., 0.35, -0.35, 0.7, -0.7, 1.2, -1.2, 1.8, -1.8, 2.6, -2.6] {
         let velocity = desired.rotate(angle);
         let next = pos + velocity * 0.75;
-        if !bounds.contains_circle(next, radius + 8.)
-            || walls
-                .iter()
-                .any(|&w| sweep_rect(pos, next, radius + 4., w).is_some())
-        {
+        if !bounds.contains_circle(next, radius + 8.) || !clear_leg(pos, next, radius, walls) {
             continue;
         }
         let border = (next.x - bounds.x)
@@ -218,14 +228,14 @@ fn aimed_speed(kind: BossKind) -> f32 {
         BossKind::Railgunner => 1700.,
         BossKind::Sunderworm => 660.,
         BossKind::Skirmisher => 450.,
-        BossKind::Trapper => 240.,
-        BossKind::Guardian => 270.,
-        BossKind::Summoner => 235.,
-        BossKind::FallenOverlord => 305.,
+        BossKind::Trapper => 850.,
+        BossKind::Guardian => 355.,
+        BossKind::Summoner => 325.,
+        BossKind::FallenOverlord => 390.,
         BossKind::Defender | BossKind::Prism => 410.,
         BossKind::FallenBooster => 460.,
         BossKind::Sentinel => 330.,
-        BossKind::Foundry => 215.,
+        BossKind::Foundry => 295.,
         BossKind::Tempest => 285.,
         BossKind::Bastion => 340.,
         BossKind::Eclipse => 370.,
@@ -263,7 +273,38 @@ fn next_leg(
         V2::from_angle(b.aim + std::f32::consts::PI)
     };
     if tactic != BossTactic::Orbit {
-        return bounds.clamp_circle(foe + out * ring, b.radius + 8.);
+        let radial = bounds.clamp_circle(foe + out * ring, b.radius + 8.);
+        if b.kind == BossKind::Trapper
+            && tactic == BossTactic::Retreat
+            && ((radial - b.pos).dot(out) < LEG_LENGTH * 0.55
+                || !clear_leg(b.pos, radial, b.radius, walls))
+        {
+            // Pick a full, clear leg along the edge, even when reaching it
+            // means briefly moving closer to the player blocking the exit.
+            let mut best = None;
+            for n in 0..16 {
+                let way = out.rotate(n as f32 * std::f32::consts::TAU / 16.);
+                let point = b.pos + way * LEG_LENGTH;
+                if bounds.contains_circle(point, b.radius + 8.)
+                    && clear_leg(b.pos, point, b.radius, walls)
+                {
+                    let room = (point.x - bounds.x)
+                        .min(bounds.x + bounds.w - point.x)
+                        .min(point.y - bounds.y)
+                        .min(bounds.y + bounds.h - point.y);
+                    let score = point.distance(foe)
+                        + room.min(LEG_LENGTH) * 0.9
+                        + way.dot(b.vel.normalized()) * 18.;
+                    if best.is_none_or(|(previous, _)| score > previous) {
+                        best = Some((score, point));
+                    }
+                }
+            }
+            if let Some((_, point)) = best {
+                return point;
+            }
+        }
+        return radial;
     }
     let spin = out.x * b.vel.y - out.y * b.vel.x;
     // With another boss on the same tank, it circles the other way round, so
@@ -308,6 +349,51 @@ pub struct BossRound {
     pub life: f32,
     pub penetration: f32,
     pub bounces: u8,
+}
+
+/// After the warned side mines land, two opposite launchers sweep outward
+/// from those flanks. Later rounds travel farther before settling.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TrapSpiral {
+    aim: f32,
+    phase: u8,
+    tick: u8,
+}
+impl TrapSpiral {
+    fn steps(phase: u8) -> u8 {
+        6 + phase.clamp(1, 3) * 2
+    }
+
+    fn pair(aim: f32, phase: u8, step: u8) -> [BossRound; 2] {
+        let travel = f32::from(step) / f32::from(Self::steps(phase) - 1);
+        let angle = aim + std::f32::consts::FRAC_PI_2 + 3.8 * travel;
+        [angle, angle + std::f32::consts::PI].map(|heading| {
+            round(
+                heading,
+                ProjectileKind::Trap,
+                350. + 990. * travel,
+                29.,
+                12.,
+                5.,
+                3.,
+                0,
+            )
+        })
+    }
+
+    fn advance(active: &mut Option<Self>) -> Option<[BossRound; 2]> {
+        let spiral = active.as_mut()?;
+        spiral.tick += 1;
+        let elapsed = spiral.tick.checked_sub(10)?;
+        let step = elapsed / 5;
+        let pair = elapsed
+            .is_multiple_of(5)
+            .then(|| Self::pair(spiral.aim, spiral.phase, step));
+        if pair.is_some() && step + 1 == Self::steps(spiral.phase) {
+            *active = None;
+        }
+        pair
+    }
 }
 
 /// How fast the Siege Engine's cannon round flies.
@@ -528,7 +614,6 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
             );
         }
         (BossKind::Trapper, 0) => {
-            // Two side pockets leave the whole forward lane open.
             for side in [-1., 1.] {
                 for n in -1..=1 {
                     rounds.push(round(
@@ -868,10 +953,37 @@ impl World {
                 {
                     return None;
                 }
-                Some((from_drone, tank.pos))
+                Some((from_drone, tank))
             })
             .min_by(|(a, _), (b, _)| a.total_cmp(b))
-            .map_or(guard, |(_, pos)| pos)
+            .map_or(guard, |(distance2, tank)| {
+                if tank.vel.length_squared() < 1. || boss.kind == BossKind::Sunderworm {
+                    return tank.pos;
+                }
+                // Cut across a circling tank for a short distance. Keep the
+                // lead on visible ground and inside this boss's normal leash.
+                let distance = distance2.sqrt();
+                let lead = (distance / aimed_speed(boss.kind)).min(0.55);
+                // Split a distant pursuit across both shoulders. The spacing
+                // tapers to zero on contact so a drone still finishes its run.
+                let shoulder =
+                    (drone_phase(drone).sin() * 85.) * ((distance - 110.) / 320.).clamp(0., 1.);
+                let heading = (tank.pos - pos).normalized();
+                let point = tank.pos
+                    + tank.vel.clamp_length(480.) * lead
+                    + V2::new(-heading.y, heading.x) * shoulder;
+                if (point - boss.pos).length_squared() <= leash * leash
+                    && self.config.bounds().contains(point)
+                    && self
+                        .walls
+                        .iter()
+                        .all(|&w| sweep_rect(pos, point, 2., w).is_none())
+                {
+                    point
+                } else {
+                    tank.pos
+                }
+            })
     }
 
     /// Who boss `i` goes after this tick, and what else it can see. It weighs
@@ -1370,7 +1482,7 @@ impl World {
                         BossKind::FallenOverlord => 65.,
                         BossKind::SiegeEngine => 25.,
                         BossKind::Skirmisher => 145.,
-                        BossKind::Trapper => 62.,
+                        BossKind::Trapper => 101.,
                         BossKind::Bastion => 38.,
                         BossKind::Foundry | BossKind::Defender => 32.,
                         _ => 55.,
@@ -1385,7 +1497,7 @@ impl World {
                 BossKind::Bastion | BossKind::Defender => 650.,
                 BossKind::SiegeEngine => 720.,
                 BossKind::Skirmisher => 420.,
-                BossKind::Trapper => 580.,
+                BossKind::Trapper => 415.,
                 _ => 450.,
             };
             let drone_limit = (b.kind.drone_limit() as f32 * swarm).ceil() as usize;
@@ -1500,11 +1612,24 @@ impl World {
             }
             // Let the warning and secondary pattern read clearly. A primary
             // volley cannot land on the same frame as the special attack.
-            let primary = primary_due && b.attack_windup <= 0. && !secondary;
+            let start_spiral = secondary && b.kind == BossKind::Trapper && b.attack == 0;
+            if start_spiral {
+                b.mind.trap_spiral = Some(TrapSpiral {
+                    aim: b.aim,
+                    phase: b.phase,
+                    tick: 0,
+                });
+                b.timer = b
+                    .timer
+                    .max(f32::from(TrapSpiral::steps(b.phase) * 5 + 10) * DT + 0.4);
+            }
+            let primary =
+                primary_due && b.attack_windup <= 0. && !secondary && b.mind.trap_spiral.is_none();
+            let spiral_pair = TrapSpiral::advance(&mut b.mind.trap_spiral);
             if secondary {
                 b.timer = b.timer.max(0.4);
             }
-            if !secondary && (target.is_none() || !primary) {
+            if !secondary && spiral_pair.is_none() && (target.is_none() || !primary) {
                 continue;
             }
             let mut spawned_drones = owned;
@@ -1544,6 +1669,20 @@ impl World {
                     bounces,
                 ));
             };
+            if let Some(pair) = spiral_pair {
+                for round in pair {
+                    emit(
+                        round.angle,
+                        round.kind,
+                        round.speed,
+                        round.damage,
+                        round.radius,
+                        round.life,
+                        round.penetration,
+                        round.bounces,
+                    );
+                }
+            }
             if secondary {
                 for round in special_volley(b.kind, b.attack, b.aim, b.phase) {
                     emit(
@@ -1600,30 +1739,35 @@ impl World {
                 BossKind::Trapper => {
                     for n in [-1., 1.] {
                         emit(
-                            b.aim + n * 0.55,
+                            b.aim + n * 0.19,
                             ProjectileKind::Trap,
-                            240.,
-                            21.,
+                            850.,
+                            26.,
                             11.,
                             4.,
                             2.5,
                             0,
                         );
                     }
-                    b.timer = 1.35;
+                    b.timer = 1.1;
                 }
                 BossKind::Guardian => {
                     for n in 0..4 {
                         emit(
                             b.aim + std::f32::consts::PI + (n as f32 - 1.5) * 0.18,
                             ProjectileKind::Drone,
-                            270.,
-                            18.,
+                            aimed_speed(b.kind),
+                            22.,
                             15.,
                             10.,
-                            3.5,
+                            5.,
                             0,
                         );
+                    }
+                    if b.phase > 1 {
+                        // The front point fires a shard while the rear bay
+                        // replenishes, so staying ahead of the swarm costs room.
+                        emit(b.aim, ProjectileKind::Piercing, 720., 36., 11., 1.65, 3., 0);
                     }
                     b.timer = 1.1;
                 }
@@ -1632,30 +1776,60 @@ impl World {
                         emit(
                             b.aim + n as f32 * std::f32::consts::FRAC_PI_2,
                             ProjectileKind::Drone,
-                            235.,
-                            20.,
+                            aimed_speed(b.kind),
+                            24.,
                             19.,
                             11.,
-                            3.,
+                            4.5,
                             0,
                         );
                     }
-                    b.timer = 2.3;
+                    if b.phase > 1 {
+                        for side in [-1., 1.] {
+                            emit(
+                                b.aim + side * 0.10,
+                                ProjectileKind::Bullet,
+                                675.,
+                                29.,
+                                10.,
+                                1.8,
+                                2.,
+                                0,
+                            );
+                        }
+                    }
+                    b.timer = 1.95;
                 }
                 BossKind::FallenOverlord => {
                     for n in 0..4 {
                         emit(
                             b.aim + n as f32 * std::f32::consts::FRAC_PI_2,
                             ProjectileKind::Drone,
-                            305.,
+                            aimed_speed(b.kind),
                             27.,
                             17.,
                             10.,
-                            3.5,
+                            5.,
                             0,
                         );
                     }
-                    b.timer = 2.4;
+                    if b.phase > 1 {
+                        // Seekers from the bow, so a tank that outruns the
+                        // swarm is still being hunted.
+                        for side in [-1., 1.] {
+                            emit(
+                                b.aim + side * 0.16,
+                                ProjectileKind::Homing,
+                                430.,
+                                25.,
+                                9.,
+                                2.6,
+                                1.6,
+                                0,
+                            );
+                        }
+                    }
+                    b.timer = 1.95;
                 }
                 BossKind::Defender => {
                     for n in 0..3 {
@@ -1731,7 +1905,7 @@ impl World {
                         emit(
                             b.aim + (n as f32 - 1.) * 0.7,
                             ProjectileKind::Drone,
-                            215.,
+                            aimed_speed(b.kind),
                             19.,
                             12.,
                             7.,
@@ -1741,6 +1915,7 @@ impl World {
                     }
                     if b.phase > 1 {
                         emit(b.aim, ProjectileKind::Turret, 80., 19., 17., 6., 4., 0);
+                        emit(b.aim, ProjectileKind::Shell, 650., 48., 13., 1.8, 3.2, 0);
                     }
                     b.timer = 2.2;
                 }
@@ -1976,6 +2151,127 @@ mod tests {
     }
 
     #[test]
+    fn the_trap_spiral_sweeps_opposite_pairs_outward_and_then_ends() {
+        for phase in 0..=4 {
+            let steps = TrapSpiral::steps(phase);
+            let mut spiral = Some(TrapSpiral {
+                aim: 0.4,
+                phase,
+                tick: 0,
+            });
+            let mut pairs = Vec::new();
+            for tick in 1..=200 {
+                let was_active = spiral.is_some();
+                if let Some(pair) = TrapSpiral::advance(&mut spiral) {
+                    pairs.push((tick, pair));
+                }
+                if !was_active {
+                    assert!(spiral.is_none());
+                }
+            }
+            assert!(spiral.is_none(), "phase {phase} never ended");
+            assert_eq!(pairs.len(), usize::from(steps), "phase {phase}");
+            let mut last: Option<(f32, f32)> = None;
+            for (n, (tick, [a, b])) in pairs.into_iter().enumerate() {
+                // A short pause after the mines, then a pair every 5 ticks.
+                assert_eq!(tick, 10 + 5 * n);
+                let opposite = (b.angle - a.angle - std::f32::consts::PI).abs();
+                assert!(opposite < 1e-4, "pair {n} is not opposite");
+                assert_eq!(
+                    (a.speed, a.kind, b.speed),
+                    (b.speed, ProjectileKind::Trap, a.speed)
+                );
+                if let Some((angle, speed)) = last {
+                    assert!(
+                        a.angle > angle && a.speed > speed,
+                        "pair {n} did not sweep out"
+                    );
+                }
+                last = Some((a.angle, a.speed));
+            }
+            // Under one and a quarter turns, so the arms never overlap.
+            let (angle, speed) = last.unwrap();
+            assert!((angle - (0.4 + std::f32::consts::FRAC_PI_2 + 3.8)).abs() < 1e-4);
+            assert!((speed - 1340.).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn a_trapper_releases_its_spiral_and_holds_fire_until_it_ends() {
+        let mut world = arena();
+        world.tanks[0].pos = V2::new(2450., 1300.);
+        world.spawn_boss(BossKind::Trapper);
+        let boss = &mut world.bosses[0];
+        boss.pos = V2::new(1600., 1300.);
+        boss.arrival = 0.;
+        boss.timer = 0.;
+        boss.attack = 0;
+        boss.attack_windup = DT * 0.5;
+        world.update_bosses();
+        let side_mines = world.projectiles.len();
+        assert!(world.bosses[0].mind.trap_spiral.is_some());
+        let mut traps = 0;
+        for _ in 0..120 {
+            let before: Vec<_> = world.projectiles.iter().map(|p| p.id).collect();
+            world.update_bosses();
+            traps += world
+                .projectiles
+                .iter()
+                .filter(|p| !before.contains(&p.id))
+                .inspect(|p| {
+                    assert_eq!(
+                        p.kind,
+                        ProjectileKind::Trap,
+                        "a primary volley broke into the spiral"
+                    )
+                })
+                .count();
+            if world.bosses[0].mind.trap_spiral.is_none() {
+                break;
+            }
+        }
+        assert!(side_mines > 0);
+        assert_eq!(
+            traps,
+            2 * usize::from(TrapSpiral::steps(world.bosses[0].phase))
+        );
+        assert!(
+            world.bosses[0].timer > 0.,
+            "no recovery gap after the spiral"
+        );
+    }
+
+    #[test]
+    fn a_cornered_trapper_slides_out_along_the_walls() {
+        let mut world = arena();
+        world.walls.clear();
+        let bounds = world.config.bounds();
+        world.spawn_boss(BossKind::Trapper);
+        let radius = world.bosses[0].radius;
+        for corner in [
+            V2::new(bounds.x, bounds.y),
+            V2::new(bounds.x + bounds.w, bounds.y + bounds.h),
+        ] {
+            let inward = (bounds.center() - corner).normalized();
+            let start = bounds.clamp_circle(corner, radius + 12.);
+            let boss = &mut world.bosses[0];
+            (boss.pos, boss.vel, boss.leg_time) = (start, V2::ZERO, 0.);
+            boss.arrival = 0.;
+            // A tank parked on the diagonal blocks the only straight way out.
+            world.tanks[0].pos = start + inward * 230.;
+            world.tanks[0].vel = V2::ZERO;
+            let mut farthest = 0_f32;
+            for _ in 0..(5. / DT) as usize {
+                world.update_bosses();
+                let pos = world.bosses[0].pos;
+                assert!(bounds.contains_circle(pos, radius - 1.));
+                farthest = farthest.max(pos.distance(start));
+            }
+            assert!(farthest > 260., "the Trapper stayed pinned: {farthest:.0}");
+        }
+    }
+
+    #[test]
     fn summoner_drones_have_shorter_acquisition_and_return_to_their_owner() {
         let mut world = arena();
         assert_ne!(world.spawn_boss(BossKind::Summoner), 0);
@@ -2067,6 +2363,18 @@ mod tests {
             assert!(
                 !world.projectiles.is_empty(),
                 "{kind:?} did not release its secondary"
+            );
+            // A Trapper's mines open a spiral of traps from the same flanks.
+            // That is still the special attack; the gap comes after it.
+            for _ in 0..120 {
+                if world.bosses[0].mind.trap_spiral.is_none() {
+                    break;
+                }
+                world.update_bosses();
+            }
+            assert!(
+                world.bosses[0].mind.trap_spiral.is_none(),
+                "{kind:?} never finished its spiral"
             );
             let shots = world.projectiles.len();
             for _ in 0..20 {

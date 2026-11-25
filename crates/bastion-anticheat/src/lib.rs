@@ -1,12 +1,55 @@
 //! Bastion Anticheat: validate intentions; the authoritative simulation owns
 //! movement, damage, upgrades, cooldowns and time. No ping-based accusations,
 //! statistical suspicion scores, client fingerprint trust, or automatic bans.
+//!
+//! A finding is a proof, never a suspicion. The game's client cannot send any
+//! of these, in any version of the current protocol, whatever the network
+//! does to its packets:
+//!
+//! - an input frame or bundle outside the limits the protocol fixes;
+//! - a control request outside those limits, once the player has joined;
+//! - two different inputs for the same frame;
+//! - a bundle whose frames are not in order.
+//!
+//! Loss, delay, duplication and reordering change which packets arrive and
+//! when, never what one says, and the transport authenticates every byte
+//! before it gets here. Undecodable bytes are not proofs: a newer client of
+//! the same protocol may send a request this build does not know.
+//!
+//! Each proof is counted once, however many packets repeat it, and a
+//! connection is removed only after [`PROOFS_TO_REMOVE`] distinct proofs
+//! inside [`PROOF_WINDOW`]. One damaged message can't end a session; a
+//! modified client sends many within a second. Every offending message is
+//! refused either way. State per connection is fixed in size.
+#![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
 use std::time::Duration;
 use tankyard_core::PlayerInput;
 use tankyard_protocol::{InputBundle, sequence_newer};
 
 pub const NAME: &str = "Bastion Anticheat";
 pub const TAGLINE: &str = "The Bastion keeps watch over fair play.";
+
+/// Distinct proofs inside [`PROOF_WINDOW`] that remove a connection.
+pub const PROOFS_TO_REMOVE: usize = 3;
+/// How long a proof counts toward removal.
+pub const PROOF_WINDOW: Duration = Duration::from_secs(60);
+/// Frames are compared with others received this recently. Sequences never
+/// repeat within a connection, so this only bounds what is remembered.
+const FRAME_WINDOW: Duration = Duration::from_secs(2);
+const REMEMBERED_FRAMES: usize = 32;
+const REMEMBERED_PROOFS: usize = 8;
 
 /// Contradictions in decoded messages from a peer that has completed the
 /// version handshake. Each reason is safe to include in the staff audit.
@@ -15,6 +58,7 @@ pub enum Violation {
     ControlValues,
     InputValues,
     ConflictingFrame,
+    ReorderedHistory,
 }
 
 impl Violation {
@@ -23,49 +67,182 @@ impl Violation {
             Self::ControlValues => "Control request outside the negotiated protocol limits.",
             Self::InputValues => "Input history outside the negotiated protocol limits.",
             Self::ConflictingFrame => "Two different inputs for the same frame.",
+            Self::ReorderedHistory => "Input history out of order within one packet.",
+        }
+    }
+    fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+/// One contradiction and what it is about. A frame repeated in later
+/// packets is the same proof; each message is its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Proof {
+    pub violation: Violation,
+    subject: Subject,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Subject {
+    Frame(u32),
+    Message(u64),
+}
+
+impl Proof {
+    fn frame(violation: Violation, sequence: u32) -> Self {
+        Self {
+            violation,
+            subject: Subject::Frame(sequence),
         }
     }
 }
 
-/// Retain one unmodified wire history per player. Simulation inputs have
-/// already lost information to normalization and merged button edges.
-#[derive(Default, Debug)]
+#[derive(Clone, Copy, Debug)]
+struct Seen {
+    frame: PlayerInput,
+    at: Duration,
+}
+
+/// The unmodified wire frames one player sent recently. Simulation inputs
+/// have already lost information to normalization and merged button edges.
+#[derive(Debug)]
 pub struct InputHistory {
-    recent: Option<(InputBundle, Duration)>,
+    frames: [Option<Seen>; REMEMBERED_FRAMES],
+    /// Where the next new frame is written, over the oldest.
+    next: usize,
+    messages: u64,
+}
+
+impl Default for InputHistory {
+    fn default() -> Self {
+        Self {
+            frames: [None; REMEMBERED_FRAMES],
+            next: 0,
+            messages: 0,
+        }
+    }
 }
 
 impl InputHistory {
-    pub fn check(&mut self, bundle: &InputBundle, now: Duration) -> Result<(), Violation> {
-        if !bundle.valid() {
-            return Err(Violation::InputValues);
+    /// Checks one bundle against the protocol and everything recently
+    /// received, and remembers it if it holds. A bundle with any proof in it
+    /// is refused whole and changes nothing here.
+    pub fn check(&mut self, bundle: &InputBundle, now: Duration) -> Result<(), Proof> {
+        self.messages = self.messages.wrapping_add(1);
+        if !(1..=3).contains(&bundle.count) {
+            return Err(Proof {
+                violation: Violation::InputValues,
+                subject: Subject::Message(self.messages),
+            });
         }
-        // A u32 sequence wraps. Only compare between packets received close
-        // together, and forget the window on every new player or round.
-        let recent = self.recent.as_ref().filter(|(_, at)| {
-            now.checked_sub(*at)
-                .is_some_and(|age| age < Duration::from_secs(2))
-        });
-        let frames = &bundle.inputs[..usize::from(bundle.count)];
-        for (i, frame) in frames.iter().enumerate() {
-            let conflicts =
-                |other: &PlayerInput| other.sequence == frame.sequence && other != frame;
-            if frames[..i].iter().any(conflicts)
-                || recent.is_some_and(|(old, _)| {
-                    old.inputs[..usize::from(old.count)].iter().any(conflicts)
-                })
+        if let Some(frame) = bundle.iter().find(|frame| !frame.valid()) {
+            return Err(Proof::frame(Violation::InputValues, frame.sequence));
+        }
+        for (i, frame) in bundle.iter().enumerate() {
+            let earlier = bundle
+                .iter()
+                .take(i)
+                .any(|other| other.sequence == frame.sequence && other != frame);
+            if earlier
+                || self
+                    .recent(frame.sequence, now)
+                    .is_some_and(|seen| seen != frame)
             {
-                return Err(Violation::ConflictingFrame);
+                return Err(Proof::frame(Violation::ConflictingFrame, frame.sequence));
             }
         }
-        // Reordered or duplicated packets do not evict or prolong the newest
-        // history. Forward gaps, including across a wrap, are ordinary.
-        let last = frames[frames.len() - 1].sequence;
-        if recent.is_none_or(|(old, _)| {
-            sequence_newer(last, old.inputs[usize::from(old.count) - 1].sequence)
-        }) {
-            self.recent = Some((*bundle, now));
+        // The client pushes one new sequence per tick, so each frame in a
+        // bundle is newer than the one before it, across a wrap too.
+        for (before, frame) in bundle.iter().zip(bundle.iter().skip(1)) {
+            if !sequence_newer(frame.sequence, before.sequence) {
+                return Err(Proof::frame(Violation::ReorderedHistory, frame.sequence));
+            }
+        }
+        for frame in bundle.iter() {
+            if self.recent(frame.sequence, now).is_none() {
+                if let Some(slot) = self.frames.get_mut(self.next) {
+                    *slot = Some(Seen { frame, at: now });
+                }
+                self.next = (self.next + 1) % REMEMBERED_FRAMES;
+            }
         }
         Ok(())
+    }
+
+    fn recent(&self, sequence: u32, now: Duration) -> Option<PlayerInput> {
+        self.frames.iter().flatten().find_map(|seen| {
+            (seen.frame.sequence == sequence && now.saturating_sub(seen.at) < FRAME_WINDOW)
+                .then_some(seen.frame)
+        })
+    }
+}
+
+/// What to do about a proof against a connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// Already counted: refuse the message and nothing more.
+    Repeated,
+    /// A new proof, `count` distinct ones inside the window including it.
+    Recorded { count: usize },
+}
+
+impl Verdict {
+    /// Whether this proof completes the case for removing the connection.
+    pub fn removes(self) -> bool {
+        matches!(self, Self::Recorded { count } if count >= PROOFS_TO_REMOVE)
+    }
+}
+
+/// The distinct proofs against one connection over the last minute, and
+/// which kinds have been reported, for as long as it stays connected.
+#[derive(Debug, Default)]
+pub struct Ledger {
+    proofs: [Option<(Proof, Duration)>; REMEMBERED_PROOFS],
+    controls: u64,
+    reported: u8,
+}
+
+impl Ledger {
+    /// A proof about one control message. Each message is its own proof:
+    /// the reliable channel delivers every message once.
+    pub fn control_proof(&mut self) -> Proof {
+        self.controls = self.controls.wrapping_add(1);
+        Proof {
+            violation: Violation::ControlValues,
+            subject: Subject::Message(self.controls),
+        }
+    }
+
+    pub fn record(&mut self, proof: Proof, now: Duration) -> Verdict {
+        for slot in &mut self.proofs {
+            if slot.is_some_and(|(_, at)| now.saturating_sub(at) >= PROOF_WINDOW) {
+                *slot = None;
+            }
+        }
+        if self.proofs.iter().flatten().any(|(seen, _)| *seen == proof) {
+            return Verdict::Repeated;
+        }
+        // A free slot, else the oldest. There are more slots than proofs
+        // needed for removal, so the count never falls short of it.
+        if let Some(slot) = self
+            .proofs
+            .iter_mut()
+            .min_by_key(|slot| slot.map(|(_, at)| at))
+        {
+            *slot = Some((proof, now));
+        }
+        Verdict::Recorded {
+            count: self.proofs.iter().flatten().count(),
+        }
+    }
+
+    /// Whether `violation` still needs its first audit line.
+    pub fn unreported(&self, violation: Violation) -> bool {
+        self.reported & violation.bit() == 0
+    }
+    pub fn mark_reported(&mut self, violation: Violation) {
+        self.reported |= violation.bit();
     }
 }
 
@@ -74,8 +251,8 @@ pub struct Counters {
     pub accepted_inputs: u64,
     pub stale_inputs: u64,
     pub invalid_inputs: u64,
-    /// Requests the server refused before simulation. In enforce mode a
-    /// joined player is disconnected for them; observe mode only discards.
+    /// Requests the server refused before simulation, whether or not they
+    /// counted toward removing the connection.
     pub rejected_requests: u64,
 }
 #[derive(Default)]
@@ -149,18 +326,22 @@ pub fn creator_command(request: CreatorCommand<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::{PI, TAU};
     use tankyard_core::V2;
+
+    fn frame(sequence: u32) -> PlayerInput {
+        PlayerInput {
+            sequence,
+            fire: sequence.is_multiple_of(2),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn repeated_history_survives_loss_wrap_reordering_and_resume() {
         let mut checks = InputHistory::default();
         let mut sent = InputBundle::default();
         let now = Duration::from_secs(3);
-        let frame = |sequence| PlayerInput {
-            sequence,
-            fire: sequence % 2 == 0,
-            ..Default::default()
-        };
         for sequence in [u32::MAX - 1, u32::MAX] {
             sent.push(frame(sequence));
         }
@@ -186,7 +367,7 @@ mod tests {
 
     #[test]
     fn refuses_a_contradiction_without_committing_any_part_of_it() {
-        let frame = PlayerInput {
+        let first = PlayerInput {
             sequence: 17,
             movement: V2::new(1., 1.),
             ..Default::default()
@@ -194,7 +375,7 @@ mod tests {
         let now = Duration::ZERO;
         let mut checks = InputHistory::default();
         let mut original = InputBundle::default();
-        original.push(frame);
+        original.push(first);
         checks.check(&original, now).unwrap();
         let mut changed = original;
         changed.inputs[0].fire = true;
@@ -205,7 +386,7 @@ mod tests {
         });
         assert_eq!(
             checks.check(&changed, now),
-            Err(Violation::ConflictingFrame)
+            Err(Proof::frame(Violation::ConflictingFrame, 17))
         );
         original.push(PlayerInput {
             sequence: 18,
@@ -213,14 +394,175 @@ mod tests {
         });
         checks.check(&original, now).unwrap();
         let mut both = changed;
-        both.push(frame);
+        both.push(first);
         assert_eq!(
             InputHistory::default().check(&both, now),
-            Err(Violation::ConflictingFrame)
+            Err(Proof::frame(Violation::ConflictingFrame, 17))
         );
         both.count = 4;
-        assert_eq!(checks.check(&both, now), Err(Violation::InputValues));
+        assert_eq!(
+            checks.check(&both, now).map_err(|proof| proof.violation),
+            Err(Violation::InputValues)
+        );
     }
+
+    #[test]
+    fn frames_out_of_order_inside_one_packet_are_a_proof() {
+        let now = Duration::ZERO;
+        let bundle = |sequences: &[u32]| {
+            let mut bundle = InputBundle::default();
+            for &sequence in sequences {
+                bundle.push(frame(sequence));
+            }
+            bundle
+        };
+        for sequences in [&[5, 4][..], &[5, 5], &[7, 9, 8], &[0, u32::MAX]] {
+            let last = *sequences.last().unwrap();
+            assert_eq!(
+                InputHistory::default().check(&bundle(sequences), now),
+                Err(Proof::frame(Violation::ReorderedHistory, last)),
+                "{sequences:?}"
+            );
+        }
+        // Gaps are ordinary: a refused send still uses up its sequence.
+        for sequences in [&[4, 5, 6][..], &[4, 9, 400], &[u32::MAX, 0, 1]] {
+            InputHistory::default()
+                .check(&bundle(sequences), now)
+                .unwrap();
+        }
+    }
+
+    /// A small fixed generator, so these runs repeat exactly.
+    struct Dice(u64);
+    impl Dice {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    #[test]
+    fn whatever_the_network_does_the_real_client_never_produces_a_proof() {
+        for seed in 1..=64_u64 {
+            let mut dice = Dice(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+            // Start anywhere, including just before the sequence wraps.
+            let mut sequence = if seed % 4 == 0 {
+                u32::MAX - 40
+            } else {
+                dice.next() as u32
+            };
+            let mut sent = InputBundle::default();
+            let mut queue: Vec<(Duration, InputBundle)> = Vec::new();
+            let mut checks = InputHistory::default();
+            let tick = Duration::from_micros(16_667);
+            for step in 0..3_000_u32 {
+                let now = tick * step;
+                sequence = sequence.wrapping_add(1);
+                // Now and then a send is refused before it joins the history.
+                if dice.below(40) != 0 {
+                    let input = PlayerInput {
+                        sequence,
+                        movement: V2::from_angle(dice.below(1000) as f32 / 1000. * TAU)
+                            * (dice.below(101) as f32 / 100.),
+                        aim: (dice.below(1000) as f32 / 500. - 1.) * PI,
+                        aim_distance: dice.below(5000) as f32,
+                        fire: dice.below(2) == 0,
+                        ability: dice.below(9) == 0,
+                        ..Default::default()
+                    };
+                    sent.push(input);
+                    // Lost, duplicated, or held back up to three seconds.
+                    let copies = [0, 1, 1, 1, 1, 2][dice.below(6) as usize];
+                    for _ in 0..copies {
+                        let delay = match dice.below(10) {
+                            0 => Duration::from_millis(dice.below(3_000)),
+                            _ => Duration::from_millis(dice.below(120)),
+                        };
+                        queue.push((now + delay, sent));
+                    }
+                }
+                // Deliver everything due, in whatever order it was shuffled.
+                let mut due: Vec<_> = Vec::new();
+                queue.retain(|&(at, bundle)| {
+                    if at <= now {
+                        due.push(bundle);
+                    }
+                    at > now
+                });
+                for i in (1..due.len()).rev() {
+                    due.swap(i, dice.below(i as u64 + 1) as usize);
+                }
+                for bundle in due {
+                    if let Err(proof) = checks.check(&bundle, now) {
+                        panic!("seed {seed}: the real client was accused: {proof:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_repeated_proof_counts_once_and_old_ones_expire() {
+        let mut ledger = Ledger::default();
+        let mut checks = InputHistory::default();
+        let at = |seconds| Duration::from_secs(seconds);
+        let mut bad = InputBundle::default();
+        bad.push(PlayerInput {
+            sequence: 10,
+            aim_distance: 9_000.,
+            ..Default::default()
+        });
+        let proof = checks.check(&bad, at(1)).unwrap_err();
+        assert_eq!(ledger.record(proof, at(1)), Verdict::Recorded { count: 1 });
+        // The same bad frame comes back in the next two histories.
+        for next in [11, 12] {
+            bad.push(frame(next));
+            let again = checks.check(&bad, at(1)).unwrap_err();
+            assert_eq!(again, proof);
+            assert_eq!(ledger.record(again, at(1)), Verdict::Repeated);
+        }
+        let second = ledger.control_proof();
+        assert_eq!(ledger.record(second, at(2)), Verdict::Recorded { count: 2 });
+        // A minute later the first two no longer count toward removal.
+        let third = ledger.control_proof();
+        let verdict = ledger.record(third, at(62));
+        assert_eq!(verdict, Verdict::Recorded { count: 1 });
+        assert!(!verdict.removes());
+        for n in 2..=3 {
+            let proof = ledger.control_proof();
+            let verdict = ledger.record(proof, at(63));
+            assert_eq!(verdict, Verdict::Recorded { count: n });
+            assert_eq!(verdict.removes(), n == PROOFS_TO_REMOVE);
+        }
+        // Reports are remembered per kind for the whole connection.
+        assert!(ledger.unreported(Violation::ReorderedHistory));
+        ledger.mark_reported(Violation::ReorderedHistory);
+        assert!(!ledger.unreported(Violation::ReorderedHistory));
+        assert!(ledger.unreported(Violation::ControlValues));
+    }
+
+    #[test]
+    fn a_full_ledger_still_counts_a_flood_correctly() {
+        let mut ledger = Ledger::default();
+        let now = Duration::from_secs(5);
+        for n in 1..=40 {
+            let proof = ledger.control_proof();
+            let verdict = ledger.record(proof, now + Duration::from_millis(n));
+            assert_eq!(
+                verdict,
+                Verdict::Recorded {
+                    count: (n as usize).min(REMEMBERED_PROOFS)
+                }
+            );
+            assert!(verdict.removes() == (n as usize >= PROOFS_TO_REMOVE));
+        }
+    }
+
     #[test]
     fn lag_reordering_and_sequence_gaps_never_become_cheating_accusations() {
         let mut bastion = Bastion::default();

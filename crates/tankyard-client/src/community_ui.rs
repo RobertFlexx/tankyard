@@ -1,9 +1,9 @@
 use crate::ui::*;
 use macroquad::prelude::*;
-use tankyard_core::{BossKind, Mode, Snapshot};
+use tankyard_core::{BossKind, Mode, ServerBadge, Snapshot, administration::WeaponTuning};
 use tankyard_protocol::{
-    MatchSettings, ServerCommand, ServerHealth, ServerKind, ServerPermission as Permission,
-    ServerRole as Role,
+    MatchSettings, OwnerTank, ServerCommand, ServerHealth, ServerKind,
+    ServerPermission as Permission, ServerRole as Role,
 };
 use tankyard_server::NetworkClient;
 
@@ -24,6 +24,9 @@ pub struct CommunityUi {
     announcement_focus: bool,
     search: String,
     search_focus: bool,
+    owner_draft: Option<OwnerTank>,
+    class_filter: String,
+    class_page: usize,
     ban_page: usize,
     audit_page: usize,
     /// The ban a first click on Lift picked; the second click lifts it.
@@ -74,6 +77,9 @@ impl Default for CommunityUi {
             announcement_focus: false,
             search: String::new(),
             search_focus: false,
+            owner_draft: None,
+            class_filter: String::new(),
+            class_page: 0,
             ban_page: 0,
             audit_page: 0,
             lifting: None,
@@ -213,6 +219,7 @@ impl CommunityUi {
             self.reason.clear();
             self.reason_focus = false;
             self.configuration = None;
+            self.owner_draft = None;
         }
         if self.configuration != client.match_settings {
             if let Some(settings) = &client.match_settings {
@@ -446,9 +453,19 @@ impl CommunityUi {
         ) {
             self.admin_open = false;
         }
-        let tab_width =
-            (r.w - 40. * s - 5. * s * (ADMIN_TABS.len() - 1) as f32) / ADMIN_TABS.len() as f32;
-        for (i, tab) in ADMIN_TABS.into_iter().enumerate() {
+        let central_owner = client.kind == ServerKind::Official
+            && client.role == Role::Owner
+            && snapshot.tanks.iter().any(|tank| {
+                Some(tank.id) == client.player_id && tank.server_badge == ServerBadge::CentralOwner
+            });
+        let tabs = if central_owner {
+            &ADMIN_TABS[..]
+        } else {
+            &ADMIN_TABS[..ADMIN_TABS.len() - 1]
+        };
+        self.tab = self.tab.min(tabs.len() - 1);
+        let tab_width = (r.w - 40. * s - 5. * s * (tabs.len() - 1) as f32) / tabs.len() as f32;
+        for (i, &tab) in tabs.iter().enumerate() {
             if button(
                 Rect::new(
                     r.x + 20.0 * s + i as f32 * (tab_width + 5. * s),
@@ -461,6 +478,10 @@ impl CommunityUi {
                 true,
                 s * 0.7,
             ) {
+                if tab == AdminTab::MyTank && self.tab != i {
+                    self.owner_draft = None;
+                    client.admin(ServerCommand::ReadOwnTank);
+                }
                 self.tab = i;
                 self.reason_focus = false;
                 self.room_focus = false;
@@ -474,7 +495,7 @@ impl CommunityUi {
                 }
             }
         }
-        match ADMIN_TABS[self.tab.min(ADMIN_TABS.len() - 1)] {
+        match tabs[self.tab] {
             AdminTab::Players => self.players(client, snapshot, r, s),
             AdminTab::Rooms => self.rooms(client, r, s),
             AdminTab::Settings => self.settings(client, r, s),
@@ -483,6 +504,7 @@ impl CommunityUi {
             AdminTab::Audit => self.audit(client, r, s),
             AdminTab::Rules => self.rules(client, snapshot, r, s),
             AdminTab::Announce => self.announcements(client, r, s),
+            AdminTab::MyTank => self.my_tank(client, r, s),
         }
         let notice = fitted_label(&self.notice, 13. * s, r.w - 40. * s);
         label(
@@ -493,6 +515,156 @@ impl CommunityUi {
             muted_color(),
         );
     }
+    fn my_tank(&mut self, client: &mut NetworkClient, r: Rect, s: f32) {
+        let x = r.x + 20. * s;
+        let y = r.y;
+        let Some(current) = client.own_tank.as_ref() else {
+            let waiting = !client.own_tank_unavailable();
+            if waiting {
+                client.admin(ServerCommand::ReadOwnTank);
+            } else if small_button(
+                Rect::new(x, y + 146. * s, 100. * s, 32. * s),
+                "Retry",
+                s * 0.8,
+            ) {
+                client.retry_own_tank();
+            }
+            label(
+                if waiting {
+                    "Reading your tank…"
+                } else {
+                    "No reply. These controls require central server 2.1.5 or newer."
+                },
+                x,
+                y + 125. * s,
+                15. * s,
+                muted_color(),
+            );
+            return;
+        };
+        let draft = self.owner_draft.get_or_insert_with(|| current.clone());
+        let list_width = 270. * s;
+        label("Choose a hull", x, y + 112. * s, 18. * s, text_color());
+        text_field(
+            Rect::new(x, y + 128. * s, list_width, 32. * s),
+            &mut self.class_filter,
+            &mut self.search_focus,
+            48,
+            0.8 * s,
+            false,
+        );
+        if self.class_filter.is_empty() && !self.search_focus {
+            label(
+                "Search by name or ID",
+                x + 9. * s,
+                y + 150. * s,
+                14. * s,
+                muted_color(),
+            );
+        }
+        let query = self.class_filter.trim().to_lowercase();
+        let classes = client.bundle.content.classes.iter().filter(|c| {
+            query.is_empty() || c.id.contains(&query) || c.name.to_lowercase().contains(&query)
+        });
+        const ROWS: usize = 9;
+        let pages = classes.clone().count().div_ceil(ROWS).max(1);
+        self.class_page = self.class_page.min(pages - 1);
+        let mut visible = classes.skip(self.class_page * ROWS).take(ROWS).peekable();
+        if visible.peek().is_none() {
+            label(
+                "No matching hulls.",
+                x,
+                y + 195. * s,
+                14. * s,
+                muted_color(),
+            );
+        }
+        for (row, class) in visible.enumerate() {
+            let name = fitted_label(&class.name, 15. * s, list_width - 18. * s);
+            if button(
+                Rect::new(x, y + (174. + 34. * row as f32) * s, list_width, 30. * s),
+                &name,
+                class.id == draft.class,
+                true,
+                s * 0.8,
+            ) {
+                draft.class.clone_from(&class.id);
+            }
+        }
+        self.class_page = pager(
+            Rect::new(x, y + 490. * s, list_width, 30. * s),
+            self.class_page,
+            pages,
+            s,
+        );
+        let x = x + 302. * s;
+        let width = r.w - 342. * s;
+        if let Some(class) = client.bundle.content.class(&draft.class) {
+            let center = x + width * 0.5;
+            crate::render::class_model(
+                class,
+                vec2(center, y + 182. * s),
+                32. * s,
+                -0.38,
+                0.,
+                0.,
+                player_color(),
+                0.,
+            );
+            center_label(
+                &fitted_label(&class.name, 20. * s, width),
+                center,
+                y + 250. * s,
+                20. * s,
+                text_color(),
+            );
+        }
+        slider_value(
+            Rect::new(x, y + 287. * s, width, 36. * s),
+            "Weapon damage",
+            &mut draft.weapons.damage,
+            WeaponTuning::DAMAGE,
+            0.05,
+            s,
+            |v| format!("{v:.2}×"),
+        );
+        slider_value(
+            Rect::new(x, y + 354. * s, width, 36. * s),
+            "Shot speed",
+            &mut draft.weapons.shot_speed,
+            WeaponTuning::SHOT_SPEED,
+            0.05,
+            s,
+            |v| format!("{v:.2}×"),
+        );
+        if small_button(
+            Rect::new(x, y + 430. * s, width * 0.48, 34. * s),
+            "Reset to 1×",
+            s * 0.8,
+        ) {
+            draft.weapons = WeaponTuning::default();
+        }
+        let apply = button(
+            Rect::new(x + width * 0.52, y + 430. * s, width * 0.48, 34. * s),
+            "Apply",
+            true,
+            draft != current,
+            s * 0.8,
+        );
+        wrap(
+            "Changes apply to your tank for this round and mark the arena as modded.",
+            x,
+            y + 502. * s,
+            width,
+            14. * s,
+            muted_color(),
+        );
+        if apply {
+            let tank = draft.clone();
+            self.submit(client, ServerCommand::SetOwnTank { tank });
+        }
+    }
+
     fn players(&mut self, client: &mut NetworkClient, snapshot: &Snapshot, r: Rect, s: f32) {
         let search = self.search.trim().to_lowercase();
         let players: Vec<_> = snapshot
@@ -1321,8 +1493,9 @@ enum AdminTab {
     Audit,
     Announce,
     Rules,
+    MyTank,
 }
-const ADMIN_TABS: [AdminTab; 8] = [
+const ADMIN_TABS: [AdminTab; 9] = [
     AdminTab::Players,
     AdminTab::Rooms,
     AdminTab::Settings,
@@ -1331,6 +1504,7 @@ const ADMIN_TABS: [AdminTab; 8] = [
     AdminTab::Audit,
     AdminTab::Announce,
     AdminTab::Rules,
+    AdminTab::MyTank,
 ];
 impl AdminTab {
     fn title(self) -> &'static str {
@@ -1343,6 +1517,7 @@ impl AdminTab {
             Self::Audit => "Audit",
             Self::Announce => "Announce",
             Self::Rules => "Rules",
+            Self::MyTank => "My tank",
         }
     }
 }

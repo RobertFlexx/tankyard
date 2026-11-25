@@ -155,12 +155,22 @@ impl Fuel {
     }
 }
 
+/// When a worm's body is being drawn.
+#[derive(Clone, Copy)]
+pub enum BodyTime {
+    /// Offline: how far the frame is between the last two simulation ticks.
+    Local(f32),
+    /// Online: the frame's clock, and when the newest snapshot landed on it.
+    /// Snapshots are often several ticks apart and never quite evenly spaced.
+    Network { now: f64, landed: f64 },
+}
+
 /// A boss as this frame shows it.
 #[derive(Clone, Copy)]
 pub struct Shown<'a> {
     pub tick: u64,
     pub body: Option<&'a tankyard_core::sunderworm::WormBody>,
-    pub fraction: f32,
+    pub body_time: BodyTime,
     pub boss: &'a Boss,
     pub pos: V2,
     /// Its real aim, carried between ticks.
@@ -1596,7 +1606,7 @@ mod tests {
             std::iter::once(Shown {
                 tick: 0,
                 body: None,
-                fraction: 1.,
+                body_time: BodyTime::Local(1.),
                 boss,
                 pos: boss.pos,
                 aim: boss.aim,

@@ -828,11 +828,12 @@ impl BossKind {
             Self::Railgunner => 3.,
             Self::Bastion | Self::Defender | Self::SiegeEngine => 1.2,
             Self::Sentinel | Self::Prism | Self::Eclipse => 1.1,
-            Self::FallenBooster | Self::Trapper => 1.,
+            Self::Trapper => 1.55,
+            Self::FallenBooster => 1.,
             Self::Tempest | Self::Skirmisher => 0.9,
-            Self::Foundry | Self::Guardian => 0.8,
-            Self::Summoner => 0.75,
-            Self::FallenOverlord => 0.65,
+            Self::Foundry | Self::Guardian => 0.95,
+            Self::Summoner => 0.9,
+            Self::FallenOverlord => 0.85,
         }
     }
     /// How fast its turning launchers spin, in radians a second.

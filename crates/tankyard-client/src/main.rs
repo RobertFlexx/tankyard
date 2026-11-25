@@ -1998,6 +1998,7 @@ impl App {
             self.effects.boss_fx.set_local(session.player);
             self.effects.boss_fx.set_camera(self.view.center);
             let boss_fraction = session.render_fraction(self.accumulator / DT);
+            let body_time = session.worm_body_time(self.accumulator / DT, now);
             let colorblind = self.settings.colorblind;
             let previous = &session.previous_positions;
             self.effects.boss_fx.sync(
@@ -2014,7 +2015,7 @@ impl App {
                     boss_fx::Shown {
                         tick: snapshot.tick,
                         body: snapshot.worm_bodies.iter().find(|body| body.id == boss.id),
-                        fraction: boss_fraction,
+                        body_time,
                         boss,
                         pos,
                         aim,

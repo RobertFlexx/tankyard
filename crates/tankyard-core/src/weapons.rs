@@ -176,6 +176,7 @@ impl World {
             let Some(class) = self.content.class(&tank.class) else {
                 continue;
             };
+            let tuning = self.owner_weapons(tank.id);
             let mut auto_aims = [None; 16];
             for (i, b) in class.barrels.iter().enumerate() {
                 if b.pattern == FirePattern::Auto
@@ -186,7 +187,7 @@ impl World {
                             .wrapping_add(i as u64)
                             .is_multiple_of(6))
                 {
-                    auto_aims[i] = self.mount_aim(tank, b);
+                    auto_aims[i] = self.mount_aim(tank, b, tuning.shot_speed);
                 }
             }
             let mut owned = [0_usize; 5];
@@ -350,13 +351,14 @@ impl World {
                         } else {
                             stat_scale(tank.stats[3])
                         }
-                        * class.multipliers[3];
+                        * class.multipliers[3]
+                        * tuning.shot_speed;
                     let damage = barrel.damage
                         * stat_scale(tank.stats[5])
                         * class.multipliers[5]
                         * charge
                         * self.config.rules.damage_multiplier
-                        * tank.damage_scale.clamp(0.25, 8.);
+                        * (tank.damage_scale * tuning.damage).clamp(0.25, 8.);
                     let penetration =
                         barrel.penetration * stat_scale(tank.stats[4]) * class.multipliers[4];
                     let velocity = V2::from_angle(aim + spread) * speed
@@ -426,7 +428,7 @@ impl World {
             self.activate_ability(index, ability);
         }
     }
-    fn mount_aim(&self, tank: &Tank, barrel: &Barrel) -> Option<f32> {
+    fn mount_aim(&self, tank: &Tank, barrel: &Barrel, shot_speed: f32) -> Option<f32> {
         let mount = tank.pos + V2::new(barrel.offset[0], barrel.offset[1]).rotate(tank.aim);
         let team = tank.team;
         let owner = tank.id;
@@ -435,6 +437,7 @@ impl World {
         let mut best = f32::MAX;
         let mut result = None;
         let speed = barrel.speed
+            * shot_speed
             * stat_scale(tank.stats[3])
             * self
                 .content

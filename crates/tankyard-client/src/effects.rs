@@ -1079,7 +1079,7 @@ mod tests {
                 std::iter::once(crate::boss_fx::Shown {
                     tick: 0,
                     body: None,
-                    fraction: 1.,
+                    body_time: crate::boss_fx::BodyTime::Local(1.),
                     boss: &boss,
                     pos: boss.pos,
                     aim: boss.aim,

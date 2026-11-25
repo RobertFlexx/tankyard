@@ -94,8 +94,10 @@ pub struct Session {
     /// How far from its true place each boss was drawn when the latest
     /// snapshot arrived, eased away rather than jumped.
     boss_error: HashMap<EntityId, V2>,
-    /// Where bosses were on screen as the latest snapshot arrived.
+    /// Where the old timeline had each boss as the latest snapshot arrived.
     boss_drawn: Vec<(EntityId, V2)>,
+    /// The snapshot spacing the display blended over last frame, in seconds.
+    shown_interval: f64,
     pub ticks: u64,
     pub dropped_ticks: u64,
     pub achievement_tracker: Tracker,
@@ -482,6 +484,7 @@ impl Session {
             previous_positions: HashMap::new(),
             boss_error: HashMap::new(),
             boss_drawn: Vec::new(),
+            shown_interval: 0.05,
             ticks: 0,
             dropped_ticks: 0,
             achievement_tracker,
@@ -686,21 +689,36 @@ impl Session {
                     .take(4096_usize.saturating_sub(self.events.len()))
                     .cloned(),
             );
+            // Where the old timeline has each boss at this moment. The new
+            // snapshot eases on from there. Measuring from the last frame
+            // instead would draw that frame twice every time a packet lands.
+            self.boss_drawn.clear();
+            if self
+                .display
+                .as_ref()
+                .is_some_and(|display| display.match_state.round == snapshot.match_state.round)
+                && let Some(old) = client
+                    .previous_snapshot
+                    .as_ref()
+                    .filter(|old| old.match_state.round == snapshot.match_state.round)
+            {
+                let blend = blend(now - self.received_at, self.shown_interval);
+                let decay = (-BOSS_EASE * dt).exp();
+                for boss in &old.bosses {
+                    let previous = self.previous_positions.get(&boss.id).map(|at| at.0);
+                    let error = self
+                        .boss_error
+                        .get(&boss.id)
+                        .map_or(V2::ZERO, |e| *e * decay);
+                    let place =
+                        shown_boss(previous, boss, blend, &old.config, &self.walls_now) + error;
+                    self.boss_drawn.push((boss.id, place));
+                }
+            }
             self.received_tick = Some((snapshot.match_state.round, snapshot.tick));
             self.received_at = now;
             self.poses_now = tankyard_core::snapshot_poses(snapshot, snapshot.match_state.elapsed);
             tankyard_core::place_walls(snapshot, &self.poses_now, &mut self.walls_now);
-            // Where each boss is on screen right now, to compare with where
-            // this snapshot first draws it.
-            self.boss_drawn.clear();
-            if let Some(display) = self
-                .display
-                .as_ref()
-                .filter(|display| display.match_state.round == snapshot.match_state.round)
-            {
-                self.boss_drawn
-                    .extend(display.bosses.iter().map(|boss| (boss.id, boss.pos)));
-            }
             self.boss_error
                 .retain(|id, _| snapshot.bosses.iter().any(|boss| boss.id == *id));
             self.previous_positions.clear();
@@ -795,8 +813,8 @@ impl Session {
             .as_ref()
             .map(|previous| snapshot.tick.saturating_sub(previous.tick).max(1) as f64 / 60.0)
             .unwrap_or(0.05);
-        let alpha = ((now - self.received_at) / interval).clamp(0.0, 1.0) as f32;
-        let extrapolation = ((now - self.received_at - interval) as f32).clamp(0.0, 0.075);
+        let (alpha, extrapolation) = blend(now - self.received_at, interval);
+        self.shown_interval = interval;
         self.render_time = client
             .previous_snapshot
             .as_ref()
@@ -887,15 +905,15 @@ impl Session {
             }
         }
         for (boss, latest) in display.bosses.iter_mut().zip(&snapshot.bosses) {
-            if let Some((previous, angle)) = self.previous_positions.get(&boss.id) {
-                boss.pos = extrapolate_position(
-                    interpolate_position(*previous, latest.pos, alpha),
-                    latest.vel,
-                    extrapolation,
-                    latest.radius,
-                    &snapshot.config,
-                    &self.walls_now,
-                );
+            let previous = self.previous_positions.get(&boss.id);
+            boss.pos = shown_boss(
+                previous.map(|at| at.0),
+                latest,
+                (alpha, extrapolation),
+                &snapshot.config,
+                &self.walls_now,
+            );
+            if let Some((_, angle)) = previous {
                 boss.aim = lerp_angle(*angle, latest.aim, alpha);
             }
             ease_boss_error(
@@ -1157,6 +1175,16 @@ impl Session {
             fraction.clamp(0.0, 1.0)
         } else {
             1.0
+        }
+    }
+    pub fn worm_body_time(&self, fraction: f32, now: f64) -> crate::boss_fx::BodyTime {
+        if self.offline_mode() {
+            crate::boss_fx::BodyTime::Local(fraction)
+        } else {
+            crate::boss_fx::BodyTime::Network {
+                now,
+                landed: self.received_at,
+            }
         }
     }
     pub fn animation_time(&self, fraction: f32) -> f32 {
@@ -1603,13 +1631,47 @@ pub fn shown_round(
 }
 
 /// How fast a boss's drawn place closes on its true one, per second.
-const BOSS_EASE: f32 = 14.;
+pub(crate) const BOSS_EASE: f32 = 14.;
 /// A gap this wide is a teleport, not jitter, and is crossed at once.
-const BOSS_SNAP: f32 = 140.;
+pub(crate) const BOSS_SNAP: f32 = 140.;
+/// The longest the display runs on past the newest snapshot, in seconds.
+const MOST_EXTRAPOLATION: f32 = 0.075;
+
+/// How far the display is from the last snapshot to the newest one
+/// `elapsed` seconds after the newest landed, and how many seconds it runs
+/// on past it when the next is late.
+pub(crate) fn blend(elapsed: f64, interval: f64) -> (f32, f32) {
+    let interval = interval.max(1e-3);
+    (
+        (elapsed / interval).clamp(0.0, 1.0) as f32,
+        ((elapsed - interval) as f32).clamp(0.0, MOST_EXTRAPOLATION),
+    )
+}
+
+/// Where the display has a boss on a snapshot timeline, before easing.
+fn shown_boss(
+    previous: Option<V2>,
+    latest: &tankyard_core::Boss,
+    (alpha, extrapolation): (f32, f32),
+    config: &tankyard_core::WorldConfig,
+    walls: &[tankyard_core::Rect],
+) -> V2 {
+    previous.map_or(latest.pos, |previous| {
+        extrapolate_position(
+            interpolate_position(previous, latest.pos, alpha),
+            latest.vel,
+            extrapolation,
+            latest.radius,
+            config,
+            walls,
+        )
+    })
+}
 
 /// Packets don't arrive evenly, so each one can move a boss a little from
-/// where it was being drawn. Take that step up as an error that fades, with
-/// no lag once it has. `decay` is what remains of the error after this frame.
+/// where the old timeline had it. Take that step up as an error that fades,
+/// with no lag once it has. The frame a packet lands draws the boss exactly
+/// there; `decay` is what remains of the error after each later frame.
 fn ease_boss_error(
     boss: &mut tankyard_core::Boss,
     drawn: &mut Vec<(EntityId, V2)>,
@@ -1621,9 +1683,11 @@ fn ease_boss_error(
         let error = place - boss.pos;
         if error.length() < BOSS_SNAP {
             errors.insert(boss.id, error);
+            boss.pos = place;
         } else {
             errors.remove(&boss.id);
         }
+        return;
     }
     if let Some(error) = errors.get_mut(&boss.id) {
         *error *= decay;
@@ -1651,7 +1715,7 @@ fn extrapolate_position(
     if seconds <= 0.0 {
         return position;
     }
-    let end = position + velocity * seconds.min(0.075);
+    let end = position + velocity * seconds.min(MOST_EXTRAPOLATION);
     let mut contact: f32 = 1.0;
     for &wall in walls {
         if let Some((time, _)) = tankyard_core::physics::sweep_rect(position, end, radius, wall) {
@@ -1692,6 +1756,84 @@ pub fn trusted_address(address: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn online_bosses_move_evenly_when_packets_land_early_or_late() {
+        // The same steps update_network takes for each boss, frame by frame.
+        const SPEED: f32 = 600.;
+        const PATTERN: [f64; 7] = [0., 1., -0.7, 0.35, -1., 0.6, -0.2];
+        let mut world = tankyard_core::World::new(
+            tankyard_core::WorldConfig {
+                target_count: 0,
+                ..Default::default()
+            },
+            Content::builtin(),
+        );
+        world.spawn_boss(tankyard_core::BossKind::Sentinel);
+        let mut template = world.bosses[0].clone();
+        template.vel = V2::new(SPEED, 0.);
+        let config = world.config.clone();
+        for fps in [60_f64, 144.] {
+            for jitter in [0., 0.014] {
+                let at = |n: u64| {
+                    let mut boss = template.clone();
+                    boss.pos = V2::new(1000. + SPEED * n as f32 * 0.05, 1500.);
+                    boss
+                };
+                let (mut latest, mut previous) = (None::<(u64, tankyard_core::Boss)>, None);
+                let (mut landed, mut interval, mut shown_interval) = (0., 0.05, 0.05);
+                let (mut drawn, mut errors) = (Vec::new(), HashMap::new());
+                let mut steps = Vec::new();
+                for frame in 0..(3. * fps) as usize {
+                    let now = frame as f64 / fps;
+                    let dt = (1. / fps) as f32;
+                    let decay = (-BOSS_EASE * dt).exp();
+                    let newest = (0..80_u64)
+                        .filter(|n| {
+                            *n as f64 * 0.05 + 0.08 + PATTERN[*n as usize % 7] * jitter <= now
+                        })
+                        .max();
+                    if let Some(n) = newest
+                        && latest.as_ref().is_none_or(|(old, _)| n > *old)
+                    {
+                        drawn.clear();
+                        if let Some((old, boss)) = &latest {
+                            let blend = blend(now - landed, shown_interval);
+                            let error = errors.get(&boss.id).map_or(V2::ZERO, |e: &V2| *e * decay);
+                            let place = shown_boss(previous, boss, blend, &config, &[]) + error;
+                            drawn.push((boss.id, place));
+                            interval = (n - old) as f64 * 0.05;
+                            previous = Some(boss.pos);
+                        }
+                        latest = Some((n, at(n)));
+                        landed = now;
+                    }
+                    let Some((_, boss)) = &latest else {
+                        continue;
+                    };
+                    let blend = blend(now - landed, interval);
+                    shown_interval = interval;
+                    let mut shown = boss.clone();
+                    shown.pos = shown_boss(previous, boss, blend, &config, &[]);
+                    ease_boss_error(&mut shown, &mut drawn, &mut errors, decay);
+                    if now >= 1. {
+                        steps.push(shown.pos.x);
+                    }
+                }
+                let even = SPEED / fps as f32;
+                let worst = steps
+                    .windows(2)
+                    .map(|pair| ((pair[1] - pair[0]) - even).abs() / even)
+                    .fold(0., f32::max);
+                let allowed = if jitter > 0. { 0.5 } else { 0.08 };
+                assert!(
+                    worst < allowed,
+                    "{fps} fps, {jitter} s jitter: a step was {:.0}% off",
+                    worst * 100.
+                );
+            }
+        }
+    }
+
     #[test]
     fn rounds_through_a_rift_keep_their_pace_between_snapshots() {
         use tankyard_core::{Rift, RiftEnd};

@@ -137,6 +137,11 @@ impl UdpServer {
             }
         };
         let arena = peer.arena.min(self.arenas.len() - 1);
+        if badge != ServerBadge::CentralOwner
+            && let Some(id) = peer.entity
+        {
+            self.arenas[arena].session.world.clear_owner_tank(id);
+        }
         if let Some(tank) = self.arenas[arena]
             .session
             .world
@@ -384,6 +389,87 @@ mod tests {
         );
         assert!(arena.server.central_owner_proof(7, &arena.proof()).is_err());
     }
+    #[test]
+    fn only_the_verified_central_owner_can_tune_their_own_tank() {
+        use tankyard_core::administration::WeaponTuning;
+        use tankyard_protocol::OwnerTank;
+        let hull = tankyard_content::Content::builtin()
+            .classes
+            .iter()
+            .find(|class| class.tier == 3)
+            .unwrap()
+            .id
+            .clone();
+        let tuned = OwnerTank {
+            class: hull.clone(),
+            weapons: WeaponTuning {
+                damage: 3.,
+                shot_speed: 2.,
+            },
+        };
+        let set = ServerCommand::SetOwnTank {
+            tank: tuned.clone(),
+        };
+        fn world(arena: &Arena) -> &tankyard_core::World {
+            &arena.server.arenas[0].session.world
+        }
+        let send = |arena: &mut Arena, sequence: u64, command: &ServerCommand| {
+            let round = arena.server.arenas[0].session.world.match_state.round;
+            let signature = arena.sign(sequence, round, command);
+            arena
+                .server
+                .signed_server_command(7, round, sequence, command.clone(), &signature)
+        };
+
+        // A host owner holds every host permission, but not this identity.
+        let mut host = Arena::new();
+        host.server.settings.kind = ServerKind::Community;
+        host.server.settings.central_owner_admin = Some(false);
+        let public: String = host
+            .key
+            .public_key()
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert!(
+            !host
+                .server
+                .admin_command(&format!("owner-client 7 {public}"))
+                .message
+                .starts_with("Error:")
+        );
+        let original = world(&host).tanks[0].class.clone();
+        for (sequence, command) in [ServerCommand::ReadOwnTank, set.clone()].iter().enumerate() {
+            let error = send(&mut host, sequence as u64, command).unwrap_err();
+            assert!(error.0.contains("central server owner"), "{}", error.0);
+        }
+        assert_eq!(world(&host).tanks[0].class, original);
+        assert!(!world(&host).config.modded);
+
+        let mut arena = Arena::new();
+        arena.server.central_owner_proof(7, &arena.proof()).unwrap();
+        let unknown = ServerCommand::SetOwnTank {
+            tank: OwnerTank {
+                class: "no_such_hull".into(),
+                ..tuned.clone()
+            },
+        };
+        assert!(send(&mut arena, 0, &unknown).is_err());
+        assert!(!world(&arena).config.modded);
+        send(&mut arena, 1, &ServerCommand::ReadOwnTank).unwrap();
+        assert!(!world(&arena).config.modded, "reading changes nothing");
+        send(&mut arena, 2, &set).unwrap();
+        let player = world(&arena).tanks[0].id;
+        assert_eq!(world(&arena).tanks[0].class, hull);
+        assert_eq!(world(&arena).owner_weapons(player), tuned.weapons);
+        assert!(world(&arena).config.modded);
+        // Revoking the identity hands the ordinary hull back at once.
+        arena.server.set_central_owner_admin(false).unwrap();
+        assert_eq!(world(&arena).tanks[0].class, original);
+        assert_eq!(world(&arena).owner_weapons(player), WeaponTuning::default());
+    }
+
     #[test]
     fn host_commands_require_the_registered_session_key_even_with_an_owner_grant() {
         let mut arena = Arena::new();

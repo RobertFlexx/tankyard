@@ -220,6 +220,7 @@ impl World {
     pub(crate) fn creator_guns(&mut self, index: usize) {
         let room = self.projectiles.len() < self.config.max_projectiles;
         let rules = self.config.rules.damage_multiplier;
+        let tuning = self.owner_weapons(self.tanks[index].id);
         let tank = &mut self.tanks[index];
         tank.charge = 0.;
         tank.creator_reload = (tank.creator_reload - DT).max(0.);
@@ -246,8 +247,8 @@ impl World {
             .input
             .aim_distance
             .max(radius * 1.6)
-            .min(GUN_SPEED * GUN_LIFETIME);
-        let damage = GUN_DAMAGE * rules * tank.damage_scale.clamp(0.25, 8.);
+            .min(GUN_SPEED * tuning.shot_speed * GUN_LIFETIME);
+        let damage = GUN_DAMAGE * rules * (tank.damage_scale * tuning.damage).clamp(0.25, 8.);
         let mouth = muzzle(center, aim, step, radius);
         // A cannon pressed against cover holds fire rather than shoot through.
         if !self.position_clear(mouth, GUN_RADIUS)
@@ -263,7 +264,7 @@ impl World {
             id,
             team,
             mouth,
-            heading * GUN_SPEED + drift * 0.16,
+            heading * (GUN_SPEED * tuning.shot_speed) + drift * 0.16,
             ProjectileKind::Shell,
             damage,
             GUN_RADIUS,

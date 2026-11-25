@@ -191,11 +191,21 @@ pub fn make(cue: BossCue) -> Vec<f32> {
             layer(&mut out, Crunch, 0.25, 0.7, 0.7);
         }
         WormDeath => {
-            layer(&mut out, Roar, 0., 0.45, 1.);
-            layer(&mut out, Scream, 0.15, 0.55, 0.5);
-            layer(&mut out, Growl, 1.1, 0.5, 0.65);
-            layer(&mut out, StoneBreak, 1.2, 0.6, 0.65);
-            layer(&mut out, StoneFall, 1.6, 0.5, 0.65);
+            // A close, wet break first. Successive plates split down the
+            // body before the voice runs out and the heavy drops land.
+            layer(&mut out, Crunch, 0., 0.73, 0.92);
+            layer(&mut out, Wet, 0.014, 0.64, 1.);
+            layer(&mut out, Roar, 0.045, 0.52, 0.62);
+            layer(&mut out, Splash, 0.09, 0.71, 0.75);
+            layer(&mut out, Scream, 0.17, 0.62, 0.4);
+            for (at, rate, gain) in [(0.24, 1.14, 0.65), (0.43, 0.86, 0.58), (0.68, 0.72, 0.46)] {
+                layer(&mut out, Spit, at, rate, gain);
+                layer(&mut out, Crunch, at + 0.024, rate * 0.82, gain * 0.64);
+            }
+            layer(&mut out, Bubble, 0.86, 0.58, 0.55);
+            layer(&mut out, Growl, 1.04, 0.52, 0.36);
+            layer(&mut out, Splash, 1.28, 0.88, 0.48);
+            layer(&mut out, Wet, 1.84, 1.18, 0.31);
         }
     }
     master(out, room, tail)

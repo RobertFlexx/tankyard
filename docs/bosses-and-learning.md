@@ -98,7 +98,9 @@ shows phase boundaries and warns before lunges, eruptions and the split.
 The jaws fold back to expose fixed, hooked teeth and a contracting throat. The
 ridged plates catch the light as the body turns, and breathing slits along the
 flanks open in a wave. Torn ends bleed in streams that break into falling drops
-and wet pools. Blood, flesh, dust and thrown tiles use the arena effects renderer
+and wet pools. When it dies, the body swells and bursts, throwing blood and flesh
+that stain the floor, and what is left sinks back into the ground. Online, the
+body moves as smoothly as it does offline. Blood, flesh, dust and thrown tiles use the arena effects renderer
 and its lighting; they follow the Effects setting. Attack warnings remain visible
 with effects off.
 
@@ -113,6 +115,22 @@ Tank Yard 2.1.4 uses **protocol 35**, the same as 2.1.0. All 2.1.x hosts and pla
 Snapshots carry its real body positions, including when joining mid-fight.
 
 </details>
+
+## Harder bosses
+
+Trapper no longer waits in a corner to be worn down. It has 55% more health,
+moves faster, fights from closer in and throws a tight, fast pair of traps. When
+it is cornered, it slides out along the walls toward open ground. Right after
+laying its mine pockets, it sends out a spiral: pairs of traps from opposite
+sides, each pair turned further round and thrown further out, eight pairs at
+first and twelve once it is badly hurt. It holds its other fire until the spiral
+ends, so that is the time to close in.
+
+Guardian, Summoner, Fallen Overlord and Foundry have more health. Their drones
+are faster and sturdier, and they head for where you are going rather than where
+you are. Once hurt, each boss adds a shot to its volleys: Guardian a piercing
+shard from its front point, Summoner twin bullets, Fallen Overlord two seekers
+from the bow and Foundry a heavy shell.
 
 ## v0.2.16 combat update
 

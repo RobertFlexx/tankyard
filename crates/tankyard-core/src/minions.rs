@@ -89,7 +89,8 @@ impl World {
         {
             return None;
         }
-        let speed = 420.0 * stat_scale(tank.stats[3]) * class.multipliers[3];
+        let tuning = self.owner_weapons(tank.id);
+        let speed = 420.0 * stat_scale(tank.stats[3]) * class.multipliers[3] * tuning.shot_speed;
         let range = (speed * 1.25).min(650.);
         let (goal, locked) = if tank.input.alt_fire {
             (None, 0)
@@ -114,7 +115,8 @@ impl World {
         let damage = 6.0
             * stat_scale(tank.stats[5])
             * class.multipliers[5]
-            * self.config.rules.damage_multiplier;
+            * self.config.rules.damage_multiplier
+            * tuning.damage;
         let penetration = 1.5 * stat_scale(tank.stats[4]) * class.multipliers[4];
         let full = self.projectiles.len() + queued >= self.config.max_projectiles;
         let p = &mut self.projectiles[index];

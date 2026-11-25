@@ -46,6 +46,7 @@ struct Grudge {
 /// travels in a snapshot.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Mind {
+    pub(crate) trap_spiral: Option<crate::bosses::TrapSpiral>,
     grudges: [Grudge; GRUDGES],
     /// Last damage-record tick read, so an evicted old attacker cannot be
     /// reinserted as fresh damage every frame in a large fight.

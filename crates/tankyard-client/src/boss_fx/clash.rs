@@ -1423,7 +1423,7 @@ mod tests {
             std::iter::once(Shown {
                 tick: 0,
                 body: None,
-                fraction: 1.,
+                body_time: crate::boss_fx::BodyTime::Local(1.),
                 boss,
                 pos: boss.pos,
                 aim: boss.aim,
@@ -1604,7 +1604,7 @@ mod tests {
             [&rail, &siege, &other_rail].into_iter().map(|boss| Shown {
                 tick: 0,
                 body: None,
-                fraction: 1.,
+                body_time: crate::boss_fx::BodyTime::Local(1.),
                 boss,
                 pos: boss.pos,
                 aim: boss.aim,

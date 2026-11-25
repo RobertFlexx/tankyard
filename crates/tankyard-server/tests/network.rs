@@ -1268,6 +1268,177 @@ fn unchanged_walls_are_omitted_but_clients_always_hold_the_current_geometry() {
 }
 
 #[test]
+fn bastion_never_accuses_the_real_client_on_a_bad_link_across_rounds_and_a_wrap() {
+    use tankyard_server::netem::{EmulationConfig, NetworkEmulator};
+    let audit = std::env::temp_dir().join(format!(
+        "tankyard-bastion-link-{}-{:x}.jsonl",
+        std::process::id(),
+        Instant::now().elapsed().as_nanos()
+    ));
+    let mut config = settings();
+    config.audit_file = audit.to_string_lossy().into();
+    let mut server = UdpServer::bind(config).unwrap();
+    // Late, reordered and lost packets, as on a poor mobile connection.
+    let relay = NetworkEmulator::start(
+        server.address,
+        EmulationConfig {
+            latency_ms: 140,
+            jitter_ms: 70,
+            loss_percent: 15.0,
+            seed: 7,
+        },
+    )
+    .unwrap();
+    let mut client = NetworkClient::connect(&relay.address.to_string(), "Far away", "").unwrap();
+    let start = Instant::now();
+    let mut previous = start;
+    // The game advances its sequence every tick, sent or not, and this
+    // one crosses the u32 wrap partway through.
+    let mut sequence = u32::MAX - 150;
+    let mut restarts = 0;
+    let mut sent = 0;
+    while start.elapsed() < Duration::from_secs(7) {
+        let now = Instant::now();
+        let elapsed = now.duration_since(previous);
+        previous = now;
+        client.update(elapsed).unwrap();
+        sequence = sequence.wrapping_add(1);
+        let t = start.elapsed().as_secs_f32();
+        let beat = (t * 4.) as u32;
+        if client.is_ready()
+            && client.send_input(PlayerInput {
+                sequence,
+                movement: V2::from_angle(t * 1.7) * (t * 0.9).sin().abs(),
+                aim: (t * 2.3).sin() * 3.,
+                aim_distance: 300. + t * 200.,
+                fire: !beat.is_multiple_of(3),
+                ability: beat.is_multiple_of(11),
+                ..Default::default()
+            })
+        {
+            sent += 1;
+            client.flush().unwrap();
+        }
+        // New rounds reset the server's history while sequences go on.
+        if restarts < 2 && start.elapsed() > Duration::from_secs(2 + 2 * restarts) {
+            restarts += 1;
+            assert!(!server.admin_command("restart").message.starts_with("Error"));
+        }
+        server.update(elapsed).unwrap();
+        thread::sleep(STEP);
+    }
+    assert!(client.is_ready(), "{:?}", client.error);
+    assert!(sent > 200, "only {sent} inputs were sent");
+    assert!(relay.stats().dropped > 0);
+    assert_eq!(server.bastion.counters().rejected_requests, 0);
+    let text = std::fs::read_to_string(&audit).unwrap_or_default();
+    let _ = std::fs::remove_file(&audit);
+    assert!(!text.contains("Bastion"), "{text}");
+}
+
+#[test]
+fn bastion_removes_a_modified_client_after_three_proofs_and_counts_a_repeat_once() {
+    use tankyard_protocol::{InputBundle, MAX_INPUT_BYTES, REALTIME_CHANNEL, encode};
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Modified", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    let raw = |frames: &[PlayerInput]| {
+        let mut bundle = InputBundle::default();
+        for frame in frames {
+            bundle.push(*frame);
+        }
+        encode(&bundle, MAX_INPUT_BYTES).unwrap()
+    };
+    let good = |sequence| PlayerInput {
+        sequence,
+        ..Default::default()
+    };
+    let bad = |sequence| PlayerInput {
+        sequence,
+        aim_distance: 1e9,
+        ..Default::default()
+    };
+    // One bad frame, carried again by the next two histories, is one proof.
+    client.send_raw(REALTIME_CHANNEL, raw(&[bad(100)]));
+    client.send_raw(REALTIME_CHANNEL, raw(&[bad(100), good(101)]));
+    client.send_raw(REALTIME_CHANNEL, raw(&[bad(100), good(101), good(102)]));
+    pump(&mut server, &mut [&mut client], 30);
+    assert!(client.is_ready(), "{:?}", client.error);
+    // A second, of another kind: a history the game never sends.
+    client.send_raw(REALTIME_CHANNEL, raw(&[good(104), good(103)]));
+    pump(&mut server, &mut [&mut client], 30);
+    assert!(client.is_ready(), "{:?}", client.error);
+    // Two different inputs for one frame make the third.
+    client.send_raw(REALTIME_CHANNEL, raw(&[good(110)]));
+    let mut changed = good(110);
+    changed.fire = true;
+    client.send_raw(REALTIME_CHANNEL, raw(&[changed]));
+    let mut closed = None;
+    for _ in 0..60 {
+        if let Err(error) = client.update(STEP) {
+            closed.get_or_insert(error.to_string());
+        }
+        server.update(STEP).unwrap();
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        closed.as_deref(),
+        Some("Bastion disconnected this session. Two different inputs for the same frame.")
+    );
+}
+
+#[test]
+fn staff_requests_this_server_cannot_check_are_refused_without_a_proof() {
+    use tankyard_protocol::{
+        CONTROL_CHANNEL, ClientControl, MAX_CONTROL_BYTES, ServerCommand, encode,
+    };
+    let mut server = UdpServer::bind(settings()).unwrap();
+    let mut client = NetworkClient::connect(&server.address.to_string(), "Staff", "").unwrap();
+    ready(&mut server, &mut [&mut client]);
+    // A newer release could allow a longer respawn than this one does.
+    let rules = tankyard_mods::GameRules {
+        respawn_seconds: 90.,
+        ..Default::default()
+    };
+    let request = ClientControl::Admin {
+        round: client.player_round.unwrap(),
+        sequence: 1,
+        command: ServerCommand::ConfigureRules { rules },
+        signature: vec![0; 64],
+    };
+    for _ in 0..6 {
+        client.send_raw(
+            CONTROL_CHANNEL,
+            encode(&request, MAX_CONTROL_BYTES).unwrap(),
+        );
+        pump(&mut server, &mut [&mut client], 10);
+    }
+    assert!(client.is_ready(), "{:?}", client.error);
+    // The same limits on an ordinary request are the protocol's own.
+    let upgrade = ClientControl::UpgradeStat { stat: 9, count: 1 };
+    let mut closed = None;
+    for step in 0..90 {
+        if step < 3 {
+            client.send_raw(
+                CONTROL_CHANNEL,
+                encode(&upgrade, MAX_CONTROL_BYTES).unwrap(),
+            );
+        }
+        if let Err(error) = client.update(STEP) {
+            closed.get_or_insert(error.to_string());
+        }
+        server.update(STEP).unwrap();
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        closed.as_deref(),
+        Some(
+            "Bastion disconnected this session. Control request outside the negotiated protocol limits."
+        )
+    );
+}
+
+#[test]
 fn an_odd_malformed_packet_is_dropped_but_a_flood_still_disconnects() {
     let mut server = UdpServer::bind(settings()).unwrap();
     let mut client = NetworkClient::connect(&server.address.to_string(), "Lossy", "").unwrap();

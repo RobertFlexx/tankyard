@@ -8,7 +8,7 @@
 //!
 //! Its warnings draw with effects turned off, as every boss's do. Debris,
 //! dust and gore are decoration and follow the Effects setting.
-use super::{BossFx, Look, Shown};
+use super::{BodyTime, BossFx, Look, Shown};
 use crate::emission::{Emission, Layer};
 use crate::map_sounds::BossCue;
 use crate::render::View;
@@ -42,6 +42,8 @@ const HOLE_SECONDS: f32 = 22.;
 const FURROW_SECONDS: f32 = 9.;
 /// How long a dead worm's body takes to sink away, tail first.
 const CORPSE_SECONDS: f32 = 3.;
+/// Time for a rupture to travel one ring along the body.
+const RIP_STEP: f32 = 0.029;
 /// How far a camera can be from it and still be shaken by it.
 const QUAKE_REACH: f32 = 3000.;
 /// The longest the strike lane is drawn.
@@ -148,6 +150,15 @@ pub(super) struct WormShown {
     rings: Vec<Ring>,
     body_previous: Vec<(V2, f32)>,
     body_current: Vec<(V2, f32)>,
+    /// Online, each ring's speed between the last two snapshots, and how
+    /// far from that timeline it was drawn when the newest landed. That
+    /// step is eased away as the boss's own is, so ring and head agree.
+    body_velocity: Vec<V2>,
+    body_error: Vec<(V2, f32)>,
+    /// The buffer the next snapshot measures its steps into.
+    body_spare: Vec<(V2, f32)>,
+    body_interval: f32,
+    body_landed: f64,
     body_tick: Option<u64>,
     sign: WormSign,
     depth: f32,
@@ -184,6 +195,11 @@ impl WormShown {
             rings: Vec::with_capacity(WORM_RINGS),
             body_previous: Vec::new(),
             body_current: Vec::new(),
+            body_velocity: Vec::new(),
+            body_error: Vec::new(),
+            body_spare: Vec::new(),
+            body_interval: tankyard_core::DT,
+            body_landed: 0.,
             body_tick: None,
             sign,
             depth: sign.depth,
@@ -216,30 +232,96 @@ impl WormShown {
     fn authoritative_body(
         &mut self,
         body: &tankyard_core::sunderworm::WormBody,
-        fraction: f32,
+        time: BodyTime,
         tick: u64,
     ) {
         if self.body_tick != Some(tick) {
+            let ticks = self.body_tick.and_then(|old| tick.checked_sub(old));
+            let interval = ticks.unwrap_or(1).clamp(1, 60) as f32 * tankyard_core::DT;
+            let continuous = self.body_current.len() == body.centers.len()
+                && ticks.is_some_and(|n| (1..=75).contains(&n))
+                && self
+                    .body_current
+                    .iter()
+                    .zip(&body.centers)
+                    .all(|(a, b)| a.0.distance(b.0) <= (1500. * interval + 48.).max(150.));
+            let landed = match time {
+                BodyTime::Network { landed, .. } => Some(landed),
+                BodyTime::Local(_) => None,
+            };
+            // Where the old timeline has each ring as this snapshot lands.
+            // Measuring from the last frame instead would draw it twice.
+            let mut anchors = std::mem::take(&mut self.body_spare);
+            anchors.clear();
+            if continuous && let Some(landed) = landed {
+                let since = (landed - self.body_landed) as f32;
+                anchors.extend((0..self.body_current.len()).map(|k| self.network_pose(k, since)));
+            }
             self.body_tick = Some(tick);
+            self.body_interval = interval;
             std::mem::swap(&mut self.body_previous, &mut self.body_current);
             self.body_current.clone_from(&body.centers);
-            if self.body_previous.len() != self.body_current.len() {
+            self.body_velocity.clear();
+            if continuous {
+                self.body_velocity.extend(
+                    self.body_previous
+                        .iter()
+                        .zip(&self.body_current)
+                        .map(|(a, b)| ((b.0 - a.0) / interval).clamp_length(1400.)),
+                );
+            } else {
                 self.body_previous.clone_from(&self.body_current);
+            }
+            // The new timeline starts at the previous snapshot. A wide step
+            // is a teleport and is crossed at once, by the whole body, as is
+            // one that isn't a number at all.
+            for (anchor, start) in anchors.iter_mut().zip(&self.body_previous) {
+                *anchor = (anchor.0 - start.0, anchor.1 - start.1);
+            }
+            if anchors.iter().any(|(step, _)| {
+                let length = step.length();
+                length.is_nan() || length >= crate::session::BOSS_SNAP
+            }) {
+                anchors.clear();
+            }
+            self.body_spare = std::mem::replace(&mut self.body_error, anchors);
+            if let Some(landed) = landed {
+                self.body_landed = landed;
             }
         }
         self.rings.clear();
-        for (k, (&(before, was_depth), &(now, depth))) in self
-            .body_previous
-            .iter()
-            .zip(&self.body_current)
-            .enumerate()
-        {
+        let first = self.part.rings().start;
+        for k in 0..self.body_current.len().min(self.body_previous.len()) {
+            let (pos, depth) = match time {
+                BodyTime::Local(fraction) => {
+                    let fraction = fraction.clamp(0., 1.);
+                    let ((before, was), (now, depth)) =
+                        (self.body_previous[k], self.body_current[k]);
+                    (before.lerp(now, fraction), was + (depth - was) * fraction)
+                }
+                BodyTime::Network { now, landed } => self.network_pose(k, (now - landed) as f32),
+            };
             self.rings.push(Ring {
-                pos: before.lerp(now, fraction.clamp(0., 1.)),
-                depth: was_depth + (depth - was_depth) * fraction.clamp(0., 1.),
-                radius: ring_radius(self.part.rings().start + k),
+                pos,
+                depth,
+                radius: ring_radius(first + k),
             });
         }
+    }
+
+    /// Ring `k` online, `since` seconds after the newest snapshot landed:
+    /// the same blend, run-on and easing the session gives the boss itself.
+    fn network_pose(&self, k: usize, since: f32) -> (V2, f32) {
+        let since = since.max(0.);
+        let (alpha, ahead) = crate::session::blend(f64::from(since), f64::from(self.body_interval));
+        let ((before, was), (now, depth)) = (self.body_previous[k], self.body_current[k]);
+        let velocity = self.body_velocity.get(k).copied().unwrap_or(V2::ZERO);
+        let (step, sink) = self.body_error.get(k).copied().unwrap_or((V2::ZERO, 0.));
+        let fade = (-crate::session::BOSS_EASE * since).exp();
+        (
+            before.lerp(now, alpha) + velocity * ahead + step * fade,
+            was + (depth - was) * alpha + sink * fade,
+        )
     }
 
     /// The number of its first ring along the whole worm.
@@ -410,7 +492,6 @@ impl BossFx {
             // removes this boss. Keep its final pose and stop emitting cues,
             // but mark it seen so a long-lived snapshot cannot age it out and
             // have the next frame insert a live body again.
-            shown.unseen = 0.;
             shown.seen = true;
             return;
         }
@@ -436,7 +517,7 @@ impl BossFx {
             .path
             .follow(item.pos, shown.depth, part.length() + WORM_SPACING * 2.);
         if let Some(body) = item.body {
-            shown.authoritative_body(body, item.fraction, item.tick);
+            shown.authoritative_body(body, item.body_time, item.tick);
         } else {
             shown.lay();
         }
@@ -698,13 +779,31 @@ impl BossFx {
     /// Keep a briefly missing body available for a delayed destruction event.
     /// Only the host can distinguish death from a map change or despawn.
     pub(super) fn worm_gone(&mut self, dt: f32) {
-        self.worms.shown.retain(|_, shown| {
-            if std::mem::take(&mut shown.seen) {
+        let worms = &mut self.worms;
+        let mut poses = std::mem::take(&mut worms.shown);
+        poses.retain(|_, shown| {
+            let visible = std::mem::take(&mut shown.seen);
+            if visible && !shown.dead {
                 return true;
             }
-            shown.unseen += dt;
-            shown.unseen < if shown.dead { CORPSE_SECONDS } else { 1.5 }
+            let before = shown.unseen;
+            shown.unseen = (before + dt).min(CORPSE_SECONDS);
+            if shown.dead && self.look.live() && before < RIP_STEP * WORM_RINGS as f32 {
+                for k in (3..shown.rings.len()).step_by(3) {
+                    let at = k as f32 * RIP_STEP;
+                    let ring = shown.rings[k];
+                    if before < at && at <= shown.unseen && ring.surfaced() {
+                        let spine = (shown.rings[k - 1].pos - ring.pos).normalized();
+                        let side = V2::new(-spine.y, spine.x) * if k % 2 == 0 { 1. } else { -1. };
+                        let wound = ring.pos + side * ring.radius * 0.55;
+                        gush(worms, wound, side, 0.54, self.look);
+                        worms.stain(wound, ring.radius * 0.74, side.angle(), false);
+                    }
+                }
+            }
+            visible || shown.unseen < if shown.dead { CORPSE_SECONDS } else { 1.5 }
         });
+        worms.shown = poses;
     }
 
     /// The destruction event is authoritative, including a hit that kills a
@@ -715,23 +814,36 @@ impl BossFx {
         };
         shown.dead = true;
         shown.unseen = 0.;
-        let rings = shown.rings.clone();
-        let Some(first) = rings.first() else {
+        let Some(first) = shown.rings.first().copied() else {
             return;
         };
+        let ahead = V2::from_angle(shown.aim);
         self.cues.push((BossCue::WormDeath, Some(first.pos)));
         let worms = &mut self.worms;
         worms.quake = worms.quake.max(12. * nearness(self.camera, first.pos));
         if !self.look.live() {
             return;
         }
-        for (k, ring) in rings.iter().enumerate().filter(|(_, ring)| ring.surfaced()) {
-            if k % 2 == 0 {
-                let angle = worms.rand() * TAU;
-                gush(worms, ring.pos, V2::from_angle(angle), 0.35, self.look);
-            }
-            worms.stain(ring.pos, ring.radius * 0.9, k as f32 * 2.399, false);
-        }
+        // The first seam bursts in both directions. The pressure wave tears
+        // open the other exposed plates as it reaches them in worm_gone.
+        let side = V2::new(-ahead.y, ahead.x);
+        let reach = first.radius * 0.48;
+        let strength = if first.surfaced() { 1. } else { 0.45 };
+        gush(
+            worms,
+            first.pos + side * reach,
+            (side + ahead * 0.45).normalized(),
+            strength,
+            self.look,
+        );
+        gush(
+            worms,
+            first.pos - side * reach,
+            (ahead * 0.25 - side).normalized(),
+            strength * 0.7,
+            self.look,
+        );
+        worms.stain(first.pos, first.radius * 1.12, ahead.angle(), false);
     }
 
     /// One frame of everything in the air or on the floor.
@@ -1105,8 +1217,10 @@ impl BossFx {
         let z = view.zoom;
         let ahead = V2::from_angle(shown.aim);
         let count = shown.rings.len().min(WORM_RINGS);
-        // Seconds it has lain dead, once it has left the snapshot.
         let dead = shown.dead.then_some(shown.unseen);
+        if dead.is_some_and(|seconds| seconds >= CORPSE_SECONDS) {
+            return;
+        }
         let mut segments = [Segment {
             at: Vec2::ZERO,
             radius: 0.,
@@ -1123,14 +1237,15 @@ impl BossFx {
                     .normalized()
             };
             let toward = if toward == V2::ZERO { ahead } else { toward };
-            let sinking = dead.map_or(0., |seconds| {
-                let tail_first = 1. - k as f32 / (count.max(2) - 1) as f32;
-                let p = ((seconds - 0.2 - tail_first) / 1.2).clamp(0., 1.);
-                p * p * (3. - 2. * p) * 0.5
+            let (swell, sinking) = dead.map_or((1., 0.), |seconds| {
+                let since = seconds - k as f32 * RIP_STEP;
+                let pressure = (1. - (since / 0.13).abs()).max(0.);
+                let p = ((since - 0.06) / 0.48).clamp(0., 1.);
+                (1. + pressure * 0.22, p * p * (3. - 2. * p) * 0.85)
             });
             segments[k] = Segment {
                 at: view.screen(ring.pos),
-                radius: ring.radius * z,
+                radius: ring.radius * z * swell,
                 depth: ring.depth + sinking,
                 along: vec2(toward.x, toward.y),
             };
@@ -1295,26 +1410,46 @@ impl BossFx {
                 mix(RAW, BLOOD, 0.35)
             };
             if gore.flesh {
-                draw(Primitive::Polygon {
-                    center: top,
-                    sides: 5,
-                    radius: size + (z * 0.8).max(0.6),
-                    angle: gore.angle,
-                    color: OUTLINE,
+                // The heavy end tumbles; a tapering strip of connective
+                // tissue trails its flight and folds back as it falls.
+                let (sin, cos) = gore.angle.sin_cos();
+                let along = vec2(cos, sin) * size;
+                let cross = vec2(-sin, cos) * size;
+                let curl = (gore.age * 12. + gore.spin).sin() * 0.4;
+                let root = top - along * 0.72;
+                let tip = root
+                    - vec2(gore.vel.x, gore.vel.y - gore.rise * 0.18).normalize_or_zero()
+                        * size
+                        * 1.7
+                    + cross * curl;
+                draw(Primitive::ShadedQuad {
+                    vertices: [
+                        root + cross * 0.28,
+                        tip,
+                        tip + cross * 0.06,
+                        root - cross * 0.24,
+                    ],
+                    color: FLESH,
+                    end: BLOOD,
                 });
-                draw(Primitive::Polygon {
-                    center: top,
-                    sides: 5,
-                    radius: size,
-                    angle: gore.angle,
-                    color,
-                });
-                draw(Primitive::Polygon {
-                    center: top + vec2(0.3, 0.2) * size,
-                    sides: 5,
-                    radius: size * 0.55,
-                    angle: gore.angle + 0.6,
+                draw(Primitive::ShadedQuad {
+                    vertices: [
+                        root + cross * 0.45,
+                        top + along + cross * 0.32,
+                        top + along * 0.54 - cross * 0.65,
+                        root - cross * 0.3,
+                    ],
                     color: RAW,
+                    end: BLOOD,
+                });
+                draw(Primitive::Quad {
+                    vertices: [
+                        root + cross * 0.32,
+                        top + along * 0.76 + cross * 0.24,
+                        top + along * 0.4 + cross * 0.12,
+                        root + cross * 0.14,
+                    ],
+                    color: mix(FLESH, WHITE, 0.25),
                 });
             } else {
                 // Surface tension rounds the leading edge; a narrow tail
@@ -2326,7 +2461,7 @@ mod tests {
         Shown {
             tick: 0,
             body: None,
-            fraction: 1.,
+            body_time: BodyTime::Local(1.),
             boss,
             pos: boss.pos,
             aim: boss.aim,
@@ -2503,7 +2638,7 @@ mod tests {
         fx.sync(
             std::iter::once(Shown {
                 body: Some(&body),
-                fraction: 1.,
+                body_time: BodyTime::Local(1.),
                 ..shown(&boss)
             }),
             1. / 60.,
@@ -2526,7 +2661,7 @@ mod tests {
         fx.sync(
             std::iter::once(Shown {
                 body: Some(&body),
-                fraction: 0.5,
+                body_time: BodyTime::Local(0.5),
                 tick: 1,
                 ..shown(&boss)
             }),
@@ -2541,13 +2676,100 @@ mod tests {
             std::iter::once(Shown {
                 body: Some(&body),
                 tick: 2,
-                fraction: 0.,
+                body_time: BodyTime::Local(0.),
                 ..shown(&boss)
             }),
             1. / 60.,
         );
         for (ring, &(at, _)) in fx.worms.shown[&boss.id].rings.iter().zip(&body.centers) {
             assert!(ring.pos.distance(at) < 0.001);
+        }
+    }
+
+    /// Arrival times for 20 Hz snapshots, `jitter` seconds early or late in
+    /// a fixed pattern, as frames at `fps` would first see them.
+    fn landings(fps: f32, jitter: f32, seconds: f32) -> Vec<(f32, u64, f32)> {
+        const PATTERN: [f32; 7] = [0., 1., -0.7, 0.35, -1., 0.6, -0.2];
+        let mut frames = Vec::new();
+        let mut newest = None;
+        for frame in 0..(seconds * fps) as usize {
+            let now = frame as f32 / fps;
+            let landed = (0..80_u64)
+                .filter(|n| {
+                    *n as f32 * 0.05 + 0.08 + PATTERN[*n as usize % PATTERN.len()] * jitter <= now
+                })
+                .max();
+            if landed.is_some() && landed != newest.map(|(n, _)| n) {
+                newest = landed.map(|n| (n, now));
+            }
+            if let Some((n, at)) = newest {
+                frames.push((now, n, at));
+            }
+        }
+        frames
+    }
+
+    /// The worst gap between a frame's step and an even one, as a share of
+    /// the even step, over everything after the first second.
+    fn unevenness(steps: &[(f32, f32)], fps: f32, speed: f32) -> f32 {
+        let even = speed / fps;
+        steps
+            .windows(2)
+            .filter(|pair| pair[0].0 >= 1.)
+            .map(|pair| ((pair[1].1 - pair[0].1) - even).abs() / even)
+            .fold(0., f32::max)
+    }
+
+    #[test]
+    fn online_its_body_moves_evenly_when_packets_land_early_or_late() {
+        const SPEED: f32 = 600.;
+        let sign = WormSign {
+            act: WormAct::Hunt,
+            phase: 1,
+            ..Default::default()
+        };
+        for fps in [60., 144.] {
+            for jitter in [0., 0.014] {
+                let mut fx = BossFx::default();
+                let mut drawn = Vec::new();
+                for (now, n, landed) in landings(fps, jitter, 3.) {
+                    let head = V2::new(1000. + SPEED * n as f32 * 0.05, 2000.);
+                    let boss = worm(17, WORM_RADIUS, head, sign);
+                    let body = tankyard_core::sunderworm::WormBody {
+                        id: boss.id,
+                        centers: (0..WORM_RINGS)
+                            .map(|k| (head - V2::new(k as f32 * 55., 0.), 0.))
+                            .collect(),
+                    };
+                    fx.sync(
+                        std::iter::once(Shown {
+                            body: Some(&body),
+                            tick: n * 3,
+                            body_time: BodyTime::Network {
+                                now: f64::from(now),
+                                landed: f64::from(landed),
+                            },
+                            ..shown(&boss)
+                        }),
+                        1. / fps,
+                    );
+                    let rings = &fx.worms.shown[&boss.id].rings;
+                    assert_eq!(rings.len(), WORM_RINGS);
+                    // The body stays in one piece while it glides.
+                    for pair in rings.windows(2) {
+                        assert!((pair[0].pos.distance(pair[1].pos) - 55.).abs() < 0.5);
+                    }
+                    drawn.push((now, rings[0].pos.x));
+                }
+                // Never a repeated frame; with steady packets, perfectly even.
+                let worst = unevenness(&drawn, fps, SPEED);
+                let allowed = if jitter > 0. { 0.5 } else { 0.08 };
+                assert!(
+                    worst < allowed,
+                    "{fps} fps, {jitter} s jitter: a step was {:.0}% off",
+                    worst * 100.
+                );
+            }
         }
     }
 

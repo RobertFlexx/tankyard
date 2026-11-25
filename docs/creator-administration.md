@@ -18,13 +18,17 @@ The server panel adds a searchable player list, boss summon and dismiss controls
 
 On **Mods**, the row's switch and the detail button both enable or disable a pack. The password screen supports Show/Hide and keypad Enter, and focusing the password field no longer prevents clicking Unlock. Disabling a staff pack locks its tools immediately. Creator and central-owner credentials remain separate.
 
+## The central owner's tank
+
+On the central server, the verified central owner has a **My tank** tab in the server panel. It changes only their own tank: choose any hull by name or ID, then scale weapon damage from 0.25× to 8× and shot speed from 0.25× to 3×. **Reset to 1×** puts both back, and **Apply** sends the change. The settings last for the current round. Applying them marks the arena as modded, so it records no normal arena progress, and a borrowed hull awards no XP or levels. If the owner's verification ends during the round, the server removes their shots and returns their original hull. Delegated staff don't get the tab, and servers older than 2.1.5 don't answer it.
+
 ## Roles and scope
 
 | Identity | Authorization | Available tools |
 | --- | --- | --- |
 | Server Host | Local hosting channel or explicit process-console grant | Server-local moderation, roles, rooms, bots, match settings, restart and audit |
 | Moderator / Admin | A grant from this server's owner | Only the selected server permissions |
-| Central Server Owner | Separate pinned Ed25519 key, verified on the official central profile | Central-server moderation, announcements, roles, match settings, bots and audit; no personal creator combat powers |
+| Central Server Owner | Separate pinned Ed25519 key, verified on the official central profile | Central-server moderation, announcements, roles, match settings, bots and audit, plus [their own tank](#the-central-owners-tank); no creator combat powers |
 | Game Creator | Pinned creator Ed25519 key and consenting host policy | Creator gameplay controls plus server-local kick, ban, mute, warnings and announcements |
 
 Badges are assigned by the server, carried through snapshots, respawns, chat and elimination records, and shown beside names. Names and client labels never confer authority. The central-owner meeting achievement requires another human with the verified badge; it is a local cosmetic achievement, like the creator meeting achievement.

@@ -619,10 +619,9 @@ pub fn boss_model_geometry(
             );
         }
         BossKind::Trapper => {
-            // A hexagon with two trap launchers ahead and a mine rack on
-            // each side, where its pockets of mines come from.
+            // Twin launch tubes sit ahead of a ratcheted magazine.
             for side in [-1., 1.] {
-                mount(emit, aim + side * 0.55, 0.4, 0.98, 1.4);
+                mount(emit, aim + side * 0.19, 0.34, 1.1, 1.35);
                 mount(emit, aim + side * FRAC_PI_2, 0.5, 0.7, 1.55);
             }
             hull(emit, p, 6, r, aim + PI / 6., color, edge);
@@ -635,6 +634,24 @@ pub fn boss_model_geometry(
                 plate_color,
                 edge * 0.45,
             );
+            let drum = aim + time * 0.6 + charge * 1.7;
+            for i in 0..3 {
+                let angle = drum + i as f32 * TAU / 3.;
+                let spoke = direction(angle);
+                let normal = vec2(-spoke.y, spoke.x);
+                let tip = p + spoke * r * 0.48;
+                let root = p + spoke * r * 0.24;
+                emit(Primitive::ShadedQuad {
+                    vertices: [
+                        root,
+                        tip - normal * r * 0.07,
+                        tip + normal * r * 0.07,
+                        root + normal * r * 0.13,
+                    ],
+                    color: dark,
+                    end: glow,
+                });
+            }
             poly(emit, p, 3, r * 0.24, aim, OUTLINE);
             poly(emit, p, 3, r * 0.24 - edge * 1.6, aim, glow);
         }

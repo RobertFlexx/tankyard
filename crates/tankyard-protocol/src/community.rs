@@ -96,6 +96,18 @@ pub struct ChatMessage {
     pub text: String,
     pub time: u64,
 }
+/// The central owner's own hull and gun settings for this round.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OwnerTank {
+    pub class: String,
+    pub weapons: tankyard_core::administration::WeaponTuning,
+}
+impl OwnerTank {
+    pub fn valid(&self) -> bool {
+        tankyard_mods::identifier(&self.class) && self.weapons.valid()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerCommand {
     Warn {
@@ -159,6 +171,10 @@ pub enum ServerCommand {
         boss: String,
     },
     DismissBosses,
+    ReadOwnTank,
+    SetOwnTank {
+        tank: OwnerTank,
+    },
 }
 impl ServerCommand {
     pub fn valid(&self) -> bool {
@@ -212,6 +228,8 @@ impl ServerCommand {
             Self::ConfigureParty { settings } => settings.party.is_some() && settings.valid(),
             Self::ConfigureRules { rules } => rules.validate().is_ok(),
             Self::SummonBoss { boss } => tankyard_core::BossKind::from_id(boss).is_some(),
+            Self::SetOwnTank { tank } => tank.valid(),
+            Self::ReadOwnTank => true,
             Self::ReloadMods
             | Self::ReadAudit
             | Self::RestartRound
@@ -305,6 +323,11 @@ impl ServerCommand {
                 tankyard_core::BossKind::from_id(boss).map_or(boss.as_str(), |kind| kind.name())
             ),
             Self::DismissBosses => "Dismissed every boss".to_owned(),
+            Self::ReadOwnTank => "Read own tank settings".into(),
+            Self::SetOwnTank { tank } => format!(
+                "Set own tank to {} with {:.2}× damage and {:.2}× shot speed",
+                tank.class, tank.weapons.damage, tank.weapons.shot_speed
+            ),
         }
     }
     pub fn permission(&self) -> ServerPermission {
@@ -322,6 +345,8 @@ impl ServerCommand {
             | Self::ConfigureRules { .. }
             | Self::RestartRound
             | Self::SummonBoss { .. }
+            | Self::ReadOwnTank
+            | Self::SetOwnTank { .. }
             | Self::DismissBosses => ServerPermission::Configure,
             Self::ReloadMods => ServerPermission::ReloadMods,
             Self::ReadAudit | Self::ReadHealth => ServerPermission::ViewAudit,

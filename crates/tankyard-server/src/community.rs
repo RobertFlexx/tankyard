@@ -1,5 +1,7 @@
 use crate::{NetError, UdpServer, unix_time};
-use tankyard_protocol::{ChatMessage, ServerCommand, ServerControl, ServerKind, ServerRole};
+use tankyard_protocol::{
+    ChatMessage, OwnerTank, ServerCommand, ServerControl, ServerKind, ServerRole,
+};
 
 /// Staff can summon bosses up to this many at once, the same as Sandbox.
 const MOST_SUMMONED_BOSSES: usize = 12;
@@ -149,6 +151,35 @@ impl UdpServer {
         self.access
             .authorize(actor, &command, now)
             .map_err(NetError)?;
+        let arena = self.arena_of(actor);
+        let own_tank = if matches!(
+            command,
+            ServerCommand::ReadOwnTank | ServerCommand::SetOwnTank { .. }
+        ) {
+            let peer = self
+                .peers
+                .get(&actor)
+                .filter(|peer| {
+                    self.settings.central_owner_enabled()
+                        && peer.central_owner
+                        && peer.disconnect_at.is_none()
+                        && self.access.grant(actor, now).role == ServerRole::Owner
+                })
+                .ok_or_else(|| NetError("Verified central server owner required.".into()))?;
+            let world = &self.arenas[arena].session.world;
+            let id = peer
+                .entity
+                .filter(|id| world.tanks.iter().any(|t| t.id == *id && !t.bot))
+                .ok_or_else(|| NetError("Your tank is no longer in this arena.".into()))?;
+            if let ServerCommand::SetOwnTank { tank } = &command
+                && world.content.class(&tank.class).is_none()
+            {
+                return Err(NetError("That class is unavailable in this arena.".into()));
+            }
+            Some(id)
+        } else {
+            None
+        };
         if !self.access.take_admin_token(actor, now) {
             return Err(NetError(
                 "Wait before sending another server command.".into(),
@@ -180,7 +211,7 @@ impl UdpServer {
         // would only push real actions out of view. Neither changes anything.
         if !matches!(
             command,
-            ServerCommand::ReadHealth | ServerCommand::ReadAudit
+            ServerCommand::ReadHealth | ServerCommand::ReadAudit | ServerCommand::ReadOwnTank
         ) {
             let named = |entity: u64| match self.tank_name(entity) {
                 Some(name) => format!("{name} (#{entity})"),
@@ -201,6 +232,7 @@ impl UdpServer {
             let target_name = target
                 .and_then(|client| self.peers.get(&client))
                 .and_then(|peer| peer.entity)
+                .or(own_tank)
                 .and_then(|entity| self.tank_name(entity))
                 .unwrap_or_default();
             crate::access::audit(
@@ -209,7 +241,9 @@ impl UdpServer {
                     time: now,
                     actor: &actor.to_string(),
                     action: "server_moderation",
-                    target: &target.map_or_else(|| "server".into(), |t| t.to_string()),
+                    target: &target
+                        .or(own_tank.map(|_| actor))
+                        .map_or_else(|| "server".into(), |t| t.to_string()),
                     reason: &command.describe(named, banned),
                     actor_name: &actor_name,
                     target_name: &target_name,
@@ -218,6 +252,31 @@ impl UdpServer {
             .map_err(NetError)?;
         }
         match command {
+            ServerCommand::ReadOwnTank | ServerCommand::SetOwnTank { .. } => {
+                // Both were checked before the token and the audit line.
+                let Some(id) = own_tank else {
+                    return Err(NetError("Verified central server owner required.".into()));
+                };
+                let world = &mut self.arenas[arena].session.world;
+                if let ServerCommand::SetOwnTank { tank } = command
+                    && !world.tune_owner_tank(id, &tank.class, tank.weapons)
+                {
+                    return Err(NetError("Could not apply tank settings.".into()));
+                }
+                let Some(class) = world
+                    .tanks
+                    .iter()
+                    .find(|t| t.id == id)
+                    .map(|t| t.class.clone())
+                else {
+                    return Err(NetError("Your tank is no longer in this arena.".into()));
+                };
+                let tank = OwnerTank {
+                    class,
+                    weapons: world.owner_weapons(id),
+                };
+                self.send_control(actor, &ServerControl::OwnTank { tank });
+            }
             ServerCommand::Warn { reason, .. } => self.warn_client(target.unwrap(), reason),
             ServerCommand::Announce { text } => self.announce(text.trim().to_owned()),
             ServerCommand::Kick { reason, .. } => self.reject(
