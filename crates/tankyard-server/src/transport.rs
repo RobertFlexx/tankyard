@@ -1,4 +1,5 @@
 use crate::{LocalSession, NetError, ServerSettings, unix_time};
+use bastion_anticheat::{InputHistory, Violation};
 use renet::{Bytes, RenetServer, ServerEvent};
 use renet_netcode::{ServerAuthentication, ServerConfig};
 use std::{
@@ -18,6 +19,10 @@ pub(crate) struct Peer {
     pub connected_at: Duration,
     pub last_input_at: Duration,
     pub last_sequence: Option<u32>,
+    input_history: InputHistory,
+    /// In observe mode, write each kind of finding once per connection after
+    /// a successful report; a failed audit leaves it available to retry.
+    reported_violations: u8,
     pub control_tokens: f32,
     pub queued_control: Option<Bytes>,
     pub input_tokens: f32,
@@ -52,6 +57,47 @@ pub(crate) struct Peer {
     pub hud_sent: Option<Bytes>,
     pub hud_sent_at: Duration,
 }
+impl Peer {
+    pub(crate) fn new(now: Duration) -> Self {
+        Self {
+            entity: None,
+            connected_at: now,
+            last_input_at: now,
+            last_sequence: None,
+            input_history: InputHistory::default(),
+            reported_violations: 0,
+            control_tokens: 24.,
+            queued_control: None,
+            input_tokens: 256.,
+            voice_tokens: 8.,
+            last_voice_sequence: None,
+            voice_muted: false,
+            spectating: None,
+            disconnect_at: None,
+            admin_key: None,
+            admin_nonce: None,
+            last_admin_sequence: None,
+            central_owner: false,
+            central_proof_used: false,
+            creator_nonce: None,
+            creator: false,
+            creator_session_nonce: None,
+            last_owner_sequence: None,
+            party_nonce: None,
+            party_in_menu: false,
+            party_ready: false,
+            arena: 0,
+            walls_revision: None,
+            walls_sent_at: Duration::ZERO,
+            strikes: 0,
+            strike_window: Duration::ZERO,
+            protocol: PROTOCOL_VERSION,
+            hud_sent: None,
+            hud_sent_at: Duration::ZERO,
+        }
+    }
+}
+
 #[derive(Default, Clone, Debug)]
 pub struct ServerMetrics {
     pub ticks: u64,
@@ -497,43 +543,7 @@ impl UdpServer {
         while let Some(event) = self.server.get_event() {
             match event {
                 ServerEvent::ClientConnected { client_id } => {
-                    self.peers.insert(
-                        client_id,
-                        Peer {
-                            entity: None,
-                            connected_at: self.elapsed,
-                            last_input_at: self.elapsed,
-                            last_sequence: None,
-                            control_tokens: 24.,
-                            queued_control: None,
-                            input_tokens: 256.,
-                            voice_tokens: 8.,
-                            last_voice_sequence: None,
-                            voice_muted: false,
-                            spectating: None,
-                            disconnect_at: None,
-                            admin_key: None,
-                            admin_nonce: None,
-                            last_admin_sequence: None,
-                            central_owner: false,
-                            central_proof_used: false,
-                            creator_nonce: None,
-                            creator: false,
-                            creator_session_nonce: None,
-                            last_owner_sequence: None,
-                            party_nonce: None,
-                            party_in_menu: false,
-                            party_ready: false,
-                            arena: 0,
-                            walls_revision: None,
-                            walls_sent_at: Duration::ZERO,
-                            strikes: 0,
-                            strike_window: Duration::ZERO,
-                            protocol: PROTOCOL_VERSION,
-                            hud_sent: None,
-                            hud_sent_at: Duration::ZERO,
-                        },
-                    );
+                    self.peers.insert(client_id, Peer::new(self.elapsed));
                     let blocked = self
                         .transport
                         .client_addr(client_id)
@@ -595,8 +605,23 @@ impl UdpServer {
                 }
                 break;
             }
-            match decode_control(&bytes) {
-                Ok(message) => self.handle_control(client, message),
+            match decode_control_request(&bytes) {
+                Ok(message) if message.valid() => self.handle_control(client, message),
+                Ok(message) => {
+                    // Validation before a successful version negotiation is a
+                    // handshake failure, including a party's second Hello.
+                    if matches!(message, ClientControl::Hello { .. })
+                        || self.peers.get(&client).is_none_or(|p| p.entity.is_none())
+                    {
+                        self.metrics.rejected_packets += 1;
+                        self.bastion.note_rejected_request();
+                        self.reject(client, "Invalid handshake.");
+                        return;
+                    }
+                    if self.bastion_violation(client, Violation::ControlValues) {
+                        return;
+                    }
+                }
                 Err(_) => {
                     self.metrics.rejected_packets += 1;
                     self.bastion.note_rejected_request();
@@ -636,7 +661,7 @@ impl UdpServer {
                 self.metrics.rejected_packets += 1;
                 continue;
             }
-            let inputs = match decode_inputs(&bytes) {
+            let inputs = match decode_input_frames(&bytes) {
                 Ok(inputs) => inputs,
                 Err(_) => {
                     self.metrics.rejected_packets += 1;
@@ -648,13 +673,19 @@ impl UdpServer {
                     continue;
                 }
             };
-            for input in inputs.iter() {
-                let Some(peer) = self.peers.get(&client) else {
+            let Some(peer) = self.peers.get_mut(&client) else {
+                return;
+            };
+            if peer.entity.is_none() {
+                continue;
+            }
+            if let Err(violation) = peer.input_history.check(&inputs, self.elapsed) {
+                if self.bastion_violation(client, violation) {
                     return;
-                };
-                if peer.entity.is_none() {
-                    continue;
                 }
+                continue;
+            }
+            for input in inputs.iter() {
                 let baseline = newest
                     .map(|i: PlayerInput| i.sequence)
                     .or(peer.last_sequence);
@@ -798,6 +829,65 @@ impl UdpServer {
         }
         peer.strikes += 1;
         peer.strikes > 12
+    }
+
+    /// Refuse the complete offending message. Only a joined connection can
+    /// reach this path. No account, address or other relay user is sanctioned.
+    fn bastion_violation(&mut self, client: u64, violation: Violation) -> bool {
+        self.metrics.rejected_packets += 1;
+        self.bastion.note_rejected_request();
+        let enforce = self.settings.bastion_mode == crate::BastionMode::Enforce;
+        let Some(peer) = self.peers.get_mut(&client) else {
+            return true;
+        };
+        if peer.disconnect_at.is_some() {
+            return true;
+        }
+        let bit = 1 << violation as u8;
+        let first_report = peer.reported_violations & bit == 0;
+        if enforce || first_report {
+            let action = if enforce { "Disconnected" } else { "Observed" };
+            let name = peer
+                .entity
+                .and_then(|id| {
+                    self.arenas
+                        .get(peer.arena)?
+                        .session
+                        .world
+                        .tanks
+                        .iter()
+                        .find(|tank| tank.id == id)
+                        .map(|tank| tank.name.as_str())
+                })
+                .unwrap_or("player");
+            let reason = format!(
+                "{action} {name} (connection {client}). {}",
+                violation.reason()
+            );
+            log::warn!("Bastion: {reason}");
+            match crate::access::audit(
+                self.settings.creator_audit_file(),
+                &crate::access::AuditRecord {
+                    time: unix_time().as_secs(),
+                    actor: "Bastion",
+                    actor_name: "Bastion",
+                    action: "server_moderation",
+                    target: &client.to_string(),
+                    target_name: name,
+                    reason: &reason,
+                },
+            ) {
+                Ok(()) => peer.reported_violations |= bit,
+                Err(error) => log::warn!("Could not write the Bastion audit entry: {error}"),
+            }
+        }
+        if enforce {
+            self.reject(
+                client,
+                &format!("Bastion disconnected this session. {}", violation.reason()),
+            );
+        }
+        enforce
     }
 
     fn take_token(&mut self, client: u64, control: bool) -> bool {
@@ -1228,6 +1318,7 @@ impl UdpServer {
         if let Some(peer) = self.peers.get_mut(&client) {
             peer.entity = Some(player);
             peer.last_sequence = None;
+            peer.input_history = InputHistory::default();
             peer.spectating = None;
             peer.last_voice_sequence = None;
             if let Some(tank) = world.tanks.iter_mut().find(|t| t.id == player) {
@@ -2284,6 +2375,91 @@ impl Drop for UdpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bastion_observes_once_per_reason_or_disconnects_only_that_peer() {
+        let audit = std::env::temp_dir().join(format!(
+            "tankyard-bastion-{:x}.jsonl",
+            u64::from_le_bytes(renet_netcode::generate_random_bytes())
+        ));
+        let mut server = UdpServer::bind(ServerSettings {
+            bind: "127.0.0.1:0".into(),
+            ban_file: String::new(),
+            bot_count: 0,
+            audit_file: audit.to_string_lossy().into(),
+            bastion_mode: crate::BastionMode::Observe,
+            ..Default::default()
+        })
+        .unwrap();
+        let player = server.arenas[0].session.world.add_player("Pilot", false);
+        let mut peer = Peer::new(Duration::ZERO);
+        peer.entity = Some(player);
+        server.peers.insert(7, peer);
+        server.peers.insert(8, Peer::new(Duration::ZERO));
+        for _ in 0..3 {
+            assert!(!server.bastion_violation(7, Violation::ConflictingFrame));
+        }
+        assert!(server.peers[&7].disconnect_at.is_none());
+        server.settings.bastion_mode = crate::BastionMode::Enforce;
+        assert!(server.bastion_violation(7, Violation::ControlValues));
+        assert!(server.peers[&7].disconnect_at.is_some());
+        assert!(server.peers[&8].disconnect_at.is_none());
+        assert!(server.bans.is_empty());
+        let text = std::fs::read_to_string(&audit).unwrap();
+        std::fs::remove_file(audit).unwrap();
+        let rows: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["target_name"], "Pilot");
+        assert!(rows[0]["reason"].as_str().unwrap().starts_with("Observed"));
+        assert!(
+            rows[1]["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("Disconnected")
+        );
+    }
+
+    #[test]
+    fn bastion_retries_an_unwritten_finding_in_observe_mode() {
+        let audit = std::env::temp_dir().join(format!(
+            "tankyard-bastion-retry-{:x}.jsonl",
+            u64::from_le_bytes(renet_netcode::generate_random_bytes())
+        ));
+        let blocked_dir = std::env::temp_dir().join(format!(
+            "tankyard-bastion-blocked-{:x}",
+            u64::from_le_bytes(renet_netcode::generate_random_bytes())
+        ));
+        std::fs::create_dir_all(&blocked_dir).unwrap();
+        let mut server = UdpServer::bind(ServerSettings {
+            bind: "127.0.0.1:0".into(),
+            ban_file: String::new(),
+            bot_count: 0,
+            audit_file: blocked_dir.to_string_lossy().into(),
+            bastion_mode: crate::BastionMode::Observe,
+            ..Default::default()
+        })
+        .unwrap();
+        let player = server.arenas[0].session.world.add_player("Pilot", false);
+        let mut peer = Peer::new(Duration::ZERO);
+        peer.entity = Some(player);
+        server.peers.insert(7, peer);
+        let bit = 1 << Violation::ControlValues as u8;
+        for _ in 0..2 {
+            assert!(!server.bastion_violation(7, Violation::ControlValues));
+            assert_eq!(server.peers[&7].reported_violations & bit, 0);
+        }
+        server.settings.audit_file = audit.to_string_lossy().into();
+        assert!(!server.bastion_violation(7, Violation::ControlValues));
+        assert_ne!(server.peers[&7].reported_violations & bit, 0);
+        assert!(!server.bastion_violation(7, Violation::ControlValues));
+        let text = std::fs::read_to_string(&audit).unwrap();
+        std::fs::remove_file(audit).unwrap();
+        std::fs::remove_dir(blocked_dir).unwrap();
+        assert_eq!(text.lines().count(), 1);
+    }
+
     #[test]
     fn players_get_maps_without_triggers_and_a_matching_hash() {
         use tankyard_content::{MapTrigger, TriggerAction, TriggerWhen};

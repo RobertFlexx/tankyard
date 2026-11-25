@@ -95,10 +95,12 @@ pursuit. At 16% health it tears into a head and tail, which fight independently.
 Both must be destroyed. A surviving half becomes more aggressive. Its boss bar
 shows phase boundaries and warns before lunges, eruptions and the split.
 
-The jaws fold back to expose fixed, hooked teeth and a contracting throat. Torn
-ends bleed in streams that break into falling drops and wet pools. Blood, flesh,
-dust and thrown tiles use the arena effects renderer and its lighting; they
-follow the Effects setting. Attack warnings remain visible with effects off.
+The jaws fold back to expose fixed, hooked teeth and a contracting throat. The
+ridged plates catch the light as the body turns, and breathing slits along the
+flanks open in a wave. Torn ends bleed in streams that break into falling drops
+and wet pools. Blood, flesh, dust and thrown tiles use the arena effects renderer
+and its lighting; they follow the Effects setting. Attack warnings remain visible
+with effects off.
 
 An eligible natural boss arrival has about a one-in-two-million chance of being
 Sunderworm, and requires an arena worth three full-level tanks. The Boss Rush
@@ -107,7 +109,7 @@ lineup. Hosts may explicitly choose `sunderworm` in a dedicated-server lineup or
 a map Boss trigger. A local pack can keep the card available with
 `"menu": { "bosses": ["sunderworm"] }`.
 
-Tank Yard 2.1.1 uses **protocol 35**, the same as 2.1.0. Update the host and its players together; those two releases can play together.
+Tank Yard 2.1.2 uses **protocol 35**, the same as 2.1.0. All 2.1.x hosts and players can play together.
 Snapshots carry its real body positions, including when joining mid-fight.
 
 </details>

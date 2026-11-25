@@ -188,7 +188,7 @@ impl WorldConfig {
         )
     }
 }
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlayerInput {
     pub sequence: u32,
     pub movement: V2,
@@ -216,6 +216,8 @@ impl Default for PlayerInput {
     }
 }
 impl PlayerInput {
+    /// Shared send/receive limits. Widening them requires a protocol change
+    /// so older hosts can distinguish new input from an invalid frame.
     pub fn valid(self) -> bool {
         self.movement.finite()
             && self.aim.is_finite()

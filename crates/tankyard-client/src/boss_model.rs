@@ -1395,7 +1395,9 @@ mod tests {
                         vec![center - Vec2::splat(radius), center + Vec2::splat(radius)]
                     }
                     Primitive::Triangle { vertices, .. } => vertices.to_vec(),
-                    Primitive::Quad { vertices, .. } => vertices.to_vec(),
+                    Primitive::Quad { vertices, .. } | Primitive::ShadedQuad { vertices, .. } => {
+                        vertices.to_vec()
+                    }
                 };
                 for point in points {
                     assert!(point.is_finite() && point.length() < r * 2.);
@@ -1462,7 +1464,8 @@ mod tests {
                             vec![center - Vec2::splat(radius), center + Vec2::splat(radius)]
                         }
                         Primitive::Triangle { vertices, .. } => vertices.to_vec(),
-                        Primitive::Quad { vertices, .. } => vertices.to_vec(),
+                        Primitive::Quad { vertices, .. }
+                        | Primitive::ShadedQuad { vertices, .. } => vertices.to_vec(),
                     };
                     for point in points {
                         assert!(point.is_finite() && point.length() < 275., "{open}");
@@ -1497,7 +1500,8 @@ mod tests {
                             vec![center - Vec2::splat(radius), center + Vec2::splat(radius)]
                         }
                         Primitive::Triangle { vertices, .. } => vertices.to_vec(),
-                        Primitive::Quad { vertices, .. } => vertices.to_vec(),
+                        Primitive::Quad { vertices, .. }
+                        | Primitive::ShadedQuad { vertices, .. } => vertices.to_vec(),
                     };
                     for point in points {
                         assert!(point.is_finite() && point.length() < kind.radius() * 2.5);

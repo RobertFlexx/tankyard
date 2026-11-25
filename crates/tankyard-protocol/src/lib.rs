@@ -171,6 +171,8 @@ pub enum ClientControl {
 }
 
 impl ClientControl {
+    /// Shared send/receive limits for this protocol version. Widen them only
+    /// with a version change so existing hosts can recognize newer clients.
     pub fn valid(&self) -> bool {
         match self {
             Self::PartyPresence { .. } | Self::PartyReady { .. } => true,
@@ -346,7 +348,9 @@ impl InputBundle {
             .copied()
             .take(usize::from(self.count.min(3)))
     }
-    fn valid(&self) -> bool {
+    /// Whether this history is one the game's client could send: one to
+    /// three frames, each passing [`PlayerInput::valid`].
+    pub fn valid(&self) -> bool {
         (1..=3).contains(&self.count) && self.iter().all(PlayerInput::valid)
     }
 }
@@ -434,8 +438,14 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8], limit: usize) -> Result<T, Deco
     }
     Ok(value)
 }
+/// A control request as it was sent, before its values are judged. Bastion
+/// needs to tell a request the game's client would never send apart from
+/// bytes that aren't a request at all.
+pub fn decode_control_request(bytes: &[u8]) -> Result<ClientControl, DecodeError> {
+    decode(bytes, MAX_CONTROL_BYTES)
+}
 pub fn decode_control(bytes: &[u8]) -> Result<ClientControl, DecodeError> {
-    let message: ClientControl = decode(bytes, MAX_CONTROL_BYTES)?;
+    let message = decode_control_request(bytes)?;
     if !message.valid() {
         return Err(DecodeError("invalid control request"));
     }
@@ -449,15 +459,21 @@ pub fn decode_input(bytes: &[u8]) -> Result<PlayerInput, DecodeError> {
     Ok(message.input)
 }
 
-pub fn decode_inputs(bytes: &[u8]) -> Result<InputBundle, DecodeError> {
+/// The frames of a realtime packet as they were sent, before their values are
+/// judged, for Bastion to examine.
+pub fn decode_input_frames(bytes: &[u8]) -> Result<InputBundle, DecodeError> {
     // A single frame occupies at most 25 bytes (five-byte sequence, four
     // four-byte floats, four booleans). A fixed three-frame bundle is >=64.
     if bytes.len() <= 25 {
+        let message: InputMessage = decode(bytes, MAX_INPUT_BYTES)?;
         let mut bundle = InputBundle::default();
-        bundle.push(decode_input(bytes)?);
+        bundle.push(message.input);
         return Ok(bundle);
     }
-    let bundle: InputBundle = decode(bytes, MAX_INPUT_BYTES)?;
+    decode(bytes, MAX_INPUT_BYTES)
+}
+pub fn decode_inputs(bytes: &[u8]) -> Result<InputBundle, DecodeError> {
+    let bundle = decode_input_frames(bytes)?;
     if !bundle.valid() {
         return Err(DecodeError("invalid input history"));
     }
@@ -776,6 +792,187 @@ mod name_hardening_tests {
 mod tests {
     use super::*;
     use tankyard_core::V2;
+
+    /// Bastion disconnects a client that sends what these checks refuse, on
+    /// the grounds that the game's client checks the same before sending.
+    /// If one of these limits has to move, bump the protocol with it: an
+    /// older server of this protocol would otherwise take a newer client for
+    /// a modified one.
+    #[test]
+    fn protocol_35_request_limits_stay_where_bastion_expects_them() {
+        assert_eq!(
+            PROTOCOL_VERSION, 35,
+            "re-check these limits for the new protocol"
+        );
+        let input = |movement: V2, aim: f32, aim_distance: f32| PlayerInput {
+            movement,
+            aim,
+            aim_distance,
+            ..Default::default()
+        };
+        for (frame, valid) in [
+            (input(V2::new(1., 1.), 0., 500.), true),
+            (input(V2::new(1.417, 0.), 0., 500.), true),
+            (input(V2::new(1.42, 0.), 0., 500.), false),
+            (input(V2::ZERO, 9999., 0.), true),
+            (input(V2::ZERO, -9999., 5000.), true),
+            (input(V2::ZERO, 10000., 500.), false),
+            (input(V2::ZERO, 0., 5000.5), false),
+            (input(V2::ZERO, 0., -0.5), false),
+            (input(V2::new(f32::NAN, 0.), 0., 500.), false),
+            (input(V2::ZERO, f32::INFINITY, 500.), false),
+            (input(V2::ZERO, 0., f32::NAN), false),
+        ] {
+            assert_eq!(frame.valid(), valid, "{frame:?}");
+        }
+        let mut bundle = InputBundle::default();
+        assert!(!bundle.valid());
+        bundle.push(PlayerInput::default());
+        assert!(bundle.valid());
+        bundle.count = 4;
+        assert!(!bundle.valid());
+
+        let hello = |name: usize, password: usize, token: Option<usize>, proof: Option<usize>| {
+            ClientControl::Hello {
+                protocol: PROTOCOL_VERSION,
+                content: 0,
+                name: "n".repeat(name),
+                password: "p".repeat(password),
+                account_token: token.map(|n| "t".repeat(n)),
+                admin_key: [0; 32],
+                party_proof: proof.map(|n| vec![0; n]),
+                arena: None,
+            }
+        };
+        let chat = |text: String| ClientControl::Chat {
+            room: "lobby".into(),
+            text,
+        };
+        for (request, valid) in [
+            (hello(96, 128, Some(1024), Some(64)), true),
+            (hello(97, 0, None, None), false),
+            (hello(0, 129, None, None), false),
+            (hello(0, 0, Some(1025), None), false),
+            (hello(0, 0, None, Some(63)), false),
+            (chat("a".repeat(160)), true),
+            (chat("a".repeat(161)), false),
+            (chat("\u{1f600}".repeat(160)), true),
+            (chat("tab\there".into()), false),
+            (ClientControl::UpgradeStat { stat: 7, count: 7 }, true),
+            (ClientControl::UpgradeStat { stat: 8, count: 1 }, false),
+            (ClientControl::UpgradeStat { stat: 0, count: 0 }, false),
+            (ClientControl::UpgradeStat { stat: 0, count: 8 }, false),
+            (ClientControl::SandboxLevel { level: 55 }, true),
+            (ClientControl::SandboxLevel { level: 0 }, false),
+            (ClientControl::SandboxLevel { level: 56 }, false),
+            (
+                ClientControl::Choose {
+                    menu: 1,
+                    option: (tankyard_mods::HUD_CHOICES - 1) as u8,
+                },
+                true,
+            ),
+            (ClientControl::Choose { menu: 0, option: 0 }, false),
+            (
+                ClientControl::Choose {
+                    menu: 1,
+                    option: tankyard_mods::HUD_CHOICES as u8,
+                },
+                false,
+            ),
+            (
+                ClientControl::Spectate {
+                    round: 1,
+                    target: Some(1),
+                },
+                true,
+            ),
+            (
+                ClientControl::Spectate {
+                    round: 0,
+                    target: None,
+                },
+                false,
+            ),
+            (
+                ClientControl::Spectate {
+                    round: 1,
+                    target: Some(0),
+                },
+                false,
+            ),
+            (
+                ClientControl::CreatorProof {
+                    signature: vec![0; 64],
+                },
+                true,
+            ),
+            (
+                ClientControl::CreatorProof {
+                    signature: vec![0; 65],
+                },
+                false,
+            ),
+            (
+                ClientControl::CentralOwnerProof {
+                    signature: vec![0; 63],
+                },
+                false,
+            ),
+            (
+                ClientControl::OwnerExtension {
+                    round: 1,
+                    sequence: 0,
+                    payload: vec![0; 1024],
+                    signature: vec![0; 64],
+                },
+                true,
+            ),
+            (
+                ClientControl::OwnerExtension {
+                    round: 1,
+                    sequence: 0,
+                    payload: vec![0; 1025],
+                    signature: vec![0; 64],
+                },
+                false,
+            ),
+            (
+                ClientControl::Evolve {
+                    class: "basic".into(),
+                },
+                true,
+            ),
+            (
+                ClientControl::Evolve {
+                    class: "Not a class!".into(),
+                },
+                false,
+            ),
+        ] {
+            assert_eq!(request.valid(), valid, "{request:?}");
+        }
+    }
+
+    #[test]
+    fn raw_decoders_expose_invalid_values_to_bastion_before_game_decoders_refuse_them() {
+        let bad_control = encode(
+            &ClientControl::UpgradeStat { stat: 8, count: 1 },
+            MAX_CONTROL_BYTES,
+        )
+        .unwrap();
+        assert!(decode_control_request(&bad_control).is_ok());
+        assert!(decode_control(&bad_control).is_err());
+
+        let bad_input = PlayerInput {
+            movement: V2::new(f32::NAN, 0.),
+            ..Default::default()
+        };
+        let bytes = encode(&InputMessage { input: bad_input }, MAX_INPUT_BYTES).unwrap();
+        let frames = decode_input_frames(&bytes).expect("the raw decoder must not judge values");
+        assert!(frames.iter().next().unwrap().movement.x.is_nan());
+        assert!(decode_inputs(&bytes).is_err());
+    }
 
     #[test]
     fn fallen_overlords_ready_special_survives_the_wire_while_turning() {

@@ -159,10 +159,10 @@ pub(super) struct WormShown {
     blink: f32,
     next_blink: f32,
     health: f32,
-    max_health: f32,
     pos: V2,
     aim: f32,
     unseen: f32,
+    seen: bool,
     /// Part-made drops and puffs, so rates hold at any frame rate.
     drips: f32,
     puffs: f32,
@@ -195,10 +195,10 @@ impl WormShown {
             blink: 0.,
             next_blink: 2.,
             health: boss.health,
-            max_health: boss.max_health,
             pos,
             aim,
             unseen: 0.,
+            seen: true,
             drips: 0.,
             puffs: 0.,
             furrow_at: pos,
@@ -405,12 +405,21 @@ impl BossFx {
         }
         let worms = &mut self.worms;
         let shown = worms.shown.get_mut(&id).expect("inserted above");
+        if shown.dead {
+            // Reliable destruction can arrive before the snapshot that
+            // removes this boss. Keep its final pose and stop emitting cues,
+            // but mark it seen so a long-lived snapshot cannot age it out and
+            // have the next frame insert a live body again.
+            shown.unseen = 0.;
+            shown.seen = true;
+            return;
+        }
         let was = shown.sign;
         let was_part = shown.part;
         shown.unseen = 0.;
         shown.sign = sign;
         shown.part = part;
-        shown.max_health = boss.max_health;
+        shown.seen = true;
         // Its head drops or rises smoothly between snapshots.
         shown.depth = if look.calm {
             sign.depth
@@ -457,12 +466,6 @@ impl BossFx {
         let head = shown.rings.first().map_or(item.pos, |ring| ring.pos);
         let heading = V2::from_angle(item.aim);
         let rage = shown.rage();
-        let up = shown
-            .rings
-            .iter()
-            .filter(|ring| ring.surfaced())
-            .map(|ring| (ring.pos, ring.radius))
-            .collect::<Vec<_>>();
         let torn_end = match part {
             WormPart::Front => shown.rings.last().map(|ring| (ring.pos, ring.radius, -1.)),
             WormPart::Back => shown.rings.first().map(|ring| (ring.pos, ring.radius, 1.)),
@@ -499,6 +502,15 @@ impl BossFx {
             shown.drips -= drips as f32;
             shown.puffs -= puffs as f32;
         }
+        let mut surface = [(V2::ZERO, 0.); WORM_RINGS];
+        let mut count = 0;
+        if drips > 0 {
+            for ring in shown.rings.iter().take(WORM_RINGS).filter(|r| r.surfaced()) {
+                surface[count] = (ring.pos, ring.radius);
+                count += 1;
+            }
+        }
+        let up = &surface[..count];
         let first_seen_rising = changed && sign.act == WormAct::Rise && sign.stage == 0;
         // The tear, seen from the front half: it was whole a moment ago.
         let tore = !fresh && was_part == WormPart::Whole && part == WormPart::Front;
@@ -550,24 +562,22 @@ impl BossFx {
             worms.furrow.push_back((point, ring_radius(0) * 0.55, 0.));
         }
         // What happens on the moment an act or stage begins.
-        let mut cues: Vec<(BossCue, V2)> = Vec::new();
+        let mut cue = |sound, at| self.cues.push((sound, Some(at)));
         if changed || adopted.is_some() || tore {
             match (sign.act, sign.stage) {
-                (WormAct::Rise, 0) if first_seen_rising => {
-                    cues.push((BossCue::WormRumble, item.pos))
-                }
+                (WormAct::Rise, 0) if first_seen_rising => cue(BossCue::WormRumble, item.pos),
                 (WormAct::Rise, 1) | (WormAct::Erupt, 1) => {
                     let big = sign.act == WormAct::Rise;
-                    cues.push((BossCue::WormBurst, item.pos));
+                    cue(BossCue::WormBurst, item.pos);
                     worms.quake = worms.quake.max(if big { 19. } else { 13. } * near);
                     if look.live() {
                         breach(worms, item.pos, heading, if big { 1.4 } else { 1. }, look);
                     }
                     worms.hole(item.pos, ERUPT_RADIUS * if big { 0.78 } else { 0.62 });
                 }
-                (WormAct::Erupt, 0) => cues.push((BossCue::WormRumble, item.pos)),
+                (WormAct::Erupt, 0) => cue(BossCue::WormRumble, item.pos),
                 (WormAct::Roar, _) => {
-                    cues.push((BossCue::WormRoar, head));
+                    cue(BossCue::WormRoar, head);
                     worms.quake = worms.quake.max(8. * near);
                     if look.live() {
                         for _ in 0..look.many(26.) {
@@ -582,16 +592,16 @@ impl BossFx {
                         }
                     }
                 }
-                (WormAct::Lunge, 0) => cues.push((BossCue::WormHiss, head)),
+                (WormAct::Lunge, 0) => cue(BossCue::WormHiss, head),
                 (WormAct::Lunge, 1) => {
-                    cues.push((BossCue::WormSnap, head));
+                    cue(BossCue::WormSnap, head);
                     worms.quake = worms.quake.max(3.5 * near);
                 }
-                (WormAct::Spit, 1) => cues.push((BossCue::WormSpit, head)),
-                (WormAct::Bile, 0) => cues.push((BossCue::WormGurgle, head)),
-                (WormAct::Bile, 1) | (WormAct::Bleed, 1) => cues.push((BossCue::WormSpray, head)),
+                (WormAct::Spit, 1) => cue(BossCue::WormSpit, head),
+                (WormAct::Bile, 0) => cue(BossCue::WormGurgle, head),
+                (WormAct::Bile, 1) | (WormAct::Bleed, 1) => cue(BossCue::WormSpray, head),
                 (WormAct::Dive, _) => {
-                    cues.push((BossCue::WormDive, head));
+                    cue(BossCue::WormDive, head);
                     if look.live() {
                         for _ in 0..look.many(12.) {
                             let spread = worms.between((-1.1, 1.1));
@@ -607,10 +617,10 @@ impl BossFx {
                         }
                     }
                 }
-                (WormAct::Brood, 1) => cues.push((BossCue::WormBrood, head)),
-                (WormAct::Thrash, 1) | (WormAct::Whip, 1) => cues.push((BossCue::WormThrash, head)),
-                (WormAct::Sting, 1) => cues.push((BossCue::WormSting, head)),
-                (WormAct::Tear, _) if !tore => cues.push((BossCue::WormStrain, head)),
+                (WormAct::Brood, 1) => cue(BossCue::WormBrood, head),
+                (WormAct::Thrash, 1) | (WormAct::Whip, 1) => cue(BossCue::WormThrash, head),
+                (WormAct::Sting, 1) => cue(BossCue::WormSting, head),
+                (WormAct::Tear, _) if !tore => cue(BossCue::WormStrain, head),
                 _ => {}
             }
         }
@@ -619,7 +629,7 @@ impl BossFx {
             worms.hole(item.pos, ring_radius(0) * 0.95);
         }
         if let Some(at) = cut {
-            cues.push((BossCue::WormTear, at));
+            cue(BossCue::WormTear, at);
             worms.quake = worms.quake.max(15. * nearness(camera, at));
             if look.live() {
                 gush(worms, at, heading, 1.6, look);
@@ -629,7 +639,7 @@ impl BossFx {
             gush(worms, at, heading * -1., 0.8, look);
         }
         if rumble_due {
-            cues.push((BossCue::WormRumble, item.pos));
+            cue(BossCue::WormRumble, item.pos);
         }
         // Grit thrown up along the ridge it pushes through the floor.
         for _ in 0..puffs {
@@ -683,31 +693,18 @@ impl BossFx {
                 worms.jet(from, out * pressure, 220., 2.8);
             }
         }
-        self.cues
-            .extend(cues.into_iter().map(|(cue, at)| (cue, Some(at))));
     }
 
-    /// Forget worms gone from the snapshot, and give a dead one its end.
+    /// Keep a briefly missing body available for a delayed destruction event.
+    /// Only the host can distinguish death from a map change or despawn.
     pub(super) fn worm_gone(&mut self, dt: f32) {
-        let worms = &mut self.worms;
-        let mut ended = Vec::new();
-        for (id, shown) in worms.shown.iter_mut() {
-            shown.unseen += dt;
-            if shown.unseen > 0.12
-                && shown.unseen - dt <= 0.12
-                && shown.health <= shown.max_health * 0.2
-                && !shown.dead
-            {
-                ended.push(*id);
+        self.worms.shown.retain(|_, shown| {
+            if std::mem::take(&mut shown.seen) {
+                return true;
             }
-        }
-        // A dead worm stays a little longer, while its body sinks away.
-        worms
-            .shown
-            .retain(|_, shown| shown.unseen < if shown.dead { CORPSE_SECONDS } else { 1.5 });
-        for id in ended {
-            self.worm_died(id);
-        }
+            shown.unseen += dt;
+            shown.unseen < if shown.dead { CORPSE_SECONDS } else { 1.5 }
+        });
     }
 
     /// The destruction event is authoritative, including a hit that kills a
@@ -717,6 +714,7 @@ impl BossFx {
             return;
         };
         shown.dead = true;
+        shown.unseen = 0.;
         let rings = shown.rings.clone();
         let Some(first) = rings.first() else {
             return;
@@ -1002,6 +1000,12 @@ impl BossFx {
         };
         let z = view.zoom;
         let draw = &mut crate::render::draw_model_primitive;
+        if shown.dead {
+            if self.look.live() {
+                self.worm_geometry(boss.id, view, time, &mut |_, primitive| draw(primitive));
+            }
+            return;
+        }
         let sign = shown.sign;
         let head = shown.rings.first().map_or(shown.pos, |ring| ring.pos);
         let ahead = V2::from_angle(shown.aim);
@@ -2415,7 +2419,8 @@ mod tests {
             ..Default::default()
         };
         let dead = worm(21, WORM_BACK_RADIUS, V2::new(1500., 900.), sign);
-        let lost = worm(22, WORM_FRONT_RADIUS, V2::new(2500., 900.), sign);
+        let mut lost = worm(22, WORM_FRONT_RADIUS, V2::new(2500., 900.), sign);
+        lost.health = 1.;
         fx.worm_frame(&shown(&dead), 1. / 60.);
         fx.worm_frame(&shown(&lost), 1. / 60.);
         fx.worm_died(dead.id);
@@ -2432,6 +2437,40 @@ mod tests {
             seconds += 1. / 60.;
         }
         assert!(fx.worms.shown.is_empty());
+    }
+
+    #[test]
+    fn a_dead_worm_still_in_the_snapshot_is_not_evicted_or_revived() {
+        let mut fx = BossFx::default();
+        let boss = worm(
+            23,
+            WORM_FRONT_RADIUS,
+            V2::new(1800., 1100.),
+            WormSign {
+                act: WormAct::Hunt,
+                phase: 7,
+                ..Default::default()
+            },
+        );
+        fx.worm_frame(&shown(&boss), 1. / 60.);
+        fx.worm_died(boss.id);
+        for _ in 0..300 {
+            fx.worm_frame(&shown(&boss), 1. / 60.);
+            fx.worm_gone(1. / 60.);
+        }
+        let corpse = fx
+            .worms
+            .shown
+            .get(&boss.id)
+            .expect("the snapshot still has it");
+        assert!(corpse.dead);
+        assert_eq!(
+            fx.cues
+                .iter()
+                .filter(|(cue, _)| *cue == BossCue::WormDeath)
+                .count(),
+            1
+        );
     }
 
     #[test]

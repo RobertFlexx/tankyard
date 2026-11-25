@@ -1,12 +1,16 @@
 # Bastion Anticheat
 
-The Bastion keeps watch over fair play. Its small Credits mark uses the same Bastion model as the arena boss.
+The server runs movement, collisions, weapons, upgrades and damage. Your client sends steering, aim and button presses. A faster frame rate or a burst of delayed packets gives a tank the same number of simulation steps as everyone else.
 
-`crates/bastion-anticheat` is the Rust validation boundary used by the regular server. Clients send bounded intentions: movement, aim, fire, and ability buttons. The authoritative simulation owns elapsed time, position, collision, health, damage, weapon cooldowns, skills, upgrades, and spawn protection. Sending more input or a larger sequence number cannot buy more simulation ticks, faster weapons, or movement beyond the server's rules.
+## What causes a disconnect
 
-Finite input validation rejects impossible values and normalizes diagonal movement. Wrapping sequence comparison discards duplicate and reordered inputs. Large forward sequence gaps are allowed, including after a client pauses or loses traffic. Redundant input bundles, normal simulation deadlines, bounded packet processing, and rate limits remain in place. Packet floods can be dropped; they never increase the simulation rate.
+Once a player has joined, Bastion checks each decoded request against the limits of the negotiated protocol. Input packets repeat up to three recent frames so a lost packet need not cost a player a tap. Two copies of the same recent frame must describe the same input. The server checks the original values before normalizing diagonal movement or combining taps. A contradiction discards the entire request and, by default, closes that connection. The disconnect message gives the reason. Players can reconnect.
 
-There are no suspicion scores, ping thresholds, client fingerprint checks, or automatic cheating bans. Lag, packet loss, repeated inputs, and differing render frame rates are not evidence of cheating. After the handshake, an undecodable or invalid packet is dropped and the request refused, never treated as an offense on its own; only a sustained stream (more than twelve within ten seconds), which no correct client produces on any link, closes the connection. A congested client misses cosmetic notices such as the kill feed instead of being disconnected, because every snapshot carries the authoritative state. Chat text with pasted tabs or line breaks is cleaned before sending rather than refused. An idle player can still time out normally. None of these outcomes creates a cheat accusation or a persistent ban. Server operators retain explicit moderation tools.
+Identical retransmissions, out-of-order delivery, gaps after a pause and sequence wraparound are ordinary. Bastion keeps a short history for each connection and clears it for a new round. Aim accuracy, latency and frame rate play no part in the decision. A single unreadable packet after joining is dropped. The separate malformed-traffic limit closes connections after more than twelve such packets in ten seconds.
+
+## Host settings
+
+Dedicated servers default to `bastion_mode = "enforce"`. Set `bastion_mode = "observe"` in the server TOML and restart to review findings from joined players while leaving those players connected. Both modes discard the offending request. Version handshakes and malformed-traffic floods keep their existing disconnect rules. Each kind of finding is reported once per connection in the server log and in the configured moderation audit file (`creator-audit.jsonl` on official hosts that leave `audit_file` unset). A failed audit write is logged and the finding is retried instead of being marked as reported. Records identify the connection and rule. A Bastion disconnect creates no account or IP ban, including for people sharing a relay.
 
 ## Information hiding
 

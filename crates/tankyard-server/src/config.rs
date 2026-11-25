@@ -7,6 +7,14 @@ use tankyard_core::{BossKind, MOST_RUSH_BOSSES, Mode, WorldConfig};
 /// Players per lobby unless a server sets `arena_capacity`.
 pub const DEFAULT_LOBBY_SIZE: usize = 20;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BastionMode {
+    #[default]
+    Enforce,
+    Observe,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerSettings {
@@ -14,6 +22,7 @@ pub struct ServerSettings {
     pub server_id: String,
     pub chat_enabled: bool,
     pub voice_enabled: bool,
+    pub bastion_mode: BastionMode,
     /// Official public arenas enable signed creator tools by default. Community
     /// hosts must explicitly opt in; false always overrides the official default.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -77,6 +86,7 @@ impl Default for ServerSettings {
             server_id: String::new(),
             chat_enabled: true,
             voice_enabled: true,
+            bastion_mode: BastionMode::Enforce,
             creator_admin: None,
             central_owner_admin: None,
             access_file: String::new(),

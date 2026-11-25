@@ -8,6 +8,7 @@
 use crate::tank_model::{OUTLINE, Primitive};
 use macroquad::prelude::{Color, Vec2, vec2};
 use std::f32::consts::{PI, TAU};
+use tankyard_core::sunderworm::WORM_RINGS;
 
 /// Its skin, a pale sickly pink.
 pub const FLESH: Color = Color::new(0.79, 0.64, 0.6, 1.);
@@ -264,8 +265,10 @@ fn grain(n: usize, salt: u32) -> f32 {
 /// The ring as drawn: sinking rings shrink and darken into the floor, and a
 /// slow wave of swelling runs down the body from the head.
 fn shown(segment: &Segment, k: usize, pose: &WormPose) -> Option<(Vec2, f32, f32)> {
-    if segment.depth >= SEEN
+    if !segment.depth.is_finite()
+        || segment.depth >= SEEN
         || !segment.at.is_finite()
+        || !segment.along.is_finite()
         || !segment.radius.is_finite()
         || segment.radius <= 0.
     {
@@ -276,6 +279,58 @@ fn shown(segment: &Segment, k: usize, pose: &WormPose) -> Option<(Vec2, f32, f32
     let swell = 1. + 0.05 * wave * pose.motion;
     let radius = segment.radius * swell * (1. - 0.38 * sink);
     Some((segment.at, radius, sink))
+}
+
+/// A curved plate catches the same upper-left light however the worm bends.
+/// Parallel chords follow the light across the elliptical shell. Their shared
+/// edges have identical positions and colors, including on a tight turn.
+fn scute(
+    emit: &mut impl FnMut(Primitive),
+    center: Vec2,
+    along: Vec2,
+    radius: f32,
+    skin: Color,
+    shade: Color,
+    sink: f32,
+) {
+    const STEPS: usize = 14;
+    static CHORDS: std::sync::OnceLock<[(f32, f32); STEPS + 1]> = std::sync::OnceLock::new();
+    let chords = CHORDS.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let (half, u) = (PI * i as f32 / STEPS as f32).sin_cos();
+            (-u, if i == 0 || i == STEPS { 0. } else { half })
+        })
+    });
+    // Callers pass a direction, but the model is public: an unnormalised or
+    // degenerate axis must not overflow into non-finite geometry.
+    let along = along.normalize_or_zero();
+    let across = along.perp();
+    let sun = vec2(LIGHT.dot(along), LIGHT.dot(across));
+    let to_screen = |p: Vec2| radius * (along * (0.61 * p.x) + across * (0.91 * p.y));
+    let climb = to_screen(sun);
+    let span = to_screen(sun.perp());
+    let mut last = None;
+    for &(u, half) in chords {
+        // The rolled shoulder sweeps back where the plate is broadest.
+        let mid = center + climb * u - along * (radius * 0.12 * half * half);
+        let left = mid - span * half;
+        let right = mid + span * half;
+        let diffuse = (0.74 * half + 0.53 * u).clamp(0., 1.);
+        let specular = (0.92 * half + 0.39 * u).clamp(0., 1.).powi(26);
+        let surface = mix(
+            mix(shade, skin, 0.15 + 0.85 * diffuse),
+            SHEEN,
+            (0.07 * diffuse + 0.24 * specular) * (1. - sink),
+        );
+        if let Some((prev_left, prev_right, color)) = last {
+            emit(Primitive::ShadedQuad {
+                vertices: [prev_left, left, right, prev_right],
+                color,
+                end: surface,
+            });
+        }
+        last = Some((left, right, surface));
+    }
 }
 
 /// The worm's body. `segments` run head first; a half passes only its own.
@@ -303,11 +358,17 @@ pub fn worm_geometry_tagged(
         hurt * 0.5,
     );
     let shade = mix(BRUISE, Color::new(0.34, 0.07, 0.12, 1.), rage * 0.7);
-    let mut drawn: Vec<Option<(Vec2, f32, f32)>> = segments
-        .iter()
-        .enumerate()
-        .map(|(k, segment)| shown(segment, pose.first + k, pose))
-        .collect();
+    let mut stack = [None; WORM_RINGS];
+    let mut overflow;
+    let drawn = if count <= stack.len() {
+        &mut stack[..count]
+    } else {
+        overflow = vec![None; count];
+        &mut overflow[..]
+    };
+    for (k, segment) in segments.iter().enumerate() {
+        drawn[k] = shown(segment, pose.first + k, pose);
+    }
     // Rearing, its head lifts and draws back over its neck.
     if pose.head
         && let Some((at, radius, sink)) = drawn[0]
@@ -425,15 +486,15 @@ pub fn worm_geometry_tagged(
         let dim = 1. - 0.55 * sink;
         let blotch = grain(ring, 11) * rage;
         let plate = mix(mix(skin, shade, 0.12 + 0.3 * blotch), OUTLINE, sink * 0.5);
-        let lit = mix(plate, SHEEN, 0.32 * dim);
         let center = at + along * radius * 0.08;
-        oval(
+        scute(
             emit,
             center,
             along,
-            (radius * 0.58, radius * 0.9),
-            14,
+            radius,
             plate,
+            mix(shade, OUTLINE, sink * 0.5),
+            sink,
         );
         // A vein under the skin, forking on every other plate, darker as it
         // is worn down. Too small to see on a far-off worm.
@@ -469,46 +530,48 @@ pub fn worm_geometry_tagged(
                 );
             }
         }
-        // The lit front edge of the plate and a wet highlight on it.
+        // A broken, narrow glint follows the lip of the plate.
         let toward = LIGHT - along * LIGHT.dot(along) * 0.5;
-        oval(
-            emit,
-            center + along * radius * 0.16 + toward * radius * 0.18,
-            along,
-            (radius * 0.3, radius * 0.6),
-            12,
-            lit,
-        );
-        oval(
-            emit,
-            center + along * radius * 0.2 + toward * radius * 0.4,
-            along,
-            (radius * 0.07, radius * 0.2),
-            8,
-            faded(SHEEN, 0.7 * dim),
-        );
+        if radius > 7. && sink < 0.65 {
+            let gleam = center + toward * radius * 0.35 + along * radius * 0.09;
+            let length = radius * (0.15 + 0.12 * grain(ring, 17));
+            strip(
+                emit,
+                &[
+                    gleam - across * length,
+                    gleam + along * radius * 0.055,
+                    gleam + across * length * 0.8,
+                ],
+                radius * 0.038,
+                0.,
+                faded(SHEEN, (0.38 + 0.14 * grain(ring, 19)) * dim),
+            );
+        }
         if sink > 0.5 {
             continue;
         }
-        // A pore on each side, a pit with a wet lip, that weeps as it weakens.
+        // Recessed breathing slits open along the flanks. Their lips follow
+        // the curvature of each plate and retain their shape after the tear.
         for (n, side) in [-1f32, 1.].into_iter().enumerate() {
             let mark = ring * 2 + n;
-            let pore = at + across * side * radius * 0.7 - along * radius * 0.05;
+            let pore = at + across * side * radius * (0.69 + 0.06 * grain(mark, 13))
+                - along * radius * (0.04 + 0.07 * grain(mark, 3));
             let size = radius * (0.06 + 0.03 * grain(mark, 5));
-            disc(emit, pore, size * 1.4, 10, faded(shade, dim));
-            disc(
+            let front = pore + along * (2.1 * size) - across * (side * size * 0.6);
+            let back = pore - along * (1.75 * size) - across * (side * size * 0.22);
+            let breath = (pose.time * 2.7 - ring as f32 * 0.54).sin() * pose.motion;
+            let lip = across * (side * size);
+            let outside = pore + lip * (0.7 + 0.18 * breath);
+            let inside = pore - lip * 0.35;
+            quad(
                 emit,
-                pore + LIGHT * size * 0.2,
-                size * 1.05,
-                10,
-                faded(mix(skin, SHEEN, 0.45), 0.6 * dim),
+                [front, outside + lip * 0.27, back, inside],
+                mix(plate, SHEEN, 0.37 * dim),
             );
-            disc(
+            quad(
                 emit,
-                pore - LIGHT * size * 0.06,
-                size * 0.95,
-                10,
-                mix(EYE, BLOOD, rage),
+                [front, outside, back, inside],
+                mix(shade, BLOOD, 0.24 + 0.56 * rage),
             );
             if radius > 8. && rage > 0.35 && grain(mark, 47) < (rage - 0.35) * 1.6 {
                 // A tear of blood running back from it.
@@ -646,16 +709,34 @@ fn head(
             let place = along * angle.cos() + across * angle.sin();
             let size = radius * (0.11 - 0.017 * n as f32);
             let spot = at + place * radius * (0.56 + 0.04 * n as f32);
-            disc(emit, spot, size * 1.4, 12, faded(shade, 0.9));
-            let open = (1. - pose.blink.clamp(0., 1.)).max(0.12);
-            disc(emit, spot, size * open, 12, EYE);
-            disc(
+            let lid = place.perp();
+            let open = 1. - pose.blink.clamp(0., 1.);
+            oval(
                 emit,
-                spot + LIGHT * size * 0.4 * open,
-                size * 0.32 * open,
-                6,
-                faded(SHEEN, 0.9),
+                spot,
+                lid,
+                (size * 1.34, size * 0.98),
+                10,
+                mix(skin, shade, 0.67),
             );
+            // The lids meet across the eye, leaving a crease when it dies.
+            oval(
+                emit,
+                spot,
+                lid,
+                (size, size * (0.09 + 0.82 * open)),
+                10,
+                EYE,
+            );
+            if open > 0.12 {
+                disc(
+                    emit,
+                    spot + LIGHT * size * 0.33 * open,
+                    size * 0.27 * open,
+                    8,
+                    faded(SHEEN, 0.87 * open),
+                );
+            }
         }
     }
     mouth(emit, at, radius, along, pose, skin, shade);
@@ -858,8 +939,12 @@ fn mouth(
     let mut tips = [center; LOBES];
     for (n, saved_tip) in tips.iter_mut().enumerate() {
         let phase = n as f32 * 1.71;
-        let flex = (opening + 0.045 * (pose.time * 3.4 - phase).sin() * opening * pose.motion)
-            .clamp(0., 1.04);
+        // The shorter folds start drawing back first. They all meet at the
+        // same bite and settle fully open regardless of frame timing.
+        let lead = (grain(n, 69) - 0.5) * opening * (1. - opening) * 0.56;
+        let flex =
+            (opening + lead + 0.045 * (pose.time * 3.4 - phase).sin() * opening * pose.motion)
+                .clamp(0., 1.04);
         let a = n as f32 / LOBES as f32 * TAU + PI / LOBES as f32;
         let out = along * a.cos() + across * a.sin();
         let side = out.perp();
@@ -880,7 +965,7 @@ fn mouth(
             let width = radius
                 * (0.19 + 0.045 * grain(n, 66))
                 * (1. - u).sqrt()
-                * (1. + 0.12 * (u * PI).sin());
+                * (1. + (0.12 + 0.18 * flex) * (u * PI).sin());
             (p, normal, width)
         };
         let steps = if radius > 45. { 9 } else { 6 };
@@ -911,16 +996,16 @@ fn mouth(
                 );
                 if pass == 1 {
                     // The inside unfolds continuously; it doesn't pop into view.
-                    quad(
-                        emit,
-                        [
+                    emit(Primitive::ShadedQuad {
+                        vertices: [
                             before.0,
+                            before.0 - before.1 * before.2 * 0.85,
+                            now.0 - now.1 * now.2 * 0.85,
                             now.0,
-                            now.0 - now.1 * now.2 * 0.75,
-                            before.0 - before.1 * before.2 * 0.75,
                         ],
-                        mix(color, GUM, opening * 0.8),
-                    );
+                        color,
+                        end: mix(color, GUM, opening * 0.88),
+                    });
                     if k < steps - 1 {
                         quad(
                             emit,
@@ -1187,23 +1272,21 @@ pub fn worm_card_geometry(center: Vec2, size: f32, time: f32, emit: &mut impl Fn
     if !size.is_finite() || size <= 0. {
         return;
     }
-    let rings = tankyard_core::sunderworm::WORM_RINGS;
     let scale = size / tankyard_core::sunderworm::WORM_RADIUS * 0.26;
-    let mut segments = Vec::with_capacity(rings);
-    for k in 0..rings {
-        let u = k as f32 / (rings - 1) as f32;
+    let segments: [_; WORM_RINGS] = std::array::from_fn(|k| {
+        let u = k as f32 / (WORM_RINGS - 1) as f32;
         // A spiral, tightest at the tail.
         let angle = PI + u * TAU * 1.35;
         let reach = size * (0.72 - 0.5 * u);
         let at = center + vec2(angle.cos(), angle.sin()) * reach;
         let ahead = vec2(-(angle).sin(), angle.cos()) * -1.;
-        segments.push(Segment {
+        Segment {
             at,
             radius: tankyard_core::sunderworm::ring_radius(k) * scale,
             depth: 0.,
             along: ahead,
-        });
-    }
+        }
+    });
     worm_geometry(
         &segments,
         &WormPose {
@@ -1241,12 +1324,76 @@ mod tests {
                     center.is_finite() && radius.is_finite()
                 }
                 Primitive::Triangle { vertices, .. } => vertices.iter().all(|v| v.is_finite()),
-                Primitive::Quad { vertices, .. } => vertices.iter().all(|v| v.is_finite()),
+                Primitive::Quad { vertices, .. } | Primitive::ShadedQuad { vertices, .. } => {
+                    vertices.iter().all(|v| v.is_finite())
+                }
             };
             assert!(finite, "{primitive:?}");
             colors.push(primitive.color());
         });
         (drawn, colors)
+    }
+
+    #[test]
+    fn scute_strips_share_positions_and_light_at_every_seam() {
+        for angle in [0., 0.7, 1.6, PI, 4.8] {
+            let mut last = None;
+            let mut strips = 0;
+            scute(
+                &mut |part| {
+                    let Primitive::ShadedQuad {
+                        vertices: [a, b, c, d],
+                        color,
+                        end,
+                    } = part
+                    else {
+                        panic!("expected a shaded strip")
+                    };
+                    assert!([a, b, c, d].into_iter().all(Vec2::is_finite));
+                    assert_eq!(color.a, end.a);
+                    if let Some((left, right, shade)) = last {
+                        assert_eq!((a, d, color), (left, right, shade));
+                    } else {
+                        assert_eq!(a, d);
+                    }
+                    last = Some((b, c, end));
+                    strips += 1;
+                },
+                Vec2::ZERO,
+                Vec2::from_angle(angle),
+                60.,
+                FLESH,
+                BRUISE,
+                0.1,
+            );
+            let (b, c, _) = last.unwrap();
+            assert_eq!(b, c);
+            assert_eq!(strips, 14);
+        }
+        for along in [Vec2::ZERO, Vec2::splat(1e30)] {
+            scute(
+                &mut |part| {
+                    assert!(part.color().a.is_finite());
+                    match part {
+                        Primitive::ShadedQuad {
+                            vertices,
+                            color,
+                            end,
+                        } => {
+                            assert!(vertices.into_iter().all(Vec2::is_finite));
+                            assert!(color.a.is_finite() && end.a.is_finite());
+                        }
+                        _ => panic!("expected a shaded strip"),
+                    }
+                },
+                Vec2::ZERO,
+                along,
+                60.,
+                FLESH,
+                BRUISE,
+                0.1,
+            );
+        }
     }
 
     #[test]

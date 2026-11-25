@@ -87,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         include(point);
                     }
                 }
-                Primitive::Quad { vertices, .. } => {
+                Primitive::Quad { vertices, .. } | Primitive::ShadedQuad { vertices, .. } => {
                     for point in vertices {
                         include(point);
                     }
@@ -281,6 +281,35 @@ fn escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 fn write_primitive(svg: &mut String, primitive: Primitive) {
+    if let Primitive::ShadedQuad {
+        vertices: [a, b, c, d],
+        color,
+        end,
+    } = primitive
+    {
+        // A strip's two edges are parallel. The SVG gradient runs normal to
+        // them, just like interpolated vertex colors on the GPU.
+        let edge = if (d - a).length_squared() > (c - b).length_squared() {
+            d - a
+        } else {
+            c - b
+        };
+        let normal = edge.perp().normalize_or_zero();
+        let stop = a + normal * (b - a).dot(normal);
+        let rgb = |c: Color| {
+            format!(
+                "rgb({},{},{})",
+                (c.r * 255.).round() as u8,
+                (c.g * 255.).round() as u8,
+                (c.b * 255.).round() as u8
+            )
+        };
+        // Each write appends to `svg`, so its current length is a unique id.
+        let id = svg.len();
+        writeln!(svg, r##"<defs><linearGradient id="g{id}" gradientUnits="userSpaceOnUse" x1="{:.3}" y1="{:.3}" x2="{:.3}" y2="{:.3}"><stop stop-color="{}"/><stop offset="1" stop-color="{}"/></linearGradient></defs><polygon points="{:.3},{:.3} {:.3},{:.3} {:.3},{:.3} {:.3},{:.3}" fill="url(#g{id})" fill-opacity="{:.4}"/>"##,
+            a.x, a.y, stop.x, stop.y, rgb(color), rgb(end), a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y, color.a).unwrap();
+        return;
+    }
     let (vertices, color) = match primitive {
         Primitive::Polygon {
             center,
@@ -299,7 +328,10 @@ fn write_primitive(svg: &mut String, primitive: Primitive) {
             (vertices, color)
         }
         Primitive::Triangle { vertices, color } => (vertices.to_vec(), color),
-        Primitive::Quad { vertices, color } => (vertices.to_vec(), color),
+        Primitive::Quad { vertices, color }
+        | Primitive::ShadedQuad {
+            vertices, color, ..
+        } => (vertices.to_vec(), color),
     };
     let points = vertices
         .iter()
@@ -315,4 +347,42 @@ fn write_primitive(svg: &mut String, primitive: Primitive) {
         color.a
     )
     .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shaded_quads_export_a_unique_gradient_along_the_shared_edges() {
+        let from = Color::new(1., 0., 0., 0.5);
+        let to = Color::new(0., 0., 1., 0.5);
+        let mut svg = String::new();
+        for x in [0., 20.] {
+            write_primitive(
+                &mut svg,
+                Primitive::ShadedQuad {
+                    vertices: [
+                        vec2(x, 0.),
+                        vec2(x + 10., 0.),
+                        vec2(x + 10., 4.),
+                        vec2(x, 4.),
+                    ],
+                    color: from,
+                    end: to,
+                },
+            );
+        }
+        let ids: Vec<&str> = svg
+            .split("id=\"g")
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1]);
+        assert!(svg.contains("x1=\"0.000\" y1=\"0.000\" x2=\"10.000\" y2=\"0.000\""));
+        assert!(svg.contains("stop-color=\"rgb(255,0,0)\""));
+        assert!(svg.contains("stop-color=\"rgb(0,0,255)\""));
+        assert!(svg.matches("fill-opacity=\"0.5000\"").count() >= 2);
+    }
 }

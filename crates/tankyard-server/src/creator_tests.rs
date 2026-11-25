@@ -55,43 +55,12 @@ impl Arena {
             .access
             .add(CLIENT, None, unix_time().as_secs())
             .unwrap();
-        server.peers.insert(
-            CLIENT,
-            Peer {
-                entity: Some(player),
-                connected_at: Duration::ZERO,
-                last_input_at: Duration::ZERO,
-                last_sequence: None,
-                control_tokens: 24.,
-                queued_control: None,
-                input_tokens: 256.,
-                voice_tokens: 8.,
-                last_voice_sequence: None,
-                voice_muted: false,
-                spectating: None,
-                disconnect_at: None,
-                admin_key: None,
-                admin_nonce: None,
-                last_admin_sequence: None,
-                central_owner: false,
-                central_proof_used: false,
-                creator_nonce: Some(NONCE),
-                creator: false,
-                creator_session_nonce: None,
-                last_owner_sequence: None,
-                party_nonce: None,
-                party_in_menu: false,
-                party_ready: false,
-                arena: 0,
-                walls_revision: None,
-                walls_sent_at: Duration::ZERO,
-                strikes: 0,
-                strike_window: Duration::ZERO,
-                protocol: PROTOCOL_VERSION,
-                hud_sent: None,
-                hud_sent_at: Duration::ZERO,
-            },
-        );
+        server.peers.insert(CLIENT, {
+            let mut peer = Peer::new(Duration::ZERO);
+            peer.entity = Some(player);
+            peer.creator_nonce = Some(NONCE);
+            peer
+        });
         Self {
             server,
             player,
@@ -386,39 +355,10 @@ fn creator_moderation_is_host_local_and_preserves_regular_achievement_eligibilit
         .access
         .add(42, None, unix_time().as_secs())
         .unwrap();
-    let peer = Peer {
-        entity: Some(player),
-        connected_at: Duration::ZERO,
-        last_input_at: Duration::ZERO,
-        last_sequence: None,
-        control_tokens: 24.,
-        queued_control: None,
-        input_tokens: 256.,
-        voice_tokens: 8.,
-        last_voice_sequence: None,
-        voice_muted: false,
-        spectating: None,
-        disconnect_at: None,
-        admin_key: None,
-        admin_nonce: None,
-        last_admin_sequence: None,
-        central_owner: false,
-        central_proof_used: false,
-        creator_nonce: None,
-        creator: false,
-        creator_session_nonce: None,
-        last_owner_sequence: None,
-        party_nonce: None,
-        party_in_menu: false,
-        party_ready: false,
-        arena: 0,
-        walls_revision: None,
-        walls_sent_at: Duration::ZERO,
-        strikes: 0,
-        strike_window: Duration::ZERO,
-        protocol: PROTOCOL_VERSION,
-        hud_sent: None,
-        hud_sent_at: Duration::ZERO,
+    let peer = {
+        let mut peer = Peer::new(Duration::ZERO);
+        peer.entity = Some(player);
+        peer
     };
     arena.server.peers.insert(42, peer);
     arena.command("mute").unwrap();

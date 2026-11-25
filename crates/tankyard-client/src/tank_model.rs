@@ -21,13 +21,21 @@ pub enum Primitive {
         vertices: [Vec2; 4],
         color: Color,
     },
+    /// A strip with interpolated vertex colors. Vertices 0 and 3 are the
+    /// first edge, 1 and 2 the second. Both edges share one opacity.
+    ShadedQuad {
+        vertices: [Vec2; 4],
+        color: Color,
+        end: Color,
+    },
 }
 impl Primitive {
     pub fn color(&self) -> Color {
         match *self {
             Self::Polygon { color, .. }
             | Self::Triangle { color, .. }
-            | Self::Quad { color, .. } => color,
+            | Self::Quad { color, .. }
+            | Self::ShadedQuad { color, .. } => color,
         }
     }
     /// A conservative screen-space bound, including polygon corners and
@@ -43,7 +51,7 @@ impl Primitive {
                 );
             }
             Self::Triangle { vertices, .. } => vertices,
-            Self::Quad { vertices, .. } => vertices,
+            Self::Quad { vertices, .. } | Self::ShadedQuad { vertices, .. } => vertices,
         };
         let mut lo = vertices[0];
         let mut hi = lo;
@@ -81,7 +89,9 @@ pub fn preview_placement(class: &ClassDef, rect: Rect, max_radius: f32, aim: f32
                 include(center + Vec2::splat(radius));
             }
             Primitive::Triangle { vertices, .. } => vertices.into_iter().for_each(&mut include),
-            Primitive::Quad { vertices, .. } => vertices.into_iter().for_each(&mut include),
+            Primitive::Quad { vertices, .. } | Primitive::ShadedQuad { vertices, .. } => {
+                vertices.into_iter().for_each(&mut include)
+            }
         },
     );
     let size = hi - lo;
@@ -1043,7 +1053,10 @@ mod geometry_tests {
                                 );
                                 assert!(color.a.is_finite());
                             }
-                            Primitive::Quad { vertices, color } => {
+                            Primitive::Quad { vertices, color }
+                            | Primitive::ShadedQuad {
+                                vertices, color, ..
+                            } => {
                                 assert!(vertices.iter().all(|p| p.is_finite()));
                                 let first =
                                     (vertices[1] - vertices[0]).perp_dot(vertices[2] - vertices[0]);
@@ -1158,7 +1171,8 @@ mod geometry_tests {
                         Primitive::Triangle { vertices, .. } => {
                             vertices.into_iter().for_each(&mut check)
                         }
-                        Primitive::Quad { vertices, .. } => {
+                        Primitive::Quad { vertices, .. }
+                        | Primitive::ShadedQuad { vertices, .. } => {
                             vertices.into_iter().for_each(&mut check)
                         }
                     },

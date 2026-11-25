@@ -242,43 +242,13 @@ mod tests {
                 .world
                 .add_player("Central Server Owner", false);
             server.access.add(7, None, unix_time().as_secs()).unwrap();
-            server.peers.insert(
-                7,
-                Peer {
-                    entity: Some(player),
-                    connected_at: Duration::ZERO,
-                    last_input_at: Duration::ZERO,
-                    last_sequence: None,
-                    control_tokens: 24.,
-                    queued_control: None,
-                    input_tokens: 256.,
-                    voice_tokens: 8.,
-                    last_voice_sequence: None,
-                    voice_muted: false,
-                    spectating: None,
-                    disconnect_at: None,
-                    creator_nonce: None,
-                    creator: false,
-                    creator_session_nonce: None,
-                    last_owner_sequence: None,
-                    party_nonce: None,
-                    party_in_menu: false,
-                    party_ready: false,
-                    admin_key: Some(key.public_key().as_ref().try_into().unwrap()),
-                    admin_nonce: Some([3; 32]),
-                    last_admin_sequence: None,
-                    central_owner: false,
-                    central_proof_used: false,
-                    arena: 0,
-                    walls_revision: None,
-                    walls_sent_at: Duration::ZERO,
-                    strikes: 0,
-                    strike_window: Duration::ZERO,
-                    protocol: PROTOCOL_VERSION,
-                    hud_sent: None,
-                    hud_sent_at: Duration::ZERO,
-                },
-            );
+            server.peers.insert(7, {
+                let mut peer = Peer::new(Duration::ZERO);
+                peer.entity = Some(player);
+                peer.admin_key = Some(key.public_key().as_ref().try_into().unwrap());
+                peer.admin_nonce = Some([3; 32]);
+                peer
+            });
             Self { server, key, audit }
         }
         fn proof(&self) -> Vec<u8> {

@@ -713,7 +713,13 @@ impl NetworkClient {
         Ok(())
     }
     pub fn send_input(&mut self, input: PlayerInput) -> bool {
-        if !self.is_ready() || !input.valid() {
+        if !self.is_ready()
+            || !input.valid()
+            || self
+                .input_history
+                .iter()
+                .any(|old| old.sequence == input.sequence && old != input)
+        {
             return false;
         }
         self.input_history.push(input);

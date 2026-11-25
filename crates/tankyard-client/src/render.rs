@@ -321,20 +321,22 @@ pub(crate) fn draw_model_primitive(primitive: crate::tank_model::Primitive) {
             crate::ui_layout::position(vertices[2]),
             crate::accessibility::palette(color),
         ),
-        crate::tank_model::Primitive::Quad { vertices, color } => {
-            let vertices = vertices.map(crate::ui_layout::position);
-            draw_triangle(
-                vertices[0],
-                vertices[1],
-                vertices[2],
-                crate::accessibility::palette(color),
-            );
-            draw_triangle(
-                vertices[0],
-                vertices[2],
-                vertices[3],
-                crate::accessibility::palette(color),
-            );
+        crate::tank_model::Primitive::Quad { vertices, color }
+        | crate::tank_model::Primitive::ShadedQuad {
+            vertices, color, ..
+        } => {
+            let left = crate::accessibility::palette(color);
+            let right = match primitive {
+                crate::tank_model::Primitive::ShadedQuad { end, .. } => {
+                    crate::accessibility::palette(end)
+                }
+                _ => left,
+            };
+            let colors = [left, right, right, left];
+            let mesh: [_; 4] = std::array::from_fn(|i| {
+                crate::lighting::vertex(crate::ui_layout::position(vertices[i]), colors[i])
+            });
+            crate::lighting::geometry(&mesh, &[0, 1, 2, 0, 2, 3]);
         }
     }
 }
@@ -601,6 +603,15 @@ pub fn world(
                 Primitive::Quad { vertices, color } => Primitive::Quad {
                     vertices: vertices.map(&emblem_screen),
                     color,
+                },
+                Primitive::ShadedQuad {
+                    vertices,
+                    color,
+                    end,
+                } => Primitive::ShadedQuad {
+                    vertices: vertices.map(&emblem_screen),
+                    color,
+                    end,
                 },
                 Primitive::Triangle { vertices, color } => Primitive::Triangle {
                     vertices: vertices.map(&emblem_screen),

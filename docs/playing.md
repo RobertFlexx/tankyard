@@ -138,11 +138,13 @@ Gatewright is a level-55 evolution from Switchback, Wisp, Undertow or Meteor, bu
 
 You, your teammates and every round that goes into the entry come out of the exit, keeping their heading and speed, so a shot into the entry can hit from an unexpected side. Opponents, drones, traps, mines and anyone carrying a flag stay on their side. Rifts open where your shots land, up to 1300 units away and at least 216 units from each other. If a shot lands where a rift can't open (inside a wall, or too close to the other end or another rift), you get the shot back. Activating the ability again, dying or changing tank closes your pair, and moving walls crush rifts they cover. Bots don't use rifts.
 
-## New combat trials and Chronarch
+## Combat trials and Chronarch
 
 Practice (F6) has Foundations, Combat trials and Boss encounters pages. Counter school teaches body parries, Frozen front introduces the Chronarch, Sentinel hunt is a one-life boss duel, and Hold the line tests trap placement. Each challenge saves its own personal best and supports Retry. Offline modes also offer a bot-count slider, level 1/30/45 starts, arena-size presets, and an adaptive-border toggle. Preset levels disable arena achievements.
 
 Chronarch is a level-55 evolution from Counterguard or Relay. Its Stasis wave ability has an 18-second cooldown: for three seconds it catches your own and hostile kinetic rounds within 330 units, up to 96 rounds. They move with the tank without aging, then release radially as your shots. Rounds cannot be captured repeatedly. Friendly teammates' rounds, drones, traps, mines, and melee bypass the field; cover blocks it. Killing the caster cancels conversion and restores the original rounds.
+
+## Staff and fair play
 
 The verified creator has a gold **Game Creator** badge. Sharing an arena with another verified human creator unlocks **Meet the game's creator** according to your achievement preference, including modified arenas. A matching display name or server moderation role cannot grant the badge.
 
@@ -203,7 +205,7 @@ The party roster includes **I'm ready** and a ready count. Readiness is shared w
 
 Siege Engine, Skirmisher and Trapper add three boss encounters, each with a practice trial. Special attacks lock their aim during the warning. Heavy siege shots, a straight skirmisher charge and side-pocket mines each leave a different escape route. Boss models use distinct mechanical silhouettes rather than a shared stack of rotating armor.
 
-Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Tank Yard 2.1.1 uses protocol **35**, the same as 2.1.0. Update the host and all players together; 2.0 hosts and clients use protocol 34.
+Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Tank Yard 2.1.2 uses protocol **35**, the same as 2.1.0. Players on 2.1.x can join any 2.1.x host. Update both ends when coming from 2.0 (protocol 34).
 
 ## Railgunner and heavy parry clashes
 

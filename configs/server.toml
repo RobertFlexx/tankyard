@@ -3,6 +3,9 @@ kind = "Community"
 server_id = "tankyard-local"
 chat_enabled = true
 voice_enabled = true
+# "observe" records Bastion findings from joined players and discards the offending request.
+# Version handshakes and malformed-traffic floods keep their existing disconnect rules.
+bastion_mode = "enforce"
 # Optional public-host consent. Leave disabled for personal/private hosting.
 creator_admin = false
 access_file = "configs/access.json"
