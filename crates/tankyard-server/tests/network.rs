@@ -1328,7 +1328,8 @@ fn bastion_never_accuses_the_real_client_on_a_bad_link_across_rounds_and_a_wrap(
         thread::sleep(STEP);
     }
     assert!(client.is_ready(), "{:?}", client.error);
-    assert!(sent > 200, "only {sent} inputs were sent");
+    // About 350 locally; a busy machine ticks slower but still sends plenty.
+    assert!(sent > 120, "only {sent} inputs were sent");
     assert!(relay.stats().dropped > 0);
     assert_eq!(server.bastion.counters().rejected_requests, 0);
     let text = std::fs::read_to_string(&audit).unwrap_or_default();

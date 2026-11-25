@@ -506,7 +506,7 @@ A menu shown to one player closes when they pick; one shown to everyone stays un
 
 Widget IDs use lowercase letters, digits and `_`. A pack may show 16 widgets to everyone and 16 to each player, and a player receives at most 64 from all packs. Bots have no screen, so widgets for bots are dropped. Widgets end with the round, with their player, or when the pack is disabled.
 
-The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. A pinned widget follows its tank or group on each player's screen by itself, so it needs no updates as the tank moves. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, styles, icons and choices in 1.4, pins, choice layouts and glow in 1.5, shapes, borders, fills, lettering, title colors, bar looks and button looks in 1.6, and boards in 1.7. Tank Yard 2.1.4 uses protocol 35, the same as 2.1.0 (2.0 used 34); players and servers must use matching protocols.
+The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. A pinned widget follows its tank or group on each player's screen by itself, so it needs no updates as the tank moves. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, styles, icons and choices in 1.4, pins, choice layouts and glow in 1.5, shapes, borders, fills, lettering, title colors, bar looks and button looks in 1.6, and boards in 1.7. Tank Yard 2.1.5 uses protocol 35, the same as 2.1.0 (2.0 used 34); players and servers must use matching protocols.
 
 #### Boards
 
