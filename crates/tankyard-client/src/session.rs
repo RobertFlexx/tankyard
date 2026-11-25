@@ -1041,13 +1041,11 @@ impl Session {
                 }
             }
             position = predicted.pos.lerp(position, contact);
+            // A tank wider than the arena (a huge one, or a hostile host's
+            // numbers) must not make `clamp` panic.
             tank.pos = V2::new(
-                position
-                    .x
-                    .clamp(tank.radius, display.config.width - tank.radius),
-                position
-                    .y
-                    .clamp(tank.radius, display.config.height - tank.radius),
+                tankyard_core::within(position.x, tank.radius, display.config.width - tank.radius),
+                tankyard_core::within(position.y, tank.radius, display.config.height - tank.radius),
             );
             tank.aim = predicted.aim;
             tank.vel = predicted.vel;

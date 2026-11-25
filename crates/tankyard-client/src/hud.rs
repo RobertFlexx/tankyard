@@ -2153,8 +2153,9 @@ pub(crate) fn boss_arrows(snapshot: &Snapshot, view: &render::View, s: f32, colo
         let name = fitted_label(boss.kind.name(), 11. * s, 104. * s);
         let half = (label_width(&name, 11. * s) * 0.5).max(26. * s);
         let at = tip - d * 34. * s;
-        let x = at.x.clamp(half + 6. * s, w - half - 6. * s);
-        let y = at.y.clamp(16. * s, h - 14. * s);
+        // A minimized window can be zero wide; `clamp` would panic.
+        let x = tankyard_core::within(at.x, half + 6. * s, w - half - 6. * s);
+        let y = tankyard_core::within(at.y, 16. * s, h - 14. * s);
         center_label(&name, x, y, 11. * s, text_color());
         arcade_track(
             Rect::new(x - 26. * s, y + 4. * s, 52. * s, 5. * s),

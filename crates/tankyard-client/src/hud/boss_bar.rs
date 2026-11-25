@@ -46,7 +46,8 @@ struct Shown {
 
 impl Animation {
     fn sample(&mut self, bar: &Bar<'_>, now: f64, calm: bool) -> Shown {
-        let health = (bar.health / bar.max_health.max(1.)).clamp(0., 1.);
+        // NaN would pass `clamp` and later cross the gradient's bounds.
+        let health = tankyard_core::within(bar.health / bar.max_health.max(1.), 0., 1.);
         let key = (bar.id, bar.kind, bar.max_health);
         let elapsed = now - self.at;
         let alarm = if bar.marked { 1. } else { 0. };
@@ -372,7 +373,9 @@ fn gradient_vertices(rect: Rect, tint: Color, boundary: Option<(f32, f32)>) -> [
         let x = match (i % COLUMNS, boundary) {
             (0, _) => left,
             (4, _) => right,
-            (col, Some((edge, blend))) => (edge + (col as f32 - 2.) * blend).clamp(left, right),
+            (col, Some((edge, blend))) => {
+                tankyard_core::within(edge + (col as f32 - 2.) * blend, left, right)
+            }
             (col, None) => left + (right - left) * col as f32 / (COLUMNS - 1) as f32,
         };
         let pale = boundary.map_or(0., |(edge, blend)| {
@@ -515,6 +518,30 @@ mod tests {
                 assert!(p.y >= rect.y && p.y <= rect.bottom());
             }
             assert!(INDICES.iter().all(|&i| usize::from(i) < vertices.len()));
+        }
+    }
+
+    #[test]
+    fn broken_health_numbers_still_give_a_drawable_bar() {
+        let mut animation = Animation::default();
+        for (health, max_health) in [
+            (f32::NAN, 100.),
+            (50., f32::NAN),
+            (f32::INFINITY, 100.),
+            (-40., 100.),
+            (1e30, 1e-30),
+        ] {
+            let shown = animation.sample(
+                &Bar {
+                    health,
+                    max_health,
+                    ..bar()
+                },
+                0.5,
+                false,
+            );
+            assert!(shown.fill.is_finite() && (0.0..=1.).contains(&shown.fill));
+            assert!(shown.lost.is_finite() && (0.0..=1.).contains(&shown.lost));
         }
     }
 

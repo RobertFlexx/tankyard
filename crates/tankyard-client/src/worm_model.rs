@@ -24,6 +24,10 @@ pub const RAW: Color = Color::new(0.76, 0.07, 0.11, 1.);
 /// Blood, darker where it pools.
 pub const BLOOD: Color = Color::new(0.42, 0.02, 0.05, 1.);
 const EYE: Color = Color::new(0.03, 0.02, 0.03, 1.);
+/// The bottom of its throat.
+const DEEP: Color = Color::new(0.045, 0.004, 0.014, 1.);
+/// The pale layer under its skin, seen where it is cut.
+const FAT: Color = Color::new(0.86, 0.62, 0.55, 1.);
 const BRISTLE: Color = Color::new(0.2, 0.13, 0.14, 1.);
 /// Bile, in its throat before it sprays.
 pub const BILE: Color = Color::new(0.62, 0.78, 0.18, 1.);
@@ -159,9 +163,68 @@ fn oval(
     }
 }
 
+/// An oval with a torn, uneven edge: each corner falls short by up to `jag`
+/// of the way in, the same corners every frame.
+fn ragged(
+    emit: &mut impl FnMut(Primitive),
+    center: Vec2,
+    axis: Vec2,
+    (long, wide): (f32, f32),
+    salt: u32,
+    jag: f32,
+    color: Color,
+) {
+    const CORNERS: usize = 22;
+    if long <= 0.05 || wide <= 0.05 {
+        return;
+    }
+    let across = vec2(-axis.y, axis.x);
+    let point = |n: usize| {
+        let a = n as f32 / CORNERS as f32 * TAU;
+        let short = 1. - jag * grain(n % CORNERS, salt);
+        center + axis * (a.cos() * long * short) + across * (a.sin() * wide * short)
+    };
+    let mut last = point(0);
+    for n in 1..=CORNERS {
+        let next = point(n);
+        tri(emit, center, last, next, color);
+        last = next;
+    }
+}
+
+/// A strand held at both ends that sags in the middle, thick where it clings
+/// and thin where it stretches: saliva, bile or sinew.
+fn sagging(
+    emit: &mut impl FnMut(Primitive),
+    a: Vec2,
+    b: Vec2,
+    sag: Vec2,
+    width: f32,
+    color: Color,
+) {
+    let middle = a.lerp(b, 0.5) + sag * 2.;
+    let mut points = [a; 7];
+    for (k, p) in points.iter_mut().enumerate() {
+        let u = k as f32 / 6.;
+        *p = a * (1. - u).powi(2) + middle * (2. * u * (1. - u)) + b * u * u;
+    }
+    strand(emit, &points[..4], width, color);
+    let mut back = [b; 4];
+    for (k, p) in back.iter_mut().enumerate() {
+        *p = points[6 - k];
+    }
+    strand(emit, &back, width, color);
+}
+
 /// A tapering strip through `points`, `width` wide at its root and coming to
 /// a point: a bristle, a feeler or a strand of torn flesh.
 fn strand(emit: &mut impl FnMut(Primitive), points: &[Vec2], width: f32, color: Color) {
+    strip(emit, points, width, 0., color);
+}
+
+/// A strip through `points`, `width` wide at its root and `end` times that at
+/// its last point.
+fn strip(emit: &mut impl FnMut(Primitive), points: &[Vec2], width: f32, end: f32, color: Color) {
     let count = points.len();
     if count < 2 {
         return;
@@ -169,7 +232,8 @@ fn strand(emit: &mut impl FnMut(Primitive), points: &[Vec2], width: f32, color: 
     let side = |n: usize| {
         let ahead = points[(n + 1).min(count - 1)] - points[n.saturating_sub(1)];
         let ahead = ahead.normalize_or_zero();
-        let half = width * 0.5 * (1. - n as f32 / (count - 1) as f32);
+        let u = n as f32 / (count - 1) as f32;
+        let half = width * 0.5 * (1. - u * (1. - end));
         vec2(-ahead.y, ahead.x) * half
     };
     for n in 0..count - 1 {
@@ -371,6 +435,40 @@ pub fn worm_geometry_tagged(
             14,
             plate,
         );
+        // A vein under the skin, forking on every other plate, darker as it
+        // is worn down. Too small to see on a far-off worm.
+        if sink < 0.5 && radius > 8. {
+            let bend = if grain(ring, 67) < 0.5 { -1. } else { 1. };
+            let root =
+                center - along * radius * 0.42 + across * radius * (grain(ring, 61) - 0.5) * 0.9;
+            let fork = root + along * radius * 0.3 + across * bend * radius * 0.12;
+            let vein = faded(
+                mix(shade, BLOOD, 0.35 + 0.45 * rage),
+                (0.2 + 0.45 * rage) * dim,
+            );
+            strand(
+                emit,
+                &[
+                    root,
+                    fork,
+                    fork + along * radius * 0.26 - across * bend * radius * 0.08,
+                ],
+                radius * 0.05,
+                vein,
+            );
+            if ring.is_multiple_of(2) {
+                strand(
+                    emit,
+                    &[
+                        fork,
+                        fork + along * radius * 0.08 + across * bend * radius * 0.12,
+                        fork + along * radius * 0.12 + across * bend * radius * 0.24,
+                    ],
+                    radius * 0.032,
+                    vein,
+                );
+            }
+        }
         // The lit front edge of the plate and a wet highlight on it.
         let toward = LIGHT - along * LIGHT.dot(along) * 0.5;
         oval(
@@ -392,12 +490,41 @@ pub fn worm_geometry_tagged(
         if sink > 0.5 {
             continue;
         }
-        // A pore on each side that weeps as it weakens.
-        for side in [-1., 1.] {
+        // A pore on each side, a pit with a wet lip, that weeps as it weakens.
+        for (n, side) in [-1f32, 1.].into_iter().enumerate() {
+            let mark = ring * 2 + n;
             let pore = at + across * side * radius * 0.7 - along * radius * 0.05;
-            let size = radius * (0.07 + 0.03 * grain(ring, 5));
-            disc(emit, pore, size * 1.35, 10, faded(shade, dim));
-            disc(emit, pore, size, 10, mix(EYE, BLOOD, rage));
+            let size = radius * (0.06 + 0.03 * grain(mark, 5));
+            disc(emit, pore, size * 1.4, 10, faded(shade, dim));
+            disc(
+                emit,
+                pore + LIGHT * size * 0.2,
+                size * 1.05,
+                10,
+                faded(mix(skin, SHEEN, 0.45), 0.6 * dim),
+            );
+            disc(
+                emit,
+                pore - LIGHT * size * 0.06,
+                size * 0.95,
+                10,
+                mix(EYE, BLOOD, rage),
+            );
+            if radius > 8. && rage > 0.35 && grain(mark, 47) < (rage - 0.35) * 1.6 {
+                // A tear of blood running back from it.
+                let length = radius * (0.2 + 0.25 * grain(mark, 53)) * rage;
+                let from = pore - along * size * 0.5;
+                strand(
+                    emit,
+                    &[
+                        from,
+                        from - along * length * 0.5 + across * side * size * 0.25,
+                        from - along * length,
+                    ],
+                    size * 1.1,
+                    faded(BLOOD, 0.85 * dim),
+                );
+            }
         }
         // A ridge of bone down its back, on every other plate.
         if (ring + 1).is_multiple_of(2) && !(pose.head && k == 0) {
@@ -559,29 +686,76 @@ fn mouth(
             28,
             OUTLINE,
         );
-        oval(emit, center, along, (maw * 1.1, maw), 28, GUM);
+        // Wet gums, catching the light along one edge.
         oval(
             emit,
-            center + along * maw * 0.08,
+            center + LIGHT * maw * 0.03,
             along,
-            (maw * 0.91, maw * 0.82),
+            (maw * 1.1, maw),
             28,
-            mix(MAW, BILE, pose.bile * 0.4),
+            mix(GUM, SHEEN, 0.3),
         );
-        // The throat contracts back toward its dark center. Teeth stay rooted
-        // in their gums; only the soft palate moves as it swallows or roars.
+        oval(
+            emit,
+            center - LIGHT * maw * 0.02,
+            along,
+            (maw * 1.08, maw * 0.98),
+            28,
+            GUM,
+        );
+        // The throat folds away from the lips, each fold darker and deeper
+        // than the last, and squeezes in waves as it swallows or roars.
+        let bile = pose.bile.clamp(0., 1.);
+        for (n, (size, depth, color)) in [
+            (0.93, 0.03, mix(GUM, MAW, 0.5)),
+            (0.72, 0.07, mix(MAW, GUM, 0.12)),
+            (0.48, 0.105, mix(MAW, DEEP, 0.4)),
+            (0.24, 0.13, DEEP),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let squeeze = 1. + 0.035 * (pose.time * 5. - n as f32 * 1.1).sin() * pose.motion;
+            oval(
+                emit,
+                center + along * maw * depth,
+                along,
+                (maw * size * 1.05 * squeeze, maw * size * 0.95 * squeeze),
+                20,
+                mix(color, mix(BILE, DEEP, 0.6), bile * 0.2 * (n as f32 / 3.)),
+            );
+        }
+        // Ridges of muscle running down into it.
+        for n in 0..9 {
+            let a = (n as f32 + 0.5) / 9. * TAU + 0.2;
+            let out = along * a.cos() + across * a.sin();
+            let rim = center + along * maw * 0.03 + out * maw * 0.9;
+            let deep = center + along * maw * 0.12 + out * maw * 0.24;
+            strand(
+                emit,
+                &[rim, rim.lerp(deep, 0.5), deep],
+                maw * 0.065,
+                faded(DEEP, 0.36),
+            );
+        }
+        // Teeth stay rooted in their gums, a fang now and then, and darker the
+        // deeper they sit; only the soft palate moves.
         for (ring, count, reach) in [(0, 14, 0.86), (1, 11, 0.59), (2, 8, 0.35)] {
             let contraction = 1. + 0.035 * (pose.time * 5. - ring as f32 * 1.4).sin() * pose.motion;
+            let sunk = along * maw * (0.03 + 0.035 * ring as f32);
             for n in 0..count {
                 let a = n as f32 / count as f32 * TAU + ring as f32 * 0.31;
                 let out = along * a.cos() + across * a.sin();
                 let side = out.perp();
-                let base = center + (out + along * (a.cos() * 0.1)) * maw * reach * contraction;
-                let width = maw * (0.048 - ring as f32 * 0.009);
+                let base =
+                    center + sunk + (out + along * (a.cos() * 0.1)) * maw * reach * contraction;
+                let fang: f32 = if ring == 0 && n % 4 == 1 { 1.4 } else { 1. };
+                let width = maw * (0.048 - ring as f32 * 0.009) * fang.sqrt();
                 let length =
-                    maw * (0.21 - ring as f32 * 0.035) * (0.72 + 0.5 * grain(n, 40 + ring));
+                    maw * (0.21 - ring as f32 * 0.035) * (0.72 + 0.5 * grain(n, 40 + ring)) * fang;
                 let hook = base - out * length * 0.58 + side * length * 0.13;
                 let tip = base - out * length;
+                disc(emit, base, width * 1.25, 6, mix(GUM, DEEP, 0.35));
                 tri(
                     emit,
                     base + side * width,
@@ -597,27 +771,87 @@ fn mouth(
                         tip,
                         base - side * width * 0.25,
                     ],
-                    mix(BONE, BONE_SHADE, ring as f32 * 0.13),
+                    mix(BONE, BONE_SHADE, ring as f32 * 0.22),
                 );
             }
         }
-        oval(
-            emit,
-            center + along * maw * 0.08,
-            along,
-            (maw * 0.22, maw * 0.18),
-            16,
-            Color::new(0.035, 0.004, 0.01, 1.),
-        );
-        if pose.bile > 0.05 {
+        if bile > 0.05 {
+            // Bile welling up the throat: a glossy pool with bubbles in it,
+            // and strings of it reaching up over the teeth.
+            let pool = center + along * maw * 0.11;
+            let size = maw * (0.14 + 0.2 * bile);
+            for n in 0..3 {
+                let a = grain(n, 71) * TAU;
+                let out = along * a.cos() + across * a.sin();
+                let reach = center + along * maw * 0.04 + out * maw * (0.5 + 0.3 * bile);
+                strand(
+                    emit,
+                    &[pool + out * size * 0.7, pool.lerp(reach, 0.6), reach],
+                    size * 0.3,
+                    faded(BILE, 0.8 * bile),
+                );
+            }
+            ragged(
+                emit,
+                pool,
+                along,
+                (size * 1.08, size),
+                41,
+                0.2,
+                faded(mix(BILE, DEEP, 0.55), bile),
+            );
+            ragged(
+                emit,
+                pool - LIGHT * size * 0.08,
+                along,
+                (size * 0.9, size * 0.8),
+                43,
+                0.18,
+                faded(BILE, bile),
+            );
+            for n in 0..3 {
+                let rise = (pose.time * (1.3 + 0.4 * n as f32) + n as f32 * 2.1).fract();
+                let a = grain(n, 73) * TAU;
+                let at = pool + (along * a.cos() + across * a.sin()) * size * 0.5 * rise;
+                let r = size * (0.06 + 0.08 * grain(n, 79)) * (rise * PI).sin();
+                disc(emit, at, r, 8, faded(mix(BILE, SHEEN, 0.35), bile));
+                disc(
+                    emit,
+                    at + LIGHT * r * 0.4,
+                    r * 0.35,
+                    6,
+                    faded(SHEEN, 0.8 * bile),
+                );
+            }
             oval(
                 emit,
-                center,
+                pool + LIGHT * size * 0.45,
                 along,
-                (maw * 0.27, maw * 0.19),
-                16,
-                faded(BILE, pose.bile * 0.55),
+                (size * 0.24, size * 0.11),
+                10,
+                faded(SHEEN, 0.6 * bile),
             );
+        }
+        // Saliva stretched across the opening, thinning as the mouth gapes.
+        if opening > 0.5 && radius > 24. {
+            let thin = 1. - 0.6 * ((opening - 0.5) / 0.5).clamp(0., 1.);
+            for (n, (from, to)) in [(0.9f32, 3.8f32), (2.3, 5.5)].into_iter().enumerate() {
+                let rim = |a: f32| {
+                    center
+                        + along * maw * 0.03
+                        + (along * a.cos() + across * a.sin() * 0.92) * maw * 0.86
+                };
+                let sag =
+                    maw * (0.07 + 0.04 * (pose.time * 1.7 + n as f32 * 2.).sin() * pose.motion);
+                sagging(
+                    emit,
+                    rim(from),
+                    rim(to),
+                    vec2(0., sag),
+                    (maw * 0.03).max(0.6),
+                    faded(SHEEN, 0.34 * thin),
+                );
+            }
         }
     }
     const LOBES: usize = 5;
@@ -726,17 +960,13 @@ fn mouth(
         for n in [0, 3] {
             let a = tips[n].lerp(center, 0.17);
             let b = tips[(n + 1) % LOBES].lerp(center, 0.17);
-            let sag = radius * (0.12 + 0.07 * (pose.time * 2.1 + n as f32).sin() * pose.motion);
-            let middle = a.lerp(b, 0.5) + vec2(0., sag);
-            let mut points = [a; 7];
-            for (k, p) in points.iter_mut().enumerate() {
-                let u = k as f32 / 6.;
-                *p = a * (1. - u).powi(2) + middle * (2. * u * (1. - u)) + b * u * u;
-            }
-            strand(
+            let sag = radius * (0.06 + 0.035 * (pose.time * 2.1 + n as f32).sin() * pose.motion);
+            sagging(
                 emit,
-                &points,
-                (radius * 0.009).max(0.5),
+                a,
+                b,
+                vec2(0., sag),
+                (radius * 0.016).max(0.5),
                 faded(SHEEN, 0.38 * opening),
             );
         }
@@ -758,8 +988,9 @@ fn stinger(emit: &mut impl FnMut(Primitive), at: Vec2, radius: f32, along: Vec2,
     strand(emit, &points[1..], radius * 0.45, BONE);
 }
 
-/// A torn end, facing `out`: the raw cut, the severed spine in the middle,
-/// and ragged flaps of skin around it.
+/// A torn end, facing `out`: a ragged cut through skin, the pale layer under
+/// it and the muscle, vessels that still pump, the snapped spine, and flaps of
+/// skin and sinew hanging past it.
 fn wound(
     emit: &mut impl FnMut(Primitive),
     at: Vec2,
@@ -770,64 +1001,183 @@ fn wound(
 ) {
     let across = vec2(-out.y, out.x);
     let face = at + out * radius * 0.42;
-    // Flaps of skin, of uneven lengths, hanging past the cut.
-    for n in 0..9 {
-        let u = n as f32 / 8. * 2. - 1.;
-        let root = face + across * u * radius * 0.86 - out * radius * 0.12 * u * u;
-        let length = radius * (0.2 + 0.32 * grain(n, salt * 13));
-        let sway = (pose.time * 2.4 + n as f32 * 1.7).sin() * 0.25 * pose.motion;
-        let way = (out + across * (u * 0.5 + sway)).normalize_or_zero();
-        let color = if n % 3 == 1 { RAW } else { FLESH };
-        strand(
-            emit,
-            &[root, root + way * length * 0.6, root + way * length],
-            radius * 0.28,
-            OUTLINE,
-        );
-        strand(
-            emit,
-            &[root, root + way * length * 0.6, root + way * length],
-            radius * 0.2,
-            color,
-        );
+    let time = pose.time;
+    // Flaps of skin round the rim of the cut: unevenly spaced and sized,
+    // some curling away and some folded back over the body, raw beneath, and
+    // ending blunt and torn rather than sharp.
+    for n in 0..7 {
+        let a = ((n as f32 + 0.5 + (grain(n, salt * 23) - 0.5) * 0.8) / 7. * 2. - 1.) * 1.4;
+        let root = face + out * (a.cos() * radius * 0.3) + across * (a.sin() * radius * 0.84);
+        let length = radius * (0.1 + 0.26 * grain(n, salt * 13));
+        let sway = (time * 2.4 + n as f32 * 1.7).sin() * 0.25 * pose.motion;
+        let folded = grain(n, salt * 29) < 0.3;
+        let way = if folded {
+            -out * 0.55 + across * a.sin().signum() * 0.85
+        } else {
+            out * a.cos() + across * (a.sin() * 0.8 + sway * 0.4)
+        }
+        .normalize_or_zero();
+        let curl = way.perp() * length * 0.35 * (grain(n, salt * 17) - 0.5);
+        let tip = root + way * length + curl * 1.8;
+        let points = [root, root + way * length * 0.55 + curl, tip];
+        let skin = mix(FLESH, RAW, 0.12 + 0.28 * grain(n, salt * 19));
+        let width = radius * (0.13 + 0.13 * grain(n, salt * 31));
+        strip(emit, &points, width + radius * 0.05, 0.5, OUTLINE);
+        disc(emit, tip, width * 0.3 + radius * 0.025, 8, OUTLINE);
+        strip(emit, &points, width, 0.45, skin);
+        disc(emit, tip, width * 0.24, 8, skin);
+        strip(emit, &points, width * 0.4, 0.4, mix(RAW, BLOOD, 0.35));
     }
-    oval(emit, face, out, (radius * 0.4, radius * 0.92), 16, OUTLINE);
-    oval(emit, face, out, (radius * 0.34, radius * 0.86), 16, BLOOD);
-    oval(
+    // The cut itself, edged with blood, then the layers it went through.
+    ragged(
+        emit,
+        face,
+        out,
+        (radius * 0.42, radius * 0.95),
+        salt,
+        0.1,
+        OUTLINE,
+    );
+    ragged(
+        emit,
+        face,
+        out,
+        (radius * 0.37, radius * 0.89),
+        salt,
+        0.1,
+        BLOOD,
+    );
+    ragged(
+        emit,
+        face + out * radius * 0.02,
+        out,
+        (radius * 0.31, radius * 0.77),
+        salt + 1,
+        0.07,
+        FAT,
+    );
+    ragged(
         emit,
         face + out * radius * 0.04,
         out,
-        (radius * 0.26, radius * 0.7),
-        16,
+        (radius * 0.28, radius * 0.71),
+        salt + 2,
+        0.09,
         RAW,
     );
-    // Rings of muscle round the cut, and the spine through the middle.
+    // Bundles of muscle, cut across.
+    let middle = face + out * radius * 0.06;
+    for n in 0..14 {
+        let a = (n as f32 + grain(n, salt * 7) * 0.4) / 14. * TAU;
+        let way = out * (a.cos() * 0.4) + across * a.sin();
+        let from = middle + way * radius * 0.24;
+        let to = middle + way * radius * (0.6 + 0.08 * grain(n, salt * 11));
+        strand(
+            emit,
+            &[to, to.lerp(from, 0.5), from],
+            radius * 0.05,
+            mix(RAW, BLOOD, 0.5),
+        );
+    }
     oval(
         emit,
-        face + out * radius * 0.06,
+        middle,
         out,
-        (radius * 0.16, radius * 0.44),
-        12,
-        mix(RAW, BLOOD, 0.5),
+        (radius * 0.16, radius * 0.42),
+        14,
+        mix(RAW, BLOOD, 0.4),
     );
-    disc(
+    // Severed vessels, welling up with each beat.
+    let beat = (0.5 + 0.5 * (time * 4.).sin()).powi(3);
+    for n in 0..6 {
+        let a = grain(n, salt * 31) * TAU;
+        let reach = 0.3 + 0.34 * grain(n, salt * 37);
+        let spot = middle + (out * (a.cos() * 0.4) + across * a.sin()) * radius * reach;
+        let size = radius * (0.03 + 0.03 * grain(n, salt * 41));
+        disc(emit, spot, size * 1.6, 8, mix(RAW, SHEEN, 0.18));
+        disc(emit, spot, size, 8, Color::new(0.14, 0., 0.02, 1.));
+        disc(emit, spot, size * 0.85 * beat, 6, RAW);
+    }
+    // The spine, snapped, with splinters standing out of it.
+    let spine = face + out * radius * 0.08;
+    for n in 0..4 {
+        let a = (n as f32 + 0.3 * grain(n, salt * 43)) / 4. * TAU + 0.4;
+        let way = (out * 0.6 + (out * a.cos() * 0.4 + across * a.sin())).normalize_or_zero();
+        let side = way.perp();
+        let base = spine + way * radius * 0.12;
+        let tip = base + way * radius * (0.1 + 0.1 * grain(n, salt * 47));
+        tri(
+            emit,
+            base + side * radius * 0.05,
+            tip,
+            base - side * radius * 0.05,
+            BONE_SHADE,
+        );
+        tri(emit, base + side * radius * 0.025, tip, base, BONE);
+    }
+    ragged(
         emit,
-        face + out * radius * 0.08,
-        radius * 0.2,
-        12,
+        spine,
+        out,
+        (radius * 0.2, radius * 0.2),
+        salt + 3,
+        0.16,
         BONE_SHADE,
     );
-    disc(emit, face + out * radius * 0.08, radius * 0.15, 12, BONE);
-    disc(emit, face + out * radius * 0.08, radius * 0.06, 8, BLOOD);
+    ragged(
+        emit,
+        spine + LIGHT * radius * 0.015,
+        out,
+        (radius * 0.15, radius * 0.15),
+        salt + 4,
+        0.14,
+        BONE,
+    );
+    disc(emit, spine, radius * 0.07, 8, BLOOD);
+    disc(emit, spine, radius * 0.04, 6, RAW);
+    // Sinew trailing from the cut, curling as it sways, a bead of blood
+    // gathering at the end of some.
+    for n in 0..3 {
+        let u = grain(n, salt * 53) * 2. - 1.;
+        let root = face + across * u * radius * 0.55 + out * radius * 0.1;
+        let sway = (time * 1.9 + n as f32 * 2.3).sin() * 0.35 * pose.motion;
+        let way = (out + across * (u * 0.3 + sway)).normalize_or_zero();
+        let length = radius * (0.16 + 0.18 * grain(n, salt * 59));
+        let bow = way.perp() * length * (0.25 + 0.2 * sway);
+        let end = root + way * length - bow * 0.5;
+        strand(
+            emit,
+            &[root, root.lerp(end, 0.5) + bow, end],
+            radius * 0.045,
+            faded(mix(FAT, RAW, 0.6), 0.9),
+        );
+        if n != 1 {
+            disc(emit, end, radius * 0.026, 8, BLOOD);
+            disc(
+                emit,
+                end + LIGHT * radius * 0.01,
+                radius * 0.009,
+                6,
+                faded(SHEEN, 0.6),
+            );
+        }
+    }
     // Wet where the blood still runs.
-    let pulse = 0.5 + 0.5 * (pose.time * 4.).sin();
     oval(
         emit,
-        face + out * radius * 0.1 + LIGHT * radius * 0.2,
+        face + out * radius * 0.1 + LIGHT * radius * 0.22,
         out,
         (radius * 0.05, radius * 0.24),
         8,
-        faded(Color::new(1., 0.6, 0.6, 1.), 0.35 + 0.25 * pulse),
+        faded(Color::new(1., 0.6, 0.6, 1.), 0.3 + 0.3 * beat),
+    );
+    oval(
+        emit,
+        face + out * radius * 0.05 + LIGHT * radius * 0.5,
+        out,
+        (radius * 0.03, radius * 0.12),
+        6,
+        faded(SHEEN, 0.35),
     );
 }
 

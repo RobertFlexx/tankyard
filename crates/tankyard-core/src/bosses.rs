@@ -1102,8 +1102,16 @@ impl World {
         let mut safety = f32::NEG_INFINITY;
         let inside = |p: V2| {
             V2::new(
-                p.x.clamp(bounds.x + radius + 30., bounds.x + bounds.w - radius - 30.),
-                p.y.clamp(bounds.y + radius + 30., bounds.y + bounds.h - radius - 30.),
+                crate::within(
+                    p.x,
+                    bounds.x + radius + 30.,
+                    bounds.x + bounds.w - radius - 30.,
+                ),
+                crate::within(
+                    p.y,
+                    bounds.y + radius + 30.,
+                    bounds.y + bounds.h - radius - 30.,
+                ),
             )
         };
         for attempt in 0..128 {
@@ -1297,7 +1305,7 @@ impl World {
                 // Its target slipped behind cover: it goes round to where it
                 // can see the last place it was, rather than straight at it.
                 let seen = b.mind.seen_at();
-                let ring = (b.pos.distance(seen)).clamp(b.radius + 220., 700.);
+                let ring = crate::within(b.pos.distance(seen), b.radius + 220., 700.);
                 b.goal = flank_point(b.pos, seen, ring, b.radius, bounds, &self.walls);
             } else if b.pos.distance(b.goal) < 130.
                 || !bounds.contains_circle(b.goal, b.radius + 60.)

@@ -40,6 +40,8 @@ const GRAVITY: f32 = 2100.;
 const STAIN_SECONDS: f32 = 40.;
 const HOLE_SECONDS: f32 = 22.;
 const FURROW_SECONDS: f32 = 9.;
+/// How long a dead worm's body takes to sink away, tail first.
+const CORPSE_SECONDS: f32 = 3.;
 /// How far a camera can be from it and still be shaken by it.
 const QUAKE_REACH: f32 = 3000.;
 /// The longest the strike lane is drawn.
@@ -699,7 +701,10 @@ impl BossFx {
                 ended.push(*id);
             }
         }
-        worms.shown.retain(|_, shown| shown.unseen < 1.5);
+        // A dead worm stays a little longer, while its body sinks away.
+        worms
+            .shown
+            .retain(|_, shown| shown.unseen < if shown.dead { CORPSE_SECONDS } else { 1.5 });
         for id in ended {
             self.worm_died(id);
         }
@@ -1061,6 +1066,20 @@ impl BossFx {
         }
     }
 
+    /// Worms that have died and left the snapshot: each body lies where it
+    /// fell, slack-jawed, and sinks into the floor ring by ring, tail first.
+    pub fn worm_corpses(&self, view: &View, time: f32, bosses: &[Boss]) {
+        if !self.look.live() {
+            return;
+        }
+        let draw = &mut crate::render::draw_model_primitive;
+        for (&id, shown) in &self.worms.shown {
+            if shown.dead && !bosses.iter().any(|boss| boss.id == id) {
+                self.worm_geometry(id, view, time, &mut |_, primitive| draw(primitive));
+            }
+        }
+    }
+
     /// The exact body model, shared by the color and motion passes.
     pub fn worm_geometry(
         &self,
@@ -1082,6 +1101,8 @@ impl BossFx {
         let z = view.zoom;
         let ahead = V2::from_angle(shown.aim);
         let count = shown.rings.len().min(WORM_RINGS);
+        // Seconds it has lain dead, once it has left the snapshot.
+        let dead = shown.dead.then_some(shown.unseen);
         let mut segments = [Segment {
             at: Vec2::ZERO,
             radius: 0.,
@@ -1098,24 +1119,35 @@ impl BossFx {
                     .normalized()
             };
             let toward = if toward == V2::ZERO { ahead } else { toward };
+            let sinking = dead.map_or(0., |seconds| {
+                let tail_first = 1. - k as f32 / (count.max(2) - 1) as f32;
+                let p = ((seconds - 0.2 - tail_first) / 1.2).clamp(0., 1.);
+                p * p * (3. - 2. * p) * 0.5
+            });
             segments[k] = Segment {
                 at: view.screen(ring.pos),
                 radius: ring.radius * z,
-                depth: ring.depth,
+                depth: ring.depth + sinking,
                 along: vec2(toward.x, toward.y),
             };
         }
-        let motion = if self.look.calm { 0. } else { 1. };
+        let motion = if self.look.calm || dead.is_some() {
+            0.
+        } else {
+            1.
+        };
+        // Dead, its jaw falls slack and its eyes close.
+        let slack = dead.map_or(0., |seconds| (seconds * 2.5).min(1.));
         worm_model::worm_geometry_tagged(
             &segments[..count],
             &WormPose {
                 time,
-                jaw: shown.jaw,
-                rear: shown.rear,
-                hurt: shown.hurt,
+                jaw: shown.jaw + (0.62 - shown.jaw) * slack,
+                rear: shown.rear * (1. - slack),
+                hurt: shown.hurt * (1. - slack),
                 rage: shown.rage(),
-                bile: shown.bile,
-                blink: shown.blink,
+                bile: shown.bile * (1. - slack),
+                blink: shown.blink + (1. - shown.blink) * slack,
                 head: shown.part != WormPart::Back,
                 tail: shown.part != WormPart::Front,
                 torn_front: shown.part == WormPart::Back,
@@ -2372,6 +2404,34 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn a_dead_worm_lingers_while_it_sinks_and_a_lost_one_does_not() {
+        let mut fx = BossFx::default();
+        let sign = WormSign {
+            act: WormAct::Hunt,
+            phase: 7,
+            ..Default::default()
+        };
+        let dead = worm(21, WORM_BACK_RADIUS, V2::new(1500., 900.), sign);
+        let lost = worm(22, WORM_FRONT_RADIUS, V2::new(2500., 900.), sign);
+        fx.worm_frame(&shown(&dead), 1. / 60.);
+        fx.worm_frame(&shown(&lost), 1. / 60.);
+        fx.worm_died(dead.id);
+        // Both leave the snapshot; only the dead one is a body on the floor.
+        let mut seconds = 0.;
+        while seconds < 2. {
+            fx.worm_gone(1. / 60.);
+            seconds += 1. / 60.;
+        }
+        assert!(fx.worms.shown.contains_key(&dead.id));
+        assert!(!fx.worms.shown.contains_key(&lost.id));
+        while seconds < CORPSE_SECONDS + 0.1 {
+            fx.worm_gone(1. / 60.);
+            seconds += 1. / 60.;
+        }
+        assert!(fx.worms.shown.is_empty());
     }
 
     #[test]

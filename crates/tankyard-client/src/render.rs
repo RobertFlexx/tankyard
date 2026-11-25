@@ -1039,6 +1039,9 @@ pub fn world(
     effects
         .boss_fx
         .rail_streams(&mut light, view, &snapshot.bosses, &mut streams, boss_time);
+    effects
+        .boss_fx
+        .worm_corpses(view, boss_time, &snapshot.bosses);
     for boss in &snapshot.bosses {
         let position = previous_positions
             .get(&boss.id)

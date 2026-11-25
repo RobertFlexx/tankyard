@@ -107,12 +107,25 @@ pub struct Rect {
     pub w: f32,
     pub h: f32,
 }
+/// `value` kept between `low` and `high`, like `f32::clamp`, but it never
+/// panics. `clamp` does when its ends cross, which rounding, a small arena or
+/// a big boss can cause, and a panic mid-match takes the game or the whole
+/// server down. Crossed ends give the middle, a NaN end is ignored, and a NaN
+/// `value` gives `low`.
+pub fn within(value: f32, low: f32, high: f32) -> f32 {
+    if low > high {
+        (low + high) * 0.5
+    } else {
+        value.max(low).min(high)
+    }
+}
+
 impl Rect {
     pub fn clamp_circle(self, p: V2, radius: f32) -> V2 {
         let radius = radius.max(0.).min(self.w.min(self.h) * 0.49);
         V2::new(
-            p.x.clamp(self.x + radius, self.x + self.w - radius),
-            p.y.clamp(self.y + radius, self.y + self.h - radius),
+            within(p.x, self.x + radius, self.x + self.w - radius),
+            within(p.y, self.y + radius, self.y + self.h - radius),
         )
     }
     pub fn contains_circle(self, p: V2, radius: f32) -> bool {
@@ -133,5 +146,37 @@ impl Rect {
         let dx = (self.x - p.x).max(p.x - (self.x + self.w)).max(0.);
         let dy = (self.y - p.y).max(p.y - (self.y + self.h)).max(0.);
         (dx * dx + dy * dy).sqrt()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn within_never_panics_on_crossed_or_broken_bounds() {
+        assert_eq!(within(5., 0., 10.), 5.);
+        assert_eq!(within(-3., 0., 10.), 0.);
+        assert_eq!(within(12., 0., 10.), 10.);
+        // Crossed ends, as a big boss in a small arena gives: the middle.
+        assert_eq!(within(5., 10., 0.), 5.);
+        assert_eq!(within(f32::NAN, 0., 10.), 0.);
+        assert_eq!(within(1., f32::NAN, 10.), 1.);
+        assert_eq!(within(11., 0., f32::NAN), 11.);
+    }
+
+    #[test]
+    fn a_circle_wider_than_its_box_is_held_in_the_middle() {
+        let room = Rect {
+            x: 0.,
+            y: 0.,
+            w: 100.,
+            h: 60.,
+        };
+        let held = room.clamp_circle(V2::new(500., -500.), 400.);
+        assert!(held.finite());
+        assert!((0.0..=100.).contains(&held.x) && (0.0..=60.).contains(&held.y));
+        let p = room.clamp_circle(V2::new(f32::NAN, 30.), 5.);
+        assert!(p.finite());
     }
 }

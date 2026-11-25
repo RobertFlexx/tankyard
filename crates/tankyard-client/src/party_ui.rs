@@ -300,8 +300,8 @@ impl PartyUi {
             let half = label_width(&name, 11. * s) * 0.5;
             center_label(
                 &name,
-                at.x.clamp(half + 6. * s, w - half - 6. * s),
-                at.y.clamp(14. * s, h - 6. * s),
+                tankyard_core::within(at.x, half + 6. * s, w - half - 6. * s),
+                tankyard_core::within(at.y, 14. * s, h - 6. * s),
                 11. * s,
                 text_color(),
             );
