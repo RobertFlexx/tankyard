@@ -71,10 +71,15 @@ impl Menu {
         );
         // The credit below moves down when the notices above wrap further.
         let y = y + (affiliation + 40. * s - (y + 480. * s)).max(0.);
+        // The mark sits beside both lines, not above the first one. Include
+        // its full height in the scroll range, as labels do for their text.
+        let mark = vec2(x + 28. * s, y + 500. * s);
+        let radius = 22. * s;
+        crate::ui_layout::reach(mark.y + radius);
         tankyard_client::boss_model::boss_model_geometry(
             tankyard_core::BossKind::Bastion,
-            crate::ui_layout::position(vec2(x + 28. * s, y + 488. * s)),
-            22. * s,
+            crate::ui_layout::position(mark),
+            radius,
             tankyard_client::boss_model::Pose {
                 aim: -0.2,
                 time: crate::accessibility::motion_time(get_time() as f32),
