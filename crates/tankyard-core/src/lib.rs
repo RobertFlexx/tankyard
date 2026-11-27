@@ -9,6 +9,7 @@ mod clash;
 mod combat_regressions;
 pub mod creator_boss;
 mod drones;
+pub mod encounters;
 mod homing;
 mod map_features;
 mod map_layout;

@@ -209,9 +209,13 @@ pub enum BossCue {
     WormTear,
     /// Its last.
     WormDeath,
+    JesterArrival,
+    MaskChange,
+    CarillonArrival,
+    HammerLift,
 }
 impl BossCue {
-    const ALL: [Self; 26] = [
+    const ALL: [Self; 30] = [
         Self::Charge,
         Self::Lock,
         Self::Shot,
@@ -238,6 +242,10 @@ impl BossCue {
         Self::WormStrain,
         Self::WormTear,
         Self::WormDeath,
+        Self::JesterArrival,
+        Self::MaskChange,
+        Self::CarillonArrival,
+        Self::HammerLift,
     ];
     /// How loud it is before distance. A shot carries further than the rest.
     pub fn gain(self) -> f32 {
@@ -258,6 +266,9 @@ impl BossCue {
             Self::WormSpit | Self::WormSpray | Self::WormThrash | Self::WormSting => 0.6,
             Self::WormDive | Self::WormStrain => 0.75,
             Self::WormBrood => 0.6,
+            Self::JesterArrival | Self::CarillonArrival => 1.,
+            Self::MaskChange => 0.5,
+            Self::HammerLift => 0.72,
         }
     }
     /// How far away it is treated as being, as a share of the real distance.

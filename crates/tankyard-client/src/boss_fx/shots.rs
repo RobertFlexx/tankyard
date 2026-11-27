@@ -64,6 +64,51 @@ impl BossFx {
             return;
         }
         let path = self.path_of(view, round);
+        if damage >= BASTION_ROUND_DAMAGE
+            && self
+                .bosses
+                .get(&round.owner)
+                .is_some_and(|b| b.kind == Some(tankyard_core::BossKind::Jester))
+        {
+            // A copied cannon retains its heavy silhouette against a split
+            // spectrum wake. The moving projectile is legible with bloom off.
+            self.trail(light, view, round, &path, 0.96);
+            let tip = p + d * r * 1.55;
+            let base = p - d * r * 0.76;
+            for side in [-1., 1.] {
+                draw_triangle(
+                    tip + d * rim,
+                    base + n * side * (r + rim),
+                    base - d * r * 0.52,
+                    edge,
+                );
+                draw_triangle(
+                    tip,
+                    base + n * side * r,
+                    base - d * r * 0.45,
+                    if side > 0. {
+                        body
+                    } else {
+                        alpha(mix(color, WHITE, 0.45), opacity)
+                    },
+                );
+            }
+            light.spot(
+                Layer::Wash,
+                p,
+                r * 3.6,
+                alpha(color, level * opacity * 0.55),
+            );
+            light.streak(
+                Layer::Core,
+                base,
+                tip,
+                r * 0.22,
+                hot(light, 0.21, 0.66),
+                hot(light, 0.85, 1.),
+            );
+            return;
+        }
         if damage >= LETHAL_DAMAGE {
             fireball(light, round, &path, clock, level);
             return;

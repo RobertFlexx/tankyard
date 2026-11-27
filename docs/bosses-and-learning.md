@@ -1,8 +1,8 @@
 # Bosses, arenas, voice, and learning
 
-Random boss events run in Free For All, Two Teams, Four Teams, Maze, and Random Events. After a 60-second initial grace period, the server makes **one aggregate 0.25% roll per simulation second**. A successful roll chooses uniformly among the fourteen regular bosses. About one arrival in eighty is a Railgunner instead, as long as the arena is worth at least two full-level tanks. This is not a per-frame or per-type probability. Only one random boss can be active, with a 90-second grace period after it disappears. Dedicated Boss Rush and Co-op waves keep their own schedules; Sandbox bosses remain manual.
+Random boss events run in Free For All, Two Teams, Four Teams, Maze, and Random Events. After a 60-second initial grace period, the server makes **one aggregate 0.25% roll per simulation second**. Most arrivals draw from fourteen regular bosses. In stronger arenas the same roll can instead bring a Railgunner (about one in 80 eligible arrivals), the Jester (one in 2,000) or Carillon (one in 48,000). The Jester requires an arena worth two and a half full-level tanks, Carillon three. See the secret encounter below for the rarest roll. Only one random boss can be active, with a 90-second grace period after it disappears. Dedicated Boss Rush and Co-op waves keep their own schedules; Sandbox bosses remain manual.
 
-Boss arrivals use a reliable, deduplicated event: an original 48 kHz alarm, a brief red pulse, and a top-center banner that expires after five seconds. Reduced Motion suppresses the red flash. Audio Disabled and the master/effects volume controls apply to the alarm independently of microphone mute and voice volume. Bosses remain stationary and cannot deal contact damage during their first two seconds. Spawns search for free space away from tanks and fail safely if the map cannot accommodate them.
+A boss arrival sounds an alarm and shows a banner for five seconds. The Jester announces itself with a laugh, Carillon with struck bells. Reduced Motion suppresses the red flash. Audio Disabled and the master/effects volume controls apply to the alarm independently of microphone mute and voice volume. Bosses remain stationary and cannot deal contact damage during their first two seconds. Spawns search for free space away from tanks and fail safely if the map cannot accommodate them.
 
 | Boss | Silhouette and weapons | Hull radius |
 | --- | --- | --- |
@@ -21,10 +21,22 @@ Boss arrivals use a reliable, deduplicated event: an original 48 kHz alarm, a br
 | Skirmisher | Twin cannons, fast orbit and a straight charge | 72 |
 | Trapper | Twin trap launchers and side-pocket mines | 88 |
 | Railgunner | Huge armored hull, a barrel that splits open for its plasma beam, hunts the furthest player | 132 |
+| Jester | A smiling porcelain mask, a three-pointed cap and three card launchers | 116 |
+| Carillon | A tracked bell foundry with swinging hammers and a triple furnace gun | 148 |
 
 Every boss is drawn in one style: an outlined hull, darker armor plates, grey guns where its rounds leave, and one bright core that whitens as a special attack charges. Tank Yard's bosses use their own sizes, damage values, phases, spawn schedule and combat rules.
 
 Bosses weigh distance, recent damage, movement, nearby allies and the targets other bosses are chasing. Each species favors different situations and varies its choices without constantly switching targets. They lead moving targets, observe line of sight, dodge approaching projectiles, manage distance while replenishing swarms, steer around walls, and respect the current arena border. Drone populations and projectile queues are capped. Custom charge attacks show a directional warning before accelerating.
+
+## Rare encounters
+
+**Jester.** A laugh echoes across the arena when it arrives. The colored silk and its three brass bells follow the motion of the hull. The mask stays upright while the guns turn. Its first trick deals three hands of ricocheting cards, center, left, then right. *Curtain call* leaves two gaps in a ring of alternating fast and slow shots. *Jack-in-the-box* throws mines to either side of an explosive.
+
+Between tricks it can borrow any ordinary boss’s full set of weapons, including Railgunner’s plasma beam, Carillon’s hammer peal and Axiom’s combat abilities. The boss bar names the act. Its borrowed shots keep their original timing and take on the Jester’s rainbow colors. A copied beam can be broken with a parry. Sunderworm’s attacks are exclusive to the worm.
+
+**Carillon.** Its two hammers lift clear of a bronze bell as the furnace builds pressure. The peal sends three fast slugs in sequence, each trailed by an explosive down the same lane. The molten pour sends two banks of ricochets outward with room between them. When mines ring the hull, look down the barrel for the open aisle and watch the two escorts. Its hull can withstand more damage than Railgunner’s.
+
+**Siege Engine.** Follow the muzzle brake to read its aim. The tracks can carry it across your path while the turret leads you. Its heavy cannon tracks through the first part of the windup and holds the last 0.6 seconds, giving you a clear moment to dodge.
 
 Open arena modes animate their border around a fixed coordinate system. Both humans and bots count, including participants waiting to respawn, so deaths do not pulse the map size. Two or fewer participants use 65% of the configured width/height; the border smoothly grows to the full configured dimensions by 24 participants. Smaller configured maps retain at least 900 × 700 playable units. Each border edge moves at most 24 units per second with damped easing; the client also interpolates between network updates. Shape counts follow playable area. Team homes/objectives move with the border, while fixed walls stay in place. Hull constraints resolve a shrinking border pinching a tank against a wall. Maze, Survival, Sandbox, Boss Rush, and Co-op retain their designed layouts or elimination boundaries. Server owners can set `world.dynamic_arena = false`.
 
@@ -111,7 +123,7 @@ lineup. Hosts may explicitly choose `sunderworm` in a dedicated-server lineup or
 a map Boss trigger. A local pack can keep the card available with
 `"menu": { "bosses": ["sunderworm"] }`.
 
-Tank Yard 2.1.5 uses **protocol 35**, the same as 2.1.0. All 2.1.x hosts and players can play together.
+Tank Yard 2.1.6 uses **protocol 35**, the same as 2.1.0. All 2.1.x hosts and players can play together.
 Snapshots carry its real body positions, including when joining mid-fight.
 
 </details>

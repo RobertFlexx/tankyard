@@ -1324,9 +1324,9 @@ mod tests {
                     center.is_finite() && radius.is_finite()
                 }
                 Primitive::Triangle { vertices, .. } => vertices.iter().all(|v| v.is_finite()),
-                Primitive::Quad { vertices, .. } | Primitive::ShadedQuad { vertices, .. } => {
-                    vertices.iter().all(|v| v.is_finite())
-                }
+                Primitive::Artwork { vertices, .. }
+                | Primitive::Quad { vertices, .. }
+                | Primitive::ShadedQuad { vertices, .. } => vertices.iter().all(|v| v.is_finite()),
             };
             assert!(finite, "{primitive:?}");
             colors.push(primitive.color());

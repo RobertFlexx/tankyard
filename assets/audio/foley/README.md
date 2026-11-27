@@ -14,6 +14,8 @@ The source recordings are released under **CC0 1.0**:
   [Steam whistle](https://opengameart.org/content/steam-whistle).
 - **Brian MacIntosh / BMacZero:** [Metal Impact Sounds](https://opengameart.org/content/metal-impact-sounds).
 
+- **Nocturnal_Vanguard (AuraVoice)** performed the Jester's entrance laugh. [Maniacal Laughter Pack 1](https://opengameart.org/content/maniacal-laughter-pack-1).
+
 The full license is in [Foley-CC0.txt](../../../licenses/Foley-CC0.txt).
 [sources.json](sources.json) records the exact source files, checksums and
 processing. The shipped files are mono, 48 kHz, signed 16-bit little-endian PCM.

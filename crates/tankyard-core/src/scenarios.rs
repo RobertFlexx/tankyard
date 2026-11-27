@@ -667,7 +667,9 @@ fn team_damage_and_spawn_protection() {
 fn every_boss_attacks_and_never_hits_itself() {
     for kind in BossKind::ALL {
         let mut w = empty(Mode::Sandbox);
-        w.add_player("A", false);
+        let player = w.add_player("A", false);
+        // A defeat would change the lobby’s strength and rescale boss health.
+        w.sandbox_invulnerability(player, true);
         w.tanks[0].pos = V2::new(2300., 1300.);
         w.tanks[0].level = 45;
         let boss = w.spawn_boss(kind);

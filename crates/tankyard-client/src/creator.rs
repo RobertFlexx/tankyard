@@ -1107,8 +1107,8 @@ impl CreatorUi {
         );
     }
 }
-/// The boss picker's columns: fifteen bosses in four rows.
-const BOSS_COLUMNS: usize = 4;
+/// Keep the roster above the summon button in four rows.
+const BOSS_COLUMNS: usize = BossKind::ALL.len().div_ceil(4);
 /// Sets a boss just inside each phase, for rehearsing a fight.
 const BOSS_HEALTH: [(&str, f32); 4] = [
     ("Full", 100.),

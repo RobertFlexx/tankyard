@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="160" height="208" viewBox="0 0 160 208">
+  <defs>
+    <path id="jm-face" d="M80 5 C108 5 133 10 142 24 C150 38 151 64 150 89 C149 119 141 147 124 170 C111 189 97 202 80 203 C61 203 46 188 32 167 C17 143 10 119 9 91 C8 66 9 40 15 25 C21 11 53 5 80 5Z"/>
+    <clipPath id="jm-edge"><use xlink:href="#jm-face"/></clipPath>
+    <radialGradient id="jm-clay" cx=".38" cy=".26" r=".79">
+      <stop stop-color="#fffefa"/><stop offset=".46" stop-color="#e7e8e5"/><stop offset=".72" stop-color="#cacbc7"/><stop offset=".92" stop-color="#999c9a"/><stop offset="1" stop-color="#727475"/>
+    </radialGradient>
+    <radialGradient id="jm-brow" cx=".35" cy=".16" r=".88"><stop stop-color="#fffefa"/><stop offset=".43" stop-color="#f3f2ee"/><stop offset=".75" stop-color="#b1b3ae"/><stop offset="1" stop-color="#797c79"/></radialGradient>
+    <radialGradient id="jm-cheek" cx=".37" cy=".30" r=".66"><stop stop-color="#fffef9"/><stop offset=".38" stop-color="#e2e2dc"/><stop offset=".82" stop-color="#babbb6" stop-opacity=".44"/><stop offset="1" stop-color="#babbb6" stop-opacity="0"/></radialGradient>
+    <linearGradient id="jm-nose"><stop stop-color="#8e918e"/><stop offset=".20" stop-color="#cecfca"/><stop offset=".46" stop-color="#f7f6f0"/><stop offset=".65" stop-color="#dddeda"/><stop offset="1" stop-color="#9b9e9a"/></linearGradient>
+    <linearGradient id="jm-lip" x2="0" y2="1"><stop stop-color="#999c99"/><stop offset=".28" stop-color="#e9e9e3"/><stop offset=".7" stop-color="#fffdf6"/><stop offset="1" stop-color="#a4a6a1"/></linearGradient>
+    <linearGradient id="jm-hole" x2=".25" y2="1"><stop stop-color="#080a0c"/><stop offset=".67" stop-color="#121416"/><stop offset="1" stop-color="#25282a"/></linearGradient>
+    <filter id="jm-soft" x="-.25" y="-.25" width="1.5" height="1.5"><feGaussianBlur stdDeviation="2.4"/></filter>
+    <filter id="jm-relief" x="-.3" y="-.3" width="1.6" height="1.6"><feGaussianBlur stdDeviation="1.8"/></filter>
+    <radialGradient id="jm-tip" cx=".40" cy=".38" r=".62"><stop stop-color="#fcfaf3" stop-opacity=".84"/><stop offset="1" stop-color="#f0f0e9" stop-opacity="0"/></radialGradient>
+    <g id="jm-orbit">
+      <path d="M17 64 C18 44 29 33 43 33 C54 33 61 41 67 51 C57 46 45 47 34 53 C26 58 21 63 19 69Z" fill="#7c807c" opacity=".48" filter="url(#jm-soft)"/>
+      <path d="M17 59 C18 44 29 29 43 30 C54 31 62 41 65 48 C55 41 47 41 39 44 C29 47 22 54 17 59Z" fill="url(#jm-brow)" opacity=".68" filter="url(#jm-relief)"/>
+      <path d="M20 77 C20 63 27 52 38 51 C51 49 62 59 64 75 L64 83 C52 82 34 79 23 77Z" fill="#abadab" filter="url(#jm-soft)"/>
+      <path d="M22 75 C21 63 27 55 36 54 C50 51 60 63 62 76 L62 79 C52 79 33 77 24 75Z" transform="translate(3.5 3.5) scale(.93 .96)" fill="url(#jm-hole)" stroke="#929590" stroke-width=".8"/>
+      <path d="M23 77 C37 80 53 82 63 80" fill="none" stroke="#fffdf6" stroke-width="1.8" stroke-linecap="round" opacity=".45"/>
+      <ellipse cx="40" cy="98" rx="24" ry="19" fill="url(#jm-cheek)" filter="url(#jm-soft)" opacity=".72"/>
+      <path d="M22 123 C28 116 36 117 40 128" fill="none" stroke="#929590" stroke-width="2" opacity=".6" filter="url(#jm-soft)"/>
+    </g>
+  </defs>
+  <use xlink:href="#jm-face" transform="translate(0 1.1)" fill="#393e40" stroke="#464847" stroke-width="4.2"/>
+  <use xlink:href="#jm-face" fill="url(#jm-clay)"/>
+  <g clip-path="url(#jm-edge)">
+    <path d="M13 83 C8 35 19 20 43 15 C67 7 103 7 126 16" fill="none" stroke="#fffef9" stroke-width="5" opacity=".76" filter="url(#jm-soft)"/>
+    <path d="M141 37 C155 88 143 151 103 187" fill="none" stroke="#666b69" opacity=".32" stroke-width="8" filter="url(#jm-soft)"/>
+    <use xlink:href="#jm-orbit"/><use xlink:href="#jm-orbit" transform="translate(160 0) scale(-1 1)"/>
+    <path d="M66 51 C71 59 69 85 63 99 C58 110 61 118 73 118 Q80 127 88 117 C97 117 103 112 99 105" fill="none" stroke="#737874" stroke-width="3.8" opacity=".63" filter="url(#jm-soft)"/>
+    <path d="M69 48 C75 55 73 84 68 99 C67 103 61 105 62 110 Q64 116 73 113 Q80 122 86 113 Q96 116 98 110 Q98 105 92 101 C87 90 86 60 91 49 C84 55 76 56 69 48Z" fill="url(#jm-nose)" filter="url(#jm-relief)"/>
+    <ellipse cx="80" cy="108" rx="10" ry="6" fill="url(#jm-tip)"/>
+    <path d="M64 112 Q68 106 74 114 M87 114 Q93 107 97 111" stroke="#676b68" fill="none" stroke-width="1.4" stroke-linecap="round" filter="url(#jm-relief)"/>
+    <path d="M79 58 C81 71 79 93 77 103" fill="none" stroke="#fffefa" stroke-width="3.5" opacity=".58" filter="url(#jm-soft)"/>
+    <path d="M37 129 C51 136 67 141 80 140 C96 139 111 134 124 126 C117 145 99 170 82 171 C65 172 45 149 37 129Z" fill="url(#jm-lip)"/>
+    <path d="M40 130 C49 131 63 140 80 139 C95 138 112 130 120 127 C121 134 112 147 102 157 C94 165 86 168 80 168 C65 166 46 146 40 134 Q38 130 40 130Z" fill="url(#jm-hole)" stroke="#8d908b" stroke-width="1.05"/>
+    <path d="M46 142 Q65 171 81 171 Q97 170 112 147" fill="none" stroke="#fffdf6" stroke-width="2.1" stroke-linecap="round" opacity=".7" filter="url(#jm-relief)"/>
+    <path d="M58 184 Q77 198 98 182" stroke="#faf8ef" stroke-width="4.5" opacity=".36" fill="none" filter="url(#jm-soft)"/>
+  </g>
+</svg>

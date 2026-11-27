@@ -23,6 +23,10 @@ const BASTION_MUZZLE: f32 = 1.52;
 type LinePaint = (Color, fn(f32) -> Color);
 const FIRE_LINE: LinePaint = (Color::new(1., 0.2, 0.05, 1.), ramp);
 const STEEL_LINE: LinePaint = (Color::new(0.1, 0.36, 1., 1.), steel);
+const SILK_LINE: LinePaint = (
+    Color::new(0.79, 0.17, 0.49, 1.),
+    tankyard_client::boss_model::silk,
+);
 const ION_LINE: LinePaint = (Color::new(0.34, 0.22, 1., 1.), super::railgun::ion);
 
 /// A color kept saturated, because light added to a cool floor pulls a pale
@@ -53,7 +57,7 @@ impl BossFx {
         let z = view.zoom;
         let p = view.screen(at);
         let r = boss.radius * z;
-        let progress = (1. - boss.attack_windup / boss.kind.windup()).clamp(0., 1.);
+        let progress = (1. - boss.attack_windup / boss.warning_seconds()).clamp(0., 1.);
         // Its last fifth tightens and brightens: the moment to dodge.
         let armed = ((progress - 0.8) / 0.2).clamp(0., 1.);
         let flow = if self.look.calm { 0. } else { time };
@@ -64,9 +68,52 @@ impl BossFx {
         );
         let stage = (progress, armed);
         let rounds = special_volley(boss.kind, boss.attack, boss.aim, boss.phase);
-        let circle = rounds.len() >= 8;
-        let railgunner = boss.kind == BossKind::Railgunner;
-        if railgunner && boss.attack == 2 {
+        let (style, pattern) = boss.attack_style();
+        let circle = rounds.len() >= 8 && (style, pattern) != (BossKind::Jester, 0);
+        let mimic = boss.kind == BossKind::Jester;
+        let railgunner = style == BossKind::Railgunner;
+        if mimic && let Some(act) = tankyard_core::encounters::axiom_act(boss.attack) {
+            use tankyard_core::creator_boss::Attack;
+            match act {
+                Attack::RiftDash => {
+                    let dir = direction(boss.aim);
+                    let to = at + V2::from_angle(boss.aim) * 700.;
+                    let fraction = walls
+                        .clone()
+                        .filter_map(|wall| {
+                            tankyard_core::physics::sweep_rect(at, to, boss.radius, wall)
+                                .map(|hit| hit.0)
+                        })
+                        .fold(1., f32::min);
+                    lane(
+                        light,
+                        p,
+                        dir,
+                        700. * fraction * z,
+                        r * 0.75,
+                        tint,
+                        stage,
+                        flow,
+                    );
+                }
+                Attack::Repulse | Attack::GravityWell | Attack::Reforge => {
+                    let reach = match act {
+                        Attack::Repulse => tankyard_core::creator_boss::REPULSE_REACH,
+                        Attack::GravityWell => tankyard_core::creator_boss::GRAVITY_REACH,
+                        _ => boss.radius * 1.15,
+                    };
+                    light.ring(
+                        Layer::Core,
+                        p,
+                        reach * z,
+                        (1.6 * z).max(1.),
+                        alpha(tint, 0.44 + 0.33 * progress),
+                    );
+                }
+                _ => {}
+            }
+        }
+        if railgunner && pattern == 2 {
             // The stream has no rounds yet, so its line is shown on its own.
             let d = direction(boss.aim);
             let from = at + V2::new(d.x, d.y) * boss.radius;
@@ -80,19 +127,34 @@ impl BossFx {
                 .fold(1., f32::min);
             cannon_line(
                 light,
-                p + d * r * RAIL_MUZZLE,
+                p + d
+                    * r
+                    * if mimic {
+                        tankyard_core::encounters::CARD_MUZZLE
+                    } else {
+                        RAIL_MUZZLE
+                    },
                 view.screen(from.lerp(to, stop)),
                 BEAM_ROUND_RADIUS * 1.5 * z,
                 stage,
                 flow,
-                ION_LINE,
+                if mimic { SILK_LINE } else { ION_LINE },
             );
         }
         for (index, round) in rounds.iter().enumerate() {
+            let tint = if mimic {
+                tankyard_client::boss_model::silk(index as f32 * 0.13 + flow * 0.09)
+            } else {
+                tint
+            };
             let d = direction(round.angle);
             let start = p + d * (r + 6. * z);
             if round.damage >= BASTION_ROUND_DAMAGE {
-                let (muzzle, paint) = if railgunner {
+                let (muzzle, paint) = if mimic {
+                    (tankyard_core::encounters::CARD_MUZZLE, (tint, SILK_LINE.1))
+                } else if boss.kind == BossKind::Carillon {
+                    (1.50, FIRE_LINE)
+                } else if railgunner {
                     (RAIL_MUZZLE, ION_LINE)
                 } else if round.damage >= LETHAL_DAMAGE {
                     (SIEGE_MUZZLE, FIRE_LINE)
@@ -153,7 +215,7 @@ impl BossFx {
     /// and speed lines streaming off it while it charges.
     pub fn dash(&self, light: &mut Emission, view: &View, boss: &Boss, at: V2, time: f32) {
         // A Railgunner's tactic carries its beam and vents, not a dash.
-        if boss.kind == BossKind::Railgunner
+        if boss.attack_style().0 == BossKind::Railgunner
             || (boss.tactic != BossTactic::Windup && boss.tactic != BossTactic::Charge)
         {
             return;

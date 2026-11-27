@@ -2542,13 +2542,7 @@ fn trigger_form(
             f.cycle("Boss", &mut boss, &options, |b| {
                 b.map_or("Any boss".to_owned(), |b| b.name().to_owned())
             });
-            t.source = boss.map_or(0, |b| {
-                BOSS_IDS
-                    .iter()
-                    .chain(&tankyard_content::SECRET_BOSS_IDS)
-                    .position(|&id| id == b.id())
-                    .map_or(0, |i| i as u8 + 1)
-            });
+            t.source = boss.map_or(0, |kind| kind as u8 + 1);
             f.note("Acts when that boss is destroyed anywhere in the arena, whether a Boss trigger or the mode brought it.");
         }
     }

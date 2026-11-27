@@ -84,10 +84,14 @@ fn barrel_goal(boss: &Boss) -> f32 {
     if boss.attack_windup <= 0. {
         return 0.;
     }
-    let total = boss.kind.windup().max(0.01);
+    let total = boss.warning_seconds().max(0.01);
     let done = (1. - boss.attack_windup / total).clamp(0., 1.);
-    if boss.attack != 2 {
-        return if boss.attack == 1 { 0.16 * done } else { 0. };
+    if boss.attack_style().1 != 2 {
+        return if boss.attack_style().1 == 1 {
+            0.16 * done
+        } else {
+            0.
+        };
     }
     if boss.attack_windup < RAIL_LOCK {
         return 1.;
@@ -265,6 +269,7 @@ pub(super) fn stream(
     clock: f32,
     level: f32,
     open: bool,
+    spectrum: bool,
 ) {
     if spine.len() < 2 {
         return;
@@ -273,6 +278,17 @@ pub(super) fn stream(
     let used = rounded(spine, &mut smooth);
     let spine = &smooth[..used];
     let moving = clock != 0.;
+    let tint = |u: f32, ordinary: Color, core: f32| {
+        if spectrum {
+            mix(
+                tankyard_client::boss_model::silk(clock * 0.12 + u * 0.9),
+                WHITE,
+                core,
+            )
+        } else {
+            ordinary
+        }
+    };
     // It swells out of the muzzle and tapers where it gives out.
     let body = |u: f32| {
         let start = if open {
@@ -293,35 +309,35 @@ pub(super) fn stream(
     lay(light, Layer::Wash, spine, |_, u| {
         (
             half * 5.2 * body(u),
-            alpha(RAIL_FRINGE, 0.2 * body(u) * level),
+            alpha(tint(u, RAIL_FRINGE, 0.), 0.2 * body(u) * level),
             0.,
         )
     });
     lay(light, Layer::Wash, spine, |_, u| {
         (
             half * 3.3 * body(u),
-            alpha(ion(0.9), 0.38 * body(u) * level),
+            alpha(tint(u, ion(0.9), 0.), 0.38 * body(u) * level),
             0.,
         )
     });
     lay(light, Layer::Wash, spine, |index, u| {
         (
             half * 2. * body(u) * shimmer(index),
-            alpha(ion(0.56), 0.62 * body(u) * level),
+            alpha(tint(u, ion(0.56), 0.18), 0.62 * body(u) * level),
             0.,
         )
     });
     lay(light, Layer::Core, spine, |index, u| {
         (
             half * 1.02 * body(u) * shimmer(index),
-            alpha(ion(0.3), 0.95 * body(u) * level),
+            alpha(tint(u, ion(0.3), 0.48), 0.95 * body(u) * level),
             0.,
         )
     });
     lay(light, Layer::Core, spine, |index, u| {
         (
             half * 0.42 * body(u) * shimmer(index + 6),
-            alpha(ion(0.), body(u) * level.max(0.7)),
+            alpha(tint(u, ion(0.), 0.86), body(u) * level.max(0.7)),
             0.,
         )
     });
@@ -364,9 +380,13 @@ pub(super) fn stream(
 }
 
 impl BossFx {
-    /// The parts of a Railgunner's pose its firing moves.
-    pub fn rail_pose(&self, boss: &Boss) -> Pose {
+    /// Moving attachments sampled on the same frame as the hull.
+    pub fn model_pose(&self, boss: &Boss) -> Pose {
         match self.bosses.get(&boss.id) {
+            Some(shown) if boss.kind == BossKind::SiegeEngine => Pose {
+                chassis: Some(shown.chassis),
+                ..Pose::default()
+            },
             Some(shown) if boss.kind == BossKind::Railgunner => Pose {
                 recoil: shown.rail.recoil,
                 beam: shown.rail.beam,
@@ -374,15 +394,25 @@ impl BossFx {
                 open: shown.rail.open,
                 ..Pose::default()
             },
+            Some(shown) if matches!(boss.kind, BossKind::Jester | BossKind::Carillon) => {
+                let (source, _) = boss.attack_style();
+                Pose {
+                    recoil: (shown.kick.length() / (boss.radius * super::MOST_KICK)).clamp(0., 1.),
+                    bells: shown.bells.map(|b| b.angle),
+                    mask: (source != boss.kind).then_some(source),
+                    ..Pose::default()
+                }
+            }
             _ => Pose::default(),
         }
     }
 
-    /// Whether `id` is a Railgunner seen recently.
-    pub fn is_railgunner(&self, id: EntityId) -> bool {
-        self.bosses
-            .get(&id)
-            .is_some_and(|shown| shown.fuel == Fuel::Ion)
+    pub(super) fn rail_flight(&self, flight: &Flight) -> bool {
+        match self.bosses.get(&flight.owner).and_then(|p| p.kind) {
+            Some(BossKind::Railgunner) => true,
+            Some(BossKind::Jester) => is_beam_round(flight.kind, flight.vel),
+            _ => false,
+        }
     }
 
     /// The sounds due this frame, and where each comes from.
@@ -549,7 +579,11 @@ impl BossFx {
         kind: tankyard_content::ProjectileKind,
         vel: V2,
     ) -> bool {
-        is_beam_round(kind, vel) && self.is_railgunner(owner)
+        is_beam_round(kind, vel)
+            && self
+                .bosses
+                .get(&owner)
+                .is_some_and(|p| matches!(p.kind, Some(BossKind::Jester | BossKind::Railgunner)))
     }
 
     /// A Railgunner's round leaving the barrel. Returns how hard that shakes
@@ -760,9 +794,12 @@ impl BossFx {
     }
 
     /// A round of the stream striking something.
-    pub(super) fn stream_hit(&mut self, at: V2, r: f32) {
+    pub(super) fn stream_hit(&mut self, at: V2, r: f32, silk: Option<Color>) {
         let look = self.look;
-        self.fueled_burst(at, Flash::Hit, Fuel::Ion, r * 0.8, RAIL_ION, 0.18);
+        let (fuel, core, spark) = silk.map_or((Fuel::Ion, RAIL_ION, ion(0.3)), |color| {
+            (Fuel::Spectrum, color, mix(color, WHITE, 0.25))
+        });
+        self.fueled_burst(at, Flash::Hit, fuel, r * 0.8, core, 0.18);
         self.spray(Spray {
             at,
             heading: None,
@@ -770,7 +807,7 @@ impl BossFx {
             speed: (120., 620.),
             life: (0.1, 0.3),
             size: (1., 2.4),
-            color: ion(0.3),
+            color: spark,
         });
     }
 
@@ -1186,7 +1223,7 @@ impl BossFx {
         let charging = windup > 0.;
         let locked = charging && windup < RAIL_LOCK;
         let tension = if charging {
-            (1. - windup / boss.kind.windup()).clamp(0., 1.)
+            (1. - windup / boss.warning_seconds()).clamp(0., 1.)
         } else {
             0.
         };
@@ -1367,6 +1404,7 @@ impl BossFx {
             let points = &mut streams.points[slot][..count];
             points.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
             let shown = self.bosses.get(&owner);
+            let spectrum = shown.is_some_and(|p| p.kind == Some(BossKind::Jester));
             let running = bosses
                 .iter()
                 .find(|boss| boss.id == owner)
@@ -1374,9 +1412,18 @@ impl BossFx {
             // While it runs the stream starts at the muzzle itself.
             let muzzle = shown.filter(|_| running).map(|shown| {
                 let way = direction(shown.aim);
-                let thrown = shown.rail.recoil * RAIL_THROW;
+                let thrown = if spectrum {
+                    0.
+                } else {
+                    shown.rail.recoil * RAIL_THROW
+                };
+                let muzzle = if spectrum {
+                    tankyard_core::encounters::CARD_MUZZLE
+                } else {
+                    RAIL_MUZZLE
+                };
                 view.screen(shown.pos + shown.kick_v2())
-                    + way * shown.radius * (RAIL_MUZZLE - thrown) * view.zoom
+                    + way * shown.radius * (muzzle - thrown) * view.zoom
             });
             let mut spine = [Vec2::ZERO; STREAM_POINTS + 1];
             let mut used = 0;
@@ -1395,6 +1442,7 @@ impl BossFx {
                         clock,
                         level,
                         first && muzzle.is_some(),
+                        spectrum,
                     );
                     first = false;
                     used = 0;
@@ -1409,6 +1457,7 @@ impl BossFx {
                 clock,
                 level,
                 first && muzzle.is_some(),
+                spectrum,
             );
             // Where it's landing right now.
             if used >= 2 && running {

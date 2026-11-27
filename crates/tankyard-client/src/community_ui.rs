@@ -1448,7 +1448,7 @@ impl CommunityUi {
                 self.summon = i;
             }
         }
-        let y = r.y + 302. * s;
+        let y = r.y + (137. + 33. * BossKind::ALL.len().div_ceil(3) as f32) * s;
         if button(
             Rect::new(x, y, width, 34. * s),
             &format!("Summon the {}", BossKind::ALL[self.summon].name()),

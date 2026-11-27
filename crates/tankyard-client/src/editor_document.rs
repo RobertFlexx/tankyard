@@ -1958,11 +1958,8 @@ fn team_here(t: &MapTrigger) -> String {
 }
 /// The boss a Defeated trigger waits for, or `None` for any boss.
 pub fn defeated_boss(t: &MapTrigger) -> Option<&'static str> {
-    tankyard_content::BOSS_IDS
-        .iter()
-        .chain(&tankyard_content::SECRET_BOSS_IDS)
-        .nth(usize::from(t.source.checked_sub(1)?))
-        .copied()
+    tankyard_core::BossKind::from_index(u32::from(t.source.checked_sub(1)?))
+        .map(tankyard_core::BossKind::id)
 }
 fn boss_name(id: &str) -> &'static str {
     tankyard_core::BossKind::from_id(id).map_or("unknown boss", tankyard_core::BossKind::name)

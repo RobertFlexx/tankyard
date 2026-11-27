@@ -9,7 +9,7 @@ Anyone can host a Tank Yard server: from the game in a few clicks, or as a dedic
 | It to start with the machine and restart if it stops | [Run it as a service](#run-it-as-a-service) | 10 minutes |
 | Players to join `play.example.com`, or no port forwarding | [Your own domain](hosting-domain.md) | 20 minutes |
 
-Players never install your mods: the server sends its checked mod data when they join. Clients and the server must use compatible protocol versions. Tank Yard 2.1.5 uses protocol **35**, the same as 2.1.0. Hosts and players on 2.1.x can update independently. When coming from 2.0.0–2.0.5 (protocol 34), update both. Version 1.7.0 used protocol 33, 1.6.0 used 32, 1.5.0, 1.5.1 and 1.5.2 used 31, 1.4.0 used protocol 30, 1.3.0 used protocol 29, 1.1.0 and 1.2.0 used protocol 28, 1.0.0 used 26, and 0.15 and 0.16 used 25.
+Players never install your mods: the server sends its checked mod data when they join. Clients and the server must use compatible protocol versions. Tank Yard 2.1.6 uses protocol **35**, the same as 2.1.0. Hosts and players on 2.1.x can update independently. When coming from 2.0.0–2.0.5 (protocol 34), update both. Version 1.7.0 used protocol 33, 1.6.0 used 32, 1.5.0, 1.5.1 and 1.5.2 used 31, 1.4.0 used protocol 30, 1.3.0 used protocol 29, 1.1.0 and 1.2.0 used protocol 28, 1.0.0 used 26, and 0.15 and 0.16 used 25.
 
 ## From the game
 
@@ -203,7 +203,7 @@ cargo build --locked --release -p tankyard-server --bin tankyard-server
 
 The port is UDP 5000. Local players join `127.0.0.1:5000`; LAN players use the host's local address. Internet players need a reachable public address and a forwarded UDP port. IPv6 addresses use brackets, such as `[2001:db8::1234]:5000`.
 
-Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default; `snapshot_rate` takes 1 to 60, and higher rates are smoother at the cost of bandwidth. Tank Yard 2.1.5 uses protocol 35, the same as 2.1.0; clients and servers from 2.0 and earlier must update before joining. Validated mod data is sent when joining, so clients do not need to install server packs.
+Host server in the menu runs until you leave the session and assigns its local player the Owner role. A dedicated server runs independently. FFA and Maze continue indefinitely; finite matches restart after the configured delay. Simulation runs at 60 ticks per second, with 20 snapshots per second by default; `snapshot_rate` takes 1 to 60, and higher rates are smoother at the cost of bandwidth. Tank Yard 2.1.6 uses protocol 35, the same as 2.1.0; clients and servers from 2.0 and earlier must update before joining. Validated mod data is sent when joining, so clients do not need to install server packs.
 
 Inputs are sent as soon as each frame's update finishes, before drawing; menu commands go out before the frame ends. Movement abilities use shared prediction rules. Remote movement can bridge a packet gap for up to 75 ms, constrained by walls and the arena boundary; longer gaps freeze until a new snapshot arrives. The server reuses snapshot storage between viewers and bounds catch-up work during overload.
 
@@ -215,9 +215,9 @@ Edit `configs/server.toml` for mode, map, population, password, chat, and storag
 
 Modes: `ffa`, `two-teams`, `four-teams`, `maze`, `domination`, `survival`, `tag`, `mothership`, `capture-core`, `boss-rush`, `deathmatch`, `sandbox`, `random-events`, and `coop-pve`. In Co-op PvE, the bot setting counts friendly teammates; waves add their own enemies. Sandbox tools need `--allow-sandbox`. Mods may provide custom maps and rules; see [modding](modding.md).
 
-Boss ids for `--boss-rush`, `boss_rush` and the console: `sentinel`, `prism`, `foundry`, `tempest`, `bastion`, `eclipse`, `guardian`, `summoner`, `defender`, `fallen_overlord`, `fallen_booster`, `siege_engine`, `skirmisher`, `trapper`, `railgunner` and `sunderworm`. `classic` is the usual six and `all` is every ordinary boss; `sunderworm` is a rare secret encounter that can also be named explicitly.
+Boss ids for `--boss-rush`, `boss_rush` and the console: `sentinel`, `prism`, `foundry`, `tempest`, `bastion`, `eclipse`, `guardian`, `summoner`, `defender`, `fallen_overlord`, `fallen_booster`, `siege_engine`, `skirmisher`, `trapper`, `railgunner`, `jester`, `carillon` and `sunderworm`. `classic` is the usual six and `all` is every ordinary boss; `sunderworm` is a rare secret encounter that can also be named explicitly.
 
-Tank Yard 2.1.5 uses protocol **35**, the same as 2.1.0, which adds authoritative boss body positions. Versions 2.0.0–2.0.5 use protocol 34, which carries the Even, Odd and Most gates, eight conditions a trigger, On input change, Gate to counter and rift events that name their owner. Version 1.7.0 used 33, which added boards, 1.6.0 used 32, which added Gatewright's rifts and the widget looks (shapes, borders, fills, lettering, bar and button looks), 1.5.0, 1.5.1 and 1.5.2 used 31, which added HUD widgets pinned over the arena or a tank, choice layouts and glow, 1.4.0 used 30, which added designed widgets with choices and players' picks, 1.3.0 used 29, 1.1.0 and 1.2.0 used 28, 1.0.1 used 27, 1.0.0 used 26, and 0.15 and 0.16 used 25. When upgrading from those versions, update clients, servers and any separate relay together; older snapshots are incompatible. Older clients receive an update message. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
+Tank Yard 2.1.6 uses protocol **35**, the same as 2.1.0, which adds authoritative boss body positions. Versions 2.0.0–2.0.5 use protocol 34, which carries the Even, Odd and Most gates, eight conditions a trigger, On input change, Gate to counter and rift events that name their owner. Version 1.7.0 used 33, which added boards, 1.6.0 used 32, which added Gatewright's rifts and the widget looks (shapes, borders, fills, lettering, bar and button looks), 1.5.0, 1.5.1 and 1.5.2 used 31, which added HUD widgets pinned over the arena or a tank, choice layouts and glow, 1.4.0 used 30, which added designed widgets with choices and players' picks, 1.3.0 used 29, 1.1.0 and 1.2.0 used 28, 1.0.1 used 27, 1.0.0 used 26, and 0.15 and 0.16 used 25. When upgrading from those versions, update clients, servers and any separate relay together; older snapshots are incompatible. Older clients receive an update message. The sample configs use 15 seconds of stationary spawn protection; existing configs keep their chosen duration. Aiming does not end it, and offensive actions wait until movement or expiry.
 
 The ordinary server includes signed creator tools by default on official public arenas (`--central`); `creator_admin = false` overrides that policy. Default community/personal hosts are disabled; public community operators can explicitly opt in. Password-protected hosts cannot enable the tools. See [creator administration](creator-administration.md) for policy, immediate revocation, auditing, and updating the central Raspberry Pi/Docker deployment.
 
@@ -347,14 +347,9 @@ The relay bounds connections to 1–1024 (default 256), the complete WebSocket u
 
 Loopback bans target the connection ID and verified account, so banning one proxied guest cannot ban every player on the relay. Direct nonshared IP bans still cover that address. For a relay in another Docker container or host, add its exact source IP to the server's top-level `shared_relay_ips = ["172.18.0.2"]` before `[world]`. No client-supplied forwarding header is trusted for bans. Anonymous guests can change connection IDs when reconnecting; lasting individual bans behind a shared relay require verified accounts. Legacy address-wide bans on a configured shared relay are ignored rather than excluding all players.
 
-### Upgrading to 2.1.5
+### Upgrading to 2.1.6
 
-Tank Yard 2.1.x clients and servers share protocol **35**, so either side can
-update first. The tougher Trapper and drone bosses, Bastion's proof counting and
-the central owner's **My tank** tab run on the server, so they arrive when the
-host updates. Smoother bosses online come with the client. Fixes from 2.1.2 to
-2.1.4 are included. Upgrading from 2.0.x requires updating both ends. A custom
-Boss Rush lineup can include `sunderworm` by id.
+Update the host to enable the Jester, Carillon, the Prism balance change and the Siege Engine’s new turret tracking. Players can join on earlier 2.1.x clients using protocol **35**. Install 2.1.6 on the client to see both new models, hear their entrances and see their full attack warnings. For an event, set `boss_rush = ["jester", "carillon"]` above the first TOML section and start the server in Boss Rush mode. Hosts upgrading from 2.0.x need matching updates on clients.
 
 Bastion now closes a connection after three distinct proofs within a minute,
 not at the first. To review its findings without disconnecting anyone, set

@@ -21,6 +21,11 @@ pub enum Primitive {
         vertices: [Vec2; 4],
         color: Color,
     },
+    /// A painted relief with a transparent surround, in clockwise corner order.
+    Artwork {
+        vertices: [Vec2; 4],
+        art: crate::boss_model::ModelArt,
+    },
     /// A strip with interpolated vertex colors. Vertices 0 and 3 are the
     /// first edge, 1 and 2 the second. Both edges share one opacity.
     ShadedQuad {
@@ -32,6 +37,7 @@ pub enum Primitive {
 impl Primitive {
     pub fn color(&self) -> Color {
         match *self {
+            Self::Artwork { .. } => WHITE,
             Self::Polygon { color, .. }
             | Self::Triangle { color, .. }
             | Self::Quad { color, .. }
@@ -51,7 +57,9 @@ impl Primitive {
                 );
             }
             Self::Triangle { vertices, .. } => vertices,
-            Self::Quad { vertices, .. } | Self::ShadedQuad { vertices, .. } => vertices,
+            Self::Artwork { vertices, .. }
+            | Self::Quad { vertices, .. }
+            | Self::ShadedQuad { vertices, .. } => vertices,
         };
         let mut lo = vertices[0];
         let mut hi = lo;
@@ -89,9 +97,9 @@ pub fn preview_placement(class: &ClassDef, rect: Rect, max_radius: f32, aim: f32
                 include(center + Vec2::splat(radius));
             }
             Primitive::Triangle { vertices, .. } => vertices.into_iter().for_each(&mut include),
-            Primitive::Quad { vertices, .. } | Primitive::ShadedQuad { vertices, .. } => {
-                vertices.into_iter().for_each(&mut include)
-            }
+            Primitive::Artwork { vertices, .. }
+            | Primitive::Quad { vertices, .. }
+            | Primitive::ShadedQuad { vertices, .. } => vertices.into_iter().for_each(&mut include),
         },
     );
     let size = hi - lo;
@@ -1053,6 +1061,9 @@ mod geometry_tests {
                                 );
                                 assert!(color.a.is_finite());
                             }
+                            Primitive::Artwork { vertices, .. } => {
+                                assert!(vertices.into_iter().all(Vec2::is_finite))
+                            }
                             Primitive::Quad { vertices, color }
                             | Primitive::ShadedQuad {
                                 vertices, color, ..
@@ -1171,7 +1182,8 @@ mod geometry_tests {
                         Primitive::Triangle { vertices, .. } => {
                             vertices.into_iter().for_each(&mut check)
                         }
-                        Primitive::Quad { vertices, .. }
+                        Primitive::Artwork { vertices, .. }
+                        | Primitive::Quad { vertices, .. }
                         | Primitive::ShadedQuad { vertices, .. } => {
                             vertices.into_iter().for_each(&mut check)
                         }
@@ -1202,7 +1214,9 @@ mod geometry_tests {
                 None,
                 None,
                 &mut |primitive| {
-                    if let Primitive::Quad { vertices, .. } = primitive {
+                    if let Primitive::Artwork { vertices, .. } | Primitive::Quad { vertices, .. } =
+                        primitive
+                    {
                         quads.push(vertices);
                     }
                 },

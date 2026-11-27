@@ -990,13 +990,9 @@ impl MapLogic {
                     easing,
                 } => self.light(map, color, darkness, (seconds, 0.), easing, now),
                 LogicInput::Defeated(kind) => {
-                    let number = tankyard_content::BOSS_IDS
-                        .iter()
-                        .chain(&tankyard_content::SECRET_BOSS_IDS)
-                        .position(|&id| id == kind.id())
-                        .map_or(0, |i| i + 1);
+                    let number = kind as u8 + 1;
                     for &index in &self.listeners.defeated {
-                        let wanted = usize::from(map.triggers[index].source);
+                        let wanted = map.triggers[index].source;
                         if wanted == 0 || wanted == number {
                             self.queue.push((index, 0));
                         }

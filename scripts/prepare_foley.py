@@ -30,9 +30,9 @@ def fetch(url, maximum=32_000_000):
     return data
 
 
-def convert(data):
+def convert(data, duration=4):
     decoded = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", "pipe:0", "-t", "4", "-ac", "1", "-ar", "48000",
+        ["ffmpeg", "-v", "error", "-i", "pipe:0", "-t", str(duration), "-ac", "1", "-ar", "48000",
          "-af", FILTER, "-f", "s16le", "pipe:1"],
         input=data, capture_output=True, check=True,
     ).stdout
@@ -73,7 +73,7 @@ def main():
                 data = fetch("https://opengameart.org/sites/default/files/" + clip["source_file"])
             if digest(data) != clip["source_sha256"]:
                 raise ValueError(f"Recording checksum mismatch: {clip['file']}")
-            pcm = convert(data)
+            pcm = convert(data, clip.get("trim_seconds", 4))
             if digest(pcm) != clip["pcm_sha256"]:
                 raise ValueError(f"Conversion differs for {clip['file']}; check the FFmpeg version")
             path.write_bytes(pcm)

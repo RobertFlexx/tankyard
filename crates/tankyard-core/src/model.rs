@@ -686,9 +686,11 @@ pub enum BossKind {
     /// The secret encounter, sent under its own kind in protocol 35.
     /// See [`Self::SECRET`] for the separate encounter pool.
     Sunderworm,
+    Jester,
+    Carillon,
 }
 impl BossKind {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 17] = [
         Self::Sentinel,
         Self::Prism,
         Self::Foundry,
@@ -704,6 +706,8 @@ impl BossKind {
         Self::Skirmisher,
         Self::Trapper,
         Self::Railgunner,
+        Self::Jester,
+        Self::Carillon,
     ];
     /// The bosses random events bring. The Railgunner comes on its own,
     /// very rarely.
@@ -726,8 +730,8 @@ impl BossKind {
     /// Encounters outside the ordinary roster. Rare menu rolls, saved
     /// lineups, maps and mods can still select them by id.
     pub const SECRET: [Self; 1] = [Self::Sunderworm];
-    /// Every kind there is, the secret ones last.
-    pub const EVERY: [Self; 16] = [
+    /// Stable numeric IDs used by reliable encounter events. Append new kinds.
+    pub const EVERY: [Self; 18] = [
         Self::Sentinel,
         Self::Prism,
         Self::Foundry,
@@ -744,6 +748,8 @@ impl BossKind {
         Self::Trapper,
         Self::Railgunner,
         Self::Sunderworm,
+        Self::Jester,
+        Self::Carillon,
     ];
     /// The kind numbered `index`, as boss events carry it.
     pub fn from_index(index: u32) -> Option<Self> {
@@ -767,6 +773,8 @@ impl BossKind {
             Self::Trapper => "Trapper",
             Self::Railgunner => "Railgunner",
             Self::Sunderworm => "Sunderworm",
+            Self::Jester => "Jester",
+            Self::Carillon => "Carillon",
         }
     }
     /// The lowercase id maps and commands use, such as `fallen_overlord`.
@@ -788,6 +796,8 @@ impl BossKind {
             Self::Trapper => "trapper",
             Self::Railgunner => "railgunner",
             Self::Sunderworm => "sunderworm",
+            Self::Jester => "jester",
+            Self::Carillon => "carillon",
         }
     }
     pub fn from_id(id: &str) -> Option<Self> {
@@ -806,6 +816,8 @@ impl BossKind {
             Self::Skirmisher => 72.,
             Self::Trapper => 88.,
             Self::Railgunner => RAIL_RADIUS,
+            Self::Jester => crate::encounters::JESTER_RADIUS,
+            Self::Carillon => crate::encounters::CARILLON_RADIUS,
             Self::Sunderworm => crate::sunderworm::WORM_RADIUS,
             _ => 90.,
         }
@@ -815,7 +827,8 @@ impl BossKind {
             Self::Guardian => 24,
             Self::Summoner => 28,
             Self::FallenOverlord => 16,
-            Self::Foundry => 12,
+            Self::Foundry | Self::Jester => 12,
+            Self::Carillon => 16,
             Self::Sunderworm => crate::sunderworm::WORM_BROOD,
             _ => 0,
         }
@@ -826,8 +839,11 @@ impl BossKind {
         match self {
             Self::Sunderworm => 7.5,
             Self::Railgunner => 3.,
+            Self::Carillon => 5.6,
+            Self::Jester => 2.7,
             Self::Bastion | Self::Defender | Self::SiegeEngine => 1.2,
-            Self::Sentinel | Self::Prism | Self::Eclipse => 1.1,
+            Self::Sentinel | Self::Eclipse => 1.1,
+            Self::Prism => 1.16,
             Self::Trapper => 1.55,
             Self::FallenBooster => 1.,
             Self::Tempest | Self::Skirmisher => 0.9,
@@ -858,6 +874,7 @@ impl BossKind {
             // Railgunner's must not pass this: older clients read it as this
             // boss and check the warning against it.
             Self::SiegeEngine | Self::Railgunner => 1.5,
+            Self::Carillon => 1.35,
             // Its lighter cannon still gets a proper look down the barrel.
             Self::Bastion => 1.15,
             _ => 0.9,
@@ -866,7 +883,8 @@ impl BossKind {
     /// How many usual boss rewards defeating it is worth.
     pub fn bounty(self) -> u32 {
         match self {
-            Self::Railgunner => 3,
+            Self::Railgunner | Self::Jester => 3,
+            Self::Carillon => 5,
             // Paid out twice, once for each half.
             Self::Sunderworm => 4,
             _ => 1,
@@ -1149,6 +1167,7 @@ pub struct Snapshot {
     pub tanks: Vec<Tank>,
     pub projectiles: Vec<Projectile>,
     pub targets: Vec<Target>,
+    #[serde(serialize_with = "crate::encounters::serialize_bosses")]
     pub bosses: Vec<Boss>,
     /// Cover where the map places it; map groups move it by `match_state.tweens`.
     pub walls: Vec<Rect>,

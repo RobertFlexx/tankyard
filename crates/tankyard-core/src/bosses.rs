@@ -225,6 +225,8 @@ pub(crate) struct Outlook {
 fn aimed_speed(kind: BossKind) -> f32 {
     match kind {
         BossKind::SiegeEngine => 390.,
+        BossKind::Carillon => 880.,
+        BossKind::Jester => 640.,
         BossKind::Railgunner => 1700.,
         BossKind::Sunderworm => 660.,
         BossKind::Skirmisher => 450.,
@@ -232,7 +234,8 @@ fn aimed_speed(kind: BossKind) -> f32 {
         BossKind::Guardian => 355.,
         BossKind::Summoner => 325.,
         BossKind::FallenOverlord => 390.,
-        BossKind::Defender | BossKind::Prism => 410.,
+        BossKind::Defender => 410.,
+        BossKind::Prism => 430.,
         BossKind::FallenBooster => 460.,
         BossKind::Sentinel => 330.,
         BossKind::Foundry => 295.,
@@ -248,6 +251,7 @@ fn special_speed(kind: BossKind) -> f32 {
         BossKind::SiegeEngine => SIEGE_ROUND_SPEED,
         BossKind::Railgunner => RAIL_ROUND_SPEED,
         BossKind::Bastion => BASTION_ROUND_SPEED,
+        BossKind::Carillon => 1430.,
         BossKind::Sentinel => 560.,
         BossKind::Skirmisher => 420.,
         _ => aimed_speed(kind),
@@ -409,7 +413,7 @@ pub const BASTION_ROUND_RADIUS: f32 = 18.;
 pub const BASTION_ROUND_DAMAGE: f32 = 125.;
 
 #[allow(clippy::too_many_arguments)]
-const fn round(
+pub(crate) const fn round(
     angle: f32,
     kind: ProjectileKind,
     speed: f32,
@@ -440,6 +444,12 @@ const fn round(
 pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<BossRound> {
     use ProjectileKind::*;
     use std::f32::consts::{FRAC_PI_2, TAU};
+    if kind == BossKind::Jester {
+        return crate::encounters::jester_volley(attack, aim, phase);
+    }
+    if kind == BossKind::Carillon {
+        return crate::encounters::carillon_volley(attack.min(2), aim, phase);
+    }
     let attack = attack.min(2);
     // Wounded, everything comes thicker.
     let more = usize::from(phase.clamp(1, 3) - 1);
@@ -455,7 +465,7 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
     }
     match (kind, attack) {
         (BossKind::Railgunner, _) => return crate::railgunner::rail_volley(attack, aim, phase),
-        (BossKind::Sunderworm, _) => {}
+        (BossKind::Sunderworm | BossKind::Jester | BossKind::Carillon, _) => {}
         (BossKind::SiegeEngine, 0) => {
             // One giant round down the locked line destroys whatever it
             // hits; cover stops it. Wounded, it flanks the line with shells.
@@ -1338,6 +1348,7 @@ impl World {
         self.land_clashes();
         let mut volleys: Vec<Volley> = Vec::new();
         let mut warnings = Vec::new();
+        let mut axiom_casts = Vec::new();
         // A swarm grows with the arena: one player can still cut through to
         // the hull, and it reaches its full size against a party of four.
         let strength = self.arena_strength();
@@ -1370,7 +1381,14 @@ impl World {
             if b.health <= 0. {
                 continue;
             }
-            if b.kind == BossKind::Railgunner {
+            if b.kind == BossKind::Railgunner
+                || (b.attack_style().0 == BossKind::Railgunner
+                    && (b.attack_windup > 0.
+                        || b.attack_timer > 0.
+                        || b.rail.beam > 0.
+                        || b.rail.vent > 0.
+                        || b.rail.echo > 0.))
+            {
                 self.update_railgunner(i, &mut volleys, &mut warnings);
                 continue;
             }
@@ -1391,7 +1409,12 @@ impl World {
             let b = &mut self.bosses[i];
             b.arrival = (b.arrival - DT).max(0.);
             let before = b.phase;
-            b.phase = if b.health < b.max_health * BOSS_PHASES[1] {
+            b.phase = if b.attack_windup > 0.
+                && matches!(b.kind, BossKind::Jester | BossKind::Carillon)
+            {
+                // The marked lanes must survive a health threshold mid-cast.
+                before
+            } else if b.health < b.max_health * BOSS_PHASES[1] {
                 3
             } else if b.health < b.max_health * BOSS_PHASES[0] {
                 2
@@ -1434,16 +1457,21 @@ impl World {
             }
             let to = b.goal - b.pos;
             let mut lined_up = true;
+            let gun_style = b.attack_style().0;
+            let traversing = gun_style == BossKind::SiegeEngine && b.attack_windup > 0.60;
             if b.tactic != BossTactic::Windup
                 && b.tactic != BossTactic::Charge
-                && b.attack_windup <= 0.
+                && (b.attack_windup <= 0. || traversing)
+                && b.mind.salvo.is_none()
             {
                 // Just before a special it aims for that shot instead, at
                 // where the target should be once the warning is over.
-                let (shot, warned) = if b.attack_timer < LINING_UP {
-                    (special_speed(b.kind), b.kind.windup() * 0.45)
+                let (shot, warned) = if traversing {
+                    (special_speed(gun_style), b.attack_windup * 0.65)
+                } else if b.attack_timer < LINING_UP {
+                    (special_speed(gun_style), gun_style.windup() * 0.45)
                 } else {
-                    (aimed_speed(b.kind), 0.)
+                    (aimed_speed(gun_style), 0.)
                 };
                 let swerve = b.mind.swerve * (rage * 0.5);
                 let point = target.map_or(b.goal, |(_, position, _)| {
@@ -1460,8 +1488,8 @@ impl World {
                     .rem_euclid(std::f32::consts::TAU)
                     - std::f32::consts::PI;
                 lined_up = difference.abs() < LINED_UP;
-                let turn_rate = match b.kind {
-                    BossKind::SiegeEngine => 1.,
+                let turn_rate = match gun_style {
+                    BossKind::SiegeEngine => 2.25,
                     BossKind::Bastion => 1.7,
                     _ => 3.2,
                 } * (1. + 0.12 * rage);
@@ -1483,6 +1511,8 @@ impl World {
                         BossKind::SiegeEngine => 25.,
                         BossKind::Skirmisher => 145.,
                         BossKind::Trapper => 101.,
+                        BossKind::Jester => 151.,
+                        BossKind::Carillon => 70.,
                         BossKind::Bastion => 38.,
                         BossKind::Foundry | BossKind::Defender => 32.,
                         _ => 55.,
@@ -1498,10 +1528,14 @@ impl World {
                 BossKind::SiegeEngine => 720.,
                 BossKind::Skirmisher => 420.,
                 BossKind::Trapper => 415.,
+                BossKind::Carillon => 570.,
+                BossKind::Jester => 370.,
                 _ => 450.,
             };
-            let drone_limit = (b.kind.drone_limit() as f32 * swarm).ceil() as usize;
-            let depleted = drone_limit > 0 && owned < drone_limit / 3;
+            let drone_limit = (gun_style.drone_limit() as f32 * swarm).ceil() as usize;
+            let depleted = drone_limit > 0
+                && owned < drone_limit / 3
+                && !matches!(b.kind, BossKind::Jester | BossKind::Carillon);
             let range = to.length();
             let preferred = if finishing {
                 preferred * 0.75
@@ -1577,11 +1611,12 @@ impl World {
             if b.tactic != BossTactic::Charge
                 && b.tactic != BossTactic::Windup
                 && b.attack_windup <= 0.
+                && b.mind.salvo.is_none()
             {
                 desired += b.dodge * speed * 0.7;
             }
             desired = boss_clear_steering(b.pos, desired, b.vel, b.radius, bounds, &self.walls);
-            if b.arrival > 0. || b.attack_windup > 0. {
+            if b.arrival > 0. || b.attack_windup > 0. || b.mind.salvo.is_some() {
                 desired = V2::ZERO;
             }
             // A steady push rather than an ease, so a change of course reads
@@ -1599,20 +1634,29 @@ impl World {
             b.attack_windup = (b.attack_windup - DT).max(0.);
             // A warned attack always comes, even at a target gone behind cover.
             let secondary = previous_windup > 0. && b.attack_windup <= 0.;
-            if b.arrival <= 0. && target.is_some() && previous_windup <= 0. {
+            if b.arrival <= 0.
+                && target.is_some()
+                && previous_windup <= 0.
+                && b.mind.salvo.is_none()
+            {
                 b.attack_timer -= DT;
                 // A ready special waits a moment for the gun to come round,
                 // so its warning points at something.
                 if b.attack_timer <= 0. && (lined_up || b.attack_timer < -BOSS_AIM_HOLD) {
                     b.attack = b.mind.pick_special(b.kind, &scene.special, special_roll);
-                    b.attack_windup = b.kind.windup();
-                    b.attack_timer = 9.2 - f32::from(b.phase) * 1.7;
+                    b.attack_windup = b.warning_seconds();
+                    b.attack_timer = match b.kind {
+                        BossKind::Jester => 6.4 - f32::from(b.phase) * 0.6,
+                        BossKind::Carillon => 7.2 - f32::from(b.phase) * 0.8,
+                        _ => 9.2 - f32::from(b.phase) * 1.7,
+                    };
                     warnings.push((b.pos, b.id, b.attack as u32, b.team));
                 }
             }
             // Let the warning and secondary pattern read clearly. A primary
             // volley cannot land on the same frame as the special attack.
-            let start_spiral = secondary && b.kind == BossKind::Trapper && b.attack == 0;
+            let (style, pattern) = b.attack_style();
+            let start_spiral = secondary && style == BossKind::Trapper && pattern == 0;
             if start_spiral {
                 b.mind.trap_spiral = Some(TrapSpiral {
                     aim: b.aim,
@@ -1623,13 +1667,34 @@ impl World {
                     .timer
                     .max(f32::from(TrapSpiral::steps(b.phase) * 5 + 10) * DT + 0.4);
             }
-            let primary =
-                primary_due && b.attack_windup <= 0. && !secondary && b.mind.trap_spiral.is_none();
+            if secondary
+                && let Some(battery) = crate::encounters::Battery::for_attack(style, pattern)
+            {
+                b.mind.salvo = Some(crate::encounters::Salvo::new(battery, b.aim));
+            }
+            let staged = b.mind.salvo.is_some();
+            let primary = primary_due
+                && b.attack_windup <= 0.
+                && !secondary
+                && b.mind.trap_spiral.is_none()
+                && !staged;
             let spiral_pair = TrapSpiral::advance(&mut b.mind.trap_spiral);
-            if secondary {
+            let beat = crate::encounters::Salvo::advance(&mut b.mind.salvo);
+            if secondary || beat.is_some() {
                 b.timer = b.timer.max(0.4);
             }
-            if !secondary && spiral_pair.is_none() && (target.is_none() || !primary) {
+            if !secondary
+                && beat.is_none()
+                && spiral_pair.is_none()
+                && (target.is_none() || !primary)
+            {
+                continue;
+            }
+            if secondary
+                && b.kind == BossKind::Jester
+                && let Some(attack) = crate::encounters::axiom_act(b.attack)
+            {
+                axiom_casts.push((i, attack));
                 continue;
             }
             let mut spawned_drones = owned;
@@ -1669,35 +1734,30 @@ impl World {
                     bounces,
                 ));
             };
+            let mut emit_round = |r: BossRound| {
+                emit(
+                    r.angle,
+                    r.kind,
+                    r.speed,
+                    r.damage,
+                    r.radius,
+                    r.life,
+                    r.penetration,
+                    r.bounces,
+                );
+            };
             if let Some(pair) = spiral_pair {
-                for round in pair {
-                    emit(
-                        round.angle,
-                        round.kind,
-                        round.speed,
-                        round.damage,
-                        round.radius,
-                        round.life,
-                        round.penetration,
-                        round.bounces,
-                    );
-                }
+                pair.into_iter().for_each(&mut emit_round);
             }
-            if secondary {
-                for round in special_volley(b.kind, b.attack, b.aim, b.phase) {
-                    emit(
-                        round.angle,
-                        round.kind,
-                        round.speed,
-                        round.damage,
-                        round.radius,
-                        round.life,
-                        round.penetration,
-                        round.bounces,
-                    );
-                }
+            if let Some(beat) = beat {
+                beat.fire(&mut emit_round);
+            }
+            if secondary && !staged {
+                special_volley(b.kind, b.attack, b.aim, b.phase)
+                    .into_iter()
+                    .for_each(emit_round);
                 // The quick ones dash in behind their volley.
-                match b.kind {
+                match style {
                     BossKind::Skirmisher => {
                         b.tactic = BossTactic::Windup;
                         b.tactic_time = 0.55;
@@ -1714,9 +1774,84 @@ impl World {
             if !primary || target.is_none() {
                 continue;
             }
-            match b.kind {
-                // These run their own in `update_railgunner` and `update_worm`.
+            match style {
+                // The rail mask fires its own coil, flak, rail and beam in the
+                // Railgunner controller, including its vent and parry windows.
                 BossKind::Railgunner | BossKind::Sunderworm => {}
+                BossKind::Jester => {
+                    if crate::encounters::axiom_act(b.attack).is_some() {
+                        // Axiom's four-step rotation fires from separate muzzles.
+                        let step = crate::creator_boss::gun_step(b.mind.gun);
+                        b.mind.gun = b.mind.gun.wrapping_add(1);
+                        let pos = crate::creator_boss::muzzle(b.pos, b.aim, step, b.radius);
+                        let direction = (b.goal - pos).normalized();
+                        let shot = crate::creator_boss::primary_round(direction.angle());
+                        if bounds.contains_circle(pos, shot.radius)
+                            && self
+                                .walls
+                                .iter()
+                                .all(|&w| sweep_rect(b.pos, pos, shot.radius, w).is_none())
+                        {
+                            volleys.push((
+                                b.id,
+                                b.team,
+                                pos,
+                                direction * shot.speed,
+                                shot.kind,
+                                shot.damage,
+                                shot.radius,
+                                shot.life,
+                                shot.penetration,
+                                0,
+                            ));
+                        }
+                        b.timer = crate::creator_boss::GUN_INTERVAL;
+                    } else {
+                        for side in [-1., 0., 1.] {
+                            emit(
+                                b.aim + side * 0.16,
+                                ProjectileKind::Piercing,
+                                640.,
+                                32.,
+                                9.,
+                                2.3,
+                                2.5,
+                                1,
+                            );
+                        }
+                        b.timer = 1.05;
+                    }
+                }
+                BossKind::Carillon => {
+                    // Pressure shot through the centre, with a pair of castings
+                    // from the outboard molds. Capped escorts release in pairs.
+                    emit(b.aim, ProjectileKind::Shell, 880., 110., 17., 2., 5., 0);
+                    for side in [-1., 1.] {
+                        emit(
+                            b.aim + side * 0.22,
+                            ProjectileKind::Piercing,
+                            720.,
+                            46.,
+                            10.,
+                            2.,
+                            3.,
+                            1,
+                        );
+                        if owned < drone_limit {
+                            emit(
+                                b.aim + side * 1.16,
+                                ProjectileKind::Drone,
+                                495.,
+                                46.,
+                                16.,
+                                8.,
+                                7.,
+                                0,
+                            );
+                        }
+                    }
+                    b.timer = 1.22;
+                }
                 BossKind::SiegeEngine => {
                     emit(b.aim, ProjectileKind::Shell, 390., 34., 15., 3., 2.5, 0);
                     b.timer = 1.65;
@@ -1834,7 +1969,7 @@ impl World {
                 BossKind::Defender => {
                     for n in 0..3 {
                         // Out of the launchers on its turning sides.
-                        let angle = b.kind.turn(self.tick)
+                        let angle = style.turn(self.tick)
                             + std::f32::consts::PI
                             + n as f32 * std::f32::consts::TAU / 3.;
                         emit(angle, ProjectileKind::Trap, 180., 26., 18., 7., 3., 0);
@@ -1886,12 +2021,12 @@ impl World {
                 BossKind::Prism => {
                     for n in 0..(6 + b.phase as usize * 2) {
                         emit(
-                            b.kind.turn(self.tick)
+                            style.turn(self.tick)
                                 + n as f32 * std::f32::consts::TAU
                                     / (6 + b.phase as usize * 2) as f32,
                             ProjectileKind::Piercing,
-                            410.,
-                            16.,
+                            430.,
+                            17.,
                             7.,
                             4.2,
                             2.,
@@ -1942,7 +2077,7 @@ impl World {
                 BossKind::Bastion => {
                     for n in 0..8 {
                         emit(
-                            b.kind.turn(self.tick) + n as f32 * std::f32::consts::TAU / 8.,
+                            style.turn(self.tick) + n as f32 * std::f32::consts::TAU / 8.,
                             ProjectileKind::Mine,
                             220.,
                             27.,
@@ -1983,7 +2118,11 @@ impl World {
                 1 => 1.,
                 2 => 0.86,
                 _ => 0.72,
-            } / if b.kind.drone_limit() > 0 { swarm } else { 1. };
+            } / if style.drone_limit() > 0 { swarm } else { 1. };
+        }
+        for (index, attack) in axiom_casts {
+            // Cover or a full arena can leave a cast with nowhere to land.
+            let _ = self.cast_axiom(crate::creator_boss::AxiomCaster::Boss(index), attack);
         }
         for (pos, id, attack, team) in warnings {
             self.event(EventKind::BossAttack, pos, id, attack, team);
@@ -2357,24 +2496,26 @@ mod tests {
                 world.projectiles.is_empty(),
                 "{kind:?} hid its windup behind a primary volley"
             );
-            for _ in 0..(kind.windup() / DT) as usize + 2 {
+            for _ in 0..(world.bosses[0].warning_seconds() / DT) as usize + 2 {
                 world.update_bosses();
             }
             assert!(
                 !world.projectiles.is_empty(),
                 "{kind:?} did not release its secondary"
             );
-            // A Trapper's mines open a spiral of traps from the same flanks.
-            // That is still the special attack; the gap comes after it.
+            // The Trapper's spiral and the three-gun batteries finish their
+            // sequence before the recovery window starts.
             for _ in 0..120 {
-                if world.bosses[0].mind.trap_spiral.is_none() {
+                if world.bosses[0].mind.trap_spiral.is_none()
+                    && world.bosses[0].mind.salvo.is_none()
+                {
                     break;
                 }
                 world.update_bosses();
             }
             assert!(
-                world.bosses[0].mind.trap_spiral.is_none(),
-                "{kind:?} never finished its spiral"
+                world.bosses[0].mind.trap_spiral.is_none() && world.bosses[0].mind.salvo.is_none(),
+                "{kind:?} never finished its special"
             );
             let shots = world.projectiles.len();
             for _ in 0..20 {
@@ -2385,6 +2526,73 @@ mod tests {
                 shots,
                 "{kind:?} overlapped its recovery gap"
             );
+        }
+    }
+
+    #[test]
+    fn siege_traverses_early_then_holds_its_mark_through_release() {
+        let mut world = arena();
+        world.spawn_boss(BossKind::SiegeEngine);
+        world.bosses[0].pos = V2::new(1600., 1300.);
+        world.bosses[0].aim = 0.;
+        world.bosses[0].arrival = 0.;
+        world.bosses[0].attack_windup = 1.4;
+        world.tanks[0].pos = V2::new(1900., 1900.);
+        for _ in 0..49 {
+            world.update_bosses();
+        }
+        let locked = world.bosses[0].aim;
+        assert!(locked > 0.3);
+        world.tanks[0].pos = V2::new(2100., 1000.);
+        while world.bosses[0].attack_windup > 0. {
+            world.update_bosses();
+            assert_eq!(world.bosses[0].aim, locked);
+        }
+        assert!(
+            world
+                .projectiles
+                .iter()
+                .any(|p| p.radius == SIEGE_ROUND_RADIUS && (p.vel.angle() - locked).abs() < 1e-4)
+        );
+    }
+
+    #[test]
+    fn a_jester_plays_every_borrowed_special_in_the_simulation() {
+        use crate::creator_boss::Attack;
+        for (code, (source, slot)) in
+            (0u8..).map_while(|code| crate::encounters::jester_act(code).map(|a| (code, a)))
+        {
+            let mut world = arena();
+            world.spawn_boss(BossKind::Jester);
+            let pos = V2::new(1600., 1300.);
+            world.tanks[0].pos = V2::new(2450., 1300.);
+            let b = &mut world.bosses[0];
+            b.pos = pos;
+            b.health = b.max_health * 0.5;
+            b.aim = 0.;
+            b.arrival = 0.;
+            b.attack = code;
+            b.attack_windup = DT;
+            b.attack_timer = 7.;
+            world.update_bosses();
+            let b = &world.bosses[0];
+            match crate::encounters::axiom_act(code) {
+                Some(Attack::RiftDash) => assert!(b.pos.distance(pos) > 500.),
+                Some(Attack::Reforge) => assert!(b.health / b.max_health > 0.57),
+                _ if (source, slot) == (BossKind::Railgunner, 2) => {
+                    assert!(b.beaming());
+                    assert!(
+                        world
+                            .projectiles
+                            .iter()
+                            .any(|p| crate::is_beam_round(p.kind, p.vel))
+                    );
+                }
+                _ => assert!(
+                    !world.projectiles.is_empty(),
+                    "act {code}: {source:?}/{slot}"
+                ),
+            }
         }
     }
 
@@ -2677,13 +2885,16 @@ mod tests {
         assert!(rounds[0].radius < SIEGE_ROUND_RADIUS);
         assert!(BossKind::Bastion.windup() < BossKind::SiegeEngine.windup());
         assert_eq!(special_volley(BossKind::Bastion, 0, 0.5, 2).len(), 3);
-        // Nothing else in any boss's kit can be mistaken for it.
+        // Other signature volleys only reach the cannon threshold on the heavy hulls.
         for kind in BossKind::ALL {
             for phase in 1..=3 {
                 for round in special_volley(kind, 0, 0., phase) {
                     assert!(
                         round.damage < BASTION_ROUND_DAMAGE
-                            || matches!(kind, BossKind::Bastion | BossKind::SiegeEngine),
+                            || matches!(
+                                kind,
+                                BossKind::Bastion | BossKind::SiegeEngine | BossKind::Carillon
+                            ),
                         "{kind:?}"
                     );
                 }
@@ -2741,9 +2952,11 @@ mod tests {
                 ];
                 world.tanks[0].max_health = 1e9;
                 if world.spawn_boss(kind) == 0 {
-                    // The Railgunner's larger hull cannot fit between this
-                    // tiny arena's cover. Refusing the spawn is the safe result.
-                    assert_eq!(kind, BossKind::Railgunner);
+                    // Large hulls can run out of safe space between these walls.
+                    assert!(matches!(
+                        kind,
+                        BossKind::Railgunner | BossKind::Jester | BossKind::Carillon
+                    ));
                     assert_eq!((width, height), (700., 520.));
                     assert!(world.bosses.is_empty());
                     continue;
@@ -2872,6 +3085,13 @@ mod tests {
             let id = world.spawn_boss(kind);
             assert_ne!(id, 0);
             world.bosses[0].pos = V2::new(1600., 1300.);
+            if kind == BossKind::Jester {
+                // A Jester only calls escorts while wearing a swarm mask.
+                world.bosses[0].attack = (0..=u8::MAX)
+                    .find(|&i| crate::encounters::jester_act(i) == Some((BossKind::Foundry, 0)))
+                    .unwrap();
+                world.bosses[0].attack_timer = 12.;
+            }
             let mut largest = 0;
             for _ in 0..1200 {
                 world.step();

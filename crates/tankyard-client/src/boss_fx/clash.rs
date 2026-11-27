@@ -90,6 +90,7 @@ pub(super) enum Blast {
     Rail(f32),
     Siege,
     Bastion,
+    Spectrum,
 }
 
 /// A heavy round's blast, held for a frame or two. A round that was parried
@@ -283,6 +284,26 @@ impl BossFx {
             Blast::Rail(strength) => self.rail_blast(held.at, held.radius, strength),
             Blast::Siege => self.detonate(held.at, held.radius),
             Blast::Bastion => self.slug_impact(held.at, held.radius, held.color),
+            Blast::Spectrum => {
+                self.fueled_burst(
+                    held.at,
+                    Flash::Hit,
+                    Fuel::Spectrum,
+                    held.radius * 1.6,
+                    held.color,
+                    0.32,
+                );
+                self.burst(held.at, Flash::Phase, held.radius * 2.4, held.color, 0.52);
+                self.spray(Spray {
+                    at: held.at,
+                    heading: None,
+                    count: self.look.many(22.),
+                    speed: (120., 580.),
+                    life: (0.18, 0.52),
+                    size: (1.4, 3.),
+                    color: held.color,
+                });
+            }
         }
     }
 
@@ -292,7 +313,12 @@ impl BossFx {
         while index < self.gone.len() {
             if self.gone[index].due {
                 let round = self.gone.swap_remove(index);
-                self.stream_hit(round.at, round.radius);
+                let silk = self
+                    .bosses
+                    .get(&round.owner)
+                    .filter(|p| p.kind == Some(BossKind::Jester))
+                    .map(|p| p.round_color(round.id));
+                self.stream_hit(round.at, round.radius, silk);
             } else {
                 self.gone[index].due = true;
                 index += 1;
@@ -316,7 +342,12 @@ impl BossFx {
         let shown = self.bosses.get(&boss)?;
         Some(match style {
             ClashStyle::Beam | ClashStyle::Rail => {
-                shown.pos + V2::from_angle(shown.aim) * shown.radius * RAIL_MUZZLE
+                let muzzle = if shown.kind == Some(BossKind::Jester) {
+                    tankyard_core::encounters::CARD_MUZZLE
+                } else {
+                    RAIL_MUZZLE
+                };
+                shown.pos + V2::from_angle(shown.aim) * shown.radius * muzzle
             }
             ClashStyle::Siege | ClashStyle::Bastion => {
                 shown.pos + (from - shown.pos).normalized() * shown.radius * 0.72
@@ -345,8 +376,13 @@ impl BossFx {
             .iter()
             .filter(|(id, _)| clash_names(bits, **id))
             .min_by(|a, b| {
-                (a.1.kind != Some(gun))
-                    .cmp(&(b.1.kind != Some(gun)))
+                let carries = |kind| {
+                    kind == Some(gun)
+                        || kind == Some(BossKind::Jester)
+                        || (kind == Some(BossKind::Carillon) && style == ClashStyle::Bastion)
+                };
+                carries(b.1.kind)
+                    .cmp(&carries(a.1.kind))
                     .then(a.1.pos.distance(at).total_cmp(&b.1.pos.distance(at)))
             })
             .map_or(0, |(id, _)| *id)
@@ -812,7 +848,17 @@ impl BossFx {
                 rest[length] = head;
                 length += 1;
                 let half = BEAM_ROUND_RADIUS * 1.3 * view.zoom;
-                stream(light, &rest[..length], half, clash.age + 1., level, true);
+                stream(
+                    light,
+                    &rest[..length],
+                    half,
+                    clash.age + 1.,
+                    level,
+                    true,
+                    self.bosses
+                        .get(&clash.boss)
+                        .is_some_and(|p| p.kind == Some(BossKind::Jester)),
+                );
                 for fork in 0..3 {
                     let seed = clash.seed + fork as f32 * 3.1 + (clash.age * 40.).floor() * 1.9;
                     let out = way * -(0.4 + 0.5 * (seed * 2.1).sin().abs())

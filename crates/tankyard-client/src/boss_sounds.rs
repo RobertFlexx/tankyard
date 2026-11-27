@@ -8,6 +8,10 @@ use crate::sound_kit::{Flanger, Room, finish, in_room, limit, low_shelf, samples
 pub fn make(cue: BossCue) -> Vec<f32> {
     use BossCue::*;
     let (seconds, room, tail) = match cue {
+        JesterArrival => (3.1, Room::HALL, 0.95),
+        MaskChange => (0.62, Room::SMALL, 0.21),
+        CarillonArrival => (3.15, Room::ARENA, 1.05),
+        HammerLift => (1.05, Room::HALL, 0.38),
         Charge => (1.05, Room::SMALL, 0.35),
         Lock => (0.4, Room::SMALL, 0.2),
         Shot | ClashIon | ClashFire => (1.7, Room::ARENA, 0.85),
@@ -22,6 +26,29 @@ pub fn make(cue: BossCue) -> Vec<f32> {
     };
     let mut out = vec![0.; samples_in(seconds)];
     match cue {
+        JesterArrival => {
+            layer(&mut out, Laugh, 0., 1., 1.);
+            // A reflection from the far end of the hall behind the dry voice.
+            layer(&mut out, Laugh, 0.138, 0.99, 0.14);
+        }
+        MaskChange => {
+            layer(&mut out, Click, 0., 0.9, 0.58);
+            layer(&mut out, Bell, 0.028, 1.65, 0.6);
+            layer(&mut out, Bell, 0.13, 1.29, 0.35);
+        }
+        CarillonArrival => {
+            for (at, rate) in [(0., 0.72), (0.78, 0.9), (1.63, 0.54)] {
+                layer(&mut out, MetalHit, at, rate, 0.38);
+                layer(&mut out, Gong, at + 0.012, rate, 0.84);
+                layer(&mut out, Bell, at + 0.018, rate * 1.5, 0.42);
+            }
+            layer(&mut out, Steam, 1.66, 0.85, 0.18);
+        }
+        HammerLift => {
+            reverse(&mut out, MetalSheet, 0., 1.45, 0.47);
+            layer(&mut out, MetalSpring, 0.015, 0.82, 0.51);
+            layer(&mut out, Bell, 0.31, 0.63, 0.64);
+        }
         Charge => {
             reverse(&mut out, MetalSpring, 0., 0.6, 0.7);
             reverse(&mut out, MetalSheet, 0.25, 0.75, 0.4);

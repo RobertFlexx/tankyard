@@ -90,7 +90,18 @@ impl BossFx {
         };
         let charge = shown.charge;
         let level = self.look.level();
-        let color = shown.color;
+        let color = match boss.kind {
+            tankyard_core::BossKind::Jester => {
+                let (source, _) = boss.attack_style();
+                if source == boss.kind {
+                    tankyard_client::boss_model::silk(time * 0.055 + 0.85)
+                } else {
+                    tankyard_client::boss_model::boss_color(source)
+                }
+            }
+            tankyard_core::BossKind::Carillon => tankyard_client::boss_model::FURNACE,
+            _ => shown.color,
+        };
         let calm = self.look.calm;
         let pulse = if calm {
             0.5
@@ -99,6 +110,48 @@ impl BossFx {
         } else {
             0.5 + 0.5 * (time * 1.6).sin()
         };
+        if boss.kind == tankyard_core::BossKind::Jester && self.look.live() {
+            let tips = tankyard_client::boss_model::bell_tips(
+                p,
+                r,
+                shown.aim,
+                shown.bells.map(|b| b.angle),
+            );
+            for (i, at) in tips.into_iter().enumerate() {
+                let dye = tankyard_client::boss_model::silk(time * 0.055 + i as f32 / 3. + 0.17);
+                light.spot(
+                    Layer::Wash,
+                    at,
+                    r * (0.32 + 0.17 * charge),
+                    alpha(dye, (0.3 + charge * 0.4) * level),
+                );
+            }
+        }
+        if boss.kind == tankyard_core::BossKind::Carillon && self.look.live() {
+            // Furnace draft climbs up the two stacks, then strikes the nozzle
+            // collars. The same local offsets place the ironwork on the hull.
+            let forward = direction(shown.aim);
+            for side in [-1., 1.] {
+                let stack = p + forward.rotate(vec2(-0.75, side * 0.38)) * r;
+                let heat = (0.38 + 0.16 * pulse + charge * 0.43) * level;
+                light.spot(Layer::Wash, stack, r * 0.34, alpha(ramp(0.63), heat * 0.65));
+                light.spot(Layer::Core, stack, r * 0.086, alpha(ramp(0.12), heat));
+            }
+            if charge > 0.03 {
+                for lane in [-0.25, 0., 0.25] {
+                    let gun = direction(shown.aim + lane);
+                    let lip = p + gun * r * 1.48;
+                    light.streak(
+                        Layer::Core,
+                        lip - gun.perp() * r * 0.095,
+                        lip + gun.perp() * r * 0.095,
+                        (r * 0.013).max(0.7),
+                        alpha(ramp(0.32), charge),
+                        alpha(ramp(0.12), charge),
+                    );
+                }
+            }
+        }
         // Charging always shows; it warns of the attack.
         light.spot(
             Layer::Wash,

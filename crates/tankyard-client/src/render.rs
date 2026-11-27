@@ -300,8 +300,53 @@ fn class_model_animated(
         },
     );
 }
+const PAINTED_PART_COUNT: usize = tankyard_client::boss_model::ModelArt::ALL.len();
+thread_local! {
+    static PAINTED_PARTS: std::cell::OnceCell<[Texture2D;PAINTED_PART_COUNT]> = const { std::cell::OnceCell::new() };
+}
+
+fn painted_parts(
+    slot: &std::cell::OnceCell<[Texture2D; PAINTED_PART_COUNT]>,
+) -> &[Texture2D; PAINTED_PART_COUNT] {
+    slot.get_or_init(|| {
+        tankyard_client::boss_model::ModelArt::ALL.map(|art| {
+            let texture = Texture2D::from_file_with_format(art.png(), Some(ImageFormat::Png));
+            texture.set_filter(FilterMode::Linear);
+            texture
+        })
+    })
+}
+
+pub fn prepare_boss_art() {
+    PAINTED_PARTS.with(|slot| {
+        painted_parts(slot);
+    });
+}
+
 pub(crate) fn draw_model_primitive(primitive: crate::tank_model::Primitive) {
     match primitive {
+        crate::tank_model::Primitive::Artwork {
+            vertices: [a, b, c, d],
+            art,
+        } => {
+            let size = vec2(a.distance(b), a.distance(d));
+            let center = crate::ui_layout::position((a + c) * 0.5);
+            let origin = center - size * 0.5;
+            PAINTED_PARTS.with(|slot| {
+                draw_texture_ex(
+                    &painted_parts(slot)[art as usize],
+                    origin.x,
+                    origin.y,
+                    WHITE,
+                    DrawTextureParams {
+                        dest_size: Some(size),
+                        rotation: (b - a).to_angle(),
+                        pivot: Some(center),
+                        ..Default::default()
+                    },
+                )
+            });
+        }
         crate::tank_model::Primitive::Polygon {
             center,
             sides,
@@ -600,6 +645,10 @@ pub fn world(
                         color,
                     }
                 }
+                Primitive::Artwork { vertices, art } => Primitive::Artwork {
+                    vertices: vertices.map(&emblem_screen),
+                    art,
+                },
                 Primitive::Quad { vertices, color } => Primitive::Quad {
                     vertices: vertices.map(&emblem_screen),
                     color,
@@ -900,7 +949,9 @@ pub fn world(
         let star = effects
             .boss_fx
             .is_star_round(projectile.owner, projectile.id);
-        let c = if star {
+        let c = if boss.is_some_and(|b| b.kind == tankyard_core::BossKind::Jester) {
+            tankyard_client::boss_model::shot_silk(projectile.id, boss_time)
+        } else if star {
             crate::accessibility::palette(tankyard_client::boss_model::AXIOM_GOLD)
         } else {
             boss.map(|b| tankyard_client::boss_model::boss_color(b.kind))
@@ -1090,16 +1141,27 @@ pub fn world(
                 mark,
                 boss_time,
             );
-            if boss.attack_windup > 0. {
-                effects.boss_fx.warning(
-                    &mut light,
-                    view,
-                    boss,
-                    position,
-                    snapshot.walls.iter().map(scaled),
-                    boss_time,
-                );
-            }
+        }
+        let distant_warning = railgunner
+            || matches!(
+                boss.attack_style(),
+                (
+                    tankyard_core::BossKind::Railgunner
+                        | tankyard_core::BossKind::SiegeEngine
+                        | tankyard_core::BossKind::Bastion
+                        | tankyard_core::BossKind::Carillon,
+                    0 | 1
+                )
+            );
+        if distant_warning && boss.attack_windup > 0. {
+            effects.boss_fx.warning(
+                &mut light,
+                view,
+                boss,
+                position,
+                snapshot.walls.iter().map(scaled),
+                boss_time,
+            );
         }
         let reach = if railgunner {
             boss.radius * 2.6
@@ -1112,7 +1174,7 @@ pub fn world(
         let p = view.screen(position) + effects.boss_fx.kick(boss, z);
         let r = boss.radius * z;
         let aim = effects.boss_fx.aim(boss);
-        if boss.attack_windup > 0. && !railgunner {
+        if boss.attack_windup > 0. && !distant_warning {
             effects.boss_fx.warning(
                 &mut light,
                 view,
@@ -1130,8 +1192,10 @@ pub fn world(
         let color = boss_tint(boss, settings.colorblind);
         let turn = (f64::from(animation_time) * f64::from(boss.kind.spin()))
             .rem_euclid(std::f64::consts::TAU) as f32;
+        let pose = effects.boss_fx.model_pose(boss);
         let armor = {
-            let (sides, size, angle) = tankyard_client::boss_model::armor(boss.kind, aim, turn);
+            let (sides, size, angle) =
+                tankyard_client::boss_model::armor(boss.kind, pose.chassis.unwrap_or(aim), turn);
             crate::boss_fx::Armor { sides, size, angle }
         };
         tankyard_client::boss_model::boss_model_geometry(
@@ -1147,7 +1211,7 @@ pub fn world(
                 phase: boss.phase,
                 charge,
                 lit: true,
-                ..effects.boss_fx.rail_pose(boss)
+                ..pose
             },
             boss.mothership.then_some(color),
             &mut draw_model_primitive,

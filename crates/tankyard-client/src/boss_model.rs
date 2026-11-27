@@ -5,6 +5,11 @@ use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 use tankyard_core::BossKind;
 use tankyard_core::creator_boss::{CANNONS, MUZZLE};
 
+mod art;
+mod rare;
+pub use art::ModelArt;
+pub use rare::{FURNACE, bell_tips, shot_silk, silk};
+
 pub fn boss_color(kind: BossKind) -> Color {
     match kind {
         BossKind::Guardian => Color::new(1., 0.47, 0.86, 1.),
@@ -20,6 +25,8 @@ pub fn boss_color(kind: BossKind) -> Color {
         BossKind::SiegeEngine => Color::new(0.69, 0.62, 0.41, 1.),
         BossKind::Skirmisher => Color::new(0.25, 0.67, 0.77, 1.),
         BossKind::Trapper => Color::new(0.75, 0.47, 0.31, 1.),
+        BossKind::Jester => Color::new(0.63, 0.28, 0.76, 1.),
+        BossKind::Carillon => Color::new(0.72, 0.45, 0.23, 1.),
         BossKind::Railgunner => RAIL_ION,
         BossKind::Sunderworm => crate::worm_model::FLESH,
     }
@@ -117,6 +124,8 @@ fn shard(emit: &mut impl FnMut(Primitive), vertices: [Vec2; 3], color: Color, ed
 pub struct Pose {
     /// Where its guns point.
     pub aim: f32,
+    /// Bearing of a tracked chassis beneath an independently traversing turret.
+    pub chassis: Option<f32>,
     /// The angle of its turning launchers, from `BossKind::turn`.
     pub turn: f32,
     /// Seconds, for slow decorative motion; held still when motion is
@@ -138,6 +147,10 @@ pub struct Pose {
     /// How far its barrel has split open for the beam: 0 shut, 1 fully open,
     /// and a little past either while it settles.
     pub open: f32,
+    /// Angular displacement of each of the Jester’s three bells.
+    pub bells: [f32; 3],
+    /// Boss whose attack the Jester has borrowed.
+    pub mask: Option<BossKind>,
 }
 
 /// Each boss's main armor: its sides, its size against the boss radius and
@@ -152,6 +165,8 @@ pub fn armor(kind: BossKind, aim: f32, turn: f32) -> (u8, f32, f32) {
         BossKind::Bastion => (4, 1., FRAC_PI_4),
         BossKind::FallenOverlord | BossKind::FallenBooster | BossKind::Eclipse => (0, 1., 0.),
         BossKind::Sentinel | BossKind::Trapper => (6, 1., aim + PI / 6.),
+        BossKind::Jester => (6, 0.84, aim),
+        BossKind::Carillon => (8, 0.94, aim + PI / 8.),
         BossKind::Railgunner => (8, 1., aim + PI / 8.),
         BossKind::Sunderworm => (0, 1., 0.),
     }
@@ -164,6 +179,8 @@ pub fn core_position(kind: BossKind, p: Vec2, r: f32, aim: f32) -> Vec2 {
         BossKind::Sentinel => p + ahead * r * 0.5,
         BossKind::Guardian => p - ahead * r * 0.12,
         BossKind::Tempest | BossKind::Skirmisher => p + ahead * r * 0.12,
+        BossKind::Jester => rare::jewel(p, r, aim),
+        BossKind::Carillon => p + ahead * r * 0.59,
         BossKind::Eclipse => p - ahead * r * 0.5,
         _ => p,
     }
@@ -244,6 +261,8 @@ pub fn boss_model_geometry(
     match kind {
         // Its body runs the length of its path, drawn by `worm_model`; this
         // is the curled-up version for cards and the model sheet.
+        BossKind::Jester => rare::jester(p, r, pose, emit),
+        BossKind::Carillon => rare::carillon(p, r, pose, emit),
         BossKind::Sunderworm => crate::worm_model::worm_card_geometry(p, r, time, emit),
         BossKind::Sentinel => {
             // A hexagonal watchtower: two heavy guns side by side under a
@@ -531,35 +550,49 @@ pub fn boss_model_geometry(
         BossKind::SiegeEngine => {
             // Two long treads, a square hull, and on its turret ring one
             // huge gun with a muzzle brake. Everything it fires leaves it.
+            let body = pose.chassis.unwrap_or(aim);
+            let drive = Vec2::from_angle(body);
+            let axle = drive.perp();
             for side in [-1., 1.] {
-                let track = p + across * side * r * 0.64;
-                plate(emit, track, vec2(r * 1.46, r * 0.4), aim, OUTLINE);
+                let track = p + axle * side * r * 0.64;
+                plate(emit, track, vec2(r * 1.46, r * 0.4), body, OUTLINE);
                 plate(
                     emit,
                     track,
                     vec2(r * 1.46 - edge * 2., r * 0.4 - edge * 2.),
-                    aim,
+                    body,
                     tint(color, 0.5),
                 );
                 for n in -3..=3 {
                     plate(
                         emit,
-                        track + ahead * n as f32 * r * 0.19,
+                        track + drive * n as f32 * r * 0.19,
                         vec2(edge * 0.9, r * 0.3),
-                        aim,
+                        body,
                         OUTLINE,
                     );
                 }
             }
-            hull(emit, p, 4, r * 0.8, aim + FRAC_PI_4, color, edge);
+            hull(emit, p, 4, r * 0.8, body + FRAC_PI_4, color, edge);
             plate(
                 emit,
-                p - ahead * r * 0.42,
+                p - drive * r * 0.42,
                 vec2(r * 0.16, r * 0.7),
-                aim,
+                body,
                 dark,
             );
+            hull(emit, p, 12, r * 0.48, body, tint(color, 0.57), edge * 0.4);
             cannon_profile(emit, p, aim, r * 1.62, r * 0.34, color, 0., 1., Some(edge));
+            for side in [-1., 1.] {
+                let mount = p + across * side * r * 0.17;
+                bar(
+                    emit,
+                    (mount + ahead * r * 0.25, mount + ahead * r * 0.68),
+                    (r * 0.047, r * 0.034),
+                    dark,
+                    edge * 0.3,
+                );
+            }
             let brake = p + ahead * r * 1.48;
             plate(emit, brake, vec2(r * 0.28, r * 0.5), aim, OUTLINE);
             plate(
@@ -1412,9 +1445,9 @@ mod tests {
                         vec![center - Vec2::splat(radius), center + Vec2::splat(radius)]
                     }
                     Primitive::Triangle { vertices, .. } => vertices.to_vec(),
-                    Primitive::Quad { vertices, .. } | Primitive::ShadedQuad { vertices, .. } => {
-                        vertices.to_vec()
-                    }
+                    Primitive::Artwork { vertices, .. }
+                    | Primitive::Quad { vertices, .. }
+                    | Primitive::ShadedQuad { vertices, .. } => vertices.to_vec(),
                 };
                 for point in points {
                     assert!(point.is_finite() && point.length() < r * 2.);
@@ -1481,7 +1514,8 @@ mod tests {
                             vec![center - Vec2::splat(radius), center + Vec2::splat(radius)]
                         }
                         Primitive::Triangle { vertices, .. } => vertices.to_vec(),
-                        Primitive::Quad { vertices, .. }
+                        Primitive::Artwork { vertices, .. }
+                        | Primitive::Quad { vertices, .. }
                         | Primitive::ShadedQuad { vertices, .. } => vertices.to_vec(),
                     };
                     for point in points {
@@ -1517,7 +1551,8 @@ mod tests {
                             vec![center - Vec2::splat(radius), center + Vec2::splat(radius)]
                         }
                         Primitive::Triangle { vertices, .. } => vertices.to_vec(),
-                        Primitive::Quad { vertices, .. }
+                        Primitive::Artwork { vertices, .. }
+                        | Primitive::Quad { vertices, .. }
                         | Primitive::ShadedQuad { vertices, .. } => vertices.to_vec(),
                     };
                     for point in points {

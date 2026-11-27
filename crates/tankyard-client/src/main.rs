@@ -2063,12 +2063,30 @@ impl App {
                     self.settings.effects
                 },
             );
-            if sounds
+            let arrivals = sounds
                 .iter()
-                .any(|event| matches!(event.kind, tankyard_core::EventKind::BossSpawn))
+                .filter(|event| matches!(event.kind, tankyard_core::EventKind::BossSpawn));
+            if let Some(arrival) = arrivals
+                .map(|event| tankyard_core::BossKind::from_index(event.value))
+                .max_by_key(|kind| match kind {
+                    Some(tankyard_core::BossKind::Carillon) => 2,
+                    Some(tankyard_core::BossKind::Jester) => 1,
+                    _ => 0,
+                })
             {
-                self.voice
-                    .boss_alarm(self.settings.master_volume * self.settings.effects_volume);
+                let cue = match arrival {
+                    Some(tankyard_core::BossKind::Jester) => {
+                        Some(map_sounds::BossCue::JesterArrival)
+                    }
+                    Some(tankyard_core::BossKind::Carillon) => {
+                        Some(map_sounds::BossCue::CarillonArrival)
+                    }
+                    _ => None,
+                };
+                self.voice.boss_alarm(
+                    cue,
+                    self.settings.master_volume * self.settings.effects_volume,
+                );
             }
             // Map sounds play where their trigger is, heard from the camera,
             // unless the map says they carry further or are for one tank.
@@ -3088,6 +3106,7 @@ async fn run(cli: Cli) {
     let mut native_resolution = native_resolution::NativeResolution::new(&initial_settings);
     ui::init_font();
     pocket_view::prepare();
+    render::prepare_boss_art();
     rifts::prepare();
     // The splash hands over the live arena it revealed, which the password
     // prompt and then the menu carry on drawing.

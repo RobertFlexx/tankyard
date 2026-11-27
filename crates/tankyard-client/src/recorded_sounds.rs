@@ -25,10 +25,11 @@ pub enum Foley {
     Bell,
     Gong,
     Horn,
+    Laugh,
 }
 
 impl Foley {
-    const ALL: [Self; 21] = [
+    const ALL: [Self; 22] = [
         Self::MetalHit,
         Self::MetalSlam,
         Self::MetalSheet,
@@ -50,6 +51,7 @@ impl Foley {
         Self::Bell,
         Self::Gong,
         Self::Horn,
+        Self::Laugh,
     ];
 
     fn bytes(self) -> &'static [u8] {
@@ -80,6 +82,7 @@ impl Foley {
             Self::Bell => clip!("bell"),
             Self::Gong => clip!("gong"),
             Self::Horn => clip!("horn"),
+            Self::Laugh => clip!("jester-laugh"),
         }
     }
 

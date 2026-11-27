@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="jb-shell" cx=".32" cy=".22" r=".81"><stop stop-color="#fff5cb"/><stop offset=".22" stop-color="#edc77e"/><stop offset=".53" stop-color="#ba8648"/><stop offset=".70" stop-color="#c09049"/><stop offset=".88" stop-color="#835928"/><stop offset="1" stop-color="#4f3f34"/></radialGradient>
+    <linearGradient id="jb-rim" x2="1" y2=".22"><stop stop-color="#5c442e"/><stop offset=".24" stop-color="#efc77f"/><stop offset=".43" stop-color="#fff2b6"/><stop offset=".84" stop-color="#ac7838"/><stop offset="1" stop-color="#63513a"/></linearGradient>
+  </defs>
+  <path d="M25 12Q23 3 30 3Q38 1 38 11" fill="none" stroke="#66503a" stroke-width="4"/>
+  <path d="M25 10Q25 3 30 3Q36 2 37 8" fill="none" stroke="#e1b771" stroke-width="2"/>
+  <circle cx="32" cy="35" r="26" fill="url(#jb-shell)" stroke="#4b4039" stroke-width="2"/>
+  <path d="M7 32C19 39 42 39 57 29" fill="none" stroke="#654e33" stroke-width="3"/>
+  <path d="M7 31C20 37 42 37 57 28" fill="none" stroke="url(#jb-rim)" stroke-width="2.6"/>
+  <path d="M15 43C21 52 36 53 47 42" fill="none" stroke="#4c3a28" stroke-width="2.3"/>
+  <ellipse cx="16" cy="44" rx="2.1" ry="3.7" transform="rotate(-34 16 44)" fill="#473726"/>
+  <ellipse cx="47" cy="42" rx="2.1" ry="3.6" transform="rotate(38 47 42)" fill="#473726"/>
+  <path d="M17 24Q20 17 27 16" stroke="#fff1c0" stroke-width="2.3" stroke-linecap="round" fill="none" opacity=".8"/>
+</svg>

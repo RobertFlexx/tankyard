@@ -550,7 +550,7 @@ impl VoiceChat {
         }
     }
 
-    pub fn boss_alarm(&mut self, volume: f32) {
+    pub fn boss_alarm(&mut self, cue: Option<crate::map_sounds::BossCue>, volume: f32) {
         self.poll_errors();
         if self.disabled || !volume.is_finite() || volume <= 0. {
             return;
@@ -565,7 +565,10 @@ impl VoiceChat {
             }
         }
         // Generate or fetch the cached clip before taking the audio lock.
-        let samples = crate::map_sounds::arrival_samples();
+        let samples = cue.map_or_else(
+            crate::map_sounds::arrival_samples,
+            crate::map_sounds::boss_samples,
+        );
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.alarm.clear();
             mixer.alarm.extend(samples.iter().copied());
@@ -613,7 +616,7 @@ impl VoiceChat {
             return Err("Raise Master volume and Effects volume to hear the preview.".into());
         }
         self.output_retry = None; // An explicit preview may retry a newly connected device.
-        self.boss_alarm(volume);
+        self.boss_alarm(None, volume);
         if self.output.is_none() {
             Err(self
                 .error

@@ -104,6 +104,7 @@ impl Presence {
             aim: item.aim,
             aim_rate: 0.,
             aim_target: item.aim,
+            chassis: item.aim,
             aim_drive: 0.,
             charge: 0.,
             heat: 0.,
@@ -122,6 +123,7 @@ impl Presence {
             drive: Vec2::ZERO,
             exhaust_aim: item.aim,
             rail: super::railgun::RailShown::default(),
+            bells: Default::default(),
             exhaust: super::exhaust_for(item.pos, color, Fuel::Star),
         }
     }

@@ -46,6 +46,9 @@ struct Grudge {
 /// travels in a snapshot.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Mind {
+    pub(crate) gun: u8,
+    pub(crate) salvo: Option<crate::encounters::Salvo>,
+    jester_played: u64,
     pub(crate) trap_spiral: Option<crate::bosses::TrapSpiral>,
     grudges: [Grudge; GRUDGES],
     /// Last damage-record tick read, so an evicted old attacker cannot be
@@ -138,6 +141,8 @@ fn temperament(kind: BossKind) -> Temperament {
         Tempest => ([1.6, 1.0, 1.1, 1.0, 0.0, 0.0, -0.6], 4., 0.5),
         // Gunners swing to what's in front and answer whoever stings them.
         Sentinel => ([1.2, 1.7, 0.7, 1.5, 0.2, 0.9, -0.6], 4., 0.6),
+        Jester => ([1.4, 1.1, 1.5, 1.2, 0.4, 0.7, -0.9], 4.1, 0.4),
+        Carillon => ([1.2, 1.8, 2.3, 0.8, 0.9, 1.1, -0.4], 4.4, 0.7),
         Prism | Eclipse => ([1.0, 1.3, 1.7, 0.7, 0.1, 0.3, -0.4], 3.6, 0.5),
         // Swarms go where the crowd is.
         Guardian | Summoner | FallenOverlord | Foundry => {
@@ -305,7 +310,20 @@ impl Mind {
         // Every boss opens with its signature.
         if self.recent == [0, 0] {
             self.recent = [1, 0];
+            if kind == BossKind::Jester {
+                self.jester_played = 1;
+            }
             return 0;
+        }
+        if kind == BossKind::Jester {
+            let chosen = crate::encounters::choose_act(
+                self.recent[0] - 1,
+                &mut self.jester_played,
+                scene,
+                roll,
+            );
+            self.recent = [chosen + 1, self.recent[0]];
+            return chosen;
         }
         let mut weights = [0_f32; 3];
         for (attack, weight) in weights.iter_mut().enumerate() {
@@ -360,7 +378,7 @@ pub(crate) struct Fit {
 }
 
 impl Fit {
-    fn suits(&self, scene: &Scene) -> f32 {
+    pub(crate) fn suits(&self, scene: &Scene) -> f32 {
         let (near, far) = self.range;
         let outside = if scene.range < near {
             (near - scene.range) / near.max(1.)
@@ -421,6 +439,12 @@ pub(crate) fn special_fit(kind: BossKind, attack: u8) -> Fit {
         (Foundry, 0) => fit((250., 800.), 0.5, 0.3, 0.),
         (Foundry, 1) => fit((150., 600.), 1., 0., 0.3),
         (Foundry, _) => fit((300., 900.), 0.3, 0.6, 0.7),
+        (Carillon, 0) => fit((440., 1450.), 0.2, -0.4, 0.),
+        (Carillon, 1) => fit((200., 920.), 0.9, 0.8, 0.3),
+        (Carillon, _) => fit((80., 620.), 1., 0.4, 0.8),
+        (Jester, 0) => fit((300., 1000.), 0.6, 0.7, 0.),
+        (Jester, 1) => fit((120., 700.), 1., 0.4, 0.3),
+        (Jester, _) => fit((120., 560.), 0.5, 0.2, 0.8),
         (Railgunner | Sunderworm, _) => fit((0., 2000.), 0., 0., 0.),
     }
 }

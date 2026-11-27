@@ -540,9 +540,10 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<Snapshot, DecodeError> {
     let raw = lz4_flex::decompress_size_prepended(bytes)
         .map_err(|_| DecodeError("invalid compressed state"))?;
     let mut state: Snapshot = decode(&raw, MAX_STATE_BYTES)?;
-    // The Railgunner travels as a Siege Engine of a size no other boss has.
     for boss in &mut state.bosses {
-        boss.kind = boss.kind.from_wire(boss.radius);
+        if !boss.restore_encounter() {
+            return Err(DecodeError("unknown encounter attack"));
+        }
     }
     if !snapshot_valid(&state) {
         return Err(DecodeError("invalid snapshot values"));
@@ -704,8 +705,10 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && scalar(b.tactic_time)
                 && scalar(b.arrival)
                 && (-tankyard_core::BOSS_AIM_HOLD..=30.).contains(&b.attack_timer)
-                && (0.0..=b.kind.windup()).contains(&b.attack_windup)
-                && b.attack <= 2
+                && (0.0..=b.warning_seconds()).contains(&b.attack_windup)
+                && (b.attack <= 2
+                    || (b.kind == BossKind::Jester
+                        && tankyard_core::encounters::jester_act(b.attack).is_some()))
                 && (1..=3).contains(&b.phase)
                 && b.team <= 4
         })
@@ -1052,7 +1055,7 @@ mod tests {
             for phase in 1..=3 {
                 snapshot.bosses[0].phase = phase;
                 snapshot.bosses[0].attack = phase - 1;
-                snapshot.bosses[0].attack_windup = kind.windup();
+                snapshot.bosses[0].attack_windup = snapshot.bosses[0].warning_seconds();
                 for timer in [-BOSS_AIM_HOLD, -DT, 0., 7., 30.] {
                     snapshot.bosses[0].attack_timer = timer;
                     let restored = decode_snapshot(&encode_snapshot(&snapshot).unwrap());
@@ -1128,6 +1131,43 @@ mod tests {
             }
             assert!(decode_snapshot(&encode_snapshot(&bad).unwrap()).is_err());
         }
+    }
+
+    #[test]
+    fn rare_encounters_survive_a_mid_cast_join_on_protocol_35() {
+        use tankyard_core::{BossKind, World, WorldConfig, encounters::jester_act};
+        let mut world = World::new(WorldConfig::default(), Content::builtin());
+        assert_ne!(world.spawn_boss(BossKind::Jester), 0);
+        assert_ne!(world.spawn_boss(BossKind::Carillon), 0);
+        let mut snapshot = world.snapshot();
+        for act in (0..=u8::MAX).take_while(|&i| jester_act(i).is_some()) {
+            for (boss, attack) in snapshot.bosses.iter_mut().zip([act, act % 3]) {
+                boss.attack = attack;
+                boss.attack_windup = boss.warning_seconds();
+            }
+            let bytes = encode_snapshot(&snapshot).unwrap();
+            let raw = lz4_flex::decompress_size_prepended(&bytes).unwrap();
+            let legacy: Snapshot = decode(&raw, MAX_STATE_BYTES).unwrap();
+            for boss in &legacy.bosses {
+                assert!(BossKind::COMMON.contains(&boss.kind) && boss.attack <= 2);
+                assert!(boss.attack_windup <= boss.kind.windup());
+            }
+            assert!(snapshot_valid(&legacy));
+            let received = decode_snapshot(&bytes).unwrap();
+            for (current, sent) in received.bosses.iter().zip(&snapshot.bosses) {
+                assert_eq!(
+                    (
+                        current.id,
+                        current.kind,
+                        current.attack,
+                        current.attack_windup
+                    ),
+                    (sent.id, sent.kind, sent.attack, sent.attack_windup)
+                );
+            }
+        }
+        snapshot.bosses[0].attack = u8::MAX;
+        assert!(encode_snapshot(&snapshot).is_err());
     }
 
     #[test]

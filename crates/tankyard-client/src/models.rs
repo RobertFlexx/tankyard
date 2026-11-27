@@ -87,7 +87,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         include(point);
                     }
                 }
-                Primitive::Quad { vertices, .. } | Primitive::ShadedQuad { vertices, .. } => {
+                Primitive::Artwork { vertices, .. }
+                | Primitive::Quad { vertices, .. }
+                | Primitive::ShadedQuad { vertices, .. } => {
                     for point in vertices {
                         include(point);
                     }
@@ -151,6 +153,15 @@ fn export_bosses(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let mut svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\"><rect width=\"100%\" height=\"100%\" fill=\"#cdcdcd\"/>"
     );
+    for art in tankyard_client::boss_model::ModelArt::ALL {
+        writeln!(
+            svg,
+            "<defs><g id=\"boss-art-{}\">{}</g></defs>",
+            art as usize,
+            art.svg()
+        )
+        .unwrap();
+    }
     for (index, kind) in BossKind::ALL.into_iter().enumerate() {
         let x = (index % columns) as f32 * 360. + 180.;
         let y = (index / columns) as f32 * 320. + 145.;
@@ -158,6 +169,10 @@ fn export_bosses(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         // and centered on its whole length rather than on its turret.
         let (size, back) = if kind == BossKind::Railgunner {
             (72., 34.)
+        } else if kind == BossKind::Carillon {
+            (106., 12.)
+        } else if kind == BossKind::Jester {
+            (88., 0.)
         } else {
             (kind.radius() * 0.9, 0.)
         };
@@ -326,6 +341,15 @@ fn write_primitive(svg: &mut String, primitive: Primitive) {
                 })
                 .collect::<Vec<_>>();
             (vertices, color)
+        }
+        Primitive::Artwork {
+            vertices: [a, b, _, d],
+            art,
+        } => {
+            let u = (b - a) / art.size().x;
+            let v = (d - a) / art.size().y;
+            writeln!(svg,r##"<use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#boss-art-{}" transform="matrix({} {} {} {} {} {})"/>"##,art as usize,u.x,u.y,v.x,v.y,a.x,a.y).unwrap();
+            return;
         }
         Primitive::Triangle { vertices, color } => (vertices.to_vec(), color),
         Primitive::Quad { vertices, color }

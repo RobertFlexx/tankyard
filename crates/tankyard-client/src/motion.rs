@@ -388,7 +388,9 @@ fn silhouette(primitive: Primitive, color: Color, outline: f32) {
         Primitive::Triangle { vertices, .. } => {
             draw_triangle(vertices[0], vertices[1], vertices[2], color);
         }
-        Primitive::Quad { vertices, .. } | Primitive::ShadedQuad { vertices, .. } => {
+        Primitive::Artwork { vertices, .. }
+        | Primitive::Quad { vertices, .. }
+        | Primitive::ShadedQuad { vertices, .. } => {
             draw_triangle(vertices[0], vertices[1], vertices[2], color);
             draw_triangle(vertices[0], vertices[2], vertices[3], color);
         }

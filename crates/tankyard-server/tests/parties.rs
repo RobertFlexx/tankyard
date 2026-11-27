@@ -258,6 +258,8 @@ fn boss_special_aim_holds_and_long_warnings_keep_both_party_clients_connected() 
         BossKind::FallenOverlord,
         BossKind::SiegeEngine,
         BossKind::Bastion,
+        BossKind::Jester,
+        BossKind::Carillon,
     ] {
         let world = &mut server.arenas[0].session.world;
         world.config.dynamic_arena = false;
@@ -290,6 +292,7 @@ fn boss_special_aim_holds_and_long_warnings_keep_both_party_clients_connected() 
                     .as_ref()
                     .and_then(|snapshot| snapshot.bosses.iter().find(|boss| boss.id == boss_id))
                 {
+                    assert_eq!(boss.kind, kind);
                     waited[index] |= boss.attack_timer < 0.;
                     warned[index] |= boss.attack_windup > kind.windup() - 0.1;
                 }

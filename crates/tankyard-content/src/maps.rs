@@ -511,7 +511,7 @@ pub enum TriggerWhen {
     Shown,
     /// When group `source` is hidden after being shown.
     Hidden,
-    /// When a boss is defeated: boss `source` of [`BOSS_IDS`], counting from
+    /// When a boss is defeated: its stable encounter number, counting from
     /// 1, or any boss for 0.
     Defeated,
     /// When a motion of group `source` ends: a Move, Move to, Turn or Fade,
@@ -2483,7 +2483,7 @@ pub const ZOOM_SECONDS: f32 = 60.;
 pub const ZOOM_EASE: f32 = 10.;
 /// Stable IDs accepted by map boss triggers. Core verifies this catalog stays
 /// in sync with its boss enum.
-pub const BOSS_IDS: [&str; 15] = [
+pub const BOSS_IDS: [&str; 17] = [
     "sentinel",
     "prism",
     "foundry",
@@ -2499,6 +2499,8 @@ pub const BOSS_IDS: [&str; 15] = [
     "skirmisher",
     "trapper",
     "railgunner",
+    "jester",
+    "carillon",
 ];
 /// Hidden encounters that authored maps and packs may explicitly request.
 pub const SECRET_BOSS_IDS: [&str; 1] = ["sunderworm"];

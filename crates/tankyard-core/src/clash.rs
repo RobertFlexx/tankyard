@@ -153,12 +153,14 @@ impl World {
     /// through anything but a parry made at the last moment facing them.
     pub(crate) fn misses_rail(&self, projectile: usize, defender: usize, ability: Ability) -> bool {
         let shot = &self.projectiles[projectile];
-        let railgunner = self
-            .bosses
-            .iter()
-            .any(|boss| boss.id == shot.owner && boss.kind == BossKind::Railgunner);
-        if !railgunner || style_of(BossKind::Railgunner, shot.kind, shot.vel, shot.damage).is_none()
-        {
+        if shot.kind != ProjectileKind::Shell && !is_beam_round(shot.kind, shot.vel) {
+            return false;
+        }
+        let rail = self.bosses.iter().any(|boss| {
+            boss.id == shot.owner
+                && boss.kind.cannon_source(shot.kind, shot.radius, shot.vel) == BossKind::Railgunner
+        });
+        if !rail {
             return false;
         }
         let tank = &self.tanks[defender];
@@ -190,7 +192,12 @@ impl World {
         if boss.clash.wait > 0. {
             return false;
         }
-        let Some((style, weight)) = style_of(boss.kind, round, vel, round_damage) else {
+        let Some((style, weight)) = style_of(
+            boss.kind.cannon_source(round, shot.radius, vel),
+            round,
+            vel,
+            round_damage,
+        ) else {
             return false;
         };
         let tank = &mut self.tanks[defender];

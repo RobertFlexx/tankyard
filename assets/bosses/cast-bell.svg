@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200" viewBox="0 0 200 200">
+ <defs>
+  <linearGradient id="cb-rim" x1="0" y1="0" x2=".9" y2="1"><stop stop-color="#6b4832"/><stop offset=".2" stop-color="#efd391"/><stop offset=".4" stop-color="#c18743"/><stop offset=".54" stop-color="#694b38"/><stop offset=".81" stop-color="#a87c50"/><stop offset="1" stop-color="#3e403a"/></linearGradient>
+  <radialGradient id="cb-bronze" cx=".33" cy=".27" r=".79"><stop stop-color="#e4bd75"/><stop offset=".24" stop-color="#cf9957"/><stop offset=".51" stop-color="#ac784c"/><stop offset=".75" stop-color="#79583f"/><stop offset="1" stop-color="#41483f"/></radialGradient>
+  <linearGradient id="cb-crown" x2="1" y2=".7"><stop stop-color="#826742"/><stop offset=".21" stop-color="#e6c384"/><stop offset=".57" stop-color="#a47a4a"/><stop offset="1" stop-color="#514936"/></linearGradient>
+  <radialGradient id="cb-glaze" cx=".33" cy=".19" r=".88"><stop stop-color="#fff3cb" stop-opacity=".51"/><stop offset=".32" stop-color="#fff2c8" stop-opacity="0"/><stop offset=".77" stop-color="#453c2b" stop-opacity="0"/><stop offset="1" stop-color="#2e3935" stop-opacity=".52"/></radialGradient>
+ </defs>
+ <circle cx="100" cy="101" r="95" fill="#373a37" stroke="#514e45" stroke-width="4"/>
+ <circle cx="100" cy="98" r="94" fill="url(#cb-rim)"/>
+ <circle cx="100" cy="98" r="86" fill="#5d523d" stroke="#ad9464" stroke-width="1.5"/>
+ <circle cx="99" cy="96" r="81" fill="url(#cb-bronze)" stroke="#695642" stroke-width="2"/>
+ <g fill="none">
+  <circle cx="99" cy="96" r="76" stroke="url(#cb-rim)" stroke-width="3"/>
+  <circle cx="99" cy="96" r="69" stroke="#6a5741" stroke-width="1.2"/>
+  <circle cx="99" cy="96" r="67" stroke="#e1b778" stroke-width="1.1" opacity=".8"/>
+  <path d="M30 61 A80 80 0 0 1 85 18 M19 99 A82 82 0 0 1 23 76" stroke="#fae1a5" stroke-width="2.1" stroke-linecap="round"/>
+ </g>
+ <g id="cb-flute">
+  <path d="M91 37 Q97 45 96 63 L98 74 L104 73 Q103 47 111 37 Q101 40 91 37Z" fill="#604f3c" opacity=".62"/>
+  <path d="M92 37 Q99 48 98 70 L100 73 Q102 49 109 37 Q102 42 92 37Z" fill="url(#cb-crown)"/>
+  <path d="M96 28 L100 22 L104 28 L100 33Z" fill="#5e6956" stroke="#c3a067" stroke-width="1.2"/>
+ </g>
+ <g transform="rotate(45 100 98)"><use xlink:href="#cb-flute"/></g><g transform="rotate(90 100 98)"><use xlink:href="#cb-flute"/></g>
+ <g transform="rotate(135 100 98)"><use xlink:href="#cb-flute"/></g><g transform="rotate(180 100 98)"><use xlink:href="#cb-flute"/></g>
+ <g transform="rotate(225 100 98)"><use xlink:href="#cb-flute"/></g><g transform="rotate(270 100 98)"><use xlink:href="#cb-flute"/></g><g transform="rotate(315 100 98)"><use xlink:href="#cb-flute"/></g>
+ <circle cx="99" cy="96" r="67" fill="url(#cb-glaze)"/>
+ <ellipse cx="100" cy="101" rx="33" ry="30" fill="#51493a"/><ellipse cx="99" cy="96" rx="32" ry="29" fill="url(#cb-rim)"/>
+ <ellipse cx="99" cy="94" rx="23" ry="20" fill="#52695e" stroke="#665840" stroke-width="3"/>
+ <path d="M80 96 Q80 79 91 79 L108 79 Q120 81 119 94 L114 101 L109 97 L109 90 Q108 86 103 86 L94 86 Q90 86 90 91 L89 100Z" fill="url(#cb-crown)" stroke="#584f3d" stroke-width="2"/>
+ <path d="M85 89 Q86 81 93 81 L106 81" fill="none" stroke="#eed094" stroke-width="2" stroke-linecap="round"/>
+</svg>

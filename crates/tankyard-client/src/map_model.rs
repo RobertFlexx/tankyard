@@ -414,7 +414,8 @@ mod tests {
                             Primitive::Triangle { vertices, .. } => {
                                 vertices.into_iter().for_each(check)
                             }
-                            Primitive::Quad { vertices, .. }
+                            Primitive::Artwork { vertices, .. }
+                            | Primitive::Quad { vertices, .. }
                             | Primitive::ShadedQuad { vertices, .. } => {
                                 vertices.into_iter().for_each(check)
                             }

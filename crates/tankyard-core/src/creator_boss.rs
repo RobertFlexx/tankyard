@@ -17,13 +17,28 @@ pub const REPULSE_REACH: f32 = 360.;
 pub const GRAVITY_REACH: f32 = 900.;
 /// The forward cannons' turns while fire is held, as steps from the aim.
 const GUN_ORDER: [i8; 4] = [0, 1, 0, -1];
-const GUN_INTERVAL: f32 = 0.13;
+pub(crate) const GUN_INTERVAL: f32 = 0.13;
 const GUN_SPEED: f32 = 860.;
 const GUN_DAMAGE: f32 = 22.;
 const GUN_RADIUS: f32 = 11.;
 const GUN_LIFETIME: f32 = 1.6;
 const GUN_PENETRATION: f32 = 3.;
 
+pub(crate) fn gun_step(turn: u8) -> i8 {
+    GUN_ORDER[usize::from(turn) % GUN_ORDER.len()]
+}
+pub(crate) fn primary_round(angle: f32) -> BossRound {
+    crate::bosses::round(
+        angle,
+        ProjectileKind::Shell,
+        GUN_SPEED,
+        GUN_DAMAGE,
+        GUN_RADIUS,
+        GUN_LIFETIME,
+        GUN_PENETRATION,
+        0,
+    )
+}
 /// Where the mouth of the cannon `step` places around from the aim is.
 pub fn muzzle(center: V2, aim: f32, step: i8, radius: f32) -> V2 {
     let angle = aim + f32::from(step) * std::f32::consts::TAU / CANNONS as f32;
@@ -120,7 +135,7 @@ impl Attack {
         ][self.index()]
     }
     /// Shots, speed, damage, radius, lifetime and kind.
-    fn stats(self) -> (usize, f32, f32, f32, f32, ProjectileKind) {
+    pub(crate) fn stats(self) -> (usize, f32, f32, f32, f32, ProjectileKind) {
         match self {
             Self::Starfall => (9, 760., 36., 9., 2.5, ProjectileKind::Piercing),
             Self::Sunburst => (24, 350., 28., 13., 3.2, ProjectileKind::Shell),
@@ -133,6 +148,21 @@ impl Attack {
             Self::SolarTurrets => (6, 0., 30., 20., 12., ProjectileKind::Turret),
             Self::GravityWell => (12, 180., 18., 12., 4., ProjectileKind::Homing),
             Self::RiftDash | Self::Reforge => (0, 0., 0., 0., 0., ProjectileKind::Bullet),
+        }
+    }
+    pub(crate) fn shot_angle(self, aim: f32, i: usize, count: usize) -> f32 {
+        if matches!(self, Self::Starfall | Self::MeteorShower) {
+            aim + (i as f32 - (count - 1) as f32 * 0.5) * 0.065
+        } else {
+            aim + i as f32 * std::f32::consts::TAU / count as f32
+        }
+    }
+    pub(crate) fn penetration(self) -> f32 {
+        match self {
+            Self::CometLance => 20.,
+            Self::StarLattice => 30.,
+            Self::SolarTurrets => 12.,
+            _ => 4.,
         }
     }
     /// How far from the center of a hull of radius `hull` this attack's shots
@@ -162,6 +192,11 @@ impl Attack {
             "Restore eight percent of maximum health",
         ][self.index()]
     }
+}
+#[derive(Clone, Copy)]
+pub(crate) enum AxiomCaster {
+    Tank(usize),
+    Boss(usize),
 }
 impl World {
     pub fn creator_form(&mut self, player: EntityId, enabled: bool) -> Result<(), String> {
@@ -232,7 +267,7 @@ impl World {
         if tank.creator_reload > 0. || !room {
             return;
         }
-        let step = GUN_ORDER[usize::from(tank.creator_turn) % GUN_ORDER.len()];
+        let step = gun_step(tank.creator_turn);
         tank.creator_turn = (tank.creator_turn + 1) % GUN_ORDER.len() as u8;
         tank.creator_reload = GUN_INTERVAL / tank.reload_scale.clamp(0.25, 6.);
         let (id, team, center, aim, drift, radius) = (
@@ -291,19 +326,44 @@ impl World {
         if self.tanks[index].creator_attacks[attack.index()] > 0. {
             return Err("Attack is recharging.".into());
         }
+        self.cast_axiom(AxiomCaster::Tank(index), attack)
+    }
+
+    /// Both casters use the same placement, cover, projectile budget and fields.
+    /// Creator authentication and private cooldowns are checked at the public
+    /// player entry point above; an NPC can cast only on its own body.
+    pub(crate) fn cast_axiom(&mut self, caster: AxiomCaster, attack: Attack) -> Result<(), String> {
         let (count, speed, damage, radius, lifetime, kind) = attack.stats();
-        let tank = &self.tanks[index];
-        let (origin, aim, team, radius_tank) = (tank.pos, tank.aim, tank.team, tank.radius);
-        if attack == Attack::Reforge && tank.health >= tank.max_health {
+        let (player, origin, aim, team, radius_tank, full) = match caster {
+            AxiomCaster::Tank(i) => {
+                let t = &self.tanks[i];
+                (
+                    t.id,
+                    t.pos,
+                    t.aim,
+                    t.team,
+                    t.radius,
+                    t.health >= t.max_health,
+                )
+            }
+            AxiomCaster::Boss(i) => {
+                let b = &self.bosses[i];
+                (
+                    b.id,
+                    b.pos,
+                    b.aim,
+                    b.team,
+                    b.radius,
+                    b.health >= b.max_health,
+                )
+            }
+        };
+        if attack == Attack::Reforge && full {
             return Err("Axiom is already at full health.".into());
         }
         let mut shots = Vec::with_capacity(count);
         for i in 0..count {
-            let angle = if matches!(attack, Attack::Starfall | Attack::MeteorShower) {
-                aim + (i as f32 - (count - 1) as f32 * 0.5) * 0.065
-            } else {
-                aim + i as f32 * std::f32::consts::TAU / count as f32
-            };
+            let angle = attack.shot_angle(aim, i, count);
             let direction = V2::from_angle(angle);
             let pos = origin + direction * attack.spawn_reach(radius_tank);
             if self.position_clear(pos, radius) {
@@ -368,12 +428,29 @@ impl World {
             if origin.distance(destination) < 1. || !self.position_clear(destination, radius_tank) {
                 return Err("No room to Rift Dash in that direction.".into());
             }
-            self.tanks[index].pos = destination;
-            self.tanks[index].vel = V2::ZERO;
+            match caster {
+                AxiomCaster::Tank(i) => {
+                    self.tanks[i].pos = destination;
+                    self.tanks[i].vel = V2::ZERO;
+                }
+                AxiomCaster::Boss(i) => {
+                    self.bosses[i].pos = destination;
+                    self.bosses[i].vel = V2::ZERO;
+                }
+            }
         }
         if attack == Attack::Reforge {
-            let tank = &mut self.tanks[index];
-            tank.health = (tank.health + tank.max_health * 0.08).min(tank.max_health);
+            let (health, full) = match caster {
+                AxiomCaster::Tank(i) => {
+                    let t = &mut self.tanks[i];
+                    (&mut t.health, t.max_health)
+                }
+                AxiomCaster::Boss(i) => {
+                    let b = &mut self.bosses[i];
+                    (&mut b.health, b.max_health)
+                }
+            };
+            *health = (*health + full * 0.08).min(full);
         }
         for (pos, direction) in shots {
             let shot = self.simple_projectile(
@@ -385,15 +462,13 @@ impl World {
                 damage,
                 radius,
                 lifetime,
-                match attack {
-                    Attack::CometLance => 20.,
-                    Attack::StarLattice => 30.,
-                    Attack::SolarTurrets => 12.,
-                    _ => 4.,
-                },
+                attack.penetration(),
             );
             self.projectiles.push(shot);
         }
+        let AxiomCaster::Tank(index) = caster else {
+            return Ok(());
+        };
         self.tanks[index].creator_attacks[attack.index()] = attack.cooldown();
         self.tanks[index].protection = 0.;
         self.tanks[index].spawn_immunity = false;

@@ -369,7 +369,7 @@ All commands need a tank ID where they act on a tank. Values outside the bounds 
 | `fire(id, { speed, damage, radius, lifetime, angle })` | an extra bullet: speed 1–1,600 (520), damage 0–10,000 (20), radius 1–60 (8), lifetime 0.05–30 s (2), angle relative to aim (0) |
 | `control(id, { x =, y =, aim =, fire =, ability = })` | drives a tank for this tick: movement `x`, `y` from −1 to 1, `aim` in radians (default: current aim), `fire` and `ability` booleans. Runs after bots decide, before physics |
 | `spawn_shape(x, y, { sides, health, xp })` | a shape: 3–12 sides (4), health 1–10,000 (60), up to 1,000,000 XP (25) |
-| `spawn_boss(name)` | `"Sentinel"`, `"Prism"`, `"Foundry"`, `"Tempest"`, `"Bastion"`, `"Eclipse"`, `"Guardian"`, `"Summoner"`, `"Defender"`, `"Fallen Overlord"`, `"Fallen Booster"`, `"Siege Engine"`, `"Skirmisher"`, `"Trapper"`, `"Railgunner"` or `"Sunderworm"` (case, spaces and underscores are ignored) |
+| `spawn_boss(name)` | `"Sentinel"`, `"Prism"`, `"Foundry"`, `"Tempest"`, `"Bastion"`, `"Eclipse"`, `"Guardian"`, `"Summoner"`, `"Defender"`, `"Fallen Overlord"`, `"Fallen Booster"`, `"Siege Engine"`, `"Skirmisher"`, `"Trapper"`, `"Railgunner"`, `"Sunderworm"`, `"Jester"` or `"Carillon"` (case, spaces and underscores are ignored) |
 | `clear_projectiles(id)` | removes a tank's projectiles; with no ID, every projectile except base guardians' |
 | `announce(text)` | a message to everyone, up to 160 characters |
 | `finish_round(team, reason)` | ends the round; team 0–4 (0 or `nil` for no winner) |
@@ -506,7 +506,7 @@ A menu shown to one player closes when they pick; one shown to everyone stays un
 
 Widget IDs use lowercase letters, digits and `_`. A pack may show 16 widgets to everyone and 16 to each player, and a player receives at most 64 from all packs. Bots have no screen, so widgets for bots are dropped. Widgets end with the round, with their player, or when the pack is disabled.
 
-The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. A pinned widget follows its tank or group on each player's screen by itself, so it needs no updates as the tank moves. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, styles, icons and choices in 1.4, pins, choice layouts and glow in 1.5, shapes, borders, fills, lettering, title colors, bar looks and button looks in 1.6, and boards in 1.7. Tank Yard 2.1.5 uses protocol 35, the same as 2.1.0 (2.0 used 34); players and servers must use matching protocols.
+The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. A pinned widget follows its tank or group on each player's screen by itself, so it needs no updates as the tank moves. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, styles, icons and choices in 1.4, pins, choice layouts and glow in 1.5, shapes, borders, fills, lettering, title colors, bar looks and button looks in 1.6, and boards in 1.7. Tank Yard 2.1.6 uses protocol 35, the same as 2.1.0 (2.0 used 34); players and servers must use matching protocols.
 
 #### Boards
 
@@ -1090,7 +1090,7 @@ Tank Yard 1.4.0 (protocol 30) adds `ui` and `hide_ui` actions. A `ui` trigger sh
       { "kind": "light", "at": [2, 1], "counter": 2, "bit": 1 } ] } } } }
 ```
 
-Boss IDs are `sentinel`, `prism`, `foundry`, `tempest`, `bastion`, `eclipse`, `guardian`, `summoner`, `defender`, `fallen_overlord`, `fallen_booster`, `siege_engine`, `skirmisher`, `trapper`, `railgunner` and `sunderworm`. Boss triggers use these IDs. Scripts' `spawn_boss` also accepts the existing display names.
+Boss IDs are `sentinel`, `prism`, `foundry`, `tempest`, `bastion`, `eclipse`, `guardian`, `summoner`, `defender`, `fallen_overlord`, `fallen_booster`, `siege_engine`, `skirmisher`, `trapper`, `railgunner`, `sunderworm`, `jester` and `carillon`. Boss triggers use these IDs. For a numeric `defeated` trigger, Sunderworm is 16, Jester is 17 and Carillon is 18. Packs that name either new boss require Tank Yard 2.1.6 on the host and on clients validating the map. Scripts' `spawn_boss` also accepts the existing display names.
 
 ### Textures and models
 

@@ -2106,6 +2106,8 @@ fn boss_gloat(kind: BossKind) -> &'static str {
         BossKind::Trapper => "It put those there on purpose.",
         BossKind::Railgunner => "Distance was not your friend.",
         BossKind::Sunderworm => "The ground was hungry.",
+        BossKind::Jester => "It kept one card up its sleeve.",
+        BossKind::Carillon => "That bell was for you.",
     }
 }
 /// Where an arrow pointing `direction` from the middle of the screen meets its
@@ -2211,7 +2213,7 @@ fn rail_status(boss: &tankyard_core::Boss, marked: bool) -> Option<(&'static str
     }
 }
 
-/// The line under a boss's bar. Only the Railgunner narrates its whole attack.
+/// The warning that fits under a boss’s health bar.
 fn bar_status(boss: &tankyard_core::Boss, marked: bool) -> Option<(&'static str, u8)> {
     if boss.kind == BossKind::Sunderworm {
         use tankyard_core::WormAct;
@@ -2222,6 +2224,26 @@ fn bar_status(boss: &tankyard_core::Boss, marked: bool) -> Option<(&'static str,
             (WormAct::Erupt, 0) => return Some(("The floor's breaking. Move.", 2)),
             (WormAct::Tear, _) => return Some(("It's tearing in two.", 2)),
             _ => {}
+        }
+    }
+    if boss.attack_windup > 0. {
+        let (source, slot) = boss.attack_style();
+        let call = match (boss.kind, source, slot) {
+            (BossKind::Jester, BossKind::Jester, 0) => "Three-card trick",
+            (BossKind::Jester, BossKind::Jester, 1) => "Curtain call · find a gap",
+            (BossKind::Jester, BossKind::Jester, 2) => "Jack-in-the-box",
+            (BossKind::Jester, BossKind::Jester, _) => {
+                tankyard_core::encounters::axiom_act(boss.attack)
+                    .map_or("Axiom", |attack| attack.name())
+            }
+            (BossKind::Jester, other, _) => other.name(),
+            (BossKind::Carillon, _, 0) => "Hammer peal · clear the lanes",
+            (BossKind::Carillon, _, 1) => "Molten pour · watch the center",
+            (BossKind::Carillon, _, _) => "Casting floor · find the aisle",
+            _ => "",
+        };
+        if !call.is_empty() {
+            return Some((call, 2));
         }
     }
     if boss.kind == tankyard_core::BossKind::Railgunner {

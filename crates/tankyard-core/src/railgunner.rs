@@ -27,7 +27,7 @@ pub const RAIL_ROUND_RADIUS: f32 = 30.;
 const RAIL_ROUND_LIFE: f32 = 1.5;
 /// What the wounded Railgunner's second, quicker shot deals.
 pub const RAIL_ECHO_DAMAGE: f32 = 170.;
-const RAIL_ECHO_RADIUS: f32 = 22.;
+pub(crate) const RAIL_ECHO_RADIUS: f32 = 22.;
 /// Seconds between the first shot and the echo.
 const RAIL_ECHO_DELAY: f32 = 0.6;
 /// How fast the plasma stream's rounds fly.
@@ -99,13 +99,13 @@ pub struct RailWork {
 impl Boss {
     /// Whether this is a Railgunner with its plasma beam running.
     pub fn beaming(&self) -> bool {
-        self.kind == BossKind::Railgunner
+        self.attack_style().0 == BossKind::Railgunner
             && self.tactic == BossTactic::Charge
             && self.tactic_time > 0.
     }
     /// Whether this is a Railgunner cooling down with its vents open.
     pub fn venting(&self) -> bool {
-        self.kind == BossKind::Railgunner
+        self.attack_style().0 == BossKind::Railgunner
             && self.tactic == BossTactic::Windup
             && self.tactic_time > 0.
     }
@@ -145,11 +145,20 @@ pub fn is_beam_round(kind: ProjectileKind, vel: V2) -> bool {
     kind == ProjectileKind::Piercing && vel.length() >= BEAM_ROUND_SPEED * 0.99
 }
 
-/// Which boss a random event brings: `rare` decides whether it's the
-/// Railgunner, and `pick` which of the rest it is otherwise.
+/// The first roll selects an eligible rare encounter. The second picks
+/// uniformly from the ordinary roster when the first misses.
 pub(crate) fn natural_boss(rare: f32, pick: f32, strength: f32) -> BossKind {
     if let Some(kind) = crate::sunderworm::rare_boss(rare, strength) {
         return kind;
+    }
+    // Disjoint bands preserve the exact odds for each eligible encounter.
+    let start = crate::sunderworm::WORM_ODDS;
+    let end = start + crate::encounters::CARILLON_ODDS;
+    if (start..end).contains(&rare) && strength >= 3. {
+        return BossKind::Carillon;
+    }
+    if (end..end + crate::encounters::JESTER_ODDS).contains(&rare) && strength >= 2.5 {
+        return BossKind::Jester;
     }
     if rare < RAILGUNNER_ODDS && strength >= RAILGUNNER_STRENGTH {
         return BossKind::Railgunner;
@@ -218,8 +227,8 @@ pub(crate) fn rail_volley(attack: u8, aim: f32, phase: u8) -> Vec<BossRound> {
 
 /// Where a round of `radius` leaves the barrel: at the muzzle, or as far along
 /// it as cover and the arena's edge allow.
-fn muzzle(at: V2, aim: f32, hull: f32, radius: f32, bounds: Rect, walls: &[Rect]) -> Option<V2> {
-    let tip = at + V2::from_angle(aim) * hull * RAIL_MUZZLE;
+fn muzzle(at: V2, aim: f32, reach: f32, radius: f32, bounds: Rect, walls: &[Rect]) -> Option<V2> {
+    let tip = at + V2::from_angle(aim) * reach;
     let clear = walls
         .iter()
         .filter_map(|&wall| sweep_rect(at, tip, radius, wall).map(|(t, _)| t))
@@ -324,13 +333,15 @@ impl World {
         let tick = self.tick;
         let b = &mut self.bosses[i];
         b.arrival = (b.arrival - DT).max(0.);
-        b.phase = if b.health < b.max_health * BOSS_PHASES[1] {
-            3
-        } else if b.health < b.max_health * BOSS_PHASES[0] {
-            2
-        } else {
-            1
-        };
+        if b.kind != BossKind::Jester || b.attack_windup <= 0. {
+            b.phase = if b.health < b.max_health * BOSS_PHASES[1] {
+                3
+            } else if b.health < b.max_health * BOSS_PHASES[0] {
+                2
+            } else {
+                1
+            };
+        }
         let stage = usize::from(b.phase.clamp(1, 3) - 1);
         if let Some(mark) = mark {
             b.read = if mark.id == b.target {
@@ -366,7 +377,7 @@ impl World {
             } else if charging {
                 (RAIL_ROUND_SPEED, b.attack_windup)
             } else if b.attack_timer < LINING_UP {
-                (RAIL_ROUND_SPEED, b.kind.windup())
+                (RAIL_ROUND_SPEED, b.warning_seconds())
             } else {
                 (COIL_ROUND_SPEED, 0.)
             };
@@ -452,14 +463,18 @@ impl World {
         b.attack_windup = (b.attack_windup - DT).max(0.);
         let release = previous > 0. && b.attack_windup <= 0.;
         if b.arrival <= 0.
-            && mark.is_some()
+            && (mark.is_some() || (b.kind == BossKind::Jester && near.is_some()))
             && previous <= 0.
             && b.rail.beam <= 0.
             && b.rail.vent <= 0.
             && b.rail.hop <= 0.
         {
             b.attack_timer -= DT;
-            if b.attack_timer <= 0. && (lined_up || b.attack_timer < -BOSS_AIM_HOLD) {
+            // The mimic's director picks the next mask on the main boss tick.
+            if b.kind == BossKind::Railgunner
+                && b.attack_timer <= 0.
+                && (lined_up || b.attack_timer < -BOSS_AIM_HOLD)
+            {
                 b.attack = (b.attack + 1) % 3;
                 b.attack_windup = b.kind.windup();
                 b.attack_timer = 8.5 - f32::from(b.phase) * 1.2;
@@ -467,12 +482,19 @@ impl World {
             }
         }
         let (id, team, at, hull, aim) = (b.id, b.team, b.pos, b.radius, b.aim);
-        let barrel = |angle: f32, radius: f32| muzzle(at, angle, hull, radius, bounds, walls);
+        let muzzle_reach = hull
+            * if b.kind == BossKind::Jester {
+                crate::encounters::CARD_MUZZLE
+            } else {
+                RAIL_MUZZLE
+            };
+        let barrel =
+            |angle: f32, radius: f32| muzzle(at, angle, muzzle_reach, radius, bounds, walls);
         let mut fire = |origin: V2, vel: V2, kind, damage, radius, life, pen| {
             volleys.push((id, team, origin, vel, kind, damage, radius, life, pen, 0));
         };
         if release {
-            if b.attack == 2 {
+            if b.attack_style().1 == 2 {
                 b.rail.beam = BEAM_SECONDS[stage];
                 b.rail.cadence = 0.;
                 b.tactic = BossTactic::Charge;
@@ -491,7 +513,7 @@ impl World {
                         );
                     }
                 }
-                if b.attack == 1 && b.phase >= 3 {
+                if b.attack_style().1 == 1 && b.phase >= 3 {
                     b.rail.echo = RAIL_ECHO_DELAY;
                 }
             }
@@ -827,16 +849,24 @@ mod tests {
             w: 40.,
             h: 1000.,
         };
-        let origin = muzzle(at, 0., 100., 10., bounds, &[wall]).unwrap();
+        let origin = muzzle(at, 0., 100. * RAIL_MUZZLE, 10., bounds, &[wall]).unwrap();
         assert!(origin.x > at.x && origin.x < 620. - 9.);
-        let edge = muzzle(V2::new(900., 500.), 0., 100., 10., bounds, &[]).unwrap();
+        let edge = muzzle(
+            V2::new(900., 500.),
+            0.,
+            100. * RAIL_MUZZLE,
+            10.,
+            bounds,
+            &[],
+        )
+        .unwrap();
         assert!(bounds.contains_circle(edge, 10.));
     }
 
     #[test]
     fn it_shows_up_rarely_and_never_for_a_lobby_of_beginners() {
         // The very bottom of the roll belongs to something rarer still.
-        let rare = crate::sunderworm::WORM_ODDS * 2.;
+        let rare = RAILGUNNER_ODDS * 0.5;
         assert_eq!(natural_boss(0., 0.5, 8.), BossKind::Sunderworm);
         assert_eq!(natural_boss(rare, 0.5, 8.), BossKind::Railgunner);
         assert_ne!(natural_boss(rare, 0.5, 0.9), BossKind::Railgunner);

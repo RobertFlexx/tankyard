@@ -169,6 +169,15 @@
       "source_sha256": "0c8c1115767140baa19adee9ce131b7b00555cc62907049d1ee918a5aa4ab5d4",
       "pcm_sha256": "4a0c1fc2a4857a2121c2f297ccf63196ce4da1526720974c4fee177b81046cb8",
       "seconds": 2.3154375
+    },
+    {
+      "file": "jester-laugh.pcm",
+      "pack": "laughter",
+      "source_file": "maniacal_laughter_pack_1.ogg",
+      "source_sha256": "1891b4b843738ee226950dd20b8f1a9bbbc0eaa7a2360c9d94c9cbfe7a21cf86",
+      "pcm_sha256": "5abd51ba952e0d4a9dfd414722f0bffdd7dcbcc0cfc541fd378225c70345f57a",
+      "trim_seconds": 2.85,
+      "seconds": 2.85
     }
   ],
   "sources": {
@@ -215,6 +224,11 @@
     "horn": {
       "page": "https://opengameart.org/content/steam-whistle",
       "author": "bart",
+      "license": "CC0-1.0"
+    },
+    "laughter": {
+      "page": "https://opengameart.org/content/maniacal-laughter-pack-1",
+      "author": "Nocturnal_Vanguard (AuraVoice)",
       "license": "CC0-1.0"
     }
   }

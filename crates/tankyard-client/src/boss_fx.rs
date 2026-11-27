@@ -139,9 +139,9 @@ enum Fuel {
 impl Fuel {
     fn of(kind: BossKind) -> Self {
         match kind {
-            BossKind::SiegeEngine | BossKind::Foundry => Self::Fire,
+            BossKind::SiegeEngine | BossKind::Foundry | BossKind::Carillon => Self::Fire,
             BossKind::Tempest | BossKind::Skirmisher => Self::Arc,
-            BossKind::Prism => Self::Spectrum,
+            BossKind::Prism | BossKind::Jester => Self::Spectrum,
             BossKind::Eclipse | BossKind::FallenOverlord | BossKind::FallenBooster => Self::Void,
             BossKind::Railgunner => Self::Ion,
             BossKind::Sunderworm => Self::Flesh,
@@ -178,6 +178,28 @@ pub struct Shown<'a> {
     pub color: Color,
 }
 
+/// Angular displacement from the sewn tip and its angular velocity.
+#[derive(Clone, Copy, Debug, Default)]
+struct BellSpring {
+    angle: f32,
+    velocity: f32,
+}
+impl BellSpring {
+    fn follow(&mut self, target: f32, frequency: f32, dt: f32) {
+        // Closed-form damped oscillator. A missed snapshot or a 30 Hz
+        // display produces the same settling time as a 144 Hz one.
+        let damping = 3.8;
+        let stiffness = frequency * frequency;
+        let omega = (stiffness - damping * damping).sqrt();
+        let (sin, cos) = (omega * dt).sin_cos();
+        let decay = (-damping * dt).exp();
+        let x = self.angle - target;
+        let v = self.velocity;
+        self.angle = target + decay * (x * cos + (v + damping * x) * sin / omega);
+        self.velocity = decay * (v * cos - (stiffness * x + damping * v) * sin / omega);
+    }
+}
+
 /// What the renderer remembers about a boss between frames.
 #[derive(Clone, Copy, Debug)]
 struct Presence {
@@ -192,6 +214,7 @@ struct Presence {
     aim_rate: f32,
     /// The real aim last frame, and how fast that has been turning.
     aim_target: f32,
+    chassis: f32,
     aim_drive: f32,
     /// How far its special has charged, eased between snapshots.
     charge: f32,
@@ -221,11 +244,20 @@ struct Presence {
     exhaust_aim: f32,
     /// A Railgunner's firing pose and what it was doing last frame.
     rail: railgun::RailShown,
+    bells: [BellSpring; 3],
     /// The gas its drive has left in the air.
     exhaust: [Trail; 2],
 }
 
 impl Presence {
+    fn round_color(&self, id: EntityId) -> Color {
+        if self.kind == Some(BossKind::Jester) {
+            tankyard_client::boss_model::shot_silk(id, 0.)
+        } else {
+            self.color
+        }
+    }
+
     fn new(shown: &Shown<'_>) -> Self {
         let boss = shown.boss;
         Self {
@@ -237,6 +269,11 @@ impl Presence {
             aim: shown.aim,
             aim_rate: 0.,
             aim_target: shown.aim,
+            chassis: if shown.boss.vel.length_squared() > 16. {
+                shown.boss.vel.angle()
+            } else {
+                shown.aim
+            },
             aim_drive: 0.,
             charge: 0.,
             heat: 0.,
@@ -255,6 +292,7 @@ impl Presence {
             drive: Vec2::ZERO,
             exhaust_aim: shown.aim,
             rail: railgun::RailShown::default(),
+            bells: Default::default(),
             exhaust: exhaust_for(shown.pos, shown.color, Fuel::of(boss.kind)),
         }
     }
@@ -782,8 +820,20 @@ impl BossFx {
             if item.aim.is_finite() {
                 presence.aim_target = item.aim;
             }
+            if boss.kind == BossKind::SiegeEngine && boss.vel.length_squared() > 16. {
+                // Either end of a tread can lead. Reversing holds the chassis
+                // steady while an orbit turns it at the track drive's pace.
+                let forward = turn_between(presence.chassis, boss.vel.angle());
+                let reverse = turn_between(presence.chassis, boss.vel.angle() + PI);
+                let turn = if forward.abs() <= reverse.abs() {
+                    forward
+                } else {
+                    reverse
+                };
+                presence.chassis += turn.clamp(-1.35 * dt, 1.35 * dt);
+            }
             let goal = if boss.attack_windup > 0. {
-                (1. - boss.attack_windup / boss.kind.windup()).clamp(0., 1.)
+                (1. - boss.attack_windup / boss.warning_seconds()).clamp(0., 1.)
             } else {
                 0.
             };
@@ -812,6 +862,30 @@ impl BossFx {
             let (y, vy) = settle(presence.kick.y, presence.kick_rate.y, KICK_RATE, dt);
             presence.kick = vec2(x, y);
             presence.kick_rate = vec2(vx, vy);
+            if boss.kind == BossKind::Jester {
+                if look.calm {
+                    presence.bells = Default::default();
+                } else {
+                    let side = V2::from_angle(presence.aim + PI * 0.5);
+                    let drift = boss.vel.dot(side) / 1300.;
+                    let acceleration = if known {
+                        (vec2(boss.vel.x, boss.vel.y) - was.drive).dot(vec2(side.x, side.y))
+                    } else {
+                        0.
+                    };
+                    presence.drive = vec2(boss.vel.x, boss.vel.y);
+
+                    for (i, bell) in presence.bells.iter_mut().enumerate() {
+                        bell.velocity -=
+                            (acceleration * 0.009).clamp(-1.6, 1.6) * [0.85, 0.61, 1.0][i];
+                        if known && was.winding && !presence.winding {
+                            bell.velocity += [2.4, -2.8, 2.1][i];
+                        }
+                        let lean = (-0.095 * presence.aim_drive - drift).clamp(-0.35, 0.35);
+                        bell.follow(lean, [12., 9., 14.][i], dt);
+                    }
+                }
+            }
             // A worm is flesh, not a machine: no exhaust, embers or flashes.
             if boss.kind == BossKind::Sunderworm {
                 self.worm_frame(&item, dt);
@@ -860,8 +934,17 @@ impl BossFx {
                 presence.smoke -= due.1 as f32;
                 presence.flame -= due.2 as f32;
             }
+            if known && !was.winding && boss.attack_windup > 0. {
+                match boss.kind {
+                    BossKind::Jester => self.push_cue(crate::map_sounds::BossCue::MaskChange, pos),
+                    BossKind::Carillon => {
+                        self.push_cue(crate::map_sounds::BossCue::HammerLift, pos)
+                    }
+                    _ => {}
+                }
+            }
             // Its pose runs even with effects off: the warnings depend on it.
-            if boss.kind == BossKind::Railgunner {
+            if boss.attack_style().0 == BossKind::Railgunner {
                 self.rail_frame(boss, known, dt);
             }
             if !look.live() {
@@ -1032,15 +1115,19 @@ impl BossFx {
         if self.is_axiom(flight.owner) {
             return self.star_launched(flight);
         }
-        if self.is_railgunner(flight.owner) {
+        if self.rail_flight(flight) {
             return self.rail_launched(flight);
         }
         let look = self.look;
         let Some(presence) = self.bosses.get_mut(&flight.owner) else {
             return 0.;
         };
-        let (color, fuel, body, hull) =
-            (presence.color, presence.fuel, presence.pos, presence.radius);
+        let (color, fuel, body, hull) = (
+            presence.round_color(flight.id),
+            presence.fuel,
+            presence.pos,
+            presence.radius,
+        );
         let heading = vec2(flight.vel.x, flight.vel.y).normalize_or_zero();
         // Firing shoves the hull back, more for a heavier round.
         let lethal = flight.damage >= LETHAL_DAMAGE;
@@ -1059,7 +1146,26 @@ impl BossFx {
                 presence.kick_rate = presence.kick_rate.normalize_or_zero() * most;
             }
         }
+        let jester_cannon = cannon && presence.kind == Some(BossKind::Jester);
+        if jester_cannon
+            && BossKind::Jester.cannon_source(flight.kind, flight.radius, flight.vel)
+                == BossKind::Railgunner
+        {
+            self.push_cue(crate::map_sounds::BossCue::Shot, flight.at);
+        }
         if !look.live() || flight.kind.is_drone() {
+            return shake;
+        }
+        if jester_cannon {
+            self.fueled_burst(
+                flight.at,
+                Flash::Muzzle(heading),
+                fuel,
+                flight.radius * 1.9,
+                color,
+                0.24,
+            );
+            self.burst(flight.at, Flash::Release, flight.radius * 1.4, color, 0.32);
             return shake;
         }
         if lethal {
@@ -1238,7 +1344,7 @@ impl BossFx {
         if !look.live() || self.is_worm(flight.owner) {
             return;
         }
-        if self.is_railgunner(flight.owner) {
+        if self.rail_flight(flight) {
             // A plasma stream is one ribbon, drawn through all its rounds.
             if tankyard_core::is_beam_round(flight.kind, flight.vel) {
                 return;
@@ -1257,7 +1363,7 @@ impl BossFx {
                 let mut trail = Trail::new(
                     flight.at,
                     flight.radius,
-                    presence.color,
+                    presence.round_color(flight.id),
                     presence.fuel,
                     heavy,
                 );
@@ -1321,7 +1427,7 @@ impl BossFx {
             self.trails.remove(&flight.id);
             return;
         }
-        if self.is_railgunner(flight.owner) {
+        if self.rail_flight(flight) {
             self.trails.remove(&flight.id);
             self.rail_landed(flight, struck);
             return;
@@ -1342,7 +1448,7 @@ impl BossFx {
         let Some((color, fuel)) = self
             .bosses
             .get(&flight.owner)
-            .map(|presence| (presence.color, presence.fuel))
+            .map(|presence| (presence.round_color(flight.id), presence.fuel))
             .or(trail.map(|trail| (trail.color, trail.fuel)))
         else {
             return;
@@ -1352,6 +1458,10 @@ impl BossFx {
             return;
         }
         let (at, radius, kind) = (flight.at, flight.radius, flight.kind);
+        if fuel == Fuel::Spectrum && flight.damage >= BASTION_ROUND_DAMAGE {
+            self.hold_blast(flight.owner, at, radius, color, clash::Blast::Spectrum);
+            return;
+        }
         if flight.damage >= LETHAL_DAMAGE {
             self.hold_blast(flight.owner, at, radius, color, clash::Blast::Siege);
             return;
@@ -1584,6 +1694,24 @@ impl BossFx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bell_rings_down_the_same_way_at_different_frame_rates() {
+        let mut coarse = BellSpring {
+            angle: 0.15,
+            velocity: 1.3,
+        };
+        let mut fine = coarse;
+        for _ in 0..30 {
+            coarse.follow(-0.12, 12., 1. / 30.);
+        }
+        for _ in 0..144 {
+            fine.follow(-0.12, 12., 1. / 144.);
+        }
+        assert!((coarse.angle - fine.angle).abs() < 1e-5);
+        assert!((coarse.velocity - fine.velocity).abs() < 1e-4);
+        assert!((coarse.angle + 0.12).abs() < 0.01);
+    }
 
     fn boss(id: EntityId) -> Boss {
         let mut world = tankyard_core::World::new(
