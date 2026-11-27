@@ -164,6 +164,8 @@ In the editor the canvas shows the darkness at half strength so you can still bu
 
 **Markers** place spawn regions (neutral, team 1 or team 2), team bases and objectives. A team base needs a matching team spawn region around it.
 
+Leave the spawn regions empty to let an unbased mode place tanks across safe parts of the arena. Place a neutral region to guide everyone to a particular area, or a team region to give that team its own start. Maps that omit all spawn regions require Tank Yard 2.1.7 or later.
+
 ## Groups and logic
 
 Every block, pad, decor item and trigger can belong to a group from 1 to 32. Group 0 is always on. A hidden group's blocks stop colliding, its pads stop working, its decor disappears, and its triggers switch off. The dock's **Group** chooser puts newly built objects in a group; **Free** picks an unused one. Newly built triggers that act on a group (Toggle, Show, Hide, Reset triggers) or watch one (On shown, On hidden) use that group instead of joining it. **G** shows group numbers on the canvas: where several objects of one group sit together, one number stands for them, and numbers make way for trigger tags. Point at an object or select it to see its own. **L** draws the logic links (see [Links](#links)).

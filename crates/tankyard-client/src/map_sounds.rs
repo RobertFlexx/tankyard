@@ -213,9 +213,11 @@ pub enum BossCue {
     MaskChange,
     CarillonArrival,
     HammerLift,
+    PressureRelease,
+    BastionLatch,
 }
 impl BossCue {
-    const ALL: [Self; 30] = [
+    const ALL: [Self; 32] = [
         Self::Charge,
         Self::Lock,
         Self::Shot,
@@ -246,6 +248,8 @@ impl BossCue {
         Self::MaskChange,
         Self::CarillonArrival,
         Self::HammerLift,
+        Self::PressureRelease,
+        Self::BastionLatch,
     ];
     /// How loud it is before distance. A shot carries further than the rest.
     pub fn gain(self) -> f32 {
@@ -269,6 +273,8 @@ impl BossCue {
             Self::JesterArrival | Self::CarillonArrival => 1.,
             Self::MaskChange => 0.5,
             Self::HammerLift => 0.72,
+            Self::PressureRelease => 0.81,
+            Self::BastionLatch => 0.65,
         }
     }
     /// How far away it is treated as being, as a share of the real distance.

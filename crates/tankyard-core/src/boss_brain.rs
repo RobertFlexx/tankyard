@@ -48,7 +48,9 @@ struct Grudge {
 pub struct Mind {
     pub(crate) gun: u8,
     pub(crate) salvo: Option<crate::encounters::Salvo>,
-    jester_played: u64,
+    jester_played: u128,
+    /// Which special the heavy guns are lining up for.
+    pub(crate) planned_special: Option<u8>,
     pub(crate) trap_spiral: Option<crate::bosses::TrapSpiral>,
     grudges: [Grudge; GRUDGES],
     /// Last damage-record tick read, so an evicted old attacker cannot be
@@ -304,8 +306,8 @@ impl Mind {
         }
         self.last = moving;
     }
-    /// The special it brings next out of the three it has, from what each
-    /// is good for and what it used last. `roll` is in [0, 1).
+    /// Which special comes next, from what each is good for and which it
+    /// used last. `roll` is in [0, 1).
     pub(crate) fn pick_special(&mut self, kind: BossKind, scene: &Scene, roll: f32) -> u8 {
         // Every boss opens with its signature.
         if self.recent == [0, 0] {
@@ -325,11 +327,16 @@ impl Mind {
             self.recent = [chosen + 1, self.recent[0]];
             return chosen;
         }
-        let mut weights = [0_f32; 3];
+        let mut weights = [0_f32; BossKind::Carillon.special_count() as usize];
+        let weights = &mut weights[..usize::from(kind.special_count())];
+        let heavy = matches!(kind, BossKind::Carillon | BossKind::Bastion);
         for (attack, weight) in weights.iter_mut().enumerate() {
             let fit = special_fit(kind, attack as u8);
             let mut score = fit.suits(scene);
             if self.recent[0] == attack as u8 + 1 {
+                if heavy {
+                    continue;
+                }
                 score -= 1.4;
             } else if self.recent[1] == attack as u8 + 1 {
                 score -= 0.5;
@@ -338,14 +345,15 @@ impl Mind {
         }
         let total: f32 = weights.iter().sum();
         let mut left = roll.clamp(0., 0.999_999) * total;
-        let mut chosen = 2;
+        let mut chosen = weights.iter().rposition(|&weight| weight > 0.).unwrap_or(0);
         for (attack, weight) in weights.iter().enumerate() {
             if left < *weight {
-                chosen = attack as u8;
+                chosen = attack;
                 break;
             }
             left -= weight;
         }
+        let chosen = chosen as u8;
         self.recent = [chosen + 1, self.recent[0]];
         chosen
     }
@@ -404,11 +412,20 @@ const fn fit(range: (f32, f32), crowd: f32, moving: f32, desperate: f32) -> Fit 
     }
 }
 
-/// What each of a boss's three specials is good for. These match the
-/// patterns in `special_volley`.
+/// What each special is good for. These match the patterns in `special_volley`.
 pub(crate) fn special_fit(kind: BossKind, attack: u8) -> Fit {
+    use crate::encounters::HeavyAttack::*;
     use BossKind::*;
-    match (kind, attack.min(2)) {
+    if let Some(extra) = crate::encounters::HeavyAttack::for_slot(kind, attack) {
+        return match extra {
+            Bellfall => fit((540., 1450.), 0.15, 1.05, 0.15),
+            Blowdown => fit((65., 430.), 1.1, 0.1, 0.45),
+            SlagSeekers => fit((480., 1230.), -0.2, 0.65, 0.7),
+            Crossfire => fit((480., 1330.), 0.25, 0.85, 0.25),
+            ShieldWall => fit((140., 620.), 0.8, 0.2, 0.6),
+        };
+    }
+    match (kind, attack) {
         (SiegeEngine, 0) => fit((450., 1400.), 0., -0.6, 0.),
         (SiegeEngine, 1) => fit((300., 900.), 0.5, 0.5, 0.3),
         (SiegeEngine, _) => fit((250., 800.), 0.8, 0.2, 0.8),

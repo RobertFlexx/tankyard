@@ -9,6 +9,7 @@ use crate::render::View;
 use crate::ui::{AMBER, RED, alpha};
 use macroquad::prelude::*;
 use std::f32::consts::{PI, TAU};
+use tankyard_core::encounters::{BLOWDOWN_OPENING, HeavyAttack};
 use tankyard_core::{
     BASTION_ROUND_DAMAGE, BEAM_ROUND_RADIUS, BEAM_ROUND_SPEED, Boss, BossKind, BossTactic,
     LETHAL_DAMAGE, RAIL_MUZZLE, Rect, V2, special_volley,
@@ -28,6 +29,52 @@ const SILK_LINE: LinePaint = (
     tankyard_client::boss_model::silk,
 );
 const ION_LINE: LinePaint = (Color::new(0.34, 0.22, 1., 1.), super::railgun::ion);
+pub(crate) const STEAM: Color = Color::new(0.81, 0.91, 1., 1.);
+
+pub(super) fn heavy_tint(attack: HeavyAttack) -> Color {
+    match attack {
+        HeavyAttack::Bellfall => Color::new(1., 0.63, 0.18, 1.),
+        HeavyAttack::Blowdown => STEAM,
+        HeavyAttack::SlagSeekers => Color::new(1., 0.31, 0.16, 1.),
+        HeavyAttack::Crossfire => Color::new(0.38, 0.70, 1., 1.),
+        HeavyAttack::ShieldWall => Color::new(0.29, 0.86, 0.79, 1.),
+    }
+}
+
+// Both pressure fronts use the same two openings. Leave them dark all the
+// way to the outer edge of the glow.
+pub(super) fn pressure_arcs(
+    light: &mut Emission,
+    center: Vec2,
+    radius: f32,
+    width: f32,
+    bearing: f32,
+    tint: Color,
+    strength: f32,
+) {
+    for side in [0., PI] {
+        let start = bearing + side + BLOWDOWN_OPENING;
+        let length = PI - BLOWDOWN_OPENING * 2.;
+        light.arc(
+            Layer::Wash,
+            center,
+            radius,
+            width * 3.2,
+            start,
+            length,
+            alpha(tint, strength * 0.35),
+        );
+        light.arc(
+            Layer::Core,
+            center,
+            radius,
+            width,
+            start,
+            length,
+            alpha(light.hot(tint, 0.48), strength),
+        );
+    }
+}
 
 /// A color kept saturated, because light added to a cool floor pulls a pale
 /// tint toward grey.
@@ -61,16 +108,41 @@ impl BossFx {
         // Its last fifth tightens and brightens: the moment to dodge.
         let armed = ((progress - 0.8) / 0.2).clamp(0., 1.);
         let flow = if self.look.calm { 0. } else { time };
-        let tint = signal(
-            self.bosses
-                .get(&boss.id)
-                .map_or(AMBER, |presence| presence.color),
-        );
+        let (style, pattern) = boss.attack_style();
+        let heavy = HeavyAttack::for_slot(style, pattern);
+        let mimic = boss.kind == BossKind::Jester;
+        let tint = if let Some(attack) = heavy {
+            if mimic {
+                tankyard_client::boss_model::silk(flow * 0.09)
+            } else {
+                heavy_tint(attack)
+            }
+        } else {
+            signal(
+                self.bosses
+                    .get(&boss.id)
+                    .map_or(AMBER, |presence| presence.color),
+            )
+        };
+        if heavy == Some(HeavyAttack::Blowdown) {
+            for (reach, width, strength) in [(1.45, 0.045, 0.8), (1.83, 0.028, 0.65)] {
+                pressure_arcs(
+                    light,
+                    p,
+                    r * reach,
+                    (r * width).max(1.),
+                    boss.aim,
+                    tint,
+                    (0.28 + 0.72 * progress) * strength,
+                );
+            }
+            closing_ring(light, p, r, z, tint, (progress, armed), flow);
+            return;
+        }
         let stage = (progress, armed);
         let rounds = special_volley(boss.kind, boss.attack, boss.aim, boss.phase);
-        let (style, pattern) = boss.attack_style();
-        let circle = rounds.len() >= 8 && (style, pattern) != (BossKind::Jester, 0);
-        let mimic = boss.kind == BossKind::Jester;
+        let circle =
+            heavy.is_none() && rounds.len() >= 8 && (style, pattern) != (BossKind::Jester, 0);
         let railgunner = style == BossKind::Railgunner;
         if mimic && let Some(act) = tankyard_core::encounters::axiom_act(boss.attack) {
             use tankyard_core::creator_boss::Attack;
@@ -148,9 +220,14 @@ impl BossFx {
                 tint
             };
             let d = direction(round.angle);
-            let start = p + d * (r + 6. * z);
+            let origin = if heavy.is_some() {
+                boss.radius + round.radius + 3.
+            } else {
+                boss.radius + 6.
+            };
+            let start = p + d * origin * z;
             if round.damage >= BASTION_ROUND_DAMAGE {
-                let (muzzle, paint) = if mimic {
+                let (mut muzzle, paint) = if mimic {
                     (tankyard_core::encounters::CARD_MUZZLE, (tint, SILK_LINE.1))
                 } else if boss.kind == BossKind::Carillon {
                     (1.50, FIRE_LINE)
@@ -161,6 +238,9 @@ impl BossFx {
                 } else {
                     (BASTION_MUZZLE, STEEL_LINE)
                 };
+                if heavy.is_some() {
+                    muzzle = origin / boss.radius;
+                }
                 let reach = round.speed * round.life;
                 let from = at + V2::new(d.x, d.y) * boss.radius;
                 let to = at + V2::new(d.x, d.y) * reach;
@@ -186,7 +266,23 @@ impl BossFx {
             if circle {
                 spoke(light, start, d, (round.radius * z).max(2.), tint, stage, z);
             } else {
-                let length = (round.speed * round.life.min(1.3)).min(760.) * z;
+                let reach = (round.speed * round.life.min(1.3)).min(760.);
+                let length = if heavy.is_some() {
+                    let to = at + V2::new(d.x, d.y) * (origin + reach);
+                    let stop = walls
+                        .clone()
+                        .filter_map(|wall| {
+                            tankyard_core::physics::sweep_rect(at, to, round.radius, wall)
+                        })
+                        .map(|(t, _)| t)
+                        .fold(1., f32::min);
+                    ((origin + reach) * stop - origin).max(0.) * z
+                } else {
+                    reach * z
+                };
+                if length <= 1. {
+                    continue;
+                }
                 lane(
                     light,
                     start,

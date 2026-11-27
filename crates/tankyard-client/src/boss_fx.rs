@@ -22,6 +22,7 @@ pub use clash::{clash_color, headline};
 pub use hull::Armor;
 pub use railgun::Streams;
 pub use shots::tracer;
+pub(crate) use warnings::STEAM;
 
 use crate::lighting::Light;
 use crate::render::View;
@@ -33,6 +34,7 @@ use std::f32::consts::{E, PI, TAU};
 use tankyard_client::boss_model::AXIOM_GOLD;
 use tankyard_content::ProjectileKind;
 use tankyard_core::creator_boss::CANNONS;
+use tankyard_core::encounters::HeavyAttack;
 use tankyard_core::{BASTION_ROUND_DAMAGE, Boss, BossKind, EntityId, LETHAL_DAMAGE, V2};
 
 /// Most sparks alive at once, so a long fight can't slow the frame.
@@ -250,11 +252,18 @@ struct Presence {
 }
 
 impl Presence {
-    fn round_color(&self, id: EntityId) -> Color {
-        if self.kind == Some(BossKind::Jester) {
-            tankyard_client::boss_model::shot_silk(id, 0.)
-        } else {
-            self.color
+    fn round_color(&self, id: EntityId, kind: ProjectileKind) -> Color {
+        match (self.kind, kind) {
+            (Some(BossKind::Jester), _) => tankyard_client::boss_model::shot_silk(id, 0.),
+            (Some(BossKind::Carillon), ProjectileKind::Scatter) => STEAM,
+            _ => self.color,
+        }
+    }
+
+    fn round_fuel(&self, kind: ProjectileKind) -> Fuel {
+        match (self.kind, kind) {
+            (Some(BossKind::Carillon), ProjectileKind::Scatter) => Fuel::Plasma,
+            _ => self.fuel,
         }
     }
 
@@ -564,6 +573,8 @@ enum Flash {
     Blast,
     /// A special attack leaving the core.
     Release,
+    /// Two rings of steam leaving the furnace, with open aisles.
+    Pressure(f32),
     /// A boss crossing into a harder phase.
     Phase,
     /// A boss destroyed.
@@ -934,18 +945,27 @@ impl BossFx {
                 presence.smoke -= due.1 as f32;
                 presence.flame -= due.2 as f32;
             }
+            let (style, slot) = boss.attack_style();
+            let heavy = HeavyAttack::for_slot(style, slot);
             if known && !was.winding && boss.attack_windup > 0. {
                 match boss.kind {
                     BossKind::Jester => self.push_cue(crate::map_sounds::BossCue::MaskChange, pos),
-                    BossKind::Carillon => {
+                    BossKind::Carillon if heavy != Some(HeavyAttack::Blowdown) => {
                         self.push_cue(crate::map_sounds::BossCue::HammerLift, pos)
+                    }
+                    BossKind::Bastion if heavy.is_some() => {
+                        self.push_cue(crate::map_sounds::BossCue::BastionLatch, pos)
                     }
                     _ => {}
                 }
             }
             // Its pose runs even with effects off: the warnings depend on it.
-            if boss.attack_style().0 == BossKind::Railgunner {
+            if style == BossKind::Railgunner {
                 self.rail_frame(boss, known, dt);
+            }
+            let released = known && was.winding && boss.attack_windup <= 0.;
+            if released && heavy == Some(HeavyAttack::Blowdown) {
+                self.push_cue(crate::map_sounds::BossCue::PressureRelease, pos);
             }
             if !look.live() {
                 continue;
@@ -956,8 +976,17 @@ impl BossFx {
             if known && boss.phase > was.phase {
                 self.phase_change(pos, radius, color);
             }
-            if known && was.winding && boss.attack_windup <= 0. {
-                self.burst(pos, Flash::Release, radius, color, 0.46);
+            if released {
+                let tint = if boss.kind == BossKind::Jester {
+                    tankyard_client::boss_model::silk(boss.attack as f32 * 0.17)
+                } else {
+                    heavy.map_or(color, warnings::heavy_tint)
+                };
+                if heavy == Some(HeavyAttack::Blowdown) {
+                    self.burst(pos, Flash::Pressure(boss.aim), radius, tint, 0.94);
+                } else {
+                    self.burst(pos, Flash::Release, radius, tint, 0.46);
+                }
             }
             self.wounds(pos, radius, phase, due);
         }
@@ -1123,8 +1152,8 @@ impl BossFx {
             return 0.;
         };
         let (color, fuel, body, hull) = (
-            presence.round_color(flight.id),
-            presence.fuel,
+            presence.round_color(flight.id, flight.kind),
+            presence.round_fuel(flight.kind),
             presence.pos,
             presence.radius,
         );
@@ -1363,8 +1392,8 @@ impl BossFx {
                 let mut trail = Trail::new(
                     flight.at,
                     flight.radius,
-                    presence.round_color(flight.id),
-                    presence.fuel,
+                    presence.round_color(flight.id, flight.kind),
+                    presence.round_fuel(flight.kind),
                     heavy,
                 );
                 trail.seed = (flight.id % 97) as f32 * 0.37;
@@ -1448,7 +1477,12 @@ impl BossFx {
         let Some((color, fuel)) = self
             .bosses
             .get(&flight.owner)
-            .map(|presence| (presence.round_color(flight.id), presence.fuel))
+            .map(|p| {
+                (
+                    p.round_color(flight.id, flight.kind),
+                    p.round_fuel(flight.kind),
+                )
+            })
             .or(trail.map(|trail| (trail.color, trail.fuel)))
         else {
             return;
@@ -1672,6 +1706,7 @@ impl BossFx {
                 Flash::Blast => (burst.size * 9. + 90., (1. - t).powi(2)),
                 Flash::Bloom => (burst.size * 6. + 60., (1. - t).powi(2) * 0.8),
                 Flash::Release => (burst.size * 3.6 + 110., (1. - t).powi(2) * 0.9),
+                Flash::Pressure(_) => (burst.size * 2.9 + 100., (1. - t).powi(2) * 0.63),
                 Flash::Phase => (burst.size * 4.6 + 160., (1. - t).powi(2)),
                 Flash::Fall => (burst.size * 7. + 260., (1. - t).powi(2)),
                 Flash::Arrival => (burst.size * 3. + 120., (t * PI).sin() * 0.8),

@@ -321,6 +321,27 @@ fn draw_burst(light: &mut Emission, view: &View, burst: &Burst, level: f32) {
                 alpha(mix(c, RED, 0.3), 0.3 * fade * level),
             );
         }
+        Flash::Pressure(bearing) => {
+            use tankyard_core::encounters::{BLOWDOWN_INTERVAL, BLOWDOWN_SPEEDS};
+            let followup = f32::from(BLOWDOWN_INTERVAL) * tankyard_core::DT;
+            for (delay, speed, thickness) in [
+                (0., BLOWDOWN_SPEEDS[0], 3.4),
+                (followup, BLOWDOWN_SPEEDS[1], 5.),
+            ] {
+                let age = burst.age - delay;
+                if (0. ..0.54).contains(&age) {
+                    super::warnings::pressure_arcs(
+                        light,
+                        p,
+                        s + (16. + speed * age) * z,
+                        (thickness * (1. + age) * z).max(1.),
+                        bearing,
+                        c,
+                        (1. - age / 0.54).powi(2) * level,
+                    );
+                }
+            }
+        }
         Flash::Release => {
             let grow = ease_out(t);
             light.ring(

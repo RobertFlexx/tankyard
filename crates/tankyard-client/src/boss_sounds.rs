@@ -12,6 +12,8 @@ pub fn make(cue: BossCue) -> Vec<f32> {
         MaskChange => (0.62, Room::SMALL, 0.21),
         CarillonArrival => (3.15, Room::ARENA, 1.05),
         HammerLift => (1.05, Room::HALL, 0.38),
+        PressureRelease => (1.5, Room::HALL, 0.36),
+        BastionLatch => (0.9, Room::SMALL, 0.26),
         Charge => (1.05, Room::SMALL, 0.35),
         Lock => (0.4, Room::SMALL, 0.2),
         Shot | ClashIon | ClashFire => (1.7, Room::ARENA, 0.85),
@@ -30,6 +32,17 @@ pub fn make(cue: BossCue) -> Vec<f32> {
             layer(&mut out, Laugh, 0., 1., 1.);
             // A reflection from the far end of the hall behind the dry voice.
             layer(&mut out, Laugh, 0.138, 0.99, 0.14);
+        }
+        PressureRelease => {
+            layer(&mut out, MetalSlam, 0., 1.05, 0.55);
+            layer(&mut out, Steam, 0.018, 1.12, 0.92);
+            layer(&mut out, MetalHit, 0.4, 0.72, 0.38);
+            layer(&mut out, Steam, 0.42, 0.83, 0.67);
+        }
+        BastionLatch => {
+            layer(&mut out, MetalSpring, 0., 0.9, 0.54);
+            layer(&mut out, Click, 0.14, 0.78, 0.62);
+            layer(&mut out, MetalSlam, 0.33, 1.32, 0.46);
         }
         MaskChange => {
             layer(&mut out, Click, 0., 0.9, 0.58);

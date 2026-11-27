@@ -104,7 +104,7 @@ impl World {
             return false;
         };
         let previous = self.tanks[index].pos;
-        let pos = self.spawn_position(team);
+        let pos = self.spawn_position(team, self.tanks[index].radius, player);
         for objective in &mut self.objectives {
             if objective.carrier == Some(player) {
                 objective.carrier = None;

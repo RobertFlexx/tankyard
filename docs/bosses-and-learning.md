@@ -32,9 +32,17 @@ Bosses weigh distance, recent damage, movement, nearby allies and the targets ot
 
 **Jester.** A laugh echoes across the arena when it arrives. The colored silk and its three brass bells follow the motion of the hull. The mask stays upright while the guns turn. Its first trick deals three hands of ricocheting cards, center, left, then right. *Curtain call* leaves two gaps in a ring of alternating fast and slow shots. *Jack-in-the-box* throws mines to either side of an explosive.
 
-Between tricks it can borrow any ordinary boss’s full set of weapons, including Railgunner’s plasma beam, Carillon’s hammer peal and Axiom’s combat abilities. The boss bar names the act. Its borrowed shots keep their original timing and take on the Jester’s rainbow colors. A copied beam can be broken with a parry. Sunderworm’s attacks are exclusive to the worm.
+Between tricks it can borrow any ordinary boss’s full set of weapons, including Railgunner’s plasma beam, the new Carillon and Bastion volleys, and Axiom’s combat abilities. The boss bar names the act. Its borrowed shots keep their original timing and take on the Jester’s rainbow colors. A copied beam can be broken with a parry. Sunderworm’s attacks are exclusive to the worm.
 
 **Carillon.** Its two hammers lift clear of a bronze bell as the furnace builds pressure. The peal sends three fast slugs in sequence, each trailed by an explosive down the same lane. The molten pour sends two banks of ricochets outward with room between them. When mines ring the hull, look down the barrel for the open aisle and watch the two escorts. Its hull can withstand more damage than Railgunner’s.
+
+- **Bellfall** leads tanks crossing its sights with three pairs of shots. The pairs close toward the middle, ending with an explosive. Change direction once it commits.
+- **Blowdown** sends out two steam fronts when the fight comes close. Both leave gaps along and opposite its aim. Use either gap and wait for both waves.
+- **Slag seekers** swing in from the flanks before two explosive shells arrive. Break the seekers’ turn around cover and watch the marked shell lanes.
+
+**Bastion.** Its new *Crossfire* sends a parryable slug down the left, right and center lanes in that order. *Shield wall* lays heavy traps along two fans, then pushes shells up their inside edges. The gap through the middle stays open.
+
+**Defender.** It has more hull health and slightly faster, harder-hitting gunfire. Its launchers still leave openings between the traps.
 
 **Siege Engine.** Follow the muzzle brake to read its aim. The tracks can carry it across your path while the turret leads you. Its heavy cannon tracks through the first part of the windup and holds the last 0.6 seconds, giving you a clear moment to dodge.
 
@@ -123,7 +131,7 @@ lineup. Hosts may explicitly choose `sunderworm` in a dedicated-server lineup or
 a map Boss trigger. A local pack can keep the card available with
 `"menu": { "bosses": ["sunderworm"] }`.
 
-Tank Yard 2.1.6 uses **protocol 35**, the same as 2.1.0. All 2.1.x hosts and players can play together.
+Tank Yard 2.1.7 uses **protocol 35**, the same as 2.1.0. All 2.1.x hosts and players can play together.
 Snapshots carry its real body positions, including when joining mid-fight.
 
 </details>

@@ -2765,9 +2765,6 @@ fn validate_map_catalog(maps: &[MapDef], check_connectivity: bool) -> Result<(),
                 return Err(format!("{}: objective overlaps a wall or boundary", map.id));
             }
         }
-        if map.spawn_regions.is_empty() {
-            return Err(format!("{}: arena needs a spawn region", map.id));
-        }
         for region in &map.spawn_regions {
             validate_rect(region.rect).map_err(|error| format!("{} spawn: {error}", map.id))?;
             let [x, y, w, h] = region.rect;

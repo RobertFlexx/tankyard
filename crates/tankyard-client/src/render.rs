@@ -951,6 +951,10 @@ pub fn world(
             .is_star_round(projectile.owner, projectile.id);
         let c = if boss.is_some_and(|b| b.kind == tankyard_core::BossKind::Jester) {
             tankyard_client::boss_model::shot_silk(projectile.id, boss_time)
+        } else if boss.is_some_and(|b| b.kind == tankyard_core::BossKind::Carillon)
+            && projectile.kind == ProjectileKind::Scatter
+        {
+            crate::boss_fx::STEAM
         } else if star {
             crate::accessibility::palette(tankyard_client::boss_model::AXIOM_GOLD)
         } else {

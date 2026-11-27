@@ -12,6 +12,59 @@ fn empty(mode: Mode) -> World {
     )
 }
 
+#[test]
+fn unmarked_arenas_use_safe_spawns_in_all_four_quadrants() {
+    for mode in [Mode::Ffa, Mode::BossRush] {
+        let mut world = empty(mode);
+        world.map.spawn_regions.clear();
+        let bounds = world.config.bounds();
+        let center = bounds.center();
+        let team = u8::from(mode == Mode::BossRush);
+        world.walls = vec![Rect {
+            x: center.x - 100.,
+            y: bounds.y + 200.,
+            w: 200.,
+            h: bounds.h - 400.,
+        }];
+        assert_ne!(
+            world.spawn_boss_near(BossKind::Carillon, center + V2::new(450., 0.)),
+            0
+        );
+        let mut quadrants = [false; 4];
+        for _ in 0..128 {
+            let p = world.spawn_position(team, 22., 0);
+            assert!(bounds.contains_circle(p, 22.));
+            assert!(physics::circle_rect(p, 22., world.walls[0]).is_none());
+            let boss = &world.bosses[0];
+            assert!(p.distance(boss.pos) > boss.radius + 42.);
+            let quadrant = usize::from(p.x > center.x) | (usize::from(p.y > center.y) << 1);
+            quadrants[quadrant] = true;
+        }
+        assert_eq!(quadrants, [true; 4], "{mode:?}");
+    }
+}
+
+#[test]
+fn authored_spawns_and_team_bases_take_precedence_over_the_arena() {
+    let mut world = empty(Mode::Ffa);
+    world.map.spawn_regions = vec![tankyard_content::SpawnRegion {
+        team: 0,
+        rect: [0.11, 0.15, 0.16, 0.12],
+    }];
+    let region = map_rect(&world.config, world.map.spawn_regions[0].rect);
+    for _ in 0..16 {
+        assert!(region.contains(world.spawn_position(0, 22., 0)));
+    }
+    // A moving wall that blocks all of the authored start forces a search
+    // elsewhere. It must never place the pilot in the occluded region.
+    world.walls.push(region);
+    let p = world.spawn_position(0, 22., 0);
+    assert!(physics::circle_rect(p, 22., region).is_none());
+    let mut world = empty(Mode::TwoTeams);
+    let base = world.config.team_base(2).unwrap();
+    assert!(base.contains_circle(world.spawn_position(2, 22., 0), 22.));
+}
+
 fn firing_trace(class: &str, seed: u64, reload: u8, ticks: u64) -> Vec<Vec<u64>> {
     let mut world = World::new(
         WorldConfig {

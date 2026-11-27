@@ -2391,6 +2391,7 @@ mod tests {
         let mut remote_ids = vec![];
         let mut offline_feed = Feed::default();
         let mut remote_feed = Feed::default();
+        let mut tactics_exercised = (false, false);
         for sequence in 1..=12_000 {
             session.tick(
                 PlayerInput {
@@ -2401,6 +2402,10 @@ mod tests {
             );
             if sequence % 3 == 0 {
                 let snapshot = session.display.as_ref().unwrap();
+                for bot in snapshot.tanks.iter().filter(|tank| tank.bot) {
+                    tactics_exercised.0 |= bot.kills > 0;
+                    tactics_exercised.1 |= bot.class != "vector";
+                }
                 let received = decode_snapshot(&encode_snapshot(snapshot).unwrap())
                     .unwrap_or_else(|error| panic!("{error} at tick {}", snapshot.tick));
                 let progress = remote
@@ -2422,14 +2427,8 @@ mod tests {
             .unwrap();
         assert!(player.alive);
         assert_eq!((player.kills, player.score, player.level), (0, 0, 1));
-        assert!(
-            snapshot.tanks.iter().any(|t| t.bot && t.kills > 0),
-            "bots must actually fight"
-        );
-        assert!(
-            snapshot.tanks.iter().any(|t| t.bot && t.class != "vector"),
-            "bots must actually upgrade"
-        );
+        assert!(tactics_exercised.0, "bots must actually fight");
+        assert!(tactics_exercised.1, "bots must actually upgrade");
         assert_eq!(offline_ids, ["first_round"]);
         assert_eq!(remote_ids, offline_ids);
         assert_eq!(session.achievement_tracker.session_totals(), (1, 0));

@@ -365,7 +365,7 @@ impl World {
                 .min_by_key(|t| self.tanks.iter().filter(|p| p.team == *t).count())
                 .unwrap_or(1)
         };
-        let pos = self.spawn_position(team);
+        let pos = self.spawn_position(team, 22., 0);
         let id = self.id();
         let name = sanitize_name(name);
         let lives = self.config.lives;
@@ -910,9 +910,10 @@ impl World {
             self.event(EventKind::PocketEject, pos, id, 0, team);
         }
         for id in respawns {
-            let team = self.tanks.iter().find(|t| t.id == id).map_or(0, |t| t.team);
-            let pos = self.spawn_position(team);
-            if let Some(t) = self.tanks.iter_mut().find(|t| t.id == id) {
+            if let Some(index) = self.tanks.iter().position(|t| t.id == id) {
+                let tank = &self.tanks[index];
+                let pos = self.spawn_position(tank.team, tank.radius, id);
+                let t = &mut self.tanks[index];
                 t.alive = true;
                 t.pos = pos;
                 t.vel = V2::ZERO;
@@ -981,69 +982,151 @@ impl World {
             }
         }
     }
-    pub(crate) fn spawn_position(&mut self, team: u8) -> V2 {
-        let spawn_bounds = self
-            .config
-            .team_base(team)
-            .unwrap_or_else(|| self.config.bounds());
-        let mut best = spawn_bounds.center();
-        let mut best_safety = -1.;
-        for _ in 0..64 {
-            let (x, y) = (self.random(), self.random());
-            let regions = || self.map.spawn_regions.iter().filter(|r| r.team == team);
-            let count = regions().count();
-            let region = regions().nth(((x * count as f32) as usize).min(count.saturating_sub(1)));
-            let bounds = self.config.bounds();
-            let p = if let Some(base) = self.config.team_base(team) {
-                base.clamp_circle(V2::new(base.x + x * base.w, base.y + y * base.h), 38.)
-            } else if let Some(region) = region {
-                let rect = region.rect;
-                V2::new(
-                    bounds.x + (rect[0] + self.random() * rect[2]) * bounds.w,
-                    bounds.y + (rect[1] + y * rect[3]) * bounds.h,
-                )
-            } else if team == 0 {
-                V2::new(
-                    bounds.x + 70. + x * (bounds.w - 140.),
-                    bounds.y + 70. + y * (bounds.h - 140.),
-                )
-            } else {
-                let home = self.team_home(team);
-                bounds.clamp_circle(home + V2::new((x - 0.5) * 400., (y - 0.5) * 400.), 50.)
-            };
-            if self.walls.iter().any(|&w| circle_rect(p, 36., w).is_some()) {
-                continue;
-            }
-            if self
-                .targets
+    pub(crate) fn spawn_position(&mut self, team: u8, radius: f32, ignore: EntityId) -> V2 {
+        use tankyard_content::{MapDef, ZoneKind};
+        let bounds = self.config.bounds();
+        let base = self.config.team_base(team);
+        let spawn_team = if self
+            .map
+            .spawn_regions
+            .iter()
+            .any(|region| region.team == team)
+        {
+            team
+        } else {
+            0
+        };
+        let regions: Vec<Rect> = if base.is_some() {
+            Vec::new()
+        } else {
+            self.map
+                .spawn_regions
                 .iter()
-                .any(|target| p.distance(target.pos) < target.radius + 38.0)
+                .filter(|region| region.team == spawn_team)
+                .map(|region| crate::map_rect(&self.config, region.rect))
+                .collect()
+        };
+        let dangerous: Vec<Rect> = self
+            .map
+            .zones
+            .iter()
+            .filter(|zone| {
+                matches!(zone.kind, ZoneKind::Hazard | ZoneKind::Portal)
+                    && MapDef::group_bit(zone.group) & self.match_state.hidden_groups == 0
+            })
+            .map(|zone| crate::map_rect(&self.config, self.poses.shift(zone.rect, zone.group)))
+            .collect();
+        let traps: Vec<_> = self
+            .projectiles
+            .iter()
+            .filter(|shot| {
+                matches!(shot.kind, ProjectileKind::Mine | ProjectileKind::Trap)
+                    && shot.lifetime > 0.
+                    && shot.penetration > 0.
+                    && self.hostile(team, shot.team)
+                    && shot.owner != ignore
+            })
+            .map(|shot| (shot.pos, (shot.radius + radius + 24.).powi(2)))
+            .collect();
+        let area = base.unwrap_or(bounds);
+        self.wall_index.sync(&self.walls);
+        let mut best = None;
+        let mut last = area.center();
+        let radius_with_room = radius + 12.;
+        for attempt in 0..96 {
+            // Authored spawns come first. Moving cover can close all of them,
+            // so a map with no usable region also has an arena-wide search.
+            if attempt == 64 && best.is_some_and(|(_, safety)| safety >= 0.) {
+                break;
+            }
+            let (fx, fy) = (self.random(), self.random());
+            let (region, fx) = if attempt < 64 && !regions.is_empty() {
+                let slot = (fx * regions.len() as f32) as usize;
+                (regions[slot.min(regions.len() - 1)], self.random())
+            } else {
+                (area, fx)
+            };
+            let inset = if region == area { radius_with_room } else { 0. };
+            let x = inset + fx * (region.w - 2. * inset).max(0.);
+            let y = inset + fy * (region.h - 2. * inset).max(0.);
+            let p = area.clamp_circle(V2::new(region.x + x, region.y + y), radius_with_room);
+            last = p;
+            if !area.contains_circle(p, radius)
                 || self
-                    .bosses
+                    .wall_index
+                    .near(p, radius_with_room)
                     .iter()
-                    .any(|boss| p.distance(boss.pos) < boss.radius + 60.0)
-                || self
-                    .tanks
-                    .iter()
-                    .any(|tank| tank.alive && p.distance(tank.pos) < tank.radius + 38.0)
+                    .any(|&wall| circle_rect(p, radius_with_room, wall).is_some())
             {
                 continue;
             }
-            let safety = self
-                .tanks
-                .iter()
-                .filter(|t| t.alive && (team == 0 || t.team != team))
-                .map(|t| p.distance(t.pos))
-                .fold(10000., f32::min);
-            if safety > best_safety {
-                best = p;
-                best_safety = safety;
+            let mut safety = self.spawn_safety(p, radius, team, ignore);
+            if dangerous.iter().any(|rect| rect.distance(p) < radius)
+                || (self.config.mode == Mode::Survival
+                    && p.distance(bounds.center()) + radius > self.match_state.safe_radius)
+            {
+                safety = safety.min(-200.);
             }
-            if safety > 650. {
+            if traps
+                .iter()
+                .any(|&(at, reach)| (p - at).length_squared() < reach)
+            {
+                safety = safety.min(-160.);
+            }
+            if best.is_none_or(|(_, score)| safety > score) {
+                best = Some((p, safety));
+            }
+            // This is clearance outside hulls. Keep about 650 units between
+            // the centers of two ordinary tanks in an uncrowded arena.
+            if safety > 650. - radius - 22. - 42. {
                 break;
             }
         }
-        crate::physics::clear_circle_position(best, 36., spawn_bounds, &self.walls).unwrap_or(best)
+        best.map(|(pos, _)| pos).unwrap_or_else(|| {
+            crate::physics::clear_circle_position(last, radius, area, &self.walls)
+                .or_else(|| {
+                    crate::physics::clear_circle_position(last, radius, bounds, &self.walls)
+                })
+                .unwrap_or_else(|| bounds.clamp_circle(last, radius))
+        })
+    }
+
+    fn spawn_safety(&self, pos: V2, radius: f32, team: u8, ignore: EntityId) -> f32 {
+        let mut score: f32 = 1e4;
+        let mut avoid = |at: V2, size: f32, hostile: bool| {
+            let reach = radius + size;
+            let distance = (pos - at).length_squared();
+            if distance < (reach + 16.).powi(2) {
+                score = score.min(-240. + distance.sqrt() - reach);
+            } else if hostile {
+                score = score.min(distance.sqrt() - reach - 42.);
+            }
+        };
+        for tank in self
+            .tanks
+            .iter()
+            .filter(|tank| tank.tangible() && tank.id != ignore)
+        {
+            avoid(tank.pos, tank.radius, self.hostile(team, tank.team));
+        }
+        for target in self.targets.iter().filter(|target| target.health > 0.) {
+            avoid(target.pos, target.radius, false);
+        }
+        for boss in self
+            .bosses
+            .iter()
+            .filter(|boss| boss.health > 0. && boss.id != ignore)
+        {
+            let hostile = self.hostile(team, boss.team);
+            if let Some(worm) = &boss.worm {
+                for ring in worm.rings.iter().filter(|ring| ring.surfaced()) {
+                    avoid(ring.pos, ring.radius, hostile);
+                }
+            } else {
+                avoid(boss.pos, boss.radius, hostile);
+            }
+        }
+        score
     }
     pub fn team_home(&self, team: u8) -> V2 {
         if let Some(base) = self.config.team_base(team) {

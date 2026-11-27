@@ -1393,9 +1393,6 @@ impl Document {
                 );
             }
         }
-        if m.spawn_regions.is_empty() {
-            note(None, "Add a spawn region so tanks can enter.".into(), true);
-        }
         if !problems.iter().any(|p| p.blocking)
             && let Err(error) = self.validate()
         {

@@ -17,7 +17,7 @@ impl BossFx {
     fn fuel_of(&self, round: &Round) -> Fuel {
         self.bosses
             .get(&round.owner)
-            .map_or(Fuel::Plasma, |presence| presence.fuel)
+            .map_or(Fuel::Plasma, |presence| presence.round_fuel(round.kind))
     }
     /// A clock for a round's flicker, different for each round and still
     /// with motion reduced.

@@ -90,10 +90,11 @@ impl BossFx {
         };
         let charge = shown.charge;
         let level = self.look.level();
+        let (source, slot) = boss.attack_style();
+        let special = tankyard_core::encounters::HeavyAttack::for_slot(source, slot);
         let color = match boss.kind {
             tankyard_core::BossKind::Jester => {
-                let (source, _) = boss.attack_style();
-                if source == boss.kind {
+                if source == boss.kind || special.is_some() {
                     tankyard_client::boss_model::silk(time * 0.055 + 0.85)
                 } else {
                     tankyard_client::boss_model::boss_color(source)
@@ -101,6 +102,13 @@ impl BossFx {
             }
             tankyard_core::BossKind::Carillon => tankyard_client::boss_model::FURNACE,
             _ => shown.color,
+        };
+        let color = if boss.kind != tankyard_core::BossKind::Jester {
+            special.map_or(color, |attack| {
+                mix(color, super::warnings::heavy_tint(attack), charge)
+            })
+        } else {
+            color
         };
         let calm = self.look.calm;
         let pulse = if calm {

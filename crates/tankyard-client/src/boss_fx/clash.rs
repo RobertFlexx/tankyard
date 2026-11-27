@@ -317,7 +317,7 @@ impl BossFx {
                     .bosses
                     .get(&round.owner)
                     .filter(|p| p.kind == Some(BossKind::Jester))
-                    .map(|p| p.round_color(round.id));
+                    .map(|p| p.round_color(round.id, tankyard_content::ProjectileKind::Piercing));
                 self.stream_hit(round.at, round.radius, silk);
             } else {
                 self.gone[index].due = true;

@@ -246,14 +246,20 @@ fn aimed_speed(kind: BossKind) -> f32 {
 }
 
 /// The same for the rounds of its special attack.
-fn special_speed(kind: BossKind) -> f32 {
-    match kind {
-        BossKind::SiegeEngine => SIEGE_ROUND_SPEED,
-        BossKind::Railgunner => RAIL_ROUND_SPEED,
-        BossKind::Bastion => BASTION_ROUND_SPEED,
-        BossKind::Carillon => 1430.,
-        BossKind::Sentinel => 560.,
-        BossKind::Skirmisher => 420.,
+fn special_speed(kind: BossKind, slot: u8) -> f32 {
+    if let Some(attack) = crate::encounters::HeavyAttack::for_slot(kind, slot) {
+        return attack.lead_speed();
+    }
+    match (kind, slot) {
+        (BossKind::SiegeEngine, _) => SIEGE_ROUND_SPEED,
+        (BossKind::Railgunner, _) => RAIL_ROUND_SPEED,
+        (BossKind::Bastion, 1) => 370.,
+        (BossKind::Bastion, _) => BASTION_ROUND_SPEED,
+        (BossKind::Carillon, 0) => 1430.,
+        (BossKind::Carillon, 1) => 710.,
+        (BossKind::Carillon, _) => 830.,
+        (BossKind::Sentinel, _) => 560.,
+        (BossKind::Skirmisher, _) => 420.,
         _ => aimed_speed(kind),
     }
 }
@@ -435,12 +441,8 @@ pub(crate) const fn round(
     }
 }
 
-/// The rounds of a boss's special attack: the `attack`th of its three,
-/// aimed at `aim`, in `phase`. Its warning shows these same lanes. The first
-/// is each boss's signature, the one it opens with; the other two suit other
-/// fights, and the third is what it reaches for when badly hurt. Every ring
-/// leaves a gap, and every round meets walls, parries and the round limit as
-/// any other.
+/// The rounds of a boss's special, aimed at `aim` in `phase`. Its warning
+/// shows the same lanes. The first is its signature, the one it opens with.
 pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<BossRound> {
     use ProjectileKind::*;
     use std::f32::consts::{FRAC_PI_2, TAU};
@@ -448,7 +450,12 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
         return crate::encounters::jester_volley(attack, aim, phase);
     }
     if kind == BossKind::Carillon {
-        return crate::encounters::carillon_volley(attack.min(2), aim, phase);
+        return crate::encounters::carillon_volley(attack, aim, phase);
+    }
+    if let Some(battery) = crate::encounters::Battery::for_attack(kind, attack) {
+        let mut rounds = Vec::with_capacity(16);
+        battery.preview(aim, phase, &mut rounds);
+        return rounds;
     }
     let attack = attack.min(2);
     // Wounded, everything comes thicker.
@@ -715,21 +722,21 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
                     aim + n as f32 * TAU / 12.,
                     Trap,
                     320.,
-                    27.,
+                    30.,
                     12.,
                     5.,
                     3.5,
                     0,
                 ));
             }
-            rounds.push(round(aim, Shell, 460., 38., 14., 2.5, 2., 0));
+            rounds.push(round(aim, Shell, 480., 41., 14., 2.5, 2., 0));
         }
         (BossKind::Defender, 1) => {
             fan(
                 &mut rounds,
                 5 + more,
                 0.16,
-                round(aim, Shell, 560., 40., 14., 2.5, 2., 0),
+                round(aim, Shell, 583., 43., 14., 2.5, 2., 0),
             );
         }
         (BossKind::Defender, _) => {
@@ -1009,8 +1016,9 @@ impl World {
         } else {
             1
         };
-        let busy =
-            b.attack_windup > 0. || matches!(b.tactic, BossTactic::Windup | BossTactic::Charge);
+        let busy = b.attack_windup > 0.
+            || b.mind.salvo.is_some()
+            || matches!(b.tactic, BossTactic::Windup | BossTactic::Charge);
         let visible: Vec<usize> = (0..self.tanks.len())
             .filter(|&j| {
                 let t = &self.tanks[j];
@@ -1410,8 +1418,10 @@ impl World {
             b.arrival = (b.arrival - DT).max(0.);
             let before = b.phase;
             b.phase = if b.attack_windup > 0.
-                && matches!(b.kind, BossKind::Jester | BossKind::Carillon)
-            {
+                && matches!(
+                    b.kind,
+                    BossKind::Jester | BossKind::Carillon | BossKind::Bastion
+                ) {
                 // The marked lanes must survive a health threshold mid-cast.
                 before
             } else if b.health < b.max_health * BOSS_PHASES[1] {
@@ -1457,7 +1467,18 @@ impl World {
             }
             let to = b.goal - b.pos;
             let mut lined_up = true;
-            let gun_style = b.attack_style().0;
+            let (gun_style, gun_slot) = b.attack_style();
+            if matches!(b.kind, BossKind::Carillon | BossKind::Bastion)
+                && target.is_some()
+                && b.arrival <= 0.
+                && b.attack_timer < LINING_UP
+                && b.attack_windup <= 0.
+                && b.mind.salvo.is_none()
+                && b.mind.planned_special.is_none()
+            {
+                b.mind.planned_special =
+                    Some(b.mind.pick_special(b.kind, &scene.special, special_roll));
+            }
             let traversing = gun_style == BossKind::SiegeEngine && b.attack_windup > 0.60;
             if b.tactic != BossTactic::Windup
                 && b.tactic != BossTactic::Charge
@@ -1467,13 +1488,19 @@ impl World {
                 // Just before a special it aims for that shot instead, at
                 // where the target should be once the warning is over.
                 let (shot, warned) = if traversing {
-                    (special_speed(gun_style), b.attack_windup * 0.65)
+                    (special_speed(gun_style, gun_slot), b.attack_windup * 0.65)
                 } else if b.attack_timer < LINING_UP {
-                    (special_speed(gun_style), gun_style.windup() * 0.45)
+                    let slot = b.mind.planned_special.unwrap_or(gun_slot);
+                    (special_speed(gun_style, slot), gun_style.windup() * 0.45)
                 } else {
                     (aimed_speed(gun_style), 0.)
                 };
-                let swerve = b.mind.swerve * (rage * 0.5);
+                let swerve = b.mind.swerve
+                    * if b.kind == BossKind::Carillon {
+                        0.65 + 0.15 * rage
+                    } else {
+                        rage * 0.5
+                    };
                 let point = target.map_or(b.goal, |(_, position, _)| {
                     bent_lead_point(
                         b.pos,
@@ -1514,7 +1541,8 @@ impl World {
                         BossKind::Jester => 151.,
                         BossKind::Carillon => 70.,
                         BossKind::Bastion => 38.,
-                        BossKind::Foundry | BossKind::Defender => 32.,
+                        BossKind::Defender => 36.,
+                        BossKind::Foundry => 32.,
                         _ => 55.,
                     }
             };
@@ -1643,7 +1671,9 @@ impl World {
                 // A ready special waits a moment for the gun to come round,
                 // so its warning points at something.
                 if b.attack_timer <= 0. && (lined_up || b.attack_timer < -BOSS_AIM_HOLD) {
-                    b.attack = b.mind.pick_special(b.kind, &scene.special, special_roll);
+                    b.attack = b.mind.planned_special.take().unwrap_or_else(|| {
+                        b.mind.pick_special(b.kind, &scene.special, special_roll)
+                    });
                     b.attack_windup = b.warning_seconds();
                     b.attack_timer = match b.kind {
                         BossKind::Jester => 6.4 - f32::from(b.phase) * 0.6,
@@ -1670,7 +1700,7 @@ impl World {
             if secondary
                 && let Some(battery) = crate::encounters::Battery::for_attack(style, pattern)
             {
-                b.mind.salvo = Some(crate::encounters::Salvo::new(battery, b.aim));
+                b.mind.salvo = Some(crate::encounters::Salvo::new(battery, b.aim, b.phase));
             }
             let staged = b.mind.salvo.is_some();
             let primary = primary_due
@@ -1972,12 +2002,12 @@ impl World {
                         let angle = style.turn(self.tick)
                             + std::f32::consts::PI
                             + n as f32 * std::f32::consts::TAU / 3.;
-                        emit(angle, ProjectileKind::Trap, 180., 26., 18., 7., 3., 0);
+                        emit(angle, ProjectileKind::Trap, 190., 29., 18., 7., 3.2, 0);
                         emit(
                             b.aim + (n as f32 - 1.) * 0.1,
                             ProjectileKind::Bullet,
-                            410.,
-                            17.,
+                            425.,
+                            18.,
                             8.,
                             2.5,
                             1.5,

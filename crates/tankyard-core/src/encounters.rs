@@ -9,6 +9,9 @@ use serde::{Serializer, ser::SerializeSeq};
 use std::f32::consts::{PI, TAU};
 use tankyard_content::ProjectileKind::*;
 
+mod heavy;
+pub use heavy::{BLOWDOWN_INTERVAL, BLOWDOWN_OPENING, BLOWDOWN_SPEEDS, HeavyAttack};
+
 pub const CARD_MUZZLE: f32 = 1.43;
 pub const JESTER_RADIUS: f32 = 116.;
 pub const CARILLON_RADIUS: f32 = 148.;
@@ -18,8 +21,7 @@ pub const CARILLON_ODDS: f32 = 1. / 48_000.;
 use crate::creator_boss::{ATTACK_COUNT, Attack};
 use BossKind::*;
 
-/// One mask uses all three published specials of its source. The last twelve
-/// cards use Axiom's combat actions, including its dash and repair.
+/// Each mask uses its source's own specials, including Axiom's dash and repair.
 #[derive(Clone, Copy)]
 struct Act {
     source: BossKind,
@@ -46,19 +48,35 @@ const SOURCES: [BossKind; 16] = [
     Carillon,
 ];
 const AXIOM_START: usize = 3 + SOURCES.len() * 3;
-const ACTS: [Act; AXIOM_START + ATTACK_COUNT] = repertoire();
+const EXPANDED_START: usize = AXIOM_START + ATTACK_COUNT;
+const BASTION_SPECIALS: u8 = 5;
+const CARILLON_SPECIALS: u8 = 6;
+const EXTRA_ACTS: [(BossKind, u8); 5] = [
+    (Carillon, 3),
+    (Carillon, 4),
+    (Carillon, 5),
+    (Bastion, 3),
+    (Bastion, 4),
+];
+const ACT_COUNT: usize = EXPANDED_START + EXTRA_ACTS.len();
+const ACTS: [Act; ACT_COUNT] = repertoire();
+// Fractional hull sizes use exact binary fractions and are outside version
+// 2.1.6's Jester range. Old clients still see a valid boss and attack.
+const JESTER_EXPANDED_WIRE_RADIUS: f32 = JESTER_RADIUS + 3.5;
+const CARILLON_EXPANDED_WIRE_RADIUS: f32 = CARILLON_RADIUS + 0.25;
+const BASTION_EXPANDED_WIRE_RADIUS: f32 = 100.25;
 
 // Protocol 35 already distinguishes the Railgunner by hull size. Four reserved
 // legacy silhouettes distinguish the mask families without changing field
 // meanings or rounding a timer. New clients restore the physical radius.
-const fn repertoire() -> [Act; AXIOM_START + ATTACK_COUNT] {
+const fn repertoire() -> [Act; ACT_COUNT] {
     let base = Act {
         source: Jester,
         attack: 0,
         proxy: (Prism, 1),
         wire_radius: JESTER_RADIUS + 3.,
     };
-    let mut acts = [base; AXIOM_START + ATTACK_COUNT];
+    let mut acts = [base; ACT_COUNT];
     acts[1] = Act {
         attack: 1,
         proxy: (Eclipse, 2),
@@ -110,6 +128,21 @@ const fn repertoire() -> [Act; AXIOM_START + ATTACK_COUNT] {
         };
         i += 1;
     }
+    i = 0;
+    while i < EXTRA_ACTS.len() {
+        let (source, attack) = EXTRA_ACTS[i];
+        let proxy = match source {
+            Carillon => SiegeEngine,
+            _ => Bastion,
+        };
+        acts[EXPANDED_START + i] = Act {
+            source,
+            attack,
+            proxy: (proxy, attack - 3),
+            wire_radius: JESTER_EXPANDED_WIRE_RADIUS,
+        };
+        i += 1;
+    }
     acts
 }
 pub fn jester_act(code: u8) -> Option<(BossKind, u8)> {
@@ -121,6 +154,15 @@ pub fn axiom_act(code: u8) -> Option<Attack> {
 }
 
 impl BossKind {
+    pub const fn special_count(self) -> u8 {
+        match self {
+            Bastion => BASTION_SPECIALS,
+            Carillon => CARILLON_SPECIALS,
+            Jester => ACT_COUNT as u8,
+            _ => 3,
+        }
+    }
+
     /// A copied heavy round keeps its parry and impact even after its owner
     /// changes masks. The gun’s bore survives velocity changes and stasis.
     pub fn cannon_source(
@@ -166,7 +208,9 @@ impl Boss {
     /// Inverse of the snapshot projection below. Reject unmapped combinations
     /// instead of guessing the attack a player should be warned about.
     pub fn restore_encounter(&mut self) -> bool {
-        if (JESTER_RADIUS..=JESTER_RADIUS + 3.).contains(&self.radius) {
+        if (JESTER_RADIUS..=JESTER_RADIUS + 3.).contains(&self.radius)
+            || self.radius == JESTER_EXPANDED_WIRE_RADIUS
+        {
             let Some(slot) = ACTS
                 .iter()
                 .position(|a| a.wire_radius == self.radius && a.proxy == (self.kind, self.attack))
@@ -176,10 +220,25 @@ impl Boss {
             self.radius = JESTER_RADIUS;
             self.kind = Jester;
             self.attack = slot as u8;
-        } else if self.kind == SiegeEngine && self.radius == CARILLON_RADIUS {
-            self.kind = Carillon;
         } else {
-            self.kind = self.kind.from_wire(self.radius);
+            match (self.kind, self.radius) {
+                (SiegeEngine, CARILLON_RADIUS) => self.kind = Carillon,
+                (SiegeEngine, CARILLON_EXPANDED_WIRE_RADIUS)
+                | (Bastion, BASTION_EXPANDED_WIRE_RADIUS) => {
+                    let kind = if self.kind == SiegeEngine {
+                        Carillon
+                    } else {
+                        Bastion
+                    };
+                    if self.attack >= kind.special_count() - 3 {
+                        return false;
+                    }
+                    self.kind = kind;
+                    self.radius = kind.radius();
+                    self.attack += 3;
+                }
+                _ => self.kind = self.kind.from_wire(self.radius),
+            }
         }
         true
     }
@@ -198,7 +257,13 @@ pub(crate) fn serialize_bosses<S: Serializer>(
                     .ok_or_else(|| serde::ser::Error::custom("unknown Jester act"))?;
                 Some((act.proxy.0, act.proxy.1, act.wire_radius))
             }
+            Carillon if boss.attack >= 3 => {
+                Some((SiegeEngine, boss.attack - 3, CARILLON_EXPANDED_WIRE_RADIUS))
+            }
             Carillon => Some((SiegeEngine, boss.attack, boss.radius)),
+            Bastion if boss.attack >= 3 => {
+                Some((Bastion, boss.attack - 3, BASTION_EXPANDED_WIRE_RADIUS))
+            }
             _ => None,
         };
         if let Some((kind, attack, radius)) = proxy {
@@ -217,20 +282,20 @@ pub(crate) fn serialize_bosses<S: Serializer>(
 /// Deal one complete repertoire before reshuffling. Distance, movement and
 /// nearby opponents weight the remaining acts. Even across the shuffle, the
 /// audience never sees the same act twice in a row.
-pub(crate) fn choose_act(previous: u8, played: &mut u64, scene: &Scene, roll: f32) -> u8 {
-    const FULL_DECK: u64 = u64::MAX >> (64 - ACTS.len());
+pub(crate) fn choose_act(previous: u8, played: &mut u128, scene: &Scene, roll: f32) -> u8 {
+    const FULL_DECK: u128 = u128::MAX >> (128 - ACT_COUNT);
     if *played == FULL_DECK {
         *played = 0;
     }
-    let unavailable = *played | (1u64 << previous);
+    let unavailable = *played | (1u128 << previous);
     let mut weights = [0.; ACTS.len()];
     let mut chosen = 0;
     for (index, act) in ACTS.iter().enumerate() {
-        if unavailable & (1u64 << index) == 0 {
+        if unavailable & (1u128 << index) == 0 {
             let fit = special_fit(act.source, act.attack).suits(scene);
             let own = if index < 3 {
                 6.
-            } else if index >= AXIOM_START {
+            } else if (AXIOM_START..EXPANDED_START).contains(&index) {
                 0.7
             } else {
                 1.
@@ -247,32 +312,39 @@ pub(crate) fn choose_act(previous: u8, played: &mut u64, scene: &Scene, roll: f3
         }
         left -= weight;
     }
-    *played |= 1u64 << chosen;
+    *played |= 1u128 << chosen;
     chosen as u8
 }
 
-/// A three-beat release on the bearing locked in during the windup. The
-/// middle gun coaches the dodge, then the port and starboard guns answer.
+/// A sequence on the bearing locked during the windup.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Battery {
     Cards,
     Hammers,
+    Heavy(HeavyAttack),
 }
 impl Battery {
     pub(crate) fn for_attack(style: BossKind, slot: u8) -> Option<Self> {
         match (style, slot) {
             (Jester, 0) => Some(Self::Cards),
             (Carillon, 0) => Some(Self::Hammers),
-            _ => None,
+            (kind, slot) => HeavyAttack::for_slot(kind, slot).map(Self::Heavy),
         }
     }
     fn interval(self) -> u8 {
         match self {
             Self::Cards => 8,
             Self::Hammers => 12,
+            Self::Heavy(attack) => attack.interval(),
         }
     }
-    fn beat(self, aim: f32, index: u8, mut fire: impl FnMut(BossRound)) {
+    fn beats(self) -> u8 {
+        match self {
+            Self::Cards | Self::Hammers => 3,
+            Self::Heavy(attack) => attack.beats(),
+        }
+    }
+    fn beat(self, aim: f32, phase: u8, index: u8, mut fire: impl FnMut(BossRound)) {
         let side = [0., -1., 1.][usize::from(index)];
         match self {
             Self::Cards => {
@@ -295,11 +367,12 @@ impl Battery {
                 fire(round(angle, Shell, 1430., 295., PEAL_RADIUS, 1.75, 11., 0));
                 fire(round(angle, Explosive, 815., 88., 14., 2.45, 4., 0));
             }
+            Self::Heavy(attack) => attack.fire(aim, phase, index, fire),
         }
     }
-    fn preview(self, aim: f32, shots: &mut Vec<BossRound>) {
-        for beat in 0..3 {
-            self.beat(aim, beat, |shot| shots.push(shot));
+    pub(crate) fn preview(self, aim: f32, phase: u8, shots: &mut Vec<BossRound>) {
+        for beat in 0..self.beats() {
+            self.beat(aim, phase, beat, |shot| shots.push(shot));
         }
     }
 }
@@ -308,13 +381,15 @@ impl Battery {
 pub(crate) struct Salvo {
     battery: Battery,
     aim: f32,
+    phase: u8,
     tick: u8,
 }
 impl Salvo {
-    pub(crate) fn new(battery: Battery, aim: f32) -> Self {
+    pub(crate) fn new(battery: Battery, aim: f32, phase: u8) -> Self {
         Self {
             battery,
             aim,
+            phase,
             tick: 0,
         }
     }
@@ -328,14 +403,18 @@ impl Salvo {
         if !beat.tick.is_multiple_of(interval) {
             return None;
         }
-        if beat.tick == 2 * interval {
+        if beat.tick == (beat.battery.beats() - 1) * interval {
             *current = None;
         }
         Some(beat)
     }
     pub(crate) fn fire(self, emit: impl FnMut(BossRound)) {
-        self.battery
-            .beat(self.aim, self.tick / self.battery.interval(), emit);
+        self.battery.beat(
+            self.aim,
+            self.phase,
+            self.tick / self.battery.interval(),
+            emit,
+        );
     }
 }
 
@@ -350,7 +429,7 @@ pub(crate) fn jester_volley(attack: u8, aim: f32, phase: u8) -> Vec<BossRound> {
     }
     let mut shots = Vec::with_capacity(24);
     match slot {
-        0 => Battery::Cards.preview(aim, &mut shots),
+        0 => Battery::Cards.preview(aim, phase, &mut shots),
         1 => {
             let spokes = 14 + 2 * phase.clamp(1, 3);
             for i in 0..spokes {
@@ -411,7 +490,7 @@ pub(crate) fn jester_volley(attack: u8, aim: f32, phase: u8) -> Vec<BossRound> {
 pub(crate) fn carillon_volley(attack: u8, aim: f32, phase: u8) -> Vec<BossRound> {
     let mut shots = Vec::with_capacity(32);
     match attack {
-        0 => Battery::Hammers.preview(aim, &mut shots),
+        0 => Battery::Hammers.preview(aim, phase, &mut shots),
         1 => {
             for side in [-1., 1.] {
                 for i in 0..(4 + phase.clamp(1, 3)) {
@@ -428,7 +507,7 @@ pub(crate) fn carillon_volley(attack: u8, aim: f32, phase: u8) -> Vec<BossRound>
                 }
             }
         }
-        _ => {
+        2 => {
             let teeth = 12 + 2 * phase.clamp(1, 3);
             for i in 1..teeth {
                 let angle = aim + TAU * f32::from(i) / f32::from(teeth);
@@ -445,6 +524,11 @@ pub(crate) fn carillon_volley(attack: u8, aim: f32, phase: u8) -> Vec<BossRound>
                     7.,
                     0,
                 ));
+            }
+        }
+        _ => {
+            if let Some(battery) = Battery::for_attack(Carillon, attack) {
+                battery.preview(aim, phase, &mut shots);
             }
         }
     }
@@ -484,7 +568,7 @@ mod tests {
             }
         }
         for source in SOURCES {
-            for slot in 0..3 {
+            for slot in 0..source.special_count() {
                 assert_eq!(
                     ACTS.iter()
                         .filter(|a| (a.source, a.attack) == (source, slot))
@@ -526,20 +610,27 @@ mod tests {
 
     #[test]
     fn all_three_beats_follow_the_warning_and_finish_on_schedule() {
-        for (kind, interval) in [(Jester, 8), (Carillon, 12)] {
-            let battery = Battery::for_attack(kind, 0).unwrap();
-            let mut salvo = Some(Salvo::new(battery, 1.23));
-            let mut fired = Vec::new();
-            let mut ticks = Vec::new();
-            for tick in 0..90 {
-                if let Some(beat) = Salvo::advance(&mut salvo) {
-                    ticks.push(tick);
-                    beat.fire(|r| fired.push(r));
+        for kind in [Jester, Carillon, Bastion] {
+            for slot in 0..kind.special_count() {
+                let Some(battery) = Battery::for_attack(kind, slot) else {
+                    continue;
+                };
+                let mut salvo = Some(Salvo::new(battery, 1.23, 3));
+                let mut fired = Vec::new();
+                let mut ticks = Vec::new();
+                for tick in 0..90 {
+                    if let Some(beat) = Salvo::advance(&mut salvo) {
+                        ticks.push(tick);
+                        beat.fire(|r| fired.push(r));
+                    }
                 }
+                let expected: Vec<_> = (0..battery.beats())
+                    .map(|n| n * battery.interval())
+                    .collect();
+                assert_eq!(ticks, expected, "{kind:?}/{slot}");
+                assert_eq!(fired, crate::special_volley(kind, slot, 1.23, 3));
+                assert!(salvo.is_none());
             }
-            assert_eq!(fired, crate::special_volley(kind, 0, 1.23, 2));
-            assert_eq!(ticks, [0, interval, 2 * interval]);
-            assert!(salvo.is_none());
         }
     }
 

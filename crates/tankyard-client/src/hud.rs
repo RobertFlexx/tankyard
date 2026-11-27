@@ -2228,6 +2228,21 @@ fn bar_status(boss: &tankyard_core::Boss, marked: bool) -> Option<(&'static str,
     }
     if boss.attack_windup > 0. {
         let (source, slot) = boss.attack_style();
+        use tankyard_core::encounters::HeavyAttack;
+        if let Some(attack) = HeavyAttack::for_slot(source, slot) {
+            let call = if boss.kind == BossKind::Jester {
+                attack.name()
+            } else {
+                match attack {
+                    HeavyAttack::Bellfall => "Bellfall · the pairs close in",
+                    HeavyAttack::Blowdown => "Blowdown · take either open lane",
+                    HeavyAttack::SlagSeekers => "Slag seekers · break their turn",
+                    HeavyAttack::Crossfire => "Crossfire · left, right, center",
+                    HeavyAttack::ShieldWall => "Shield wall · take the center gap",
+                }
+            };
+            return Some((call, 2));
+        }
         let call = match (boss.kind, source, slot) {
             (BossKind::Jester, BossKind::Jester, 0) => "Three-card trick",
             (BossKind::Jester, BossKind::Jester, 1) => "Curtain call · find a gap",
@@ -2239,7 +2254,7 @@ fn bar_status(boss: &tankyard_core::Boss, marked: bool) -> Option<(&'static str,
             (BossKind::Jester, other, _) => other.name(),
             (BossKind::Carillon, _, 0) => "Hammer peal · clear the lanes",
             (BossKind::Carillon, _, 1) => "Molten pour · watch the center",
-            (BossKind::Carillon, _, _) => "Casting floor · find the aisle",
+            (BossKind::Carillon, _, 2) => "Casting floor · find the aisle",
             _ => "",
         };
         if !call.is_empty() {

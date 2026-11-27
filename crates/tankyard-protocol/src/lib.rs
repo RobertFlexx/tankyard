@@ -706,9 +706,7 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && scalar(b.arrival)
                 && (-tankyard_core::BOSS_AIM_HOLD..=30.).contains(&b.attack_timer)
                 && (0.0..=b.warning_seconds()).contains(&b.attack_windup)
-                && (b.attack <= 2
-                    || (b.kind == BossKind::Jester
-                        && tankyard_core::encounters::jester_act(b.attack).is_some()))
+                && b.attack < b.kind.special_count()
                 && (1..=3).contains(&b.phase)
                 && b.team <= 4
         })
@@ -1139,9 +1137,15 @@ mod tests {
         let mut world = World::new(WorldConfig::default(), Content::builtin());
         assert_ne!(world.spawn_boss(BossKind::Jester), 0);
         assert_ne!(world.spawn_boss(BossKind::Carillon), 0);
+        assert_ne!(world.spawn_boss(BossKind::Bastion), 0);
         let mut snapshot = world.snapshot();
         for act in (0..=u8::MAX).take_while(|&i| jester_act(i).is_some()) {
-            for (boss, attack) in snapshot.bosses.iter_mut().zip([act, act % 3]) {
+            let attacks = [
+                act,
+                act % BossKind::Carillon.special_count(),
+                act % BossKind::Bastion.special_count(),
+            ];
+            for (boss, attack) in snapshot.bosses.iter_mut().zip(attacks) {
                 boss.attack = attack;
                 boss.attack_windup = boss.warning_seconds();
             }
@@ -1160,9 +1164,16 @@ mod tests {
                         current.id,
                         current.kind,
                         current.attack,
-                        current.attack_windup
+                        current.attack_windup,
+                        current.radius
                     ),
-                    (sent.id, sent.kind, sent.attack, sent.attack_windup)
+                    (
+                        sent.id,
+                        sent.kind,
+                        sent.attack,
+                        sent.attack_windup,
+                        sent.radius
+                    )
                 );
             }
         }

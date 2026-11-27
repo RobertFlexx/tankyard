@@ -113,15 +113,17 @@ impl World {
             .map(|tank| tank.id)
             .collect();
         for id in squad {
-            let pos = self.spawn_position(1);
-            if let Some(tank) = self.tanks.iter_mut().find(|tank| tank.id == id) {
-                if !tank.alive {
+            if let Some(index) = self.tanks.iter().position(|tank| tank.id == id) {
+                if !self.tanks[index].alive {
+                    let pos = self.spawn_position(1, self.tanks[index].radius, id);
+                    let tank = &mut self.tanks[index];
                     tank.pos = pos;
                     tank.vel = V2::ZERO;
                     tank.input = PlayerInput::default();
                     tank.protection = self.config.spawn_protection;
                     tank.spawn_immunity = tank.protection > 0.0;
                 }
+                let tank = &mut self.tanks[index];
                 tank.alive = true;
                 tank.health = tank.max_health;
                 tank.respawn_timer = 0.0;
@@ -152,7 +154,6 @@ impl World {
         };
         for index in 0..count {
             let id = self.add_player(&format!("Raider {}", index + 1), true);
-            let pos = self.spawn_position(2);
             let class = classes[(index + usize::from(wave)) % classes.len()];
             let minimum = self.content.class(class).map_or(1, |class| class.min_level);
             self.set_level_unchecked(id, (10 + wave * 3).max(minimum).min(MAX_LEVEL));
@@ -171,7 +172,9 @@ impl World {
                     self.upgrade_stat(id, stat);
                 }
             }
-            if let Some(tank) = self.tanks.iter_mut().find(|tank| tank.id == id) {
+            if let Some(index) = self.tanks.iter().position(|tank| tank.id == id) {
+                let pos = self.spawn_position(2, self.tanks[index].radius, id);
+                let tank = &mut self.tanks[index];
                 tank.team = 2;
                 tank.pos = pos;
                 tank.lives = 0;
@@ -184,8 +187,9 @@ impl World {
                 9 => BossKind::Bastion,
                 _ => BossKind::Eclipse,
             });
-            let pos = self.spawn_position(2);
-            if let Some(boss) = self.bosses.iter_mut().find(|boss| boss.id == id) {
+            if let Some(index) = self.bosses.iter().position(|boss| boss.id == id) {
+                let pos = self.spawn_position(2, self.bosses[index].radius, id);
+                let boss = &mut self.bosses[index];
                 boss.team = 2;
                 boss.pos = pos;
                 boss.max_health = (1400.0 + f32::from(wave) * 260.0)
