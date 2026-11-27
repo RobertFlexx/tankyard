@@ -62,6 +62,7 @@ pub(crate) fn populate(
                 .clone(),
             // A moment to take in the room before the first one moves.
             wake: 1.8 + index as f32 * 0.5,
+            last_seen: None,
         });
     }
 }
@@ -85,9 +86,15 @@ pub(crate) fn pursue(
     for echo in &mut tank.pocket_echoes {
         echo.previous = echo.pos;
         echo.wake = (echo.wake - dt).max(0.);
+        if layout.clear(echo.pos, target, 2.) {
+            echo.last_seen = Some(target);
+        } else if echo.last_seen.is_some_and(|at| echo.pos.distance(at) < 32.) {
+            echo.last_seen = None;
+        }
         if echo.wake == 0. {
-            let goal = layout
-                .route(echo.pos, target, echo.radius)
+            let goal = echo
+                .last_seen
+                .and_then(|at| layout.route(echo.pos, at, echo.radius))
                 .unwrap_or(echo.pos);
             let delta = goal - echo.pos;
             let desired = delta.normalized() * speed.min(delta.length() / dt.max(0.001));

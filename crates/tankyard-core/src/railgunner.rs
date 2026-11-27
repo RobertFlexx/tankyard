@@ -260,12 +260,7 @@ impl World {
         let b = &self.bosses[i];
         let mut best: Option<(f32, Mark)> = None;
         for t in &self.tanks {
-            if !t.tangible()
-                || t.health <= 0.
-                || t.protection > 0.
-                || !self.hostile(b.team, t.team)
-                || self.config.base_protected(t.team, t.pos, t.radius)
-            {
+            if !self.can_hunt(b.team, t) {
                 continue;
             }
             let distance = t.pos.distance(b.pos);
@@ -303,17 +298,20 @@ impl World {
         best.map(|(_, mark)| mark)
     }
 
-    /// How far off the nearest enemy tank is, and where.
+    /// How far off the nearest visible tank is. A tank behind cover cannot
+    /// force a hop or steer the hull away from its last sighting.
     fn rail_nearest(&self, i: usize) -> Option<(f32, V2)> {
         let b = &self.bosses[i];
         self.tanks
             .iter()
             .filter(|t| {
-                t.tangible()
-                    && t.health > 0.
-                    && t.protection <= 0.
-                    && self.hostile(b.team, t.team)
-                    && !self.config.base_protected(t.team, t.pos, t.radius)
+                self.can_hunt(b.team, t)
+                    && (t.pos - b.pos).length_squared()
+                        < (HOP_RANGE + b.radius).max(RAIL_CLOSE + 60.).powi(2)
+                    && self
+                        .walls
+                        .iter()
+                        .all(|&wall| sweep_rect(b.pos, t.pos, 5., wall).is_none())
             })
             .map(|t| (t.pos.distance(b.pos), t.pos))
             .min_by(|a, c| a.0.total_cmp(&c.0))
@@ -328,6 +326,12 @@ impl World {
     ) {
         let mark = self.rail_mark(i);
         let near = self.rail_nearest(i);
+        let boss = &self.bosses[i];
+        let remembered = boss.target != 0
+            && self
+                .tanks
+                .iter()
+                .any(|t| t.id == boss.target && self.can_hunt(boss.team, t));
         let bounds = self.config.bounds();
         let walls = &self.walls;
         let tick = self.tick;
@@ -343,6 +347,7 @@ impl World {
             };
         }
         let stage = usize::from(b.phase.clamp(1, 3) - 1);
+        let mut search = None;
         if let Some(mark) = mark {
             b.read = if mark.id == b.target {
                 b.read.lerp(mark.vel, 1. - (-DT * READ_RATE).exp())
@@ -351,13 +356,24 @@ impl World {
             };
             b.target = mark.id;
             b.goal = mark.pos;
-        } else if b.pos.distance(b.goal) < 130. || !bounds.contains_circle(b.goal, b.radius + 60.) {
-            b.target = 0;
-            let angle = tick as f32 * 0.002 + b.id as f32 * 1.618;
-            b.goal = bounds.clamp_circle(
-                bounds.center() + V2::from_angle(angle) * (bounds.w.min(bounds.h) * 0.3),
-                b.radius + 80.,
-            );
+            b.mind.saw(mark.pos);
+        } else {
+            let had_target = b.target != 0;
+            if !remembered {
+                b.mind.forget();
+            }
+            search = b.search_goal(bounds, walls);
+            if search.is_none()
+                && (had_target
+                    || b.pos.distance(b.goal) < 130.
+                    || !bounds.contains_circle(b.goal, b.radius + 60.))
+            {
+                let angle = tick as f32 * 0.002 + b.id as f32 * 1.618;
+                b.goal = bounds.clamp_circle(
+                    bounds.center() + V2::from_angle(angle) * (bounds.w.min(bounds.h) * 0.3),
+                    b.radius + 80.,
+                );
+            }
         }
         let beaming = b.rail.beam > 0.;
         b.rail.hop = (b.rail.hop - DT).max(0.);
@@ -433,6 +449,9 @@ impl World {
                 let side = if b.id.is_multiple_of(2) { 1. } else { -1. };
                 V2::new(-run.y, run.x) * side * drive * 0.5
             }
+        } else if let Some(point) = search {
+            b.tactic = BossTactic::Advance;
+            (point - b.pos).normalized() * drive
         } else {
             b.tactic = BossTactic::Patrol;
             (b.goal - b.pos).normalized() * drive * 0.6

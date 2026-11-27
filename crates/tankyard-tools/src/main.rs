@@ -922,6 +922,7 @@ fn fill_projectiles(world: &mut World, wanted: usize, rng: &mut u64) {
             hit: Vec::new(),
             gun: None,
             homing_target: 0,
+            last_seen: None,
             frozen: None,
             stasis_used: false,
         });

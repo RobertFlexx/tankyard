@@ -2708,6 +2708,7 @@ mod snapshot_regressions {
                 hit: (0..24).map(|n| u64::MAX - n).collect(),
                 gun: None,
                 homing_target: 0,
+                last_seen: None,
                 frozen: None,
                 stasis_used: false,
             });

@@ -2297,13 +2297,19 @@ impl World {
             self.steer_homing(i);
             return;
         }
-        let (kind, pos, owner, team, speed, id) = {
-            let p = &self.projectiles[i];
-            (p.kind, p.pos, p.owner, p.team, p.cruise_speed, p.id)
-        };
+        let shot = &self.projectiles[i];
+        let (kind, pos, owner, team, speed, id) = (
+            shot.kind,
+            shot.pos,
+            shot.owner,
+            shot.team,
+            shot.cruise_speed,
+            shot.id,
+        );
         if kind.is_drone() {
+            let mut sighting = shot.last_seen;
             if let Some(guard_team) = crate::team_bases::base_guard_team(owner) {
-                let Some(goal) = self.base_guard_goal(guard_team, id, pos) else {
+                let Some(goal) = self.base_guard_goal(guard_team, shot, &mut sighting) else {
                     // The mode or arena no longer has this base.
                     self.projectiles[i].lifetime = 0.;
                     return;
@@ -2312,22 +2318,21 @@ impl World {
                 let desired_speed = speed * (offset.length() / 60.).clamp(0.0, 1.0);
                 let target = offset.normalized() * desired_speed;
                 self.projectiles[i].vel = self.projectiles[i].vel.lerp(target, (DT * 7.).min(1.));
+                self.projectiles[i].last_seen = sighting;
                 return;
             }
             let desired = if let Some(t) = self.tanks.iter().find(|t| t.id == owner && t.alive) {
-                let returning = self.projectiles[i].is_return_drone();
+                let returning = shot.is_return_drone();
                 let commanded = if returning {
                     t.input.steer_return
                 } else {
                     t.input.fire
                 };
-                if returning && !commanded && !t.input.alt_fire {
-                    let target = self.projectiles[i].homing_target;
-                    self.homing_position(target, team, owner)
-                        .or_else(|| self.minion_target(pos, team, owner, 900.))
-                } else if t.input.alt_fire {
+                if t.input.alt_fire {
+                    sighting = None;
                     Some(t.pos + V2::from_angle(drone_phase(id)) * 90.)
                 } else if commanded {
+                    sighting = None;
                     let cursor = t.pos + V2::from_angle(t.aim) * t.input.aim_distance.min(1600.);
                     if kind == ProjectileKind::Minion {
                         // Stable slots leave each minion room to aim and fire.
@@ -2336,31 +2341,57 @@ impl World {
                     } else {
                         Some(cursor)
                     }
-                } else if kind == ProjectileKind::Minion {
-                    let orbit = drone_phase(id) + self.tick as f32 * DT * 0.35;
-                    if let Some((_, target)) = self.minion_target_with_id(
-                        pos,
-                        team,
-                        owner,
-                        500.0,
-                        self.projectiles[i].homing_target,
-                    ) {
-                        // Give the little bastards a firing circle instead of ramming.
-                        Some(target + V2::from_angle(orbit) * 90.0)
-                    } else {
-                        Some(t.pos + V2::from_angle(orbit) * 110.0)
-                    }
                 } else {
-                    self.minion_target(pos, team, owner, 700.).or(Some(
-                        t.pos + V2::from_angle(self.tick as f32 * 0.02 + drone_phase(id)) * 120.,
-                    ))
+                    let observed = if returning {
+                        self.homing_position(shot.homing_target, team, owner)
+                            .filter(|&at| self.can_see(pos, at, 2.))
+                            .map(|at| (shot.homing_target, at))
+                    } else {
+                        None
+                    };
+                    let range = if returning {
+                        900.
+                    } else if kind == ProjectileKind::Minion {
+                        500.
+                    } else {
+                        700.
+                    };
+                    let observed = observed.or_else(|| {
+                        self.minion_target_with_id(pos, team, owner, range, shot.homing_target)
+                    });
+                    let orbit = drone_phase(id) + self.tick as f32 * DT * 0.35;
+                    if let Some((target, at)) = observed {
+                        sighting = Some((target, at));
+                        Some(if kind == ProjectileKind::Minion {
+                            at + V2::from_angle(orbit) * 90.
+                        } else {
+                            at
+                        })
+                    } else {
+                        self.search_drone(pos, shot.radius, team, &mut sighting)
+                            .or_else(|| {
+                                if returning {
+                                    None
+                                } else if kind == ProjectileKind::Minion {
+                                    Some(t.pos + V2::from_angle(orbit) * 110.)
+                                } else {
+                                    Some(
+                                        t.pos
+                                            + V2::from_angle(
+                                                self.tick as f32 * 0.02 + drone_phase(id),
+                                            ) * 120.,
+                                    )
+                                }
+                            })
+                    }
                 }
             } else if let Some(b) = self.bosses.iter().find(|b| b.id == owner && b.health > 0.) {
-                Some(self.boss_drone_goal(b, id, pos, team))
+                Some(self.boss_drone_goal(b, id, pos, team, shot.radius, &mut sighting))
             } else {
                 self.projectiles[i].lifetime = 0.;
                 None
             };
+            self.projectiles[i].last_seen = sighting;
             if let Some(goal) = desired {
                 let offset = goal - pos;
                 // Arrive at a nearby cursor or guard slot without orbiting
@@ -2388,6 +2419,7 @@ impl World {
                 && !self.config.base_protected(t.team, t.pos, t.radius)
                 && self.hostile(team, t.team)
                 && d < best
+                && self.can_see(pos, t.pos, 2.)
             {
                 best = d;
                 target = Some(t.pos);
@@ -2398,7 +2430,12 @@ impl World {
                 continue;
             };
             let d = (pos - center).length_squared();
-            if b.id != owner && b.health > 0. && self.hostile(team, b.team) && d < best {
+            if b.id != owner
+                && b.health > 0.
+                && self.hostile(team, b.team)
+                && d < best
+                && self.can_see(pos, center, 2.)
+            {
                 best = d;
                 target = Some(center);
             }
@@ -2406,7 +2443,7 @@ impl World {
         if target.is_none() {
             for t in &self.targets {
                 let d = (pos - t.pos).length_squared();
-                if t.health > 0. && d < best {
+                if t.health > 0. && d < best && self.can_see(pos, t.pos, 2.) {
                     best = d;
                     target = Some(t.pos);
                 }

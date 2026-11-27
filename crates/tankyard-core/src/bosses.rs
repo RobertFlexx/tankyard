@@ -24,8 +24,6 @@ pub(crate) const LINING_UP: f32 = 0.6;
 pub(crate) const LINED_UP: f32 = 0.1;
 /// How far around its target one leg takes a circling boss, in radians.
 const LEG_TURN: f32 = 0.62;
-/// How long a boss keeps hunting for a target that slipped out of sight.
-const LOST_SECONDS: f32 = 6.;
 /// About how far a boss drives in a straight line before it picks a new one.
 const LEG_LENGTH: f32 = 200.;
 
@@ -34,13 +32,15 @@ const LEG_LENGTH: f32 = 200.;
 fn clear_leg(from: V2, to: V2, radius: f32, walls: &[Rect]) -> bool {
     walls
         .iter()
-        .all(|&wall| match sweep_rect(from, to, radius + 4., wall) {
-            None => true,
-            Some((0., normal)) => {
-                (to - from).dot(normal) >= 0. && circle_rect(to, radius, wall).is_none()
-            }
-            Some(_) => false,
-        })
+        .all(|&wall| leg_contact(from, to, radius, wall).is_none())
+}
+
+fn leg_contact(from: V2, to: V2, radius: f32, wall: Rect) -> Option<f32> {
+    let (time, normal) = sweep_rect(from, to, radius + 4., wall)?;
+    if time == 0. && (to - from).dot(normal) >= 0. && circle_rect(to, radius, wall).is_none() {
+        return None;
+    }
+    Some(time)
 }
 
 pub(crate) fn boss_clear_steering(
@@ -173,40 +173,75 @@ pub(crate) fn bent_lead_point(
     }
 }
 
-/// A point `ring` from `seen` with a clear line to it, as near `from` as
-/// there is one: where a boss goes to look round the cover its target
-/// slipped behind.
-pub(crate) fn flank_point(
+/// A short detour to the remembered position. Use the first wall in its way
+/// and score the reachable corners by total distance around it.
+pub(crate) fn pursuit_waypoint(
     from: V2,
     seen: V2,
-    ring: f32,
     radius: f32,
     bounds: Rect,
     walls: &[Rect],
 ) -> V2 {
-    let out = (from - seen).normalized();
-    let out = if out == V2::ZERO {
-        V2::new(1., 0.)
-    } else {
-        out
+    let goal = bounds.clamp_circle(seen, radius + 8.);
+    let Some((_, wall)) = walls
+        .iter()
+        .filter_map(|&wall| leg_contact(from, goal, radius, wall).map(|t| (t, wall)))
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+    else {
+        return goal;
     };
-    let mut best = None;
-    let mut nearest = f32::INFINITY;
-    for step in 0..12 {
-        let side = if step % 2 == 0 { 1. } else { -1. };
-        let turn = (step / 2 + step % 2) as f32 * 0.52 * side;
-        let point = bounds.clamp_circle(seen + out.rotate(turn) * ring, radius + 8.);
-        let open = walls.iter().all(|&wall| {
-            sweep_rect(point, seen, 6., wall).is_none()
-                && circle_rect(point, radius, wall).is_none()
-        });
-        let distance = point.distance(from);
-        if open && distance < nearest {
-            nearest = distance;
-            best = Some(point);
+    let pad = radius + 16.;
+    let mut best: Option<(bool, f32, V2)> = None;
+    for x in [wall.x - pad, wall.x + wall.w + pad] {
+        for y in [wall.y - pad, wall.y + wall.h + pad] {
+            let point = V2::new(x, y);
+            let distance = from.distance(point);
+            let cost = distance + goal.distance(point);
+            // Once the far corner is reachable, taking it clears this wall.
+            // A near corner is still geometrically closer and would pull a
+            // slow hull back on the next tick if we only compared distances.
+            let clears_wall = leg_contact(point, goal, radius, wall).is_none();
+            if distance > 9.
+                && best.is_none_or(|(clears, previous, _)| {
+                    (clears_wall && !clears) || (clears_wall == clears && cost < previous)
+                })
+                && bounds.contains_circle(point, radius + 8.)
+                && clear_leg(from, point, radius, walls)
+            {
+                best = Some((clears_wall, cost, point));
+            }
         }
     }
-    best.unwrap_or(seen)
+    best.map_or(goal, |(_, _, point)| point)
+}
+
+pub(crate) fn checked_sighting(
+    from: V2,
+    seen: V2,
+    radius: f32,
+    bounds: Rect,
+    walls: &[Rect],
+) -> bool {
+    from.distance(bounds.clamp_circle(seen, radius + 8.)) < radius * 0.4 + 28.
+        && walls
+            .iter()
+            .all(|&wall| sweep_rect(from, seen, 5., wall).is_none())
+}
+
+impl Boss {
+    /// Keep investigating until the spot has actually been checked.
+    pub(crate) fn search_goal(&mut self, bounds: Rect, walls: &[Rect]) -> Option<V2> {
+        if let Some(at) = self.mind.seen_at()
+            && self.target != 0
+            && !checked_sighting(self.pos, at, self.radius, bounds, walls)
+        {
+            self.goal = at;
+            return Some(pursuit_waypoint(self.pos, at, self.radius, bounds, walls));
+        }
+        self.mind.forget();
+        self.target = 0;
+        None
+    }
 }
 
 /// What a boss can see of the fight beyond its target.
@@ -931,7 +966,29 @@ pub fn special_volley(kind: BossKind, attack: u8, aim: f32, phase: u8) -> Vec<Bo
 }
 
 impl World {
-    pub(crate) fn boss_drone_goal(&self, boss: &Boss, drone: EntityId, pos: V2, team: u8) -> V2 {
+    pub(crate) fn can_hunt(&self, team: u8, tank: &Tank) -> bool {
+        tank.tangible()
+            && tank.health > 0.
+            && tank.protection <= 0.
+            && self.hostile(team, tank.team)
+            && !self.config.base_protected(tank.team, tank.pos, tank.radius)
+    }
+
+    pub(crate) fn can_see(&self, from: V2, to: V2, radius: f32) -> bool {
+        self.walls
+            .iter()
+            .all(|&wall| sweep_rect(from, to, radius, wall).is_none())
+    }
+
+    pub(crate) fn boss_drone_goal(
+        &self,
+        boss: &Boss,
+        drone: EntityId,
+        pos: V2,
+        team: u8,
+        radius: f32,
+        sighting: &mut Option<(EntityId, V2)>,
+    ) -> V2 {
         let (acquisition, leash) = match boss.kind {
             BossKind::Summoner => (820., 1050.),
             BossKind::Guardian => (900., 1200.),
@@ -942,19 +999,15 @@ impl World {
             + V2::from_angle(drone_phase(drone) + self.tick as f32 * DT * 0.25)
                 * (boss.radius + 55.);
         if (pos - boss.pos).length_squared() > leash * leash {
+            *sighting = None;
             return guard;
         }
         // Acquire from the drone, but never chain pursuit across the map. The
         // owner leash and protected/new-player rules match the boss's awareness.
-        self.tanks
+        let target = self
+            .tanks
             .iter()
-            .filter(|tank| {
-                tank.tangible()
-                    && tank.health > 0.
-                    && tank.protection <= 0.
-                    && !self.config.base_protected(tank.team, tank.pos, tank.radius)
-                    && self.hostile(team, tank.team)
-            })
+            .filter(|tank| self.can_hunt(team, tank))
             .filter_map(|tank| {
                 // Cache squared distances once per candidate; drones make
                 // these decisions every tick, and ordering needs no roots.
@@ -963,44 +1016,44 @@ impl World {
                 if (tank.level < 15 && tank.id != boss.last_attacker && from_boss >= 420. * 420.)
                     || from_drone > acquisition * acquisition
                     || from_boss > (leash - 100.) * (leash - 100.)
-                    || self
-                        .walls
-                        .iter()
-                        .any(|&wall| sweep_rect(pos, tank.pos, 2., wall).is_some())
+                    || !self.can_see(pos, tank.pos, 2.)
                 {
                     return None;
                 }
                 Some((from_drone, tank))
             })
-            .min_by(|(a, _), (b, _)| a.total_cmp(b))
-            .map_or(guard, |(distance2, tank)| {
-                if tank.vel.length_squared() < 1. || boss.kind == BossKind::Sunderworm {
-                    return tank.pos;
-                }
-                // Cut across a circling tank for a short distance. Keep the
-                // lead on visible ground and inside this boss's normal leash.
-                let distance = distance2.sqrt();
-                let lead = (distance / aimed_speed(boss.kind)).min(0.55);
-                // Split a distant pursuit across both shoulders. The spacing
-                // tapers to zero on contact so a drone still finishes its run.
-                let shoulder =
-                    (drone_phase(drone).sin() * 85.) * ((distance - 110.) / 320.).clamp(0., 1.);
-                let heading = (tank.pos - pos).normalized();
-                let point = tank.pos
-                    + tank.vel.clamp_length(480.) * lead
-                    + V2::new(-heading.y, heading.x) * shoulder;
-                if (point - boss.pos).length_squared() <= leash * leash
-                    && self.config.bounds().contains(point)
-                    && self
-                        .walls
-                        .iter()
-                        .all(|&w| sweep_rect(pos, point, 2., w).is_none())
-                {
-                    point
-                } else {
-                    tank.pos
-                }
-            })
+            .min_by(|(a, _), (b, _)| a.total_cmp(b));
+        let Some((distance2, tank)) = target else {
+            if sighting
+                .is_some_and(|(_, at)| (at - boss.pos).length_squared() > (leash - 100.).powi(2))
+            {
+                *sighting = None;
+            }
+            return self
+                .search_drone(pos, radius, team, sighting)
+                .unwrap_or(guard);
+        };
+        *sighting = Some((tank.id, tank.pos));
+        if tank.vel.length_squared() < 1. || boss.kind == BossKind::Sunderworm {
+            return tank.pos;
+        }
+        // Split a distant pursuit across both shoulders. The spacing tapers
+        // to zero on contact, and the lead must stay inside the leash.
+        let distance = distance2.sqrt();
+        let lead = (distance / aimed_speed(boss.kind)).min(0.55);
+        let shoulder = (drone_phase(drone).sin() * 85.) * ((distance - 110.) / 320.).clamp(0., 1.);
+        let heading = (tank.pos - pos).normalized();
+        let point = tank.pos
+            + tank.vel.clamp_length(480.) * lead
+            + V2::new(-heading.y, heading.x) * shoulder;
+        if (point - boss.pos).length_squared() <= leash * leash
+            && self.config.bounds().contains(point)
+            && self.can_see(pos, point, 2.)
+        {
+            point
+        } else {
+            tank.pos
+        }
     }
 
     /// Who boss `i` goes after this tick, and what else it can see. It weighs
@@ -1019,14 +1072,15 @@ impl World {
         let busy = b.attack_windup > 0.
             || b.mind.salvo.is_some()
             || matches!(b.tactic, BossTactic::Windup | BossTactic::Charge);
+        let remembered = current != 0
+            && self
+                .tanks
+                .iter()
+                .any(|tank| tank.id == current && self.can_hunt(team, tank));
         let visible: Vec<usize> = (0..self.tanks.len())
             .filter(|&j| {
                 let t = &self.tanks[j];
-                t.tangible()
-                    && t.health > 0.
-                    && self.hostile(team, t.team)
-                    && t.protection <= 0.
-                    && !self.config.base_protected(t.team, t.pos, t.radius)
+                self.can_hunt(team, t)
                     && t.pos.distance(pos) < 1600.
                     && (t.level >= 15
                         || kind.drone_limit() == 0
@@ -1038,15 +1092,9 @@ impl World {
                         .all(|&w| sweep_rect(pos, t.pos, 5., w).is_none())
             })
             .collect();
-        let near_foes = self
-            .tanks
+        let near_foes = visible
             .iter()
-            .filter(|t| {
-                t.tangible()
-                    && t.health > 0.
-                    && self.hostile(team, t.team)
-                    && t.pos.distance(pos) < 750.
-            })
+            .filter(|&&j| (self.tanks[j].pos - pos).length_squared() < 750. * 750.)
             .count() as f32;
         let reads: Vec<crate::boss_brain::Read> = visible
             .iter()
@@ -1088,6 +1136,9 @@ impl World {
         let in_sight = reads.iter().any(|r| r.id == current);
         if !in_sight {
             b.mind.lost();
+        }
+        if !remembered {
+            b.mind.forget();
         }
         let mut chosen = if in_sight { current } else { 0 };
         if ((!busy && b.mind.due()) || chosen == 0)
@@ -1437,6 +1488,7 @@ impl World {
                 b.attack_timer = b.attack_timer.min(LINING_UP * 0.5);
             }
             let rage = f32::from(b.phase.clamp(1, 3) - 1);
+            let mut search = None;
             if let Some((id, position, moving)) = target {
                 let rate = READ_RATE * (1. + 0.22 * rage);
                 b.read = if id == b.target {
@@ -1446,26 +1498,25 @@ impl World {
                 };
                 b.target = id;
                 b.goal = position;
-            } else if b.target != 0 && b.mind.hidden() < LOST_SECONDS {
-                // Its target slipped behind cover: it goes round to where it
-                // can see the last place it was, rather than straight at it.
-                let seen = b.mind.seen_at();
-                let ring = crate::within(b.pos.distance(seen), b.radius + 220., 700.);
-                b.goal = flank_point(b.pos, seen, ring, b.radius, bounds, &self.walls);
-            } else if b.pos.distance(b.goal) < 130.
-                || !bounds.contains_circle(b.goal, b.radius + 60.)
-            {
-                b.target = 0;
-                let angle = self.tick as f32 * 0.003 + b.id as f32 * 1.618;
-                b.goal = bounds.clamp_circle(
-                    bounds.center() + V2::from_angle(angle) * (bounds.w.min(bounds.h) * 0.3),
-                    b.radius + 80.,
-                );
+            } else {
+                let had_target = b.target != 0;
+                search = b.search_goal(bounds, &self.walls);
+                if search.is_none()
+                    && (had_target
+                        || b.pos.distance(b.goal) < 130.
+                        || !bounds.contains_circle(b.goal, b.radius + 60.))
+                {
+                    let angle = self.tick as f32 * 0.003 + b.id as f32 * 1.618;
+                    b.goal = bounds.clamp_circle(
+                        bounds.center() + V2::from_angle(angle) * (bounds.w.min(bounds.h) * 0.3),
+                        b.radius + 80.,
+                    );
+                }
             }
             if let Some((_, _, moving)) = target {
                 b.mind.watch(moving, DT);
             }
-            let to = b.goal - b.pos;
+            let to = search.unwrap_or(b.goal) - b.pos;
             let mut lined_up = true;
             let (gun_style, gun_slot) = b.attack_style();
             if matches!(b.kind, BossKind::Carillon | BossKind::Bastion)
@@ -1573,9 +1624,13 @@ impl World {
             let too_close = preferred * if depleted || b.phase == 3 { 1.15 } else { 0.7 };
             let too_far = preferred + 130.;
             let mut desired = if target.is_none() {
-                b.tactic = BossTactic::Patrol;
+                b.tactic = if search.is_some() {
+                    BossTactic::Advance
+                } else {
+                    BossTactic::Patrol
+                };
                 // Straight to where it last saw someone, quicker than it wanders.
-                to.normalized() * speed * if b.target != 0 { 0.8 } else { 0.45 }
+                to.normalized() * speed * if search.is_some() { 1. } else { 0.45 }
             } else if b.tactic == BossTactic::Windup && b.tactic_time > 0. {
                 V2::ZERO
             } else if b.tactic == BossTactic::Windup {
@@ -2441,6 +2496,67 @@ mod tests {
     }
 
     #[test]
+    fn bosses_keep_the_observed_position_while_the_pilot_is_hidden() {
+        let start = V2::new(1250., 1300.);
+        let seen = V2::new(1940., 1300.);
+        for kind in [
+            BossKind::SiegeEngine,
+            BossKind::Railgunner,
+            BossKind::Sunderworm,
+        ] {
+            let mut world = arena();
+            world.tanks[0].pos = seen;
+            let target = world.tanks[0].id;
+            assert_ne!(world.spawn_boss(kind), 0);
+            let b = &mut world.bosses[0];
+            b.pos = start;
+            b.arrival = 0.;
+            b.timer = 12.;
+            b.attack_timer = 25.;
+            world.update_bosses();
+            assert_eq!(world.bosses[0].mind.seen_at(), Some(seen), "{kind:?}");
+            world.walls.push(Rect {
+                x: 1580.,
+                y: 900.,
+                w: 70.,
+                h: 800.,
+            });
+            let hidden = V2::new(2030., 1200.);
+            world.tanks[0].pos = hidden;
+            world.update_bosses();
+            assert_eq!(world.bosses[0].target, target, "{kind:?}");
+            assert_eq!(world.bosses[0].mind.seen_at(), Some(seen), "{kind:?}");
+            if kind != BossKind::Sunderworm {
+                for _ in 0..480 {
+                    world.update_bosses();
+                }
+                let b = &world.bosses[0];
+                assert_eq!(
+                    b.mind.seen_at(),
+                    Some(seen),
+                    "{kind:?} forgot before reaching cover"
+                );
+                assert!(b.pos.distance(start) > 75., "{kind:?} stalled");
+                for _ in 0..3_600 {
+                    world.update_bosses();
+                    if world.bosses[0].mind.seen_at() == Some(hidden) {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    world.bosses[0].mind.seen_at(),
+                    Some(hidden),
+                    "{kind:?} never saw around the wall from {:?}",
+                    world.bosses[0].pos
+                );
+            }
+            world.tanks[0].pocket = 5.;
+            world.update_bosses();
+            assert_eq!(world.bosses[0].target, 0, "{kind:?}");
+        }
+    }
+
+    #[test]
     fn summoner_drones_have_shorter_acquisition_and_return_to_their_owner() {
         let mut world = arena();
         assert_ne!(world.spawn_boss(BossKind::Summoner), 0);
@@ -2448,13 +2564,13 @@ mod tests {
         let boss = &world.bosses[0];
         world.tanks[0].pos = boss.pos + V2::new(810., 0.);
         assert_eq!(
-            world.boss_drone_goal(boss, 100, boss.pos, 0),
+            world.boss_drone_goal(boss, 100, boss.pos, 0, 16., &mut None),
             world.tanks[0].pos
         );
         world.tanks[0].pos = boss.pos + V2::new(850., 0.);
         assert!(
             world
-                .boss_drone_goal(boss, 100, boss.pos, 0)
+                .boss_drone_goal(boss, 100, boss.pos, 0, 16., &mut None)
                 .distance(boss.pos)
                 < 200.
         );
@@ -2462,14 +2578,14 @@ mod tests {
         world.tanks[0].pos = boss.pos + V2::new(1100., 0.);
         assert!(
             world
-                .boss_drone_goal(boss, 100, boss.pos + V2::new(900., 0.), 0)
+                .boss_drone_goal(boss, 100, boss.pos + V2::new(900., 0.), 0, 16., &mut None)
                 .distance(boss.pos)
                 < 200.
         );
         world.tanks[0].pos = boss.pos + V2::new(700., 0.);
         assert!(
             world
-                .boss_drone_goal(boss, 100, boss.pos + V2::new(1100., 0.), 0)
+                .boss_drone_goal(boss, 100, boss.pos + V2::new(1100., 0.), 0, 16., &mut None)
                 .distance(boss.pos)
                 < 200.
         );
@@ -2484,13 +2600,13 @@ mod tests {
         world.tanks[0].level = 1;
         let boss = &world.bosses[0];
         assert_ne!(
-            world.boss_drone_goal(boss, 100, boss.pos, 0),
+            world.boss_drone_goal(boss, 100, boss.pos, 0, 16., &mut None),
             world.tanks[0].pos
         );
         world.tanks[0].level = 45;
         world.tanks[0].protection = 5.;
         assert_ne!(
-            world.boss_drone_goal(boss, 100, boss.pos, 0),
+            world.boss_drone_goal(boss, 100, boss.pos, 0, 16., &mut None),
             world.tanks[0].pos
         );
         world.tanks[0].protection = 0.;
@@ -2501,12 +2617,12 @@ mod tests {
             h: 600.,
         });
         assert_ne!(
-            world.boss_drone_goal(boss, 100, boss.pos, 0),
+            world.boss_drone_goal(boss, 100, boss.pos, 0, 16., &mut None),
             world.tanks[0].pos
         );
         world.walls.clear();
         assert_eq!(
-            world.boss_drone_goal(boss, 100, boss.pos, 0),
+            world.boss_drone_goal(boss, 100, boss.pos, 0, 16., &mut None),
             world.tanks[0].pos
         );
     }

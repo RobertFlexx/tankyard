@@ -282,7 +282,11 @@ pub(super) fn decide(
     let mut state = BotState::Exploring;
     let mut priority = 0.06;
     let mut target = best_target.map(|(_, sample, _)| sample);
+    let live_enemy = best_target.is_some_and(|(_, _, action)| action != BotState::Farming);
     if let Some((utility, sample, action)) = best_target {
+        if live_enemy {
+            brain.last_seen = Some((sample.id, sample.pos));
+        }
         priority = utility;
         state = action;
         let distance = tank.pos.distance(sample.pos);
@@ -334,6 +338,15 @@ pub(super) fn decide(
         } else {
             sample.pos + outward * preferred + strafe * (90. + difficulty.prediction() * 90.)
         };
+    }
+    if !live_enemy
+        && nearest_enemy.is_none()
+        && let Some((_, at)) = brain.last_seen
+    {
+        state = BotState::Searching;
+        goal = at;
+        priority = 1.;
+        target = None;
     }
     let personal_fear = nearest_enemy.map_or(0., |(_, enemy)| {
         brain.learning.relationships.get(enemy.id, world.tick).fear

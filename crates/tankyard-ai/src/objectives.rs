@@ -55,7 +55,9 @@ pub(super) fn objective_goal(
             let enemy = world
                 .tanks
                 .iter()
-                .filter(|other| other.alive && other.health > 0.0 && hostile(tank.team, other.team))
+                .filter(|other| {
+                    other.tangible() && other.health > 0.0 && hostile(tank.team, other.team)
+                })
                 .map(|other| other.pos)
                 .chain(
                     world
@@ -64,6 +66,7 @@ pub(super) fn objective_goal(
                         .filter(|boss| boss.health > 0.0 && hostile(tank.team, boss.team))
                         .map(|boss| boss.pos),
                 )
+                .filter(|&position| in_view(world, tank.pos, position))
                 .min_by(|a, b| tank.pos.distance(*a).total_cmp(&tank.pos.distance(*b)));
             if let Some(enemy) = enemy {
                 return (tank.pos.distance(enemy) > 350.0).then_some((
@@ -192,6 +195,7 @@ pub(super) fn objective_goal(
                 .bosses
                 .iter()
                 .filter(|boss| boss.mothership && hostile(tank.team, boss.team))
+                .filter(|boss| in_view(world, tank.pos, boss.pos))
                 .map(|boss| {
                     let distance = tank.pos.distance(boss.pos);
                     let approach =
@@ -221,6 +225,7 @@ fn boss_hunt(world: &World, tank: &Tank, priority: f32) -> Option<(f32, V2, BotS
             boss.nearest_part(tank.pos)
                 .unwrap_or((boss.pos, boss.radius))
         })
+        .filter(|&(position, _)| in_view(world, tank.pos, position))
         .min_by(|a, b| (tank.pos.distance(a.0) - a.1).total_cmp(&(tank.pos.distance(b.0) - b.1)))
         .map(|(position, radius)| {
             let direction = (tank.pos - position).normalized();
@@ -236,4 +241,11 @@ fn boss_hunt(world: &World, tank: &Tank, priority: f32) -> Option<(f32, V2, BotS
                 BotState::BossEngagement,
             )
         })
+}
+
+fn in_view(world: &World, from: V2, to: V2) -> bool {
+    world
+        .walls
+        .iter()
+        .all(|&wall| physics::sweep_rect(from, to, 5., wall).is_none())
 }

@@ -26,11 +26,21 @@ impl World {
                 && ahead > 0.0
                 && ahead * ahead >= distance * CONE_COSINE * CONE_COSINE
         };
-        let goal = self
+        let visible = |goal| in_cone(goal) && self.can_see(pos, goal, 2.);
+        let observed = self
             .homing_position(shot.homing_target, shot.team, shot.owner)
-            .filter(|&goal| in_cone(goal))
-            .or_else(|| self.nearest_homing_position(pos, shot.team, shot.owner, in_cone));
-        if let Some(goal) = goal {
+            .filter(|&goal| visible(goal))
+            .map(|goal| (shot.homing_target, goal))
+            .or_else(|| self.nearest_homing_position(pos, shot.team, shot.owner, visible));
+        let sighting = observed.or_else(|| {
+            shot.last_seen.filter(|&(id, at)| {
+                in_cone(at)
+                    && self
+                        .guidance_target(id, shot.team, shot.owner)
+                        .is_some_and(|now| !self.can_see(pos, now, 2.))
+            })
+        });
+        if let Some((_, goal)) = sighting {
             let heading = shot.vel.angle();
             let difference = ((goal - pos).angle() - heading + std::f32::consts::PI)
                 .rem_euclid(std::f32::consts::TAU)
@@ -40,6 +50,16 @@ impl World {
             // Turning cannot slow a round into a hovering, repeatedly circling threat.
             self.projectiles[index].vel = V2::from_angle(heading + turn) * shot.cruise_speed;
         }
+        self.projectiles[index].last_seen = sighting;
+    }
+
+    pub(crate) fn guidance_target(&self, id: EntityId, team: u8, owner: EntityId) -> Option<V2> {
+        self.homing_position(id, team, owner).or_else(|| {
+            self.targets
+                .iter()
+                .find(|t| t.id == id && t.health > 0.)
+                .map(|t| t.pos)
+        })
     }
 
     fn nearest_homing_position(
@@ -48,24 +68,17 @@ impl World {
         team: u8,
         owner: EntityId,
         in_cone: impl Fn(V2) -> bool,
-    ) -> Option<V2> {
+    ) -> Option<(EntityId, V2)> {
         nearest(
             self.tanks
                 .iter()
-                .filter(|tank| {
-                    tank.tangible()
-                        && tank.health > 0.0
-                        && tank.id != owner
-                        && tank.protection <= 0.0
-                        && !self.config.base_protected(tank.team, tank.pos, tank.radius)
-                        && self.hostile(team, tank.team)
-                })
-                .map(|tank| tank.pos)
+                .filter(|tank| tank.id != owner && self.can_hunt(team, tank))
+                .map(|tank| (tank.id, tank.pos))
                 .chain(
                     self.bosses
                         .iter()
                         .filter(|boss| boss.health > 0.0 && self.hostile(team, boss.team))
-                        .map(|boss| boss.pos),
+                        .map(|boss| (boss.id, boss.pos)),
                 ),
             pos,
             &in_cone,
@@ -75,7 +88,7 @@ impl World {
                 self.targets
                     .iter()
                     .filter(|target| target.health > 0.0)
-                    .map(|target| target.pos),
+                    .map(|target| (target.id, target.pos)),
                 pos,
                 in_cone,
             )
@@ -84,14 +97,14 @@ impl World {
 }
 
 fn nearest(
-    positions: impl Iterator<Item = V2>,
+    positions: impl Iterator<Item = (EntityId, V2)>,
     pos: V2,
     in_cone: impl Fn(V2) -> bool,
-) -> Option<V2> {
-    positions.filter(|&goal| in_cone(goal)).min_by(|a, b| {
-        (*a - pos)
+) -> Option<(EntityId, V2)> {
+    positions.filter(|&(_, goal)| in_cone(goal)).min_by(|a, b| {
+        (a.1 - pos)
             .length_squared()
-            .total_cmp(&(*b - pos).length_squared())
+            .total_cmp(&(b.1 - pos).length_squared())
     })
 }
 
@@ -129,6 +142,29 @@ mod tests {
         );
         world.projectiles.push(shot);
         world
+    }
+
+    #[test]
+    fn guidance_keeps_the_observed_point_when_a_tank_moves_behind_cover() {
+        let at = V2::new(1800., 1540.);
+        let mut world = arena(at, 400., 2.);
+        world.steer_homing(0);
+        assert_eq!(
+            world.projectiles[0].last_seen,
+            Some((world.tanks[1].id, at))
+        );
+        world.walls.push(crate::Rect {
+            x: 1680.,
+            y: 1515.,
+            w: 50.,
+            h: 80.,
+        });
+        world.tanks[1].pos = V2::new(1840., 1580.);
+        world.steer_homing(0);
+        assert_eq!(
+            world.projectiles[0].last_seen,
+            Some((world.tanks[1].id, at))
+        );
     }
 
     #[test]

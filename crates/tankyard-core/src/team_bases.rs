@@ -169,14 +169,17 @@ impl World {
     }
 
     /// Chase the raider nearest to this guardian, otherwise hold a patrol slot.
-    pub(crate) fn base_guard_goal(&self, team: u8, id: EntityId, pos: V2) -> Option<V2> {
+    pub(crate) fn base_guard_goal(
+        &self,
+        team: u8,
+        shot: &crate::Projectile,
+        sighting: &mut Option<(EntityId, V2)>,
+    ) -> Option<V2> {
         let base = self.config.team_base(team)?;
-        let mut nearest: Option<(f32, V2)> = None;
+        let mut nearest = None;
         for tank in &self.tanks {
-            if !tank.tangible()
-                || tank.health <= 0.
-                || tank.team == team
-                || !self.hostile(team, tank.team)
+            if tank.team == team
+                || !self.can_hunt(team, tank)
                 || !self.config.raiding_base(team, tank.pos, tank.radius)
                 // Contesting a point beside a base is not a raid.
                 || self
@@ -186,21 +189,26 @@ impl World {
             {
                 continue;
             }
-            let distance = (tank.pos - pos).length_squared();
-            if nearest.is_none_or(|(best, _)| distance < best) {
-                // Lead the target slightly so a fleeing raider is cut off.
-                nearest = Some((distance, tank.pos + tank.vel * 0.12));
+            let distance = (tank.pos - shot.pos).length_squared();
+            if nearest.is_none_or(|(best, _)| distance < best)
+                && self.can_see(shot.pos, tank.pos, 2.)
+            {
+                nearest = Some((distance, tank));
             }
         }
         if let Some((_, target)) = nearest {
-            return Some(target);
+            *sighting = Some((target.id, target.pos));
+            return Some(target.pos + target.vel * 0.12);
+        }
+        if let Some(goal) = self.search_drone(shot.pos, shot.radius, team, sighting) {
+            return Some(goal);
         }
         let owner = base_guard_owner(team);
         let mut rank = 0;
         let mut count = 0;
         for guard in self.projectiles.iter().filter(|p| p.owner == owner) {
             count += 1;
-            if guard.id < id {
+            if guard.id < shot.id {
                 rank += 1;
             }
         }

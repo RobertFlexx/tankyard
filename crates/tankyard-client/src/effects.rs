@@ -1231,6 +1231,7 @@ mod tests {
             hit: Vec::new(),
             gun: None,
             homing_target: 0,
+            last_seen: None,
             frozen: None,
             stasis_used: false,
         };
@@ -1266,6 +1267,7 @@ mod tests {
             hit: Vec::new(),
             gun: None,
             homing_target: 0,
+            last_seen: None,
             frozen: None,
             stasis_used: false,
         };

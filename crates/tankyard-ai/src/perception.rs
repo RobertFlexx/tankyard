@@ -15,7 +15,7 @@ pub(crate) struct Perception {
     cols: usize,
     rows: usize,
     buckets: Vec<Vec<Seen>>,
-    targets: HashMap<EntityId, u8>,
+    targets: HashMap<EntityId, (u8, Seen)>,
     /// Extended bodies don't fit a head's single spatial bucket. There are
     /// at most sixteen bosses, so a bounded broad phase handles these once.
     extended: Vec<(usize, V2, f32)>,
@@ -40,15 +40,21 @@ impl Perception {
         for (index, tank) in world.tanks.iter().enumerate() {
             if tank.alive {
                 self.insert(tank.pos, Seen::Tank(index));
-                if tank.protection <= 0.0 && tank.health > 0.0 {
-                    self.targets.insert(tank.id, tank.team);
+                if tank.tangible()
+                    && tank.protection <= 0.
+                    && tank.health > 0.
+                    && !world
+                        .config
+                        .base_protected(tank.team, tank.pos, tank.radius)
+                {
+                    self.targets.insert(tank.id, (tank.team, Seen::Tank(index)));
                 }
             }
         }
         for (index, target) in world.targets.iter().enumerate() {
             if target.health > 0. {
                 self.insert(target.pos, Seen::Target(index));
-                self.targets.insert(target.id, 0);
+                self.targets.insert(target.id, (0, Seen::Target(index)));
             }
         }
         for (index, boss) in world.bosses.iter().enumerate() {
@@ -60,7 +66,7 @@ impl Perception {
                 } else {
                     self.insert(boss.pos, Seen::Boss(index));
                 }
-                self.targets.insert(boss.id, boss.team);
+                self.targets.insert(boss.id, (boss.team, Seen::Boss(index)));
             }
         }
         for (index, projectile) in world.projectiles.iter().enumerate() {
@@ -70,10 +76,11 @@ impl Perception {
         }
     }
 
-    pub fn target_valid(&self, id: EntityId, team: u8) -> bool {
+    pub fn target(&self, id: EntityId, team: u8) -> Option<Seen> {
         self.targets
             .get(&id)
-            .is_some_and(|&other| team == 0 || other == 0 || team != other)
+            .filter(|&&(other, _)| team == 0 || other == 0 || team != other)
+            .map(|&(_, seen)| seen)
     }
 
     fn insert(&mut self, position: V2, value: Seen) {

@@ -356,6 +356,8 @@ pub struct PocketEcho {
     pub class: String,
     /// A short still pose before the double starts pursuing.
     pub wake: f32,
+    #[serde(skip)]
+    pub last_seen: Option<V2>,
 }
 
 impl Tank {
@@ -539,6 +541,9 @@ pub struct Projectile {
     pub gun: Option<MinionGun>,
     #[serde(default)]
     pub homing_target: EntityId,
+    /// Host-only guidance memory.
+    #[serde(skip)]
+    pub last_seen: Option<(EntityId, V2)>,
     #[serde(default)]
     pub frozen: Option<FrozenShot>,
     #[serde(default)]
@@ -614,6 +619,7 @@ impl Clone for Projectile {
             hit: self.hit.clone(),
             gun: self.gun,
             homing_target: self.homing_target,
+            last_seen: self.last_seen,
             frozen: self.frozen,
             stasis_used: self.stasis_used,
         }
@@ -636,6 +642,7 @@ impl Clone for Projectile {
         self.hit.clone_from(&source.hit);
         self.gun.clone_from(&source.gun);
         self.homing_target.clone_from(&source.homing_target);
+        self.last_seen = source.last_seen;
         self.frozen = source.frozen;
         self.stasis_used = source.stasis_used;
     }

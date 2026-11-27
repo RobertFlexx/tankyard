@@ -60,6 +60,7 @@ pub enum BotState {
     Escorting,
     BossEngagement,
     Repositioning,
+    Searching,
 }
 
 #[derive(Clone, Copy)]
@@ -94,6 +95,8 @@ struct Brain {
     /// Where and when a hostile tank was last seen, so a hurt bot keeps
     /// backing off briefly after losing sight instead of freezing.
     last_threat: Option<(V2, u64)>,
+    /// The last confirmed position of the enemy this bot was following.
+    last_seen: Option<(EntityId, V2)>,
     /// Where something worth doing was last seen, for purposeful roaming.
     interest: Option<(V2, u64)>,
     /// Circle-strafe direction around the current target: 1 or -1.
@@ -314,14 +317,40 @@ impl BotController {
                 continue;
             };
             let brain = self.brains.entry(tank.id).or_default();
-            if brain.target.is_some_and(|target| {
-                !self.perception.target_valid(target.id, tank.team)
-                    || tank.pos.distance(target.pos) > difficulty.perception_radius()
-            }) {
-                // Invalid or out-of-sight samples stop firing immediately,
-                // without waiting for the next tactical decision.
-                brain.target = None;
-                brain.initialized = false;
+            if let Some(target) = brain.target {
+                let sample = self.perception.target(target.id, tank.team);
+                let now = match sample {
+                    Some(Seen::Tank(i)) => Some(world.tanks[i].pos),
+                    Some(Seen::Boss(i)) => {
+                        world.bosses[i].nearest_part(tank.pos).map(|(pos, _)| pos)
+                    }
+                    Some(Seen::Target(i)) => Some(world.targets[i].pos),
+                    _ => None,
+                };
+                let visible = now.filter(|&pos| {
+                    tank.pos.distance(pos) <= difficulty.perception_radius()
+                        && self.navigation.clear_path(tank.pos, pos, 5.)
+                });
+                if let Some(pos) = visible {
+                    if matches!(sample, Some(Seen::Tank(_) | Seen::Boss(_))) {
+                        brain.last_seen = Some((target.id, pos));
+                    }
+                } else {
+                    // Force a decision when sight breaks. The gun loses its
+                    // live target, but the route can use the saved position.
+                    brain.target = None;
+                    brain.initialized = false;
+                }
+            }
+            if let Some((id, at)) = brain.last_seen {
+                let spot = world.config.bounds().clamp_circle(at, tank.radius + 48.);
+                let checked = brain.target.is_none()
+                    && tank.pos.distance(spot) < 45.
+                    && self.navigation.clear_path(tank.pos, at, 5.);
+                if checked || self.perception.target(id, tank.team).is_none() {
+                    brain.last_seen = None;
+                    brain.initialized = false;
+                }
             }
             let period = difficulty.reaction_ticks();
             // IDs stagger the expensive utility decisions across the tick budget.
@@ -1338,6 +1367,7 @@ mod tests {
             hit: vec![],
             gun: None,
             homing_target: 0,
+            last_seen: None,
             frozen: None,
             stasis_used: false,
         });
@@ -1389,6 +1419,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_bot_searches_the_last_visible_point_and_reacquires_after_cover() {
+        let mut world = pursuit_world(ProjectileKind::Bullet);
+        world.projectiles.clear();
+        world.config.dynamic_arena = false;
+        let (bot, enemy) = (world.tanks[0].id, world.tanks[1].id);
+        for difficulty in Difficulty::ALL {
+            let seen = V2::new(1280., 1000.);
+            world.tanks[1].pos = seen;
+            world.walls.clear();
+            let mut controller = BotController::new(difficulty);
+            controller.update(&mut world);
+            assert_eq!(controller.target(bot), Some(enemy));
+            world.walls.push(tankyard_core::Rect {
+                x: 1150.,
+                y: 940.,
+                w: 40.,
+                h: 140.,
+            });
+            world.tanks[1].pos = V2::new(1310., 1010.);
+            for _ in 0..500 {
+                world.tick += 1;
+                controller.update(&mut world);
+                assert_eq!(controller.state(bot), Some(BotState::Searching));
+                assert_eq!(controller.brains[&bot].goal, seen);
+                assert!(!world.tanks[0].input.fire);
+            }
+            world.walls.clear();
+            for _ in 0..=30 {
+                world.tick += 1;
+                controller.update(&mut world);
+            }
+            assert_eq!(controller.target(bot), Some(enemy));
+            assert_eq!(
+                controller.brains[&bot].last_seen,
+                Some((enemy, world.tanks[1].pos))
+            );
+        }
+    }
+
     fn pursuit_world(kind: ProjectileKind) -> World {
         let mut world = World::new(
             WorldConfig {
@@ -1423,6 +1493,7 @@ mod tests {
             hit: vec![],
             gun: None,
             homing_target: 0,
+            last_seen: None,
             frozen: None,
             stasis_used: false,
         });

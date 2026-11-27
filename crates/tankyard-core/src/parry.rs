@@ -98,7 +98,9 @@ impl World {
         let shot = &self.projectiles[projectile];
         let (owner, team, pos) = (tank.id, tank.team, tank.pos);
         let target = shot.owner;
-        let target_pos = self.homing_position(target, team, owner);
+        let target_pos = self
+            .homing_position(target, team, owner)
+            .filter(|&point| self.can_see(impact, point, 2.));
         let direction = target_pos.map_or_else(
             || {
                 if shot.vel.length_squared() > 0.001 {
@@ -119,6 +121,7 @@ impl World {
         shot.team = team;
         shot.kind = ProjectileKind::Homing;
         shot.homing_target = target;
+        shot.last_seen = None;
         shot.radius = shot.radius.clamp(3.0, 12.0);
         shot.cruise_speed = shot.cruise_speed.clamp(280.0, 900.0);
         shot.vel = direction * shot.cruise_speed;
@@ -189,10 +192,13 @@ impl World {
             return false;
         }
         let target = incoming.owner;
-        let direction = self.homing_position(target, team, owner).map_or_else(
-            || incoming.vel.normalized() * -1.0,
-            |p| (p - impact).normalized(),
-        );
+        let direction = self
+            .homing_position(target, team, owner)
+            .filter(|&point| self.can_see(impact, point, 2.))
+            .map_or_else(
+                || incoming.vel.normalized() * -1.0,
+                |p| (p - impact).normalized(),
+            );
         let (multiplier, damage_cap, health_cap, radius_cap, speed, lifetime, healing) =
             match ability {
                 Ability::CounterParry => (3.0, 260., 9., 42., 560., 7., 0.12),
@@ -232,6 +238,7 @@ impl World {
             drone.team = team;
             drone.kind = ProjectileKind::Drone;
             drone.homing_target = target;
+            drone.last_seen = None;
             drone.radius = radius;
             drone.damage = damage;
             drone.penetration = health;
@@ -262,13 +269,7 @@ impl World {
         }
         self.tanks
             .iter()
-            .find(|tank| {
-                tank.id == target
-                    && tank.alive
-                    && tank.health > 0.0
-                    && tank.protection <= 0.0
-                    && self.hostile(team, tank.team)
-            })
+            .find(|tank| tank.id == target && self.can_hunt(team, tank))
             .map(|tank| tank.pos)
             .or_else(|| {
                 self.bosses

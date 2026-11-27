@@ -154,6 +154,7 @@ impl World {
                 shots: 0,
             }),
             homing_target: 0,
+            last_seen: None,
             frozen: None,
             stasis_used: false,
         }

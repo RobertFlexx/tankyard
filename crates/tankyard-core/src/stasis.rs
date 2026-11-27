@@ -77,6 +77,7 @@ impl World {
                     shot.team = tank.team;
                     shot.kind = ProjectileKind::Bullet;
                     shot.homing_target = 0;
+                    shot.last_seen = None;
                     shot.cruise_speed = frozen.velocity.length().clamp(380., 720.);
                     shot.vel = direction * shot.cruise_speed;
                     shot.damage = shot.damage.clamp(8., 55.);

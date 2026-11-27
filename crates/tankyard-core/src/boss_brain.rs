@@ -68,9 +68,8 @@ pub struct Mind {
     pub(crate) swerve: V2,
     /// Its target's motion last tick.
     last: V2,
-    /// Seconds since it last saw its target, and where that was.
-    hidden: f32,
-    seen_at: V2,
+    /// The last position it actually saw its target occupy.
+    seen_at: Option<V2>,
 }
 
 /// What one boss sees of one tank, each part from 0 to 1.
@@ -241,19 +240,16 @@ impl Mind {
         }
         self.think -= dt;
         self.focus += dt;
-        self.hidden += dt;
     }
     /// It can see its target, at `at`.
     pub(crate) fn saw(&mut self, at: V2) {
-        self.hidden = 0.;
-        self.seen_at = at;
+        self.seen_at = Some(at);
     }
-    /// Seconds since it last saw its target.
-    pub(crate) fn hidden(&self) -> f32 {
-        self.hidden
+    pub(crate) fn forget(&mut self) {
+        self.seen_at = None;
     }
     /// Where it last saw its target.
-    pub(crate) fn seen_at(&self) -> V2 {
+    pub(crate) fn seen_at(&self) -> Option<V2> {
         self.seen_at
     }
     /// How much `id` has hurt it lately, against `scale`: 0 for nothing and

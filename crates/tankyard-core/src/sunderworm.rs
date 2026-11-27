@@ -555,7 +555,7 @@ fn fierceness(phase: u8) -> f32 {
     f32::from(phase.clamp(1, 7) - 1) / 6.
 }
 
-/// A tank it can feel, and what it needs to know to go after it.
+/// A tank near the worm. Only the observed ones inform its pursuit.
 #[derive(Clone, Copy, Debug)]
 struct Prey {
     index: usize,
@@ -694,7 +694,8 @@ impl World {
                 Some(_) => {}
             }
         }
-        // Who it can feel through the ground.
+        // Nearby tanks can be hit by the body or a burst, even outside the
+        // opening its head can see through.
         let (id, team, head) = {
             let b = &self.bosses[i];
             (b.id, b.team, b.pos)
@@ -703,14 +704,7 @@ impl World {
             .tanks
             .iter()
             .enumerate()
-            .filter(|(_, t)| {
-                t.tangible()
-                    && t.health > 0.
-                    && t.protection <= 0.
-                    && self.hostile(team, t.team)
-                    && !self.config.base_protected(t.team, t.pos, t.radius)
-                    && t.pos.distance(head) < SENSE
-            })
+            .filter(|(_, t)| self.can_hunt(team, t) && t.pos.distance(head) < SENSE)
             .map(|(index, t)| Prey {
                 index,
                 id: t.id,
@@ -742,6 +736,11 @@ impl World {
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let tanks = &self.tanks;
+        let previous = self.bosses[i].target;
+        let remembered = tanks
+            .iter()
+            .enumerate()
+            .find(|(_, tank)| tank.id == previous && self.can_hunt(team, tank));
         let walls = &self.walls;
         let roll = next_random(&mut self.rng);
         let think_roll = next_random(&mut self.rng);
@@ -773,11 +772,14 @@ impl World {
         // Choose its prey.
         let reads: Vec<Read> = prey
             .iter()
+            .filter(|p| p.seen)
             .map(|p| {
                 let distance = p.pos.distance(head);
                 let crowd = prey
                     .iter()
-                    .filter(|other| other.id != p.id && other.pos.distance(p.pos) < 420.)
+                    .filter(|other| {
+                        other.seen && other.id != p.id && other.pos.distance(p.pos) < 420.
+                    })
                     .count() as f32;
                 let tank = &tanks[p.index];
                 let paired = pair_target.is_some_and(|(target, _)| target == p.id);
@@ -803,7 +805,7 @@ impl World {
                 }
             })
             .collect();
-        let current = prey.iter().find(|p| p.id == b.target).copied();
+        let current = prey.iter().find(|p| p.seen && p.id == b.target).copied();
         let committed = matches!(
             work.act,
             WormAct::Lunge | WormAct::Erupt | WormAct::Coil | WormAct::Tear
@@ -811,15 +813,34 @@ impl World {
         if current.is_none() {
             b.mind.lost();
         }
-        if !committed && (b.mind.due() || current.is_none()) {
-            let chosen = draw(BossKind::Sunderworm, work.phase.min(3), &reads, roll);
-            b.mind.chose(chosen.unwrap_or(0), b.target, think_roll);
-            b.target = chosen.unwrap_or(0);
+        if !committed
+            && (b.mind.due() || current.is_none())
+            && let Some(chosen) = draw(BossKind::Sunderworm, work.phase.min(3), &reads, roll)
+        {
+            b.mind.chose(chosen, b.target, think_roll);
+            b.target = chosen;
         }
-        let mark = prey.iter().find(|p| p.id == b.target).copied();
-        if let Some(mark) = mark {
-            b.mind.watch(mark.vel, DT);
-        }
+        let hull = ring_radius(0) * 0.55;
+        let mark = if let Some(p) = prey.iter().find(|p| p.seen && p.id == b.target).copied() {
+            b.mind.saw(p.pos);
+            b.mind.watch(p.vel, DT);
+            Some(p)
+        } else if let (Some((index, tank)), Some(pos)) = (remembered, b.mind.seen_at())
+            && !crate::bosses::checked_sighting(head, pos, hull, bounds, walls)
+        {
+            Some(Prey {
+                index,
+                id: tank.id,
+                pos,
+                vel: V2::ZERO,
+                radius: tank.radius,
+                seen: false,
+            })
+        } else {
+            b.target = 0;
+            b.mind.forget();
+            None
+        };
         let mut deeds: Vec<Deed> = Vec::new();
         let mut tear_now = false;
         // Where things come from.
@@ -828,7 +849,13 @@ impl World {
         work.sway += DT * (2.6 + 1.6 * fury);
         let ahead = V2::from_angle(work.heading);
         let lead = |speed: f32, warned: f32| {
-            mark.map(|m| curved_lead(head, m.pos, m.vel, b.mind.swerve, speed.max(1.), warned))
+            mark.map(|m| {
+                if m.seen {
+                    curved_lead(head, m.pos, m.vel, b.mind.swerve, speed.max(1.), warned)
+                } else {
+                    m.pos
+                }
+            })
         };
         // What it wants to do with its body this tick: a point to steer at,
         // how fast, how sharply it may turn, and how deep it wants to be.
@@ -849,6 +876,7 @@ impl World {
                 want_depth = 1.;
                 if let Some(p) = prey
                     .iter()
+                    .filter(|p| p.seen)
                     .min_by(|a, c| a.pos.distance(head).total_cmp(&c.pos.distance(head)))
                 {
                     work.heading = (p.pos - head).angle();
@@ -894,7 +922,7 @@ impl World {
             }
             (WormAct::Hunt, _) => {
                 slither = 0.26 + 0.08 * fury;
-                if let Some(mark) = mark {
+                if let Some(mark) = mark.filter(|p| p.seen) {
                     // It circles its prey at striking distance, closing as it
                     // grows fiercer, rather than ploughing into it: the jaws
                     // are for the strike.
@@ -913,6 +941,8 @@ impl World {
                         let far = (mark.pos - from).normalized();
                         aim_at = mark.pos + far * 380.;
                     }
+                } else if let Some(mark) = mark {
+                    aim_at = crate::bosses::pursuit_waypoint(head, mark.pos, hull, bounds, walls);
                 }
                 if work.lull <= 0. && b.arrival <= 0. {
                     let choice = choose(work, mark, &prey, head, act_roll);
@@ -1564,9 +1594,11 @@ fn choose(
     let near_body = prey
         .iter()
         .filter(|p| {
-            work.rings
-                .iter()
-                .any(|r| r.surfaced() && r.pos.distance(p.pos) < r.radius + 260.)
+            p.seen
+                && work
+                    .rings
+                    .iter()
+                    .any(|r| r.surfaced() && r.pos.distance(p.pos) < r.radius + 260.)
         })
         .count() as f32;
     let fury = fierceness(work.phase);
@@ -1600,7 +1632,8 @@ fn choose(
         options.push((WormAct::Bile, 1.2 * window(250., 820.)));
     }
     if part == WormPart::Whole && work.phase >= 4 && can(WormAct::Brood) {
-        options.push((WormAct::Brood, 0.8 + 0.25 * prey.len().min(4) as f32));
+        let count = prey.iter().filter(|p| p.seen).take(4).count();
+        options.push((WormAct::Brood, 0.8 + 0.25 * count as f32));
     }
     if part != WormPart::Front && work.phase >= 5 && can(WormAct::Thrash) {
         options.push((WormAct::Thrash, 0.5 + 0.55 * near_body.min(4.)));

@@ -8,9 +8,28 @@ fn wrap(angle: f32) -> f32 {
 }
 
 impl World {
-    pub(crate) fn minion_target(&self, pos: V2, team: u8, owner: u64, range: f32) -> Option<V2> {
-        self.minion_target_with_id(pos, team, owner, range, 0)
-            .map(|(_, pos)| pos)
+    pub(crate) fn search_drone(
+        &self,
+        pos: V2,
+        radius: f32,
+        team: u8,
+        sighting: &mut Option<(u64, V2)>,
+    ) -> Option<V2> {
+        let (id, seen) = (*sighting)?;
+        let live = self.guidance_target(id, team, 0).is_some();
+        let bounds = self.config.bounds();
+        if live && !crate::bosses::checked_sighting(pos, seen, radius, bounds, &self.walls) {
+            Some(crate::bosses::pursuit_waypoint(
+                pos,
+                seen,
+                radius,
+                bounds,
+                &self.walls,
+            ))
+        } else {
+            *sighting = None;
+            None
+        }
     }
 
     pub(crate) fn minion_target_with_id(
@@ -47,13 +66,7 @@ impl World {
         let tanks = self
             .tanks
             .iter()
-            .filter(|tank| {
-                tank.tangible()
-                    && tank.id != owner
-                    && tank.protection <= 0.
-                    && !self.config.base_protected(tank.team, tank.pos, tank.radius)
-                    && self.hostile(team, tank.team)
-            })
+            .filter(|tank| tank.id != owner && self.can_hunt(team, tank))
             .map(|tank| (tank.id, tank.pos));
         let bosses = self
             .bosses
@@ -269,7 +282,9 @@ mod tests {
             });
         }
         assert_eq!(
-            world.minion_target(V2::new(600.0, 500.0), 0, owner, 600.0),
+            world
+                .minion_target_with_id(V2::new(600.0, 500.0), 0, owner, 600.0, 0)
+                .map(|(_, pos)| pos),
             Some(V2::new(780.0, 620.0))
         );
         let shot = world.fire_minion(0, 0);
