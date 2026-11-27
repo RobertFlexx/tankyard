@@ -122,9 +122,12 @@ impl Hud {
             &Bar {
                 id: boss.id,
                 kind: Some(boss.kind),
-                name: boss
-                    .worm_part()
-                    .map_or(boss.kind.name(), |part| part.name()),
+                name: if boss.mothership {
+                    "Mothership"
+                } else {
+                    boss.worm_part()
+                        .map_or(boss.kind.name(), |part| part.name())
+                },
                 health: boss.health,
                 max_health: boss.max_health,
                 lost: trail,

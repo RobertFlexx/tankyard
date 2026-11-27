@@ -1,5 +1,6 @@
 //! Legal stat spending and class evolution.
 use super::*;
+use tankyard_core::{MAX_STAT_LEVEL, STAT_COUNT};
 
 pub(super) fn progression_commands(
     world: &World,
@@ -15,20 +16,22 @@ pub(super) fn progression_commands(
         .barrels
         .iter()
         .any(|barrel| barrel.projectile.is_drone());
-    let desired = if melee {
-        [7, 5, 7, 2, 2, 2, 1, 7]
+    let desired = if class.recoil_bounce > 0. {
+        [5, 2, 0, 3, 4, 5, 6, 3, 7]
+    } else if melee {
+        [7, 5, 7, 2, 2, 2, 1, 7, 0]
     } else if drones {
-        [5, 3, 0, 2, 6, 7, 7, 3]
+        [5, 3, 0, 2, 6, 7, 7, 3, 0]
     } else if class.has_deployables() {
-        [6, 3, 1, 1, 7, 6, 6, 3]
+        [6, 3, 1, 1, 7, 6, 6, 3, 0]
     } else {
-        [4, 2, 0, 4, 5, 7, 7, 4]
+        [4, 2, 0, 4, 5, 7, 7, 4, 0]
     };
     let mut points = tank.points;
     let mut stats = tank.stats;
     while points > 0 {
-        let next = (0..8)
-            .filter(|&index| stats[index] < 7 && stats[index] < desired[index])
+        let next = (0..STAT_COUNT)
+            .filter(|&index| stats[index] < MAX_STAT_LEVEL && stats[index] < desired[index])
             .min_by(|&a, &b| {
                 let ratio_a = f32::from(stats[a]) / f32::from(desired[a].max(1))
                     - learning.skill_value(class, stats, a);
@@ -36,7 +39,7 @@ pub(super) fn progression_commands(
                     - learning.skill_value(class, stats, b);
                 ratio_a.total_cmp(&ratio_b).then_with(|| b.cmp(&a))
             })
-            .or_else(|| (0..8).find(|&index| stats[index] < 7));
+            .or_else(|| (0..STAT_COUNT).find(|&index| stats[index] < MAX_STAT_LEVEL));
         let Some(index) = next else {
             break;
         };

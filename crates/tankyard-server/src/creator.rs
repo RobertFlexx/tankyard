@@ -433,7 +433,7 @@ mod tests {
         .unwrap();
         apply(&mut local, player, Command::Bots { count: 4 }).unwrap();
         assert_eq!(local.world.tanks[0].speed_scale, 3.);
-        assert_eq!(local.world.tanks[0].stats, [7; 8]);
+        assert_eq!(local.world.tanks[0].stats, [7; tankyard_core::STAT_COUNT]);
         assert_eq!(local.world.tanks[0].class, "chronarch");
         assert!(local.world.admin_modifiers[&player].god);
         assert_eq!(local.world.tanks.iter().filter(|t| t.bot).count(), 4);

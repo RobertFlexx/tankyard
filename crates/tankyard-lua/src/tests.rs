@@ -494,8 +494,12 @@ fn tank_queries_match_the_world() {
         tankyard.on("tick", function()
           for _, tank in ipairs(tankyard.tanks()) do
             local again = tankyard.tank(tank.id)
-            assert(again.name == tank.name and again.x == tank.x and #again.stats == 8)
+            assert(again.name == tank.name and again.x == tank.x and #again.stats == 9)
             assert(type(tank.alive) == "boolean" and type(tank.in_base) == "boolean")
+            assert(tankyard.stats[9] == "recoil")
+            assert(again.stats[9] == tank.stats[9])
+            tankyard.raise_stat(tank.id, "recoil")
+            tankyard.raise_stat(tank.id, 9)
             tankyard.set_score(tank.id, 4321)
           end
         end)
@@ -504,6 +508,7 @@ fn tank_queries_match_the_world() {
     );
     assert!(runtime.errors.is_empty(), "{:?}", runtime.errors);
     assert_eq!(world.tanks[0].score, 4321);
+    assert_eq!(world.tanks[0].stats[tankyard_core::RECOIL_STAT], 6);
 }
 
 /// Packs written for the LuaJIT sandbox keep their exact results on Luau.

@@ -788,7 +788,7 @@ impl Menu {
                     self.binding = None;
                 }
                 wrap(
-                    "Aim with the mouse. Left click fires and directs drones to the cursor. Right click recalls drones. Keys 1–8 buy stats; hold Shift to fill a stat. Tab opens tank upgrades. Escape pauses.",
+                    "Aim with the mouse. Left click fires and directs drones to the cursor. Right click recalls drones. Keys 1–9 buy skills. Hold a skill's plus button to repeat, or hold Shift to fill it at once. Tab opens tank upgrades. Escape pauses.",
                     rx,
                     by + 86.0 * s,
                     col,

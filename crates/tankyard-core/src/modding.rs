@@ -618,6 +618,7 @@ fn apply(world: &mut World, actor: EntityId, effect: Effect) {
                 t.barrel_shots.clear();
                 t.barrel_aims.clear();
                 t.charge = 0.0;
+                t.recoil_time = 0.;
                 world.refresh_stats(actor, false);
             }
         }
@@ -713,7 +714,12 @@ fn apply(world: &mut World, actor: EntityId, effect: Effect) {
         Effect::RaiseStat { stat } => {
             if let Some(i) = index {
                 let stat = usize::from(stat);
-                if world.tanks[i].alive && world.tanks[i].stats[stat] < 7 {
+                if world.tanks[i].alive
+                    && world.tanks[i]
+                        .stats
+                        .get(stat)
+                        .is_some_and(|&level| level < crate::MAX_STAT_LEVEL)
+                {
                     world.tanks[i].points = world.tanks[i].points.saturating_add(1).min(38);
                     world.upgrade_stat(actor, stat);
                 }
@@ -1148,7 +1154,9 @@ mod tests {
             },
             Effect::SetShield { seconds: 31. },
             Effect::SetLevel { level: 0 },
-            Effect::RaiseStat { stat: 8 },
+            Effect::RaiseStat {
+                stat: crate::STAT_COUNT as u8,
+            },
             Effect::SetTeamScore { team: 0, score: 1 },
         ] {
             assert!(invalid.validate(content).is_err(), "{invalid:?}");

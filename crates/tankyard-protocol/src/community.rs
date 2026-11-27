@@ -101,6 +101,8 @@ pub struct ChatMessage {
 pub struct OwnerTank {
     pub class: String,
     pub weapons: tankyard_core::administration::WeaponTuning,
+    #[serde(default)]
+    pub invulnerable: bool,
 }
 impl OwnerTank {
     pub fn valid(&self) -> bool {
@@ -325,8 +327,11 @@ impl ServerCommand {
             Self::DismissBosses => "Dismissed every boss".to_owned(),
             Self::ReadOwnTank => "Read own tank settings".into(),
             Self::SetOwnTank { tank } => format!(
-                "Set own tank to {} with {:.2}× damage and {:.2}× shot speed",
-                tank.class, tank.weapons.damage, tank.weapons.shot_speed
+                "Set own tank to {} with {:.2}× damage, {:.2}× shot speed and invulnerability {}",
+                tank.class,
+                tank.weapons.damage,
+                tank.weapons.shot_speed,
+                if tank.invulnerable { "on" } else { "off" }
             ),
         }
     }

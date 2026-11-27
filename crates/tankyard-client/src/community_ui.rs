@@ -637,15 +637,21 @@ impl CommunityUi {
             s,
             |v| format!("{v:.2}×"),
         );
+        toggle(
+            Rect::new(x, y + 405. * s, width, 31. * s),
+            "Invulnerability",
+            &mut draft.invulnerable,
+            s,
+        );
         if small_button(
-            Rect::new(x, y + 430. * s, width * 0.48, 34. * s),
+            Rect::new(x, y + 449. * s, width * 0.48, 34. * s),
             "Reset to 1×",
             s * 0.8,
         ) {
             draft.weapons = WeaponTuning::default();
         }
         let apply = button(
-            Rect::new(x + width * 0.52, y + 430. * s, width * 0.48, 34. * s),
+            Rect::new(x + width * 0.52, y + 449. * s, width * 0.48, 34. * s),
             "Apply",
             true,
             draft != current,

@@ -173,8 +173,8 @@ pub(crate) fn bent_lead_point(
     }
 }
 
-/// A short detour to the remembered position. Use the first wall in its way
-/// and score the reachable corners by total distance around it.
+/// Local detour for tight clearances where a sampled navigation grid may
+/// have no nodes. Score the first blocking wall's reachable corners.
 pub(crate) fn pursuit_waypoint(
     from: V2,
     seen: V2,
@@ -228,15 +228,209 @@ pub(crate) fn checked_sighting(
             .all(|&wall| sweep_rect(from, seen, 5., wall).is_none())
 }
 
-impl Boss {
-    /// Keep investigating until the spot has actually been checked.
-    pub(crate) fn search_goal(&mut self, bounds: Rect, walls: &[Rect]) -> Option<V2> {
-        if let Some(at) = self.mind.seen_at()
-            && self.target != 0
-            && !checked_sighting(self.pos, at, self.radius, bounds, walls)
+/// A short search earned by seeing a pilot. Host-only and never updated
+/// from the hidden pilot's current position or inputs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Pursuit {
+    seen: Option<(V2, V2)>,
+    probe: usize,
+    elapsed: f32,
+    stalled: f32,
+    checkpoint: V2,
+    reroute: f32,
+    route: Vec<V2>,
+}
+
+pub(crate) struct SearchLeg {
+    pub at: V2,
+    pub waypoint: V2,
+}
+
+#[derive(Default)]
+pub(crate) struct PursuitRoutes {
+    grid: crate::navigation::Navigation,
+    remaining: u8,
+}
+
+impl PursuitRoutes {
+    fn begin_tick(&mut self) {
+        // A wave can lose sight of every pilot on the same tick. Spread its
+        // replans across ticks so a moving gate cannot spike the whole arena.
+        self.remaining = 2;
+    }
+
+    fn plan(
+        &mut self,
+        from: V2,
+        goal: V2,
+        clearance: f32,
+        config: &WorldConfig,
+        walls: &[Rect],
+    ) -> Option<Vec<V2>> {
+        if self.remaining == 0 {
+            return None;
+        }
+        self.remaining -= 1;
+        self.grid.refresh(config.width, config.height, walls);
+        Some(
+            self.grid
+                .route_in_bounds(from, goal, walls, clearance, config.bounds()),
+        )
+    }
+}
+
+impl Pursuit {
+    pub fn observe(&mut self, pos: V2, moving: V2, from: V2) {
+        let advance = if moving.length_squared() > 40. * 40. {
+            moving * 0.8
+        } else {
+            pos - from
+        };
+        let speed = advance.length();
+        let reach = speed.clamp(145., 310.);
+        let step = if speed > 1. {
+            advance * (reach / speed)
+        } else {
+            V2::new(reach, 0.)
+        };
+        self.seen = Some((pos, step));
+        self.probe = 0;
+        self.elapsed = 0.;
+        self.reset_leg(from);
+    }
+
+    pub fn clear(&mut self) {
+        self.seen = None;
+        self.route.clear();
+    }
+
+    #[cfg(test)]
+    pub fn seen_at(&self) -> Option<V2> {
+        self.seen.map(|(pos, _)| pos)
+    }
+
+    fn reset_leg(&mut self, from: V2) {
+        self.stalled = 0.;
+        self.checkpoint = from;
+        self.reroute = 0.;
+        self.route.clear();
+    }
+
+    pub fn advance(
+        &mut self,
+        from: V2,
+        radius: f32,
+        config: &WorldConfig,
+        walls: &[Rect],
+        routes: &mut PursuitRoutes,
+    ) -> Option<SearchLeg> {
+        let (seen, advance) = self.seen?;
+        let bounds = config.bounds();
+        self.elapsed += DT;
+        if self.elapsed >= 90. {
+            self.clear();
+            return None;
+        }
+        if from.distance(self.checkpoint) >= 20. {
+            self.checkpoint = from;
+            self.stalled = 0.;
+        } else {
+            self.stalled += DT;
+        }
+        self.reroute = (self.reroute - DT).max(0.);
+        // Cover the last sighting first, then where a tank keeping its
+        // heading could have gone and the corners to either side.
+        let offset = [
+            V2::ZERO,
+            advance,
+            advance.rotate(-1.10),
+            advance.rotate(1.10),
+            advance.rotate(2.7) * 0.7,
+        ];
+        while let Some(&offset) = offset.get(self.probe) {
+            let at = bounds.clamp_circle(seen + offset, 1.);
+            let obscured = self.probe > 0 && walls.iter().any(|wall| wall.contains(at));
+            if !obscured && self.stalled < 5. && !checked_sighting(from, at, radius, bounds, walls)
+            {
+                let waypoint = self.waypoint(from, at, radius, config, walls, routes);
+                return Some(SearchLeg { at, waypoint });
+            }
+            self.probe += 1;
+            self.reset_leg(from);
+        }
+        self.clear();
+        None
+    }
+
+    fn waypoint(
+        &mut self,
+        from: V2,
+        at: V2,
+        radius: f32,
+        config: &WorldConfig,
+        walls: &[Rect],
+        routes: &mut PursuitRoutes,
+    ) -> V2 {
+        let bounds = config.bounds();
+        let goal = bounds.clamp_circle(at, radius + 10.);
+        if clear_leg(from, goal, radius, walls) {
+            self.route.clear();
+            return goal;
+        }
+        while self
+            .route
+            .last()
+            .is_some_and(|&point| from.distance(point) < 12.)
         {
-            self.goal = at;
-            return Some(pursuit_waypoint(self.pos, at, self.radius, bounds, walls));
+            self.route.pop();
+        }
+        let reachable = |point| {
+            bounds.contains_circle(point, radius + 6.) && clear_leg(from, point, radius, walls)
+        };
+        if self.route.last().is_some_and(|&point| reachable(point)) {
+            // Skip grid corners when the hull has a clear diagonal to the
+            // following cell. Keep a legal leg when a moving door closes.
+            if self
+                .route
+                .iter()
+                .rev()
+                .nth(1)
+                .is_some_and(|&point| reachable(point))
+            {
+                self.route.pop();
+            }
+            return *self.route.last().expect("the next leg is present");
+        }
+        if self.reroute <= 0.
+            && let Some(route) = routes.plan(from, goal, radius + 8., config, walls)
+        {
+            self.reroute = 0.42;
+            self.route = route;
+            self.route.reverse();
+            if let Some(&point) = self.route.last().filter(|&&point| reachable(point)) {
+                return point;
+            }
+        }
+        pursuit_waypoint(from, goal, radius, bounds, walls)
+    }
+}
+
+impl Boss {
+    /// Follow a route to the last sighting and check the nearby exits.
+    pub(crate) fn search_goal(
+        &mut self,
+        config: &WorldConfig,
+        walls: &[Rect],
+        routes: &mut PursuitRoutes,
+    ) -> Option<V2> {
+        if self.target != 0
+            && let Some(leg) =
+                self.mind
+                    .pursuit
+                    .advance(self.pos, self.radius, config, walls, routes)
+        {
+            self.goal = leg.at;
+            return Some(leg.waypoint);
         }
         self.mind.forget();
         self.target = 0;
@@ -1162,7 +1356,7 @@ impl World {
             ..Outlook::default()
         };
         if let Some((target_id, at, moving)) = target {
-            b.mind.saw(at);
+            b.mind.saw(at, moving, pos);
             let line = (at - pos).normalized();
             outlook.special.range = at.distance(pos);
             outlook.special.across = (moving - line * moving.dot(line)).length();
@@ -1404,6 +1598,7 @@ impl World {
         if self.bosses.is_empty() {
             return;
         }
+        self.boss_routes.begin_tick();
         self.land_clashes();
         let mut volleys: Vec<Volley> = Vec::new();
         let mut warnings = Vec::new();
@@ -1500,7 +1695,7 @@ impl World {
                 b.goal = position;
             } else {
                 let had_target = b.target != 0;
-                search = b.search_goal(bounds, &self.walls);
+                search = b.search_goal(&self.config, &self.walls, &mut self.boss_routes);
                 if search.is_none()
                     && (had_target
                         || b.pos.distance(b.goal) < 130.
@@ -1552,7 +1747,12 @@ impl World {
                     } else {
                         rage * 0.5
                     };
-                let point = target.map_or(b.goal, |(_, position, _)| {
+                let look = if traversing {
+                    b.goal
+                } else {
+                    search.unwrap_or(b.goal)
+                };
+                let point = target.map_or(look, |(_, position, _)| {
                     bent_lead_point(
                         b.pos,
                         (position, b.read, swerve),
@@ -1630,7 +1830,11 @@ impl World {
                     BossTactic::Patrol
                 };
                 // Straight to where it last saw someone, quicker than it wanders.
-                to.normalized() * speed * if search.is_some() { 1. } else { 0.45 }
+                if search.is_some() {
+                    to.clamp_length(speed * 0.75) / 0.75
+                } else {
+                    to.normalized() * speed * 0.45
+                }
             } else if b.tactic == BossTactic::Windup && b.tactic_time > 0. {
                 V2::ZERO
             } else if b.tactic == BossTactic::Windup {
@@ -2493,6 +2697,61 @@ mod tests {
             }
             assert!(farthest > 260., "the Trapper stayed pinned: {farthest:.0}");
         }
+    }
+
+    #[test]
+    fn pursuit_routes_around_joined_cover_then_checks_the_approach() {
+        let bounds = Rect {
+            x: 0.,
+            y: 0.,
+            w: 2000.,
+            h: 1680.,
+        };
+        let walls = [
+            Rect {
+                x: 870.,
+                y: 0.,
+                w: 80.,
+                h: 1100.,
+            },
+            Rect {
+                x: 950.,
+                y: 930.,
+                w: 380.,
+                h: 170.,
+            },
+        ];
+        let mut pos = V2::new(700., 700.);
+        let seen = V2::new(1130., 700.);
+        let motion = V2::new(250., -25.);
+        let hull = 75.;
+        let config = WorldConfig {
+            width: bounds.w,
+            height: bounds.h,
+            ..Default::default()
+        };
+        let mut pursuit = Pursuit::default();
+        let mut routes = PursuitRoutes::default();
+        pursuit.observe(seen, motion, pos);
+        let mut detoured = false;
+        for _ in 0..800 {
+            routes.begin_tick();
+            let leg = pursuit
+                .advance(pos, hull, &config, &walls, &mut routes)
+                .expect("an active search");
+            if leg.at != seen {
+                assert!(detoured && checked_sighting(pos, seen, hull, bounds, &walls));
+                assert!((leg.at - seen).dot(motion) > 0.);
+                assert!(leg.at.distance(seen) < 315.);
+                assert_eq!(pursuit.seen_at(), Some(seen));
+                return;
+            }
+            let next = pos + (leg.waypoint - pos).clamp_length(5.);
+            assert!(clear_leg(pos, next, hull, &walls));
+            detoured |= pos.y > 1100. + hull;
+            pos = next;
+        }
+        panic!("the route stalled at {pos:?}");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Progression shared by local games, bots, and online arenas.
-use tankyard_content::MAX_LEVEL;
+use tankyard_content::{MAX_LEVEL, MAX_STAT_LEVEL};
 
 /// Cumulative XP at the beginning of each level (1..=55).
 /// The ramp slows complete builds without making early levels a long grind.
@@ -55,7 +55,7 @@ pub fn respawn_level(level: u8) -> u8 {
 }
 
 pub fn stat_scale(points: u8) -> f32 {
-    let points = f32::from(points.min(7));
+    let points = f32::from(points.min(MAX_STAT_LEVEL));
     1.0 + points * 0.105 + points * points * 0.003
 }
 

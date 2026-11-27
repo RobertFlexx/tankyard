@@ -707,15 +707,21 @@ impl Menu {
         } else {
             "L or arrow by the board"
         };
+        let skills_key = if (0..6).any(|index| settings.key(index) == KeyCode::U) {
+            "Arrow by the skills"
+        } else {
+            "U or arrow by the skills"
+        };
         let movement = [
             ("Move", move_keys.as_str()),
             ("Aim / fire", "Mouse / left click"),
             ("Ability", settings.bindings[4].as_str()),
             ("Auto-fire", settings.bindings[5].as_str()),
             ("Recall drones", "Right click"),
-            ("Buy a skill / fill it", "1-8 / Shift + 1-8"),
+            ("Buy a skill / fill it", "1–9 / Shift + 1–9"),
             ("Tank upgrades", "Tab"),
             ("Fold the scoreboard", board_key),
+            ("Fold the skill panel", skills_key),
             ("Pause / back", "Esc"),
             ("Respawn", "Enter"),
             ("Sandbox level", "PgUp / PgDn (Shift: 15)"),
@@ -738,7 +744,7 @@ impl Menu {
             .enumerate()
         {
             let x = margin + column as f32 * (width + gap);
-            panel(Rect::new(x, 222.0 * s, width, 440.0 * s));
+            panel(Rect::new(x, 222.0 * s, width, 471.0 * s));
             for (index, (action, key)) in rows.iter().enumerate() {
                 let y = (247.0 + index as f32 * 38.0) * s;
                 label(action, x + 18.0 * s, y, 15.0 * s, text_color());
@@ -758,14 +764,14 @@ impl Menu {
         label(
             "Text: arrows move the caret, Shift selects, Ctrl+A/C/X/V edits, and held Backspace repeats.",
             margin,
-            677.0 * s,
+            708.0 * s,
             14.0 * s,
             muted_color(),
         );
         label(
             "Chat: Up and Down bring back what you said, in case it was worth saying twice.",
             margin,
-            697.0 * s,
+            728.0 * s,
             14.0 * s,
             muted_color(),
         );

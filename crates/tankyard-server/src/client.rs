@@ -755,7 +755,7 @@ impl NetworkClient {
         self.upgrade_stat_amount(stat, 1)
     }
     pub fn upgrade_stat_amount(&mut self, stat: usize, count: u8) -> bool {
-        stat < 8
+        stat < tankyard_core::STAT_COUNT
             && self.queue_control(ClientControl::UpgradeStat {
                 stat: stat as u8,
                 count,

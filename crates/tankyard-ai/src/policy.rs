@@ -2,7 +2,7 @@
 //! and visible human class results. Private skill allocations/inputs stay unread.
 use std::collections::VecDeque;
 use tankyard_content::{ClassDef, Content};
-use tankyard_core::Tank;
+use tankyard_core::{RECOIL_STAT, STAT_COUNT, Tank};
 
 use crate::{neural::Network, noise};
 
@@ -19,7 +19,7 @@ struct Experience {
 struct Observation {
     tick: u64,
     class_key: u64,
-    stats: [u8; 8],
+    stats: [u8; STAT_COUNT],
     health: f32,
     score: u32,
     kills: u32,
@@ -94,7 +94,7 @@ fn class_features(class: &ClassDef) -> [f32; 8] {
     ]
 }
 
-fn build_features(class: &ClassDef, stats: [u8; 8]) -> [f32; 13] {
+fn build_features(class: &ClassDef, stats: [u8; STAT_COUNT]) -> [f32; 13] {
     let role = class_features(class);
     std::array::from_fn(|index| match index {
         0..=7 => f32::from(stats[index].min(7)) / 7.,
@@ -309,8 +309,10 @@ impl BuildLearning {
 
     /// Only a bounded nudge to a sensible class-specific allocation. This cannot
     /// create points, exceed seven per stat, or change the tank's combat values.
-    pub fn skill_value(&self, class: &ClassDef, stats: [u8; 8], index: usize) -> f32 {
-        if self.outcomes == 0 {
+    pub fn skill_value(&self, class: &ClassDef, stats: [u8; STAT_COUNT], index: usize) -> f32 {
+        // Keep the saved build model's original inputs. Recoil uses the class
+        // budget until there is a model trained with that extra feature.
+        if self.outcomes == 0 || index == RECOIL_STAT {
             return 0.;
         }
         let before = self.builds.predict(build_features(class, stats))[0];
@@ -415,7 +417,7 @@ mod tests {
             learning.builds.samples, 0,
             "human skill allocations stay private"
         );
-        player.stats = [7; 8];
+        player.stats = [7; STAT_COUNT];
         learning.observe_player(player, &world.content, 252);
         assert_eq!(learning.builds.samples, 0);
         for id in 10..100 {
@@ -439,7 +441,7 @@ mod tests {
         for i in 0..2500 {
             let positive = i % 2 == 0;
             let class = if positive { good } else { bad };
-            let mut stats = [0; 8];
+            let mut stats = [0; STAT_COUNT];
             stats[if positive { 5 } else { 1 }] = 5;
             learning.record(
                 Experience {
@@ -473,7 +475,7 @@ mod tests {
         // rather than merely recognizing the class used in the first examples.
         for i in 0..2500 {
             let positive = i % 2 == 0;
-            let mut stats = [0; 8];
+            let mut stats = [0; STAT_COUNT];
             stats[if positive { 5 } else { 1 }] = 5;
             learning.record(
                 Experience {
@@ -484,7 +486,10 @@ mod tests {
                 i + 2500,
             );
         }
-        assert!(learning.skill_value(good, [0; 8], 5) > learning.skill_value(good, [0; 8], 1));
+        assert!(
+            learning.skill_value(good, [0; STAT_COUNT], 5)
+                > learning.skill_value(good, [0; STAT_COUNT], 1)
+        );
         eligible_tank.points = 1;
         eligible_tank.class = good.id.clone();
         commands.clear();
@@ -499,7 +504,7 @@ mod tests {
         );
         assert!(matches!(commands[0], crate::Command::Stat(_, 5)));
         for index in 0..8 {
-            assert!(learning.skill_value(good, [0; 8], index).abs() <= 0.18);
+            assert!(learning.skill_value(good, [0; STAT_COUNT], index).abs() <= 0.18);
         }
     }
 }

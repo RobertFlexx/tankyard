@@ -16,7 +16,6 @@ pub mod driver;
 mod driver_weights;
 mod knowledge;
 mod learning;
-mod navigation;
 mod neural;
 mod objectives;
 mod perception;
@@ -35,7 +34,6 @@ pub use knowledge::{
     ClassRecord, Knowledge, MAX_FILE_BYTES as KNOWLEDGE_FILE_LIMIT, SharedKnowledge,
     lock as lock_knowledge,
 };
-use navigation::Navigation;
 use objectives::objective_goal;
 use perception::{Perception, Seen};
 use personality::Personality;
@@ -43,6 +41,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use steering::*;
 use tankyard_content::{Ability, ClassDef, ProjectileKind};
+use tankyard_core::navigation::Navigation;
 use tankyard_core::{EntityId, Mode, PlayerInput, Tank, V2, World, physics};
 
 /// Seconds the hidden boost takes to climb one whole difficulty level.

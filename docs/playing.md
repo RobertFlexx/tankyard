@@ -30,9 +30,12 @@ Map cover has distinct artwork, including Garden planters and Circuit Maze walls
 | Microphone mute / unmute | M or the bottom-right microphone button |
 | Previous / next spectator target | Left / Right or spectator buttons, while dead |
 | Open text chat | Enter while alive, or Slash, on community servers |
-| Spend a skill point | 1 through 8, or click the skill |
+| Spend a skill point | 1 through 9, or click the skill |
+| Spend several points | Hold the skill’s plus button |
 | Fill a skill | Hold Shift while pressing its key or clicking |
 | Tank upgrades | Tab |
+| Show or hide the skill panel | U or the arrow by the skills |
+| Show or hide the leaderboard | L or the arrow by the leaderboard |
 | Pause / menu | Esc |
 | Respawn | Enter or the Respawn button |
 | Light / dark theme | F9 |
@@ -79,13 +82,15 @@ In a text field, use arrows or Home/End to place the caret. Hold Shift to select
 
 Levels 15, 30, and 45 need 1,020, 8,644, and 35,304 XP. The final upgrade tier unlocks at level 55, with 72,734 XP. Each level-45 class has a route into the new tier. Skills arrive at three points per four levels: 10 points at level 15, 21 at level 30, and 33 at level 45. After level 45, you earn one point every two levels, ending at 38 points at level 55. Each skill still caps at seven points. Sandbox level controls use the same point budget.
 
+**Recoil** (9) increases the kick from weapons that push the hull. At level 45, Tri-Angle can evolve into **Bankshot**. Fire near a wall to bounce off it while the hull is still coasting from the shot. A glancing hit preserves speed along the wall. Try it against the arena edge in Sandbox before taking it into a match.
+
 Trapper reloads in one second and its traps deal about 28 damage with 5.49 penetration. Every trap launcher has 20% shorter reloads, 20% more damage, 22% more penetration and 30% faster launch speed compared with v0.2.15. Traps launch farther and settle more gradually. The Trap Range skill increases launch distance, up to about 2.15 times the base range at seven points. Mixed weapons show Speed / Trap Range in the same skill slot. Trap lifetimes and the 24-trap limit stay the same. Automatic mounts only fire at targets their shots can reach. Auto Smasher bullets last 2.2 seconds.
 
 ## Deaths and bosses
 
 When another tank destroys you, a card shows who it was and their score, then the camera moves over to watch them until you respawn. Left / Right switches who you watch. In team modes you watch a teammate instead. When a boss falls, the banner at the top names the player who did the most damage to it.
 
-A boss's health bar has notches where its next phases begin, and a pale stretch shows the damage it just took. While a boss is off screen, an arrow at the edge of your view points to it, with its name and health. Up to four bosses get an arrow at once, nearest first.
+A boss's health bar appears in public arenas and other modes whenever a boss is active. If several are present, the bar gives priority to one pursuing you. Notches mark its next phases, and the white trail shows recent damage. Off-screen arrows point toward up to four nearby bosses. Break line of sight to interrupt their aim, then keep moving. A boss checks where it last saw you and searches nearby exits.
 
 ## Modes
 
@@ -205,7 +210,7 @@ The party roster includes **I'm ready** and a ready count. Readiness is shared w
 
 Siege Engine, Skirmisher and Trapper add three boss encounters, each with a practice trial. Special attacks lock their aim during the warning. Heavy siege shots, a straight skirmisher charge and side-pocket mines each leave a different escape route. Boss models use distinct mechanical silhouettes rather than a shared stack of rotating armor.
 
-Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, use the [domain hosting guide](hosting-domain.md). Tank Yard 2.1.7 uses protocol **35**, the same as 2.1.0. Players on 2.1.x can join any 2.1.x host. Update both ends when coming from 2.0 (protocol 34).
+Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, follow the [domain hosting guide](hosting-domain.md). Tank Yard 2.2.0 uses protocol **36**. Update the game and host together when coming from 2.1.0–2.1.8, which use protocol 35.
 
 ## Fighting the Jester and Carillon
 

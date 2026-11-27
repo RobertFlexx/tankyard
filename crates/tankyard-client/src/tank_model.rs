@@ -700,6 +700,41 @@ pub fn class_model_geometry(
         alpha(OUTLINE, color.a),
     );
     polygon(emit, p, sides, r, body_angle, color);
+    if class.recoil_bounce > 0. {
+        let angle = angles[0];
+        let along = vec2(angle.cos(), angle.sin());
+        let side = vec2(-along.y, along.x);
+        let stroke = barrel_recoils
+            .and_then(|recoils| recoils.first())
+            .copied()
+            .unwrap_or(recoil)
+            .clamp(0., 0.12)
+            * 2.5;
+        let at = |x: f32, y: f32| p + (along * x + side * y) * r;
+        // Twin spring housings frame the gun. Their metal rods follow the
+        // barrel's kick into the sleeves while the near ends stay fixed.
+        for y in [-0.51_f32, 0.51] {
+            let housing = |lo, hi, half: f32| {
+                [
+                    at(lo, y - half),
+                    at(hi, y - half),
+                    at(hi, y + half),
+                    at(lo, y + half),
+                ]
+            };
+            quad(emit, housing(-0.58, 0.65, 0.15), alpha(OUTLINE, color.a));
+            quad(
+                emit,
+                housing(-0.48, 0.57 - stroke, 0.08),
+                Color::new(0.74, 0.74, 0.72, color.a),
+            );
+            quad(
+                emit,
+                housing(-0.49, 0.12, 0.10),
+                Color::new(0.51, 0.54, 0.55, color.a),
+            );
+        }
+    }
     // Brief, unobtrusive damage flash that never hides the tank silhouette.
     if flash > 0.0 {
         polygon(

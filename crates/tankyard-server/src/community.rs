@@ -259,7 +259,7 @@ impl UdpServer {
                 };
                 let world = &mut self.arenas[arena].session.world;
                 if let ServerCommand::SetOwnTank { tank } = command
-                    && !world.tune_owner_tank(id, &tank.class, tank.weapons)
+                    && !world.tune_owner_tank(id, &tank.class, tank.weapons, tank.invulnerable)
                 {
                     return Err(NetError("Could not apply tank settings.".into()));
                 }
@@ -274,6 +274,7 @@ impl UdpServer {
                 let tank = OwnerTank {
                     class,
                     weapons: world.owner_weapons(id),
+                    invulnerable: world.owner_invulnerable(id),
                 };
                 self.send_control(actor, &ServerControl::OwnTank { tank });
             }

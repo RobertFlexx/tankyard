@@ -93,7 +93,7 @@ pub(crate) fn pull_trigger(tank: &mut Tank, class: &ClassDef, dt: f32) -> bool {
     if let Some(barrel_aim) = tank.barrel_aims.first_mut() {
         *barrel_aim = aim;
     }
-    tank.vel -= V2::from_angle(aim) * barrel.recoil;
+    crate::weapons::kick(tank, class, barrel, aim, 1, 1.);
     tank.protection = 0.;
     tank.spawn_immunity = false;
     true

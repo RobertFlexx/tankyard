@@ -1,8 +1,8 @@
 //! Clearance-aware, bounded A* for rectangular arena walls.
-use std::{cmp::Reverse, collections::BinaryHeap};
 #[cfg(test)]
-use tankyard_core::physics::circle_rect;
-use tankyard_core::{Rect, V2, physics::sweep_rect};
+use crate::physics::circle_rect;
+use crate::{Rect, V2, physics::sweep_rect};
+use std::{cmp::Reverse, collections::BinaryHeap};
 
 pub(crate) fn clear_line(start: V2, end: V2, clearance: f32, walls: &[Rect]) -> bool {
     walls
@@ -45,7 +45,7 @@ fn unsettle(blocks: &mut Vec<Cells>, mut cells: Cells) {
     blocks.push(cells);
 }
 
-pub(crate) struct Navigation {
+pub struct Navigation {
     cols: usize,
     rows: usize,
     cell: f32,
@@ -243,8 +243,7 @@ impl Navigation {
     }
 
     /// A grid of `world`'s arena and cover as they stand.
-    #[cfg(test)]
-    pub fn of(world: &tankyard_core::World) -> Self {
+    pub fn of(world: &crate::World) -> Self {
         let mut navigation = Self::default();
         navigation.refresh(world.config.width, world.config.height, &world.walls);
         navigation
@@ -384,11 +383,13 @@ impl Navigation {
         p: V2,
         clearance: f32,
         walls: &[Rect],
+        bounds: Rect,
         require_connection: bool,
     ) -> Option<usize> {
         let cell = self.cell_of(p);
         let reachable = |navigation: &mut Self, index| {
             navigation.clearance_squared[index] > clearance * clearance
+                && bounds.contains_circle(navigation.center(index), clearance)
                 && (!require_connection
                     || navigation.clear(p, navigation.center(index), clearance, walls))
         };
@@ -433,18 +434,41 @@ impl Navigation {
     /// Returns an empty route if the bounded search cannot reach the goal.
     /// No unbounded pathfinding or exponential recursive searches are used.
     pub fn route(&mut self, start: V2, goal: V2, walls: &[Rect], clearance: f32) -> Vec<V2> {
+        let bounds = Rect {
+            x: 0.,
+            y: 0.,
+            w: self.width,
+            h: self.height,
+        };
+        self.route_in_bounds(start, goal, walls, clearance, bounds)
+    }
+
+    /// Route within the current playable bounds, which may shrink around a
+    /// fixed wall grid. A circle can only take legs that fit inside those edges.
+    pub(crate) fn route_in_bounds(
+        &mut self,
+        start: V2,
+        goal: V2,
+        walls: &[Rect],
+        clearance: f32,
+        bounds: Rect,
+    ) -> Vec<V2> {
         // The grid knows clearance only up to its reach.
         let clearance = clearance.min(REACH - 1.);
         self.indexed = self.cols > 0 && self.walls == walls;
-        if self.clear(start, goal, clearance, walls) {
+        let goal_fits = bounds.contains_circle(goal, clearance);
+        if goal_fits && self.clear(start, goal, clearance, walls) {
             return vec![goal];
+        }
+        if self.cols == 0 || self.rows == 0 {
+            return vec![];
         }
         let goal_clear = self.clear(goal, goal, clearance, walls);
         let (Some(from), Some(to)) = (
-            self.nearest_free(start, clearance, walls, true),
+            self.nearest_free(start, clearance, walls, bounds, true),
             // Exploration and combat spacing can place a goal inside a wall.
             // In that case approach a free cell beside it instead of stalling.
-            self.nearest_free(goal, clearance, walls, goal_clear),
+            self.nearest_free(goal, clearance, walls, bounds, goal_clear && goal_fits),
         ) else {
             return vec![];
         };
@@ -483,7 +507,9 @@ impl Navigation {
                     continue;
                 }
                 let next = ny as usize * self.cols + nx as usize;
-                if self.clearance_squared[next] <= clearance * clearance {
+                if self.clearance_squared[next] <= clearance * clearance
+                    || !bounds.contains_circle(self.center(next), clearance)
+                {
                     continue;
                 }
                 if dx != 0 && dy != 0 {
@@ -521,7 +547,7 @@ impl Navigation {
         }
         points.push(self.center(from));
         points.reverse();
-        if self.clear(*points.last().unwrap_or(&start), goal, clearance, walls) {
+        if goal_fits && self.clear(*points.last().unwrap_or(&start), goal, clearance, walls) {
             points.push(goal);
         }
         points
@@ -725,7 +751,7 @@ mod tests {
             previous = point;
         }
         assert!(previous.distance(goal) < 180.);
-        assert!(tankyard_core::physics::circle_rect(previous, 30., walls[0]).is_none());
+        assert!(circle_rect(previous, 30., walls[0]).is_none());
     }
 
     #[test]

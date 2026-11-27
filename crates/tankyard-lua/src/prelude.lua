@@ -136,7 +136,7 @@ function tankyard.set_team(tank, team) emit("set_team", id("set_team", tank), nu
 function tankyard.set_level(tank, level) emit("set_level", id("set_level", tank), number("set_level", level, "level")) end
 function tankyard.raise_stat(tank, stat)
   if type(stat) ~= "number" and type(stat) ~= "string" then
-    error("tankyard.raise_stat: stat must be a number 1..8 or a stat name", 2)
+    error("tankyard.raise_stat: stat must be a number 1..9 or a stat name", 2)
   end
   emit("raise_stat", id("raise_stat", tank), stat)
 end
@@ -402,7 +402,7 @@ function tankyard.base_map(map_id)
   return base_map(check("string", map_id, "base_map", "map id"))
 end
 
-tankyard.stats = { "health", "regen", "body", "speed", "penetration", "damage", "reload", "movement" }
+tankyard.stats = { "health", "regen", "body", "speed", "penetration", "damage", "reload", "movement", "recoil" }
 
 -- Host side ------------------------------------------------------------------
 
@@ -431,14 +431,14 @@ function host.definitions() return definitions end
 -- faster than the host setting each field.
 function host.tank(id, name, class, team, x, y, vx, vy, aim, radius, health, max_health,
     level, xp, score, kills, deaths, alive, bot, points, shield, protection, speed_scale,
-    reload_scale, damage_scale, in_base, s1, s2, s3, s4, s5, s6, s7, s8, pocket)
+    reload_scale, damage_scale, in_base, s1, s2, s3, s4, s5, s6, s7, s8, s9, pocket)
   return {
     id = id, name = name, class = class, team = team, x = x, y = y, vx = vx, vy = vy,
     aim = aim, radius = radius, health = health, max_health = max_health, level = level,
     xp = xp, score = score, kills = kills, deaths = deaths, alive = alive, bot = bot,
     points = points, shield = shield, protection = protection, speed_scale = speed_scale,
     reload_scale = reload_scale, damage_scale = damage_scale, in_base = in_base, pocket = pocket,
-    stats = { s1, s2, s3, s4, s5, s6, s7, s8 },
+    stats = { s1, s2, s3, s4, s5, s6, s7, s8, s9 },
   }
 end
 

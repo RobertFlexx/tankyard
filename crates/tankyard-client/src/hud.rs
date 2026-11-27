@@ -9,7 +9,9 @@ use crate::{render, settings::Settings, ui::*};
 use macroquad::prelude::*;
 use std::fmt::Write as _;
 use tankyard_content::{Ability, ClassDef, Content, ProjectileKind};
-use tankyard_core::{BossKind, EntityId, Mode, Snapshot, Tank, xp_for_level};
+use tankyard_core::{
+    BossKind, EntityId, MAX_STAT_LEVEL, Mode, RECOIL_STAT, STAT_COUNT, Snapshot, Tank, xp_for_level,
+};
 
 #[derive(Clone, Copy)]
 struct StatHint {
@@ -17,8 +19,8 @@ struct StatHint {
     description: &'static str,
 }
 
-// Names come from the actual gun mounts, not some hardcoded class ID bullshit.
-fn stat_hints(class: Option<&ClassDef>) -> [StatHint; 8] {
+// Names and descriptions follow the tank's weapons.
+fn stat_hints(class: Option<&ClassDef>) -> [StatHint; STAT_COUNT] {
     let mut hints = [
         StatHint {
             name: "Max Health",
@@ -52,8 +54,25 @@ fn stat_hints(class: Option<&ClassDef>) -> [StatHint; 8] {
             name: "Movement Speed",
             description: "Accelerate and move more quickly.",
         },
+        StatHint {
+            name: "Recoil",
+            description: "Get more kick from firing. Aim away from where you want to move.",
+        },
     ];
     let Some(class) = class else { return hints };
+    hints[RECOIL_STAT] = if class.recoil_bounce > 0. {
+        StatHint {
+            name: "Recoil",
+            description: "Your cannon throws you back harder. Fire near cover to bank off it.",
+        }
+    } else if class.barrels.iter().all(|barrel| barrel.recoil == 0.) {
+        StatHint {
+            name: "Recoil (N/A)",
+            description: "This hull has no weapon kick.",
+        }
+    } else {
+        hints[RECOIL_STAT]
+    };
     if class.barrels.is_empty() {
         hints[3] = StatHint {
             name: "Weapon Speed (N/A)",
@@ -393,6 +412,59 @@ pub enum HudAction {
     Invulnerable(bool),
     Speed(f32),
     ToggleBoard,
+    ToggleSkills,
+}
+
+struct SkillsLayout {
+    rows: Rect,
+    tab: Rect,
+}
+
+fn skills_layout(height: f32, scale: f32, visible: f32) -> SkillsLayout {
+    let margin = 22. * scale;
+    let width = 246. * scale;
+    let height_used = ((STAT_COUNT - 1) as f32 * 26. + 22.) * scale;
+    let x = margin - (1. - visible) * (width + margin);
+    let y = height - margin - height_used;
+    SkillsLayout {
+        rows: Rect::new(x, y, width, height_used),
+        tab: Rect::new(
+            (x + width + 6. * scale).max(margin),
+            y,
+            22. * scale,
+            28. * scale,
+        ),
+    }
+}
+
+/// Wait for the last purchase to appear in the snapshot before repeating.
+/// A slow connection therefore cannot overbuy or fill its reliable queue.
+struct SkillHold {
+    index: usize,
+    observed: u8,
+    repeat_at: f64,
+}
+
+impl SkillHold {
+    fn start(index: usize, observed: u8, now: f64) -> Self {
+        Self {
+            index,
+            observed,
+            repeat_at: now + 0.29,
+        }
+    }
+
+    fn repeat(&mut self, hovered: Option<usize>, observed: u8, now: f64) -> bool {
+        if hovered != Some(self.index) {
+            self.repeat_at = f64::INFINITY;
+        }
+        if now < self.repeat_at || observed <= self.observed {
+            return false;
+        }
+        self.observed = observed;
+        self.repeat_at = now + 0.075;
+        true
+    }
 }
 
 /// How much of a scoreboard row its little tank takes, at scale 1.
@@ -432,6 +504,40 @@ fn board_layout(screen: f32, s: f32, fold: f32) -> BoardLayout {
         width: 220. * s,
         tab: Rect::new(x - tab_width - 6. * s, y + s, tab_width, tab_height),
     }
+}
+
+fn fold_tab(rect: Rect, heading: f32, glow: &mut f32, hovered: bool, s: f32) {
+    ease_toward(glow, f32::from(u8::from(hovered)), 18.);
+    let glow = *glow;
+    crate::hud_widgets::rounded(rect, 7. * s, Color::new(0.333, 0.333, 0.333, 1.));
+    let edge = (2.4 * s).max(1.);
+    crate::hud_widgets::rounded(
+        Rect::new(
+            rect.x + edge,
+            rect.y + edge,
+            rect.w - edge * 2.,
+            rect.h - edge * 2.,
+        ),
+        5. * s,
+        mix(Color::new(0.40, 0.40, 0.40, 1.), accent(), glow * 0.75),
+    );
+    let way = vec2(heading.cos(), heading.sin());
+    let side = vec2(-way.y, way.x);
+    let size = (5.6 + 0.9 * glow) * s;
+    let nudge = rect.center() + way * (0.7 + 0.7 * glow) * s;
+    let corner = |reach: f32| {
+        [
+            nudge + way * reach,
+            nudge - way * reach * 0.72 + side * reach * 0.94,
+            nudge - way * reach * 0.72 - side * reach * 0.94,
+        ]
+    };
+    if !crate::accessibility::contrast() {
+        let [a, b, c] = corner(size + 2.3 * s);
+        draw_triangle(a, b, c, Color::new(0.15, 0.15, 0.16, 1.));
+    }
+    let [a, b, c] = corner(size);
+    draw_triangle(a, b, c, WHITE);
 }
 
 /// The top of scoreboard row `row`. The eleventh row is the local player's
@@ -512,6 +618,8 @@ pub struct Hud {
     sandbox_level_pending: Option<u8>,
     sandbox_level_at: f64,
     stat_visibility: f32,
+    skill_hold: Option<SkillHold>,
+    skills_tab_glow: f32,
     offered_class: String,
     ranking_tick: Option<(u64, usize)>,
     ranking: Vec<usize>,
@@ -566,6 +674,8 @@ impl Hud {
             sandbox_level_pending: None,
             sandbox_level_at: 0.,
             stat_visibility: 0.0,
+            skill_hold: None,
+            skills_tab_glow: 0.,
             offered_class: String::new(),
             ranking_tick: None,
             ranking: Vec::with_capacity(256),
@@ -593,13 +703,10 @@ impl Hud {
         if contains(Rect::new(m, m, 226.0 * s, 56.0 * s)) {
             return true;
         }
-        if (tank.points > 0 || tank.creator_boss)
-            && contains(Rect::new(
-                m,
-                screen_height() - m - 225.0 * s,
-                246.0 * s,
-                225.0 * s,
-            ))
+        let skills = skills_layout(screen_height(), s, self.stat_visibility);
+        if (self.skill_hold.is_some() && is_mouse_button_down(MouseButton::Left))
+            || (tank.points > 0 && !tank.creator_boss && contains(skills.tab))
+            || (self.stat_visibility > 0. && contains(skills.rows))
         {
             return true;
         }
@@ -644,8 +751,8 @@ impl Hud {
             132.0 * s,
         ))
     }
-    fn update_skill_panel(&mut self, tank: &Tank, finished: bool, dt: f32, reduced_motion: bool) {
-        let target = if tank.points > 0 && tank.alive && !finished {
+    fn update_skill_panel(&mut self, tank: &Tank, hidden: bool, dt: f32, reduced_motion: bool) {
+        let target = if tank.points > 0 && tank.alive && !tank.creator_boss && !hidden {
             1.0
         } else {
             0.0
@@ -860,16 +967,19 @@ impl Hud {
         }
         // Saturated horizontal segmented stats, ordered like the classic
         // interface. The display order is NOT the authoritative stat index.
-        let stats_y = h - m - 207.0 * s;
-        let stat_w = 246.0 * s;
-        let stat_order = STAT_ORDER;
+        let stat_enabled = !modal && !settings.skills_hidden;
         self.update_skill_panel(
             tank,
-            snapshot.match_state.finished,
+            !stat_enabled,
             get_frame_time(),
             settings.reduced_motion,
         );
-        let stats_x = m - (1.0 - self.stat_visibility) * (stat_w + m + 10.0 * s);
+        let skills = skills_layout(h, s, self.stat_visibility);
+        let now = get_time();
+        if !is_mouse_button_down(MouseButton::Left) || is_mouse_button_pressed(MouseButton::Left) {
+            self.skill_hold = None;
+        }
+        let mut hover_skill = None;
         let hints = stat_hints(class);
         let stat_colors = [
             Color::new(0.91, 0.43, 0.91, 1.0),
@@ -880,13 +990,14 @@ impl Hud {
             RED,
             Color::new(0.72, 0.94, 0.41, 1.0),
             Color::new(0.42, 0.91, 0.89, 1.0),
+            Color::new(0.96, 0.61, 0.29, 1.0),
         ];
         let mut tooltip = None;
         if self.stat_visibility > 0.0 && !tank.creator_boss {
             arcade_label(
                 &format!("Skill points: {}", tank.points),
-                stats_x + 6.0 * s,
-                stats_y - 9.0 * s,
+                skills.rows.x + 6.0 * s,
+                skills.rows.y - 9.0 * s,
                 16.0 * s,
             );
             let covered = self.evolution
@@ -896,12 +1007,14 @@ impl Hud {
                         .any(|card| contains(*card))
                 });
             let _text = text_after_shapes();
-            for (row, &index) in stat_order.iter().enumerate() {
-                let r = Rect::new(stats_x, stats_y + row as f32 * 26.0 * s, stat_w, 22.0 * s);
-                let hovered = contains(Rect::new(r.x, r.y, r.w, 25. * s))
-                    && !modal
-                    && !covered
-                    && tank.points > 0;
+            for (row, &index) in STAT_ORDER.iter().enumerate() {
+                let r = Rect::new(
+                    skills.rows.x,
+                    skills.rows.y + row as f32 * 26.0 * s,
+                    skills.rows.w,
+                    22.0 * s,
+                );
+                let hovered = contains(r) && stat_enabled && !covered && tank.points > 0;
                 if hovered {
                     tooltip = Some(index);
                 }
@@ -925,7 +1038,8 @@ impl Hud {
                         alpha(BLACK, 0.30),
                     );
                 }
-                let can_upgrade = tank.points > 0 && tank.stats[index] < 7 && !modal;
+                let can_upgrade =
+                    tank.points > 0 && tank.stats[index] < MAX_STAT_LEVEL && stat_enabled;
                 let controls_x = r.x + r.w - 43.0 * s;
                 draw_rectangle(
                     controls_x,
@@ -960,19 +1074,46 @@ impl Hud {
                     11.0 * s,
                 );
                 arcade_center(
-                    if tank.stats[index] == 7 { "=" } else { "+" },
+                    if tank.stats[index] == MAX_STAT_LEVEL {
+                        "="
+                    } else {
+                        "+"
+                    },
                     r.x + r.w - 10.0 * s,
                     r.y + 16.0 * s,
                     15.0 * s,
                 );
-                if hovered && can_upgrade && take_click() {
-                    actions.push(HudAction::Stat(index));
+                if hovered && can_upgrade {
+                    // The row still accepts a single click. Only the plus
+                    // continues spending while it owns the held button.
+                    let plus = crate::ui_layout::pointer().x >= controls_x + 25. * s;
+                    if plus {
+                        hover_skill = Some(index);
+                    }
+                    if take_click() {
+                        if plus {
+                            self.skill_hold = Some(SkillHold::start(index, tank.stats[index], now));
+                        }
+                        actions.push(HudAction::Stat(index));
+                    }
                 }
             }
         }
+        if let Some(hold) = &mut self.skill_hold
+            && hold.repeat(hover_skill, tank.stats[hold.index], now)
+        {
+            actions.push(HudAction::Stat(hold.index));
+        }
+        if tank.points > 0
+            && !modal
+            && !tank.creator_boss
+            && self.skills_tab(skills.tab, tank.points, settings, s)
+        {
+            actions.push(HudAction::ToggleSkills);
+        }
         if let Some(index) = tooltip {
-            let x = stats_x;
-            let y = stats_y - 130. * s;
+            let x = skills.rows.x;
+            let y = skills.rows.y - 130. * s;
             panel(Rect::new(x, y, 264.0 * s, 112.0 * s));
             label(
                 hints[index].name,
@@ -990,7 +1131,7 @@ impl Hud {
                 text_color(),
             );
             label(
-                &format!("{} / 7", tank.stats[index]),
+                &format!("{} / {MAX_STAT_LEVEL}", tank.stats[index]),
                 x + 12.0 * s,
                 y + 101.0 * s,
                 12.0 * s,
@@ -1418,40 +1559,13 @@ impl Hud {
         let fold = self.board_fold.unwrap_or(0.);
         let rect = board_layout(screen_width(), s, fold).tab;
         let hovered = contains(rect);
-        ease_toward(&mut self.board_tab_glow, f32::from(u8::from(hovered)), 18.);
-        let glow = self.board_tab_glow;
-        crate::hud_widgets::rounded(rect, 7. * s, Color::new(0.333, 0.333, 0.333, 1.));
-        let edge = (2.4 * s).max(1.);
-        crate::hud_widgets::rounded(
-            Rect::new(
-                rect.x + edge,
-                rect.y + edge,
-                rect.w - edge * 2.,
-                rect.h - edge * 2.,
-            ),
-            5. * s,
-            mix(Color::new(0.40, 0.40, 0.40, 1.), accent(), glow * 0.75),
+        fold_tab(
+            rect,
+            fold * std::f32::consts::PI,
+            &mut self.board_tab_glow,
+            hovered,
+            s,
         );
-        // It points where the board will go: right to put it away, left to
-        // fetch it back, and turns over on the way.
-        let heading = fold * std::f32::consts::PI;
-        let way = vec2(heading.cos(), heading.sin());
-        let side = vec2(-way.y, way.x);
-        let size = (5.6 + 0.9 * glow) * s;
-        let nudge = rect.center() + way * (0.7 + 0.7 * glow) * s;
-        let corner = |reach: f32| {
-            [
-                nudge + way * reach,
-                nudge - way * reach * 0.72 + side * reach * 0.94,
-                nudge - way * reach * 0.72 - side * reach * 0.94,
-            ]
-        };
-        if !crate::accessibility::contrast() {
-            let [a, b, c] = corner(size + 2.3 * s);
-            draw_triangle(a, b, c, Color::new(0.15, 0.15, 0.16, 1.));
-        }
-        let [a, b, c] = corner(size);
-        draw_triangle(a, b, c, WHITE);
         // The arrow alone doesn't say what it does, or where you stand.
         let free = (0..6).all(|index| settings.key(index) != KeyCode::L);
         let note = if hovered {
@@ -1481,6 +1595,35 @@ impl Hud {
                 rect.y + rect.h * 0.5 + 5.5 * s,
                 size,
             );
+        }
+        hovered && take_click()
+    }
+    fn skills_tab(&mut self, rect: Rect, points: u8, settings: &Settings, s: f32) -> bool {
+        let hovered = contains(rect);
+        fold_tab(
+            rect,
+            self.stat_visibility * std::f32::consts::PI,
+            &mut self.skills_tab_glow,
+            hovered,
+            s,
+        );
+        let note = if settings.skills_hidden {
+            Some(format!("Skill points: {points}"))
+        } else if hovered {
+            let shortcut_free = (0..6).all(|index| settings.key(index) != KeyCode::U);
+            Some(
+                if shortcut_free {
+                    "Hide skills [U]"
+                } else {
+                    "Hide skills"
+                }
+                .to_owned(),
+            )
+        } else {
+            None
+        };
+        if let Some(note) = note {
+            arcade_label(&note, rect.x + rect.w + 7. * s, rect.y + 18. * s, 15. * s);
         }
         hovered && take_click()
     }
@@ -2274,6 +2417,21 @@ pub(crate) fn boss_banner_layout(width: f32, s: f32) -> Rect {
     let w = (600. * s).min(available);
     Rect::new((left + right - w) * 0.5, 112. * s, w, 62. * s)
 }
+
+pub(crate) fn headline_boss(snapshot: &Snapshot, local: EntityId) -> Option<&tankyard_core::Boss> {
+    snapshot
+        .bosses
+        .iter()
+        .filter(|boss| boss.health > 0.)
+        .min_by_key(|boss| {
+            let priority = match boss.kind {
+                BossKind::Sunderworm => 0,
+                BossKind::Railgunner => 1,
+                _ => 2,
+            };
+            (boss.target == 0 || boss.target != local, priority, boss.id)
+        })
+}
 fn sandbox_layout(width: f32, height: f32, scale: f32) -> (Rect, f32) {
     let s = scale
         .min((width - 40.).max(1.) / 920.)
@@ -2445,6 +2603,18 @@ mod tests {
                 assert!(sandbox.x >= 19.99 && sandbox.y >= 19.99);
             }
         }
+    }
+
+    #[test]
+    fn holding_a_skill_waits_for_the_snapshot_and_never_retargets() {
+        let mut held = SkillHold::start(RECOIL_STAT, 2, 10.);
+        assert!(!held.repeat(Some(RECOIL_STAT), 3, 10.2));
+        assert!(!held.repeat(Some(RECOIL_STAT), 2, 10.4));
+        assert!(held.repeat(Some(RECOIL_STAT), 3, 10.4));
+        assert!(!held.repeat(Some(RECOIL_STAT), 4, 10.41));
+        assert!(held.repeat(Some(RECOIL_STAT), 4, 10.5));
+        assert!(!held.repeat(Some(7), 5, 10.7));
+        assert!(!held.repeat(Some(RECOIL_STAT), 5, 11.));
     }
 
     #[test]

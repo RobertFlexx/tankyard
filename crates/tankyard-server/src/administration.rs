@@ -406,6 +406,7 @@ mod tests {
                 damage: 3.,
                 shot_speed: 2.,
             },
+            invulnerable: true,
         };
         let set = ServerCommand::SetOwnTank {
             tank: tuned.clone(),
@@ -463,11 +464,13 @@ mod tests {
         let player = world(&arena).tanks[0].id;
         assert_eq!(world(&arena).tanks[0].class, hull);
         assert_eq!(world(&arena).owner_weapons(player), tuned.weapons);
+        assert!(world(&arena).owner_invulnerable(player));
         assert!(world(&arena).config.modded);
         // Revoking the identity hands the ordinary hull back at once.
         arena.server.set_central_owner_admin(false).unwrap();
         assert_eq!(world(&arena).tanks[0].class, original);
         assert_eq!(world(&arena).owner_weapons(player), WeaponTuning::default());
+        assert!(!world(&arena).owner_invulnerable(player));
     }
 
     #[test]

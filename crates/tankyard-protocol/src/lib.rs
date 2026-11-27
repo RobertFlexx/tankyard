@@ -19,19 +19,22 @@ pub use party::*;
 mod status;
 pub use status::*;
 
-/// Version 35 adds authoritative Sunderworm body rings to snapshots. Clients
-/// and servers update together so the visible body matches collision geometry,
-/// including when joining an encounter already in progress.
-pub const PROTOCOL_VERSION: u32 = 35;
+/// Version 36 adds the recoil skill and its movement state, and extends
+/// the signed owner's tank settings. Clients and servers update together.
+pub const PROTOCOL_VERSION: u32 = 36;
 // Bastion counts a request outside `ClientControl::valid` as proof that it
 // did not come from the game, so every client of one protocol must agree on
 // those limits. Two come from game data: pin them to the version.
 const _: () = assert!(
-    PROTOCOL_VERSION == 35 && tankyard_core::MAX_LEVEL == 55 && tankyard_mods::HUD_CHOICES == 6,
-    "the level cap and HUD choice count are wire limits: change them with PROTOCOL_VERSION"
+    PROTOCOL_VERSION == 36
+        && tankyard_core::MAX_LEVEL == 55
+        && tankyard_core::STAT_COUNT == 9
+        && tankyard_core::MAX_STAT_LEVEL == 7
+        && tankyard_mods::HUD_CHOICES == 6,
+    "these request limits must change together with PROTOCOL_VERSION"
 );
 /// The oldest client version servers accept.
-pub const MIN_PROTOCOL_VERSION: u32 = 35;
+pub const MIN_PROTOCOL_VERSION: u32 = 36;
 pub const CLIENT_OUTDATED: &str = "This server runs a newer Tank Yard. Update the game to join it.";
 pub const SERVER_OUTDATED: &str =
     "This server runs an older Tank Yard. Its host needs to update it.";
@@ -206,7 +209,10 @@ impl ClientControl {
                     && account_token.as_ref().is_none_or(|s| s.len() <= 1024)
                     && party_proof.as_ref().is_none_or(|s| s.len() == 64)
             }
-            Self::UpgradeStat { stat, count } => *stat < 8 && (1..=7).contains(count),
+            Self::UpgradeStat { stat, count } => {
+                usize::from(*stat) < tankyard_core::STAT_COUNT
+                    && (1..=tankyard_core::MAX_STAT_LEVEL).contains(count)
+            }
             Self::Choose { menu, option } => {
                 *menu != 0 && usize::from(*option) < tankyard_mods::HUD_CHOICES
             }
@@ -629,6 +635,7 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && (0.25..=6.).contains(&t.reload_scale)
                 && (0.25..=8.).contains(&t.damage_scale)
                 && (0.0..=1.).contains(&t.knockback)
+                && (0.0..=tankyard_core::RECOIL_WINDOW).contains(&t.recoil_time)
                 && (0.0..=tankyard_core::STASIS_SECONDS).contains(&t.stasis)
                 && (0.0..=tankyard_core::POCKET_SECONDS).contains(&t.pocket)
                 && t.rift_shots <= 2
@@ -648,7 +655,9 @@ fn snapshot_valid(s: &Snapshot) -> bool {
                 && t.creator_attacks.iter().all(|v| {
                     v.is_finite() && (0.0..=tankyard_core::creator_boss::MAX_COOLDOWN).contains(v)
                 })
-                && t.stats.iter().all(|stat| *stat <= 7)
+                && t.stats
+                    .iter()
+                    .all(|stat| *stat <= tankyard_core::MAX_STAT_LEVEL)
                 && t.points <= 38
                 && t.team <= 4
                 && t.input.valid()
@@ -811,9 +820,9 @@ mod tests {
     /// older server of this protocol would otherwise take a newer client for
     /// a modified one.
     #[test]
-    fn protocol_35_request_limits_stay_where_bastion_expects_them() {
+    fn protocol_36_request_limits_stay_where_bastion_expects_them() {
         assert_eq!(
-            PROTOCOL_VERSION, 35,
+            PROTOCOL_VERSION, 36,
             "re-check these limits for the new protocol"
         );
         let input = |movement: V2, aim: f32, aim_distance: f32| PlayerInput {
@@ -871,7 +880,8 @@ mod tests {
             (chat("\u{1f600}".repeat(160)), true),
             (chat("tab\there".into()), false),
             (ClientControl::UpgradeStat { stat: 7, count: 7 }, true),
-            (ClientControl::UpgradeStat { stat: 8, count: 1 }, false),
+            (ClientControl::UpgradeStat { stat: 8, count: 1 }, true),
+            (ClientControl::UpgradeStat { stat: 9, count: 1 }, false),
             (ClientControl::UpgradeStat { stat: 0, count: 0 }, false),
             (ClientControl::UpgradeStat { stat: 0, count: 8 }, false),
             (ClientControl::SandboxLevel { level: 55 }, true),
@@ -969,7 +979,7 @@ mod tests {
     #[test]
     fn raw_decoders_expose_invalid_values_to_bastion_before_game_decoders_refuse_them() {
         let bad_control = encode(
-            &ClientControl::UpgradeStat { stat: 8, count: 1 },
+            &ClientControl::UpgradeStat { stat: 9, count: 1 },
             MAX_CONTROL_BYTES,
         )
         .unwrap();
@@ -1222,10 +1232,6 @@ mod tests {
     #[test]
     fn a_clash_stays_an_ordinary_parry_on_the_wire() {
         use tankyard_core::{ClashStyle, EventKind, GameEvent, clash_names, clash_of, clash_value};
-        assert_eq!(
-            PROTOCOL_VERSION, 35,
-            "authoritative worm bodies use protocol 35"
-        );
         for style in ClashStyle::ALL {
             for boss in [41, 41 + 8192, u64::MAX - 1] {
                 let event = GameEvent {
@@ -1747,7 +1753,7 @@ mod tests {
         assert!(decode_control(&bytes).is_err());
         assert!(decode_control(&vec![0; MAX_CONTROL_BYTES + 1]).is_err());
         let invalid = encode(
-            &ClientControl::UpgradeStat { stat: 8, count: 1 },
+            &ClientControl::UpgradeStat { stat: 9, count: 1 },
             MAX_CONTROL_BYTES,
         )
         .unwrap();

@@ -44,7 +44,7 @@ struct Grudge {
 
 /// What a boss remembers between ticks. Only the host thinks, so this never
 /// travels in a snapshot.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Mind {
     pub(crate) gun: u8,
     pub(crate) salvo: Option<crate::encounters::Salvo>,
@@ -68,8 +68,7 @@ pub struct Mind {
     pub(crate) swerve: V2,
     /// Its target's motion last tick.
     last: V2,
-    /// The last position it actually saw its target occupy.
-    seen_at: Option<V2>,
+    pub(crate) pursuit: crate::bosses::Pursuit,
 }
 
 /// What one boss sees of one tank, each part from 0 to 1.
@@ -241,16 +240,17 @@ impl Mind {
         self.think -= dt;
         self.focus += dt;
     }
-    /// It can see its target, at `at`.
-    pub(crate) fn saw(&mut self, at: V2) {
-        self.seen_at = Some(at);
+    /// Record position and heading only while a target is visible.
+    pub(crate) fn saw(&mut self, at: V2, moving: V2, from: V2) {
+        self.pursuit.observe(at, moving, from);
     }
     pub(crate) fn forget(&mut self) {
-        self.seen_at = None;
+        self.pursuit.clear();
     }
     /// Where it last saw its target.
+    #[cfg(test)]
     pub(crate) fn seen_at(&self) -> Option<V2> {
-        self.seen_at
+        self.pursuit.seen_at()
     }
     /// How much `id` has hurt it lately, against `scale`: 0 for nothing and
     /// toward 1 for a lot.

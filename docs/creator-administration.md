@@ -20,7 +20,9 @@ On **Mods**, the row's switch and the detail button both enable or disable a pac
 
 ## The central owner's tank
 
-On the central server, the verified central owner has a **My tank** tab in the server panel. It changes only their own tank: choose any hull by name or ID, then scale weapon damage from 0.25× to 8× and shot speed from 0.25× to 3×. **Reset to 1×** puts both back, and **Apply** sends the change. The settings last for the current round. Applying them marks the arena as modded, so it records no normal arena progress, and a borrowed hull awards no XP or levels. If the owner's verification ends during the round, the server removes their shots and returns their original hull. Delegated staff don't get the tab, and servers older than 2.1.5 don't answer it.
+On the central server, open **Server → My tank** with a verified central-owner pack. Choose a hull, adjust weapon damage (0.25×–8×) and shot speed (0.25×–3×), or turn on **Invulnerability**. **Apply** sends the changes for your tank. **Reset to 1×** resets the weapon sliders.
+
+Changes last for the round and mark the arena as modded, suspending normal progression awards. If verification is revoked, the server removes the protection, clears the owner's shots and returns the original hull. Invulnerability requires a protocol 36 client and server.
 
 ## Roles and scope
 

@@ -618,7 +618,7 @@ impl Effect {
                     && finite_range(*angle, -6.3, 6.3)
             }
             Self::SetLevel { level } => (1..=tankyard_content::MAX_LEVEL).contains(level),
-            Self::RaiseStat { stat } => *stat < 8,
+            Self::RaiseStat { stat } => usize::from(*stat) < tankyard_content::STAT_COUNT,
             Self::SetScales {
                 speed,
                 reload,

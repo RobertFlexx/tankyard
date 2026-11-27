@@ -92,7 +92,8 @@ pub const CYAN: Color = Color::new(0.0, 0.698, 0.882, 1.0);
 pub const AMBER: Color = Color::new(1.0, 0.91, 0.412, 1.0);
 pub const RED: Color = Color::new(0.988, 0.463, 0.467, 1.0);
 pub const VIOLET: Color = Color::new(0.749, 0.498, 0.961, 1.0);
-pub const STAT_ORDER: [usize; 8] = [1, 0, 2, 3, 4, 5, 6, 7];
+pub const STAT_ORDER: [usize; tankyard_core::STAT_COUNT] =
+    [1, 0, 2, 3, 4, 5, 6, 7, tankyard_core::RECOIL_STAT];
 pub fn card_color(index: usize) -> Color {
     crate::accessibility::palette(
         [

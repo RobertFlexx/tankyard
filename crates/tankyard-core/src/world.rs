@@ -1,8 +1,8 @@
 use crate::drones::DroneContacts;
 use crate::physics::{
     Body, SpatialGrid, Spot, WallIndex, circle_rect, constrain_tank, polygon_vertices_into,
-    segment_distance_squared, slide_reach, slide_tank, steer_tank, sweep_circle, sweep_polygon,
-    sweep_rect,
+    segment_distance_squared, slide_reach, slide_tank_with_recoil, steer_tank, sweep_circle,
+    sweep_polygon, sweep_rect,
 };
 use crate::*;
 use std::collections::BTreeMap;
@@ -90,6 +90,7 @@ pub struct World {
     collision_hits: Vec<(f32, Body, EntityId)>,
     drone_contacts: DroneContacts,
     pub(crate) wall_index: WallIndex,
+    pub(crate) boss_routes: crate::bosses::PursuitRoutes,
     body_padding: f32,
     pub(crate) contributions: BTreeMap<EntityId, Vec<(EntityId, f32, u64)>>,
     pub(crate) mode_timer: f32,
@@ -207,6 +208,7 @@ impl World {
             grid: SpatialGrid::new(config.width, config.height),
             drone_contacts: DroneContacts::new(config.width, config.height),
             wall_index: WallIndex::new(config.width, config.height),
+            boss_routes: Default::default(),
             rng: config.seed,
             next_id: config.id_base.clamp(1, 1 << 52),
             tick: 0,
@@ -382,7 +384,7 @@ impl World {
             xp: 0,
             score: 0,
             level: 1,
-            stats: [0; 8],
+            stats: [0; STAT_COUNT],
             points: 0,
             class: "vector".into(),
             team,
@@ -410,6 +412,7 @@ impl World {
             deployed_defenses: [0; 4],
             spawn_immunity: protection > 0.0,
             knockback: 0.,
+            recoil_time: 0.,
             speed_scale: 1.,
             terrain: 1.,
             grip: 1.,
@@ -478,19 +481,22 @@ impl World {
         true
     }
     pub fn upgrade_stat(&mut self, id: EntityId, index: usize) -> bool {
-        if index >= 8 {
+        if index >= STAT_COUNT {
             return false;
         }
         let Some(t) = self.tanks.iter_mut().find(|t| t.id == id) else {
             return false;
         };
-        if t.points == 0 || t.stats[index] >= 7 || !t.alive {
+        if t.points == 0 || t.stats[index] >= MAX_STAT_LEVEL || !t.alive {
             return false;
         }
-        let previous = stat_scale(t.stats[index]);
+        let previous = t.stats[index];
         t.stats[index] += 1;
-        let ratio = stat_scale(t.stats[index]) / previous;
         t.points -= 1;
+        if index == RECOIL_STAT {
+            return true;
+        }
+        let ratio = stat_scale(t.stats[index]) / stat_scale(previous);
         for drone in self.projectiles.iter_mut().filter(|p| {
             p.owner == id
                 && p.kind.is_drone()
@@ -546,6 +552,7 @@ impl World {
             t.charge = 0.;
             t.rift_shots = 0;
             t.rift_armed = 0.;
+            t.recoil_time = 0.;
             let pos = t.pos;
             let team = t.team;
             self.refresh_stats(id, false);
@@ -623,7 +630,7 @@ impl World {
         t.level = level;
         let allowed = points_for_level(level);
         if t.stats.iter().copied().sum::<u8>() > allowed {
-            t.stats = [0; 8];
+            t.stats = [0; STAT_COUNT];
         }
         t.points = allowed.saturating_sub(t.stats.iter().copied().sum());
         self.refresh_stats(id, true);
@@ -868,6 +875,7 @@ impl World {
             tank.shield = (tank.shield - DT).max(0.);
             tank.boost = (tank.boost - DT).max(0.);
             tank.knockback = (tank.knockback - DT).max(0.);
+            tank.recoil_time = (tank.recoil_time - DT).max(0.);
             tank.stasis = (tank.stasis - DT).max(0.);
             tank.ability_cooldown = (tank.ability_cooldown - DT).max(0.);
             crate::rifts::tick_armed(tank, DT);
@@ -897,7 +905,13 @@ impl World {
                 } else {
                     near
                 };
-                slide_tank(tank, &self.config, walls, DT);
+                slide_tank_with_recoil(
+                    tank,
+                    &self.config,
+                    walls,
+                    DT,
+                    def.map_or(0., |class| class.recoil_bounce),
+                );
             }
             if let Some(plan) = pocket_plan
                 && crate::pocket::pursue(tank, before_position, &self.content, plan, DT)
@@ -1375,12 +1389,14 @@ impl World {
         owner: EntityId,
         knockback: V2,
     ) {
+        let owner_god = self.owner_invulnerable(self.tanks[index].id);
         let t = &mut self.tanks[index];
         if !t.tangible()
             || t.health <= 0.
             || t.protection > 0.
             || self.config.base_protected(t.team, t.pos, t.radius)
             || self.sandbox_god.contains(&t.id)
+            || owner_god
             || self.admin_modifiers.get(&t.id).is_some_and(|m| m.god)
         {
             return;
@@ -1458,6 +1474,7 @@ impl World {
                 t.pocket = 0.;
                 t.pocket_echoes.clear();
                 t.knockback = 0.;
+                t.recoil_time = 0.;
                 t.boost = 0.;
                 t.ability_cooldown = 0.;
                 t.carrying = false;
@@ -1513,7 +1530,7 @@ impl World {
                 self.tanks[i].score = recovered_score;
                 self.tanks[i].level = recovered_level;
                 self.tanks[i].class = "vector".into();
-                self.tanks[i].stats = [0; 8];
+                self.tanks[i].stats = [0; STAT_COUNT];
                 self.tanks[i].points = points_for_level(recovered_level);
             }
             self.tanks[i].cooldowns.clear();

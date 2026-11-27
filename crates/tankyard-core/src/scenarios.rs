@@ -539,8 +539,8 @@ fn upgrade_budget_and_graph_are_enforced() {
         w.upgrade_stat(id, 0);
     }
     assert_eq!(w.tanks[0].stats[0], 7);
-    assert!(!w.upgrade_stat(id, 8));
-    for i in 1..8 {
+    assert!(!w.upgrade_stat(id, STAT_COUNT));
+    for i in 1..STAT_COUNT {
         for _ in 0..7 {
             w.upgrade_stat(id, i);
         }
@@ -1398,7 +1398,7 @@ fn player_death_reduces_both_score_and_level_and_restores_earned_points() {
     assert_eq!(tank.xp, xp_for_level(22));
     assert_eq!(tank.score, xp_for_level(22));
     assert_eq!(tank.points, points_for_level(22));
-    assert_eq!(tank.stats, [0; 8]);
+    assert_eq!(tank.stats, [0; STAT_COUNT]);
     assert_eq!(tank.class, "vector");
     for _ in 0..185 {
         world.step();
@@ -1681,6 +1681,7 @@ fn manual_recoil_prediction_matches_the_authoritative_simulation() {
         "anchor",
         "bastille",
         "rook",
+        "bankshot",
     ] {
         let mut world = empty(Mode::Sandbox);
         let player = world.add_player("Prediction", false);
@@ -1715,6 +1716,69 @@ fn manual_recoil_prediction_matches_the_authoritative_simulation() {
                 "{class} recoil diverged on tick {sequence}"
             );
         }
+    }
+}
+
+#[test]
+fn bankshot_banks_without_spending_an_extra_tick_or_diverging_from_prediction() {
+    for against_wall in [false, true] {
+        let mut world = empty(Mode::Sandbox);
+        let pilot = world.add_player("Bankshot", false);
+        world.sandbox_class(pilot, "bankshot");
+        for _ in 0..MAX_STAT_LEVEL {
+            assert!(world.upgrade_stat(pilot, RECOIL_STAT));
+        }
+        assert!(!world.upgrade_stat(pilot, RECOIL_STAT));
+        let radius = world.tanks[0].radius;
+        let left = if against_wall {
+            world.walls.push(Rect {
+                x: 350.,
+                y: 760.,
+                w: 10.,
+                h: 500.,
+            });
+            360.
+        } else {
+            world.config.bounds().x
+        };
+        world.tanks[0].pos = V2::new(left + radius + 16., 1000.);
+        let mut predicted = world.tanks[0].clone();
+        let mut banked = false;
+        for sequence in 1..=24 {
+            let input = PlayerInput {
+                sequence,
+                fire: sequence == 1,
+                aim: 0.25,
+                ..Default::default()
+            };
+            world.set_input(pilot, input);
+            predicted.input = input;
+            physics::predict_tank(
+                &mut predicted,
+                &world.content,
+                &world.config,
+                &world.walls,
+                world.tick + 1,
+                DT,
+            );
+            world.step();
+            let actual = &world.tanks[0];
+            assert!(actual.pos.x >= left + radius - 0.01);
+            assert!(
+                predicted.pos.distance(actual.pos) < 0.001
+                    && predicted.vel.distance(actual.vel) < 0.001
+                    && predicted.recoil_time == actual.recoil_time,
+                "tick {sequence}, against_wall {against_wall}"
+            );
+            if sequence == 1 {
+                assert!(
+                    actual.vel.x < -400.,
+                    "the recoil skill builds a strong kick"
+                );
+            }
+            banked |= actual.vel.x > 80. && actual.vel.y < 0.;
+        }
+        assert!(banked, "the normal reflects and the tangent is retained");
     }
 }
 

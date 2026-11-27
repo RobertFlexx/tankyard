@@ -1,6 +1,6 @@
 //! Trusted, process-local tools. Network authorization belongs to the host.
 //! These fields are absent from snapshots and cannot be changed by player input.
-use crate::{EntityId, MAX_LEVEL, World};
+use crate::{EntityId, MAX_LEVEL, MAX_STAT_LEVEL, STAT_COUNT, World};
 
 #[derive(Clone, Copy, Default)]
 pub struct Modifiers {
@@ -32,6 +32,7 @@ impl WeaponTuning {
 
 pub(crate) struct OwnerTankOverride {
     weapons: WeaponTuning,
+    invulnerable: bool,
     /// The ordinary class and the staff-selected replacement, for revocation.
     class_change: Option<(String, String)>,
 }
@@ -43,11 +44,18 @@ impl World {
             .map_or_else(WeaponTuning::default, |tank| tank.weapons)
     }
 
+    pub fn owner_invulnerable(&self, player: EntityId) -> bool {
+        self.owner_tanks
+            .get(&player)
+            .is_some_and(|tank| tank.invulnerable)
+    }
+
     pub fn tune_owner_tank(
         &mut self,
         player: EntityId,
         class: &str,
         weapons: WeaponTuning,
+        invulnerable: bool,
     ) -> bool {
         if !weapons.valid() || self.content.class(class).is_none() {
             return false;
@@ -56,7 +64,10 @@ impl World {
             return false;
         };
         let change_class = tank.class != class;
-        if !change_class && self.owner_weapons(player) == weapons {
+        if !change_class
+            && self.owner_weapons(player) == weapons
+            && self.owner_invulnerable(player) == invulnerable
+        {
             return true;
         }
         let settings = self
@@ -64,9 +75,11 @@ impl World {
             .entry(player)
             .or_insert_with(|| OwnerTankOverride {
                 weapons: WeaponTuning::default(),
+                invulnerable: false,
                 class_change: None,
             });
         settings.weapons = weapons;
+        settings.invulnerable = invulnerable;
         if change_class {
             let original = match settings.class_change.take() {
                 Some((original, granted)) if tank.class == granted => original,
@@ -139,7 +152,7 @@ impl World {
         self.config.modded = true;
         self.set_level_unchecked(player, MAX_LEVEL);
         if let Some(tank) = self.tanks.iter_mut().find(|t| t.id == player) {
-            tank.stats = [7; 8];
+            tank.stats = [MAX_STAT_LEVEL; STAT_COUNT];
             tank.points = 0;
         }
         self.refresh_stats(player, true);
@@ -305,10 +318,10 @@ mod tests {
             (owner, "no-such-hull", tuned),
             (bot, original.as_str(), tuned),
         ] {
-            assert!(!world.tune_owner_tank(player, class, weapons));
+            assert!(!world.tune_owner_tank(player, class, weapons, false));
         }
         assert!(!world.config.modded);
-        assert!(world.tune_owner_tank(owner, &original, tuned));
+        assert!(world.tune_owner_tank(owner, &original, tuned, false));
         assert!(world.config.modded);
         let (tuned_damage, tuned_speed) = first_shot(&mut world, owner);
         assert!(
@@ -330,22 +343,53 @@ mod tests {
             .unwrap()
             .id
             .clone();
-        assert!(world.tune_owner_tank(owner, &hull, tuned));
+        assert!(world.tune_owner_tank(owner, &hull, tuned, false));
         assert_eq!(world.tanks[0].class, hull);
         assert_eq!(world.owner_weapons(owner), tuned);
         // Choosing the original hull again needs nothing to hand back.
-        assert!(world.tune_owner_tank(owner, &original, WeaponTuning::default()));
+        assert!(world.tune_owner_tank(owner, &original, WeaponTuning::default(), false));
         assert_eq!(world.tanks[0].class, original);
-        assert!(world.tune_owner_tank(owner, &hull, tuned));
+        assert!(world.tune_owner_tank(owner, &hull, tuned, false));
         world.clear_owner_tank(owner);
         assert_eq!(world.tanks[0].class, original);
         assert_eq!(world.owner_weapons(owner), WeaponTuning::default());
         assert!(world.projectiles.iter().all(|shot| shot.owner != owner));
         assert_eq!(first_shot(&mut world, owner), (damage, speed));
         // A departing owner leaves nothing behind.
-        assert!(world.tune_owner_tank(owner, &hull, tuned));
+        assert!(world.tune_owner_tank(owner, &hull, tuned, false));
         world.remove_player(owner);
         assert_eq!(world.owner_weapons(owner), WeaponTuning::default());
+    }
+
+    #[test]
+    fn owner_invulnerability_is_personal_and_ends_on_toggle_or_revocation() {
+        let mut world = World::new(
+            WorldConfig {
+                target_count: 0,
+                spawn_protection: 0.,
+                ..Default::default()
+            },
+            tankyard_content::Content::builtin(),
+        );
+        let owner = world.add_player("Owner", false);
+        let other = world.add_player("Pilot", false);
+        let tune = WeaponTuning {
+            damage: 1.5,
+            ..Default::default()
+        };
+        assert!(world.tune_owner_tank(owner, "vector", tune, true));
+        world.damage_tank(0, 20., other, V2::ZERO);
+        world.damage_tank(1, 20., owner, V2::ZERO);
+        assert_eq!(world.tanks[0].health, 100.);
+        assert_eq!(world.tanks[1].health, 80.);
+        assert!(world.tune_owner_tank(owner, "vector", tune, false));
+        assert_eq!(world.owner_weapons(owner), tune);
+        world.damage_tank(0, 20., other, V2::ZERO);
+        assert_eq!(world.tanks[0].health, 80.);
+        assert!(world.tune_owner_tank(owner, "vector", tune, true));
+        world.clear_owner_tank(owner);
+        world.damage_tank(0, 20., other, V2::ZERO);
+        assert_eq!(world.tanks[0].health, 60.);
     }
 
     #[test]

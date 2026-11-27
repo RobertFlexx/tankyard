@@ -1733,6 +1733,11 @@ impl App {
                 {
                     self.toggle_board();
                 }
+                if is_key_pressed(KeyCode::U)
+                    && (0..6).all(|index| self.settings.key(index) != KeyCode::U)
+                {
+                    self.toggle_skills();
+                }
                 if is_key_pressed(KeyCode::Tab) {
                     self.hud.evolution = !self.hud.evolution;
                 }
@@ -1785,6 +1790,7 @@ impl App {
                         KeyCode::Key6,
                         KeyCode::Key7,
                         KeyCode::Key8,
+                        KeyCode::Key9,
                     ]
                     .into_iter()
                     .enumerate()
@@ -2353,30 +2359,14 @@ impl App {
             .and_then(|session| session.display.as_ref())
             .and_then(|snapshot| snapshot.tanks.iter().find(|t| t.creator_boss && t.alive));
         let axiom_height = if axiom.is_some() { 61. * s } else { 0. };
-        // Rare encounters keep their health visible even off screen. Boss
-        // Rush also gives the current ordinary boss a headline.
+        // Every mode receives the arena's boss list, including off-camera
+        // enemies. Give the current threat a headline in public matches too.
         let headline_boss = self
             .session
             .as_ref()
-            .and_then(|session| session.display.as_ref())
-            .and_then(|snapshot| {
-                let bosses = &snapshot.bosses;
-                bosses
-                    .iter()
-                    .find(|boss| boss.kind == tankyard_core::BossKind::Sunderworm)
-                    .or_else(|| {
-                        bosses
-                            .iter()
-                            .find(|boss| boss.kind == tankyard_core::BossKind::Railgunner)
-                    })
-                    .or_else(|| {
-                        (snapshot.config.mode == tankyard_core::Mode::BossRush)
-                            .then(|| bosses.first())
-                            .flatten()
-                    })
-            });
-        let rail_top = 106. * s + axiom_height;
-        let axiom_height = axiom_height + headline_boss.map_or(0., |_| hud::RAIL_BAR_HEIGHT * s);
+            .and_then(|session| hud::headline_boss(session.display.as_ref()?, session.player));
+        let headline_top = 106. * s + axiom_height;
+        let boss_height = axiom_height + headline_boss.map_or(0., |_| hud::RAIL_BAR_HEIGHT * s);
         let mut overlays = notifications::top_overlays(
             screen_height(),
             s,
@@ -2390,11 +2380,11 @@ impl App {
             },
             unobscured && self.effects.notice_life > 0.,
         );
-        overlays.server_y += axiom_height;
-        overlays.practice_y += axiom_height;
-        overlays.kill_y += axiom_height;
-        overlays.notice_y += axiom_height;
-        overlays.achievement_y += axiom_height;
+        overlays.server_y += boss_height;
+        overlays.practice_y += boss_height;
+        overlays.kill_y += boss_height;
+        overlays.notice_y += boss_height;
+        overlays.achievement_y += boss_height;
         let mut actions = Vec::new();
         let mut widget_pick = None;
         set_interactive(true);
@@ -2557,7 +2547,7 @@ impl App {
                         boss,
                         self.effects.boss_fx.health_trail(boss),
                         boss.target != 0 && boss.target == session.player,
-                        rail_top,
+                        headline_top,
                         s,
                         self.settings.colorblind,
                     );
@@ -2565,7 +2555,7 @@ impl App {
                 if let Some((boss, killer, life)) = &self.effects.boss_defeat {
                     let opacity = (life / 0.4).min(1.);
                     let mut rect = hud::boss_banner_layout(screen_width(), s);
-                    rect.y += axiom_height;
+                    rect.y += boss_height;
                     let half_destroyed = boss.starts_with("Sunderworm ")
                         && snapshot.bosses.iter().any(|boss| {
                             boss.kind == tankyard_core::BossKind::Sunderworm && boss.health > 0.
@@ -2600,7 +2590,7 @@ impl App {
                 } else if let Some((kind, life)) = self.effects.boss_arrival {
                     let opacity = (life / 0.4).min(1.);
                     let mut rect = hud::boss_banner_layout(screen_width(), s);
-                    rect.y += axiom_height;
+                    rect.y += boss_height;
                     let width = rect.w;
                     let y = rect.y;
                     arcade_center_in(
@@ -2893,6 +2883,10 @@ impl App {
         self.settings.leaderboard_hidden = !self.settings.leaderboard_hidden;
         let _ = self.settings.save();
     }
+    fn toggle_skills(&mut self) {
+        self.settings.skills_hidden = !self.settings.skills_hidden;
+        let _ = self.settings.save();
+    }
     fn hud_action(&mut self, action: HudAction) {
         match action {
             HudAction::Spectate(direction) => {
@@ -2916,6 +2910,7 @@ impl App {
                 let _ = self.settings.save();
             }
             HudAction::ToggleBoard => self.toggle_board(),
+            HudAction::ToggleSkills => self.toggle_skills(),
             HudAction::Evolve(class) => {
                 if let Some(session) = &mut self.session {
                     session.evolve(&class);

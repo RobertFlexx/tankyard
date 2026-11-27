@@ -356,13 +356,13 @@ impl World {
             };
             b.target = mark.id;
             b.goal = mark.pos;
-            b.mind.saw(mark.pos);
+            b.mind.saw(mark.pos, mark.vel, b.pos);
         } else {
             let had_target = b.target != 0;
             if !remembered {
                 b.mind.forget();
             }
-            search = b.search_goal(bounds, walls);
+            search = b.search_goal(&self.config, walls, &mut self.boss_routes);
             if search.is_none()
                 && (had_target
                     || b.pos.distance(b.goal) < 130.
@@ -397,7 +397,12 @@ impl World {
             } else {
                 (COIL_ROUND_SPEED, 0.)
             };
-            let point = mark.map_or(b.goal, |mark| {
+            let look = if charging || b.rail.beam > 0. {
+                b.goal
+            } else {
+                search.unwrap_or(b.goal)
+            };
+            let point = mark.map_or(look, |mark| {
                 lead_point(b.pos, (mark.pos, b.read), shot, warned, bounds, walls)
             });
             let difference =
@@ -451,7 +456,7 @@ impl World {
             }
         } else if let Some(point) = search {
             b.tactic = BossTactic::Advance;
-            (point - b.pos).normalized() * drive
+            (point - b.pos).clamp_length(drive * 0.75) / 0.75
         } else {
             b.tactic = BossTactic::Patrol;
             (b.goal - b.pos).normalized() * drive * 0.6

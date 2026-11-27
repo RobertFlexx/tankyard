@@ -2,6 +2,52 @@ use crate::physics::sweep_rect;
 use crate::*;
 use tankyard_content::{Ability, Barrel, ClassDef, FirePattern, ProjectileKind};
 
+pub const RECOIL_WINDOW: f32 = 0.55;
+
+pub(crate) fn shot_charge(tank: &Tank, barrel: &Barrel) -> f32 {
+    if barrel.pattern == FirePattern::Charge {
+        0.5 + tank.charge * 1.7
+    } else {
+        1.
+    }
+}
+
+/// Kick opposite the net momentum of the rounds that actually left the
+/// muzzle. Recoil is calibrated for a full volley from a standard hull.
+pub(crate) fn kick(
+    tank: &mut Tank,
+    class: &ClassDef,
+    barrel: &Barrel,
+    aim: f32,
+    count: usize,
+    charge: f32,
+) {
+    if count == 0 || barrel.recoil <= 0. {
+        return;
+    }
+    let mass = (tank.radius / 22.).powi(2).clamp(0.7, 2.5);
+    let charge = charge.sqrt();
+    let count = count as f32;
+    // Sum equally spaced unit vectors about the barrel. Their sideways
+    // components cancel, while a wider fan has less forward momentum.
+    let spread = if count > 1. && barrel.spread > 0.0001 {
+        let step = barrel.spread * 0.5 / (count - 1.);
+        if step.sin().abs() > 0.0001 {
+            (count * step).sin() / step.sin()
+        } else {
+            count * step.cos()
+        }
+    } else {
+        count
+    };
+    let impulse = barrel.recoil * stat_scale(tank.stats[RECOIL_STAT]) * charge * spread
+        / (mass * f32::from(barrel.count.max(1)));
+    tank.vel = (tank.vel - V2::from_angle(aim) * impulse).clamp_length(1200.);
+    if class.recoil_bounce > 0. && impulse.abs() > 1. {
+        tank.recoil_time = RECOIL_WINDOW;
+    }
+}
+
 fn deployable_slot(kind: ProjectileKind) -> Option<usize> {
     match kind {
         ProjectileKind::Drone | ProjectileKind::Minion => Some(0),
@@ -323,11 +369,7 @@ impl World {
                 let local = V2::new(barrel.offset[0], barrel.offset[1]).rotate(tank.aim);
                 let mut origin =
                     tank.pos + local + V2::from_angle(aim) * (barrel.length + tank.radius * 0.45);
-                let charge = if barrel.pattern == FirePattern::Charge {
-                    0.5 + tank.charge * 1.7
-                } else {
-                    1.
-                };
+                let charge = shot_charge(tank, barrel);
                 // A barrel beside a thin wall cannot spawn a bullet through it.
                 let mount = tank.pos + local;
                 let muzzle = origin;
@@ -381,7 +423,7 @@ impl World {
                         barrel.ricochets,
                     ));
                 }
-                tank.vel -= V2::from_angle(aim) * barrel.recoil;
+                kick(tank, class, barrel, aim, count, charge);
                 tank.barrel_shots[barrel_index] = tank.barrel_shots[barrel_index].wrapping_add(1);
                 tank.shot_count = tank.shot_count.wrapping_add(1);
                 tank.cooldowns[barrel_index] = reload_interval(

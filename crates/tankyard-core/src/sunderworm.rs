@@ -821,17 +821,22 @@ impl World {
             b.target = chosen;
         }
         let hull = ring_radius(0) * 0.55;
+        let mut search = None;
         let mark = if let Some(p) = prey.iter().find(|p| p.seen && p.id == b.target).copied() {
-            b.mind.saw(p.pos);
+            b.mind.saw(p.pos, p.vel, head);
             b.mind.watch(p.vel, DT);
             Some(p)
-        } else if let (Some((index, tank)), Some(pos)) = (remembered, b.mind.seen_at())
-            && !crate::bosses::checked_sighting(head, pos, hull, bounds, walls)
+        } else if let Some((index, tank)) = remembered
+            && let Some(leg) =
+                b.mind
+                    .pursuit
+                    .advance(head, hull, &self.config, walls, &mut self.boss_routes)
         {
+            search = Some(leg.waypoint);
             Some(Prey {
                 index,
                 id: tank.id,
-                pos,
+                pos: leg.at,
                 vel: V2::ZERO,
                 radius: tank.radius,
                 seen: false,
@@ -941,8 +946,8 @@ impl World {
                         let far = (mark.pos - from).normalized();
                         aim_at = mark.pos + far * 380.;
                     }
-                } else if let Some(mark) = mark {
-                    aim_at = crate::bosses::pursuit_waypoint(head, mark.pos, hull, bounds, walls);
+                } else if let Some(waypoint) = search {
+                    aim_at = waypoint;
                 }
                 if work.lull <= 0. && b.arrival <= 0. {
                     let choice = choose(work, mark, &prey, head, act_roll);

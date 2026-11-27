@@ -18,7 +18,7 @@ use winapi::{
     um::{
         imm::{HIMC, ImmGetContext, ImmReleaseContext},
         libloaderapi::{GetModuleHandleW, GetProcAddress},
-        shellapi::{DragAcceptFiles, DragQueryFileW, HDROP},
+        shellapi::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP},
         shellscalingapi::*,
         wingdi::*,
         winuser::*,
@@ -41,6 +41,12 @@ const WM_INPUTLANGCHANGEREQUEST: UINT = 0x0050;
 // Window focus messages
 const WM_SETFOCUS: UINT = 0x0007;
 const WM_KILLFOCUS: UINT = 0x0008;
+
+const MOUSE_BUTTONS: [(u8, MouseButton); 3] = [
+    (1, MouseButton::Left),
+    (2, MouseButton::Right),
+    (4, MouseButton::Middle),
+];
 
 /// Global flag tracking whether IME has been explicitly disabled by the user.
 /// This is controlled via `show_keyboard(bool)` API calls.
@@ -109,6 +115,7 @@ pub(crate) struct WindowsDisplay {
     user_cursor: bool,
     mouse_x: f32,
     mouse_y: f32,
+    mouse_buttons: u8,
     cursor: HCURSOR,
     libopengl32: LibOpengl32,
     _msg_wnd: HWND,
@@ -246,23 +253,17 @@ impl WindowsDisplay {
     }
     /// Set the window position in screen coordinates.
     fn set_window_position(&mut self, new_x: u32, new_y: u32) {
-        let mut rect: RECT = unsafe { std::mem::zeroed() };
-        if unsafe { GetClientRect(self.wnd, &mut rect as *mut _ as _) } != 0 {
-            let mut new_rect = rect;
-            new_rect.right = new_rect.right - new_rect.left + new_x as i32;
-            new_rect.bottom = new_rect.bottom - new_rect.top + new_y as i32;
-            unsafe {
-                SetWindowPos(
-                    self.wnd,
-                    HWND_TOP,
-                    new_x as i32,
-                    new_y as i32,
-                    0,
-                    0,
-                    SWP_NOSIZE,
-                )
-            };
-        }
+        unsafe {
+            SetWindowPos(
+                self.wnd,
+                HWND_TOP,
+                new_x as i32,
+                new_y as i32,
+                0,
+                0,
+                SWP_NOSIZE,
+            )
+        };
     }
 
     fn set_fullscreen(&mut self, fullscreen: bool) {
@@ -458,40 +459,41 @@ unsafe extern "system" fn win32_wndproc(
                 return 1;
             }
         }
-        WM_LBUTTONDOWN => {
-            let mouse_x = payload.mouse_x;
-            let mouse_y = payload.mouse_y;
-            event_handler.mouse_button_down_event(MouseButton::Left, mouse_x, mouse_y);
+        WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONUP
+        | WM_MBUTTONUP => {
+            let (mask, button) = MOUSE_BUTTONS[match umsg {
+                WM_LBUTTONDOWN | WM_LBUTTONUP => 0,
+                WM_RBUTTONDOWN | WM_RBUTTONUP => 1,
+                _ => 2,
+            }];
+            let mouse_x = GET_X_LPARAM(lparam) as f32 * payload.mouse_scale;
+            let mouse_y = GET_Y_LPARAM(lparam) as f32 * payload.mouse_scale;
+            payload.mouse_x = mouse_x;
+            payload.mouse_y = mouse_y;
+            if matches!(umsg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN) {
+                payload.mouse_buttons |= mask;
+                event_handler.mouse_button_down_event(button, mouse_x, mouse_y);
+                // Deliver the release even after a drag leaves the window.
+                if GetCapture() != hwnd {
+                    SetCapture(hwnd);
+                }
+            } else {
+                payload.mouse_buttons &= !mask;
+                event_handler.mouse_button_up_event(button, mouse_x, mouse_y);
+                if payload.mouse_buttons == 0 && GetCapture() == hwnd {
+                    // This sends WM_CAPTURECHANGED synchronously. All state
+                    // for this button has already been released.
+                    ReleaseCapture();
+                }
+            }
         }
-        WM_RBUTTONDOWN => {
-            let mouse_x = payload.mouse_x;
-            let mouse_y = payload.mouse_y;
-
-            event_handler.mouse_button_down_event(MouseButton::Right, mouse_x, mouse_y);
-        }
-        WM_MBUTTONDOWN => {
-            let mouse_x = payload.mouse_x;
-            let mouse_y = payload.mouse_y;
-
-            event_handler.mouse_button_down_event(MouseButton::Middle, mouse_x, mouse_y);
-        }
-        WM_LBUTTONUP => {
-            let mouse_x = payload.mouse_x;
-            let mouse_y = payload.mouse_y;
-
-            event_handler.mouse_button_up_event(MouseButton::Left, mouse_x, mouse_y);
-        }
-        WM_RBUTTONUP => {
-            let mouse_x = payload.mouse_x;
-            let mouse_y = payload.mouse_y;
-
-            event_handler.mouse_button_up_event(MouseButton::Right, mouse_x, mouse_y);
-        }
-        WM_MBUTTONUP => {
-            let mouse_x = payload.mouse_x;
-            let mouse_y = payload.mouse_y;
-
-            event_handler.mouse_button_up_event(MouseButton::Middle, mouse_x, mouse_y);
+        WM_CAPTURECHANGED | WM_CANCELMODE => {
+            let held = std::mem::take(&mut payload.mouse_buttons);
+            for (mask, button) in MOUSE_BUTTONS {
+                if held & mask != 0 {
+                    event_handler.mouse_button_up_event(button, payload.mouse_x, payload.mouse_y);
+                }
+            }
         }
 
         WM_MOUSEMOVE => {
@@ -743,8 +745,7 @@ unsafe extern "system" fn win32_wndproc(
             let mut path = core::mem::MaybeUninit::<[u16; MAX_PATH]>::uninit();
             let num_drops = DragQueryFileW(hdrop, u32::MAX, std::ptr::null_mut(), 0);
 
-            let mut d = crate::native_display().lock().unwrap();
-            d.dropped_files = Default::default();
+            let mut dropped = crate::native::DroppedFiles::default();
             for i in 0..num_drops {
                 let path_ptr = path.as_mut_ptr() as *mut u16;
                 let path_len = DragQueryFileW(hdrop, i, path_ptr, MAX_PATH as u32) as usize;
@@ -755,10 +756,14 @@ unsafe extern "system" fn win32_wndproc(
                         let path = path.assume_init();
                         PathBuf::from(OsString::from_wide(&path[0..path_len]))
                     };
-                    d.dropped_files.bytes.push(std::fs::read(&path).unwrap());
-                    d.dropped_files.paths.push(path);
+                    if let Ok(bytes) = std::fs::read(&path) {
+                        dropped.bytes.push(bytes);
+                        dropped.paths.push(path);
+                    }
                 }
             }
+            DragFinish(hdrop);
+            crate::native_display().lock().unwrap().dropped_files = dropped;
         }
         WM_ACTIVATE => {
             if LOWORD(wparam as _) == WA_ACTIVE || LOWORD(wparam as _) == WA_CLICKACTIVE {
@@ -1183,6 +1188,7 @@ where
             window_scale: 1.,
             mouse_x: 0.,
             mouse_y: 0.,
+            mouse_buttons: 0,
             show_cursor: true,
             user_cursor: false,
             cursor: std::ptr::null_mut(),

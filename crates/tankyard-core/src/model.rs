@@ -240,7 +240,7 @@ pub struct Tank {
     pub xp: u32,
     pub score: u32,
     pub level: u8,
-    pub stats: [u8; 8],
+    pub stats: [u8; crate::STAT_COUNT],
     pub points: u8,
     pub class: String,
     pub team: u8,
@@ -277,6 +277,9 @@ pub struct Tank {
     /// Remaining forced recoil, shared with movement prediction.
     #[serde(default)]
     pub knockback: f32,
+    /// Seconds a recoil hull can still bank off solid cover after firing.
+    #[serde(default)]
+    pub recoil_time: f32,
     /// Authoritative movement effects; client input cannot change this value.
     #[serde(default = "unit_scale")]
     pub speed_scale: f32,
@@ -431,6 +434,7 @@ impl Clone for Tank {
             deployed_defenses: self.deployed_defenses,
             spawn_immunity: self.spawn_immunity,
             knockback: self.knockback,
+            recoil_time: self.recoil_time,
             speed_scale: self.speed_scale,
             reload_scale: self.reload_scale,
             damage_scale: self.damage_scale,
@@ -490,6 +494,7 @@ impl Clone for Tank {
         self.deployed_defenses.clone_from(&source.deployed_defenses);
         self.spawn_immunity.clone_from(&source.spawn_immunity);
         self.knockback = source.knockback;
+        self.recoil_time = source.recoil_time;
         self.speed_scale = source.speed_scale;
         self.reload_scale = source.reload_scale;
         self.damage_scale = source.damage_scale;

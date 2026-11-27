@@ -645,7 +645,7 @@ mod tests {
         world.tanks[0].score = 50_000;
         world.tanks[0].level = 45;
         world.tanks[0].class = "fork".into();
-        world.tanks[0].stats = [7, 7, 7, 7, 5, 0, 0, 0];
+        world.tanks[0].stats = [7, 7, 7, 7, 5, 0, 0, 0, 0];
         let mut tracker = Tracker::default();
         assert!(
             tracker

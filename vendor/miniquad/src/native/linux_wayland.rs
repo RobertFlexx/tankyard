@@ -97,24 +97,26 @@ impl WaylandPayload {
                 (self.client.wl_display_cancel_read)(self.display);
             }
             // if key repeat takes place
-            if fds[1].revents & libc::POLLIN == 1 {
-                let mut count: [libc::size_t; 1] = [0];
-                let n_bits = core::mem::size_of::<libc::size_t>();
-                assert_eq!(
-                    libc::read(
-                        self.keyboard_context.timerfd,
-                        count.as_mut_ptr() as _,
-                        n_bits
-                    ),
-                    n_bits as _
+            if fds[1].revents & libc::POLLIN != 0 {
+                let mut count = 0_u64;
+                let size = std::mem::size_of_val(&count);
+                // A key-up processed while dispatching Wayland events above
+                // can disarm this timer after poll said it was readable.
+                let read = libc::read(
+                    self.keyboard_context.timerfd,
+                    (&mut count as *mut u64).cast(),
+                    size,
                 );
-                for _ in 0..count[0] {
-                    self.keyboard_context.generate_key_repeat_events(
-                        &mut self.xkb,
-                        &self.keymap,
-                        self.xkb_state,
-                        &mut self.events,
-                    );
+                if read == size as libc::ssize_t {
+                    // Discard a backlog from a suspended or busy window.
+                    for _ in 0..count.min(8) {
+                        self.keyboard_context.generate_key_repeat_events(
+                            &mut self.xkb,
+                            &self.keymap,
+                            self.xkb_state,
+                            &mut self.events,
+                        );
+                    }
                 }
             }
         } else {
@@ -246,13 +248,16 @@ impl KeyboardContext {
             enter_serial: None,
             repeat_info: Default::default(),
             repeated_key: None,
-            timerfd: unsafe { libc::timerfd_create(libc::CLOCK_MONOTONIC, libc::TFD_CLOEXEC) },
+            timerfd: unsafe {
+                libc::timerfd_create(libc::CLOCK_MONOTONIC, libc::TFD_CLOEXEC | libc::TFD_NONBLOCK)
+            },
         }
     }
     fn track_key_down(&mut self, key: core::ffi::c_uint) {
         let mut timer = new_itimerspec();
         match self.repeat_info {
             RepeatInfo::Repeat { delay, gap } => {
+                let delay = delay.max(Duration::from_nanos(1));
                 self.repeated_key = Some(key);
                 timer.it_interval.tv_sec = gap.as_secs() as _;
                 timer.it_interval.tv_nsec = gap.subsec_nanos() as _;
@@ -267,10 +272,13 @@ impl KeyboardContext {
     }
     fn track_key_up(&mut self, key: core::ffi::c_uint) {
         if self.repeated_key == Some(key) {
-            self.repeated_key = None;
-            unsafe {
-                libc::timerfd_settime(self.timerfd, 0, &new_itimerspec(), core::ptr::null_mut());
-            }
+            self.stop_repeat();
+        }
+    }
+    fn stop_repeat(&mut self) {
+        self.repeated_key = None;
+        unsafe {
+            libc::timerfd_settime(self.timerfd, 0, &new_itimerspec(), core::ptr::null_mut());
         }
     }
     unsafe fn generate_key_repeat_events(
@@ -307,6 +315,14 @@ impl KeyboardContext {
             if let Some(chr) = char::from_u32(chr) {
                 events.push(WaylandEvent::Char(chr, keymods, repeat));
             }
+        }
+    }
+}
+
+impl Drop for KeyboardContext {
+    fn drop(&mut self) {
+        if self.timerfd >= 0 {
+            unsafe { libc::close(self.timerfd) };
         }
     }
 }
@@ -601,7 +617,7 @@ unsafe extern "C" fn keyboard_handle_leave(
     // Clear modifiers
     let display: &mut WaylandPayload = &mut *(data as *mut _);
     (display.xkb.xkb_state_update_mask)(display.xkb_state, 0, 0, 0, 0, 0, 0);
-    display.keyboard_context.repeated_key = None;
+    display.keyboard_context.stop_repeat();
     display.keyboard_context.enter_serial = None;
     display.events.push(WaylandEvent::WindowMinimized);
 }
@@ -674,12 +690,13 @@ unsafe extern "C" fn keyboard_handle_repeat_info(
     delay: i32,
 ) {
     let display: &mut WaylandPayload = &mut *(data as *mut _);
-    display.keyboard_context.repeat_info = if rate == 0 {
+    display.keyboard_context.repeat_info = if rate <= 0 {
+        display.keyboard_context.stop_repeat();
         RepeatInfo::NoRepeat
     } else {
         RepeatInfo::Repeat {
-            delay: Duration::from_millis(delay as u64),
-            gap: Duration::from_micros(1_000_000 / rate as u64),
+            delay: Duration::from_millis(delay.max(0) as u64),
+            gap: Duration::from_micros((1_000_000 / rate as u64).max(1)),
         }
     };
 }

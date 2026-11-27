@@ -184,7 +184,14 @@ pub fn move_tank(
         return;
     }
     steer_tank(tank, content, config, dt);
-    slide_tank(tank, config, walls, dt);
+    let bounce = if tank.recoil_time > 0. {
+        content
+            .class(&tank.class)
+            .map_or(0., |class| class.recoil_bounce)
+    } else {
+        0.
+    };
+    slide_tank_with_recoil(tank, config, walls, dt, bounce);
 }
 
 /// Maximum motor-driven speed, including terrain, boosts and carrying a core.
@@ -236,6 +243,8 @@ pub fn steer_tank(tank: &mut Tank, content: &Content, config: &WorldConfig, dt: 
     };
     let rate = if tank.knockback > 0. {
         1.6
+    } else if tank.recoil_time > 0. {
+        3.2 * grip
     } else if desired.length_squared() > 0.1 {
         config.rules.acceleration * grip
     } else {
@@ -244,7 +253,7 @@ pub fn steer_tank(tank: &mut Tank, content: &Content, config: &WorldConfig, dt: 
     tank.vel = tank
         .vel
         .lerp(desired, 1. - (-rate * dt).exp())
-        .clamp_length(if tank.knockback > 0. {
+        .clamp_length(if tank.knockback > 0. || tank.recoil_time > 0. {
             1200.
         } else {
             speed * 3.
@@ -261,6 +270,43 @@ pub fn slide_reach(tank: &Tank, dt: f32) -> f32 {
 /// result once it overlaps none, so callers with a wall index may pass those
 /// alone, in map order.
 pub fn slide_tank(tank: &mut Tank, config: &WorldConfig, walls: &[Rect], dt: f32) {
+    slide_tank_with_recoil(tank, config, walls, dt, 0.);
+}
+
+fn arena_contact(bounds: Rect, start: V2, end: V2, r: f32) -> Option<(f32, V2)> {
+    let step = end - start;
+    let mut first = None;
+    for (from, to, edge, normal) in [
+        (start.x, end.x, bounds.x + r, V2::new(1., 0.)),
+        (start.x, end.x, bounds.x + bounds.w - r, V2::new(-1., 0.)),
+        (start.y, end.y, bounds.y + r, V2::new(0., 1.)),
+        (start.y, end.y, bounds.y + bounds.h - r, V2::new(0., -1.)),
+    ] {
+        if step.dot(normal) < -1e-6 && (to - edge) * (normal.x + normal.y) < 0. {
+            let time = ((edge - from) / (to - from)).max(0.);
+            if first.is_none_or(|(before, _)| time < before) {
+                first = Some((time, normal));
+            }
+        }
+    }
+    first
+}
+
+pub(crate) fn slide_tank_with_recoil(
+    tank: &mut Tank,
+    config: &WorldConfig,
+    walls: &[Rect],
+    dt: f32,
+    bounce: f32,
+) {
+    let bounce = if tank.recoil_time > 0. && tank.pocket <= 0. && !tank.creator_boss {
+        bounce
+    } else {
+        0.
+    };
+    if bounce > 0. {
+        tank.pos = config.bounds().clamp_circle(tank.pos, tank.radius);
+    }
     // Resolve initial penetrations first (spawns, map edits, remote correction).
     // Keeping the simulation finite prevents one bad collision from affecting
     // all clients and makes prediction use identical authoritative rules.
@@ -277,8 +323,8 @@ pub fn slide_tank(tank: &mut Tank, config: &WorldConfig, walls: &[Rect], dt: f32
             break;
         }
     }
-    // Continuous swept contact followed by tangential sliding. Unlike a
-    // single impact-and-stop, a diagonal approach continues along the wall.
+    // Continuous contacts preserve tangential motion. A recoil hull reflects
+    // some of its normal speed and spends the rest of the tick moving away.
     let mut remaining = tank.vel * dt.clamp(0.0, 0.1);
     for _ in 0..4 {
         if remaining.length_squared() < 1e-8 {
@@ -286,7 +332,11 @@ pub fn slide_tank(tank: &mut Tank, config: &WorldConfig, walls: &[Rect], dt: f32
         }
         let start = tank.pos;
         let end = start + remaining;
-        let mut first: Option<(f32, V2)> = None;
+        let mut first = if bounce > 0. {
+            arena_contact(config.bounds(), start, end, tank.radius)
+        } else {
+            None
+        };
         for &wall in walls {
             if let Some((time, normal)) = sweep_rect(start, end, tank.radius, wall) {
                 // An exact tangent is not a collision if we are departing.
@@ -302,8 +352,14 @@ pub fn slide_tank(tank: &mut Tank, config: &WorldConfig, walls: &[Rect], dt: f32
             let travel = (time - 0.0001).max(0.0);
             tank.pos += remaining * travel;
             let leftover = remaining * (1.0 - time);
-            remaining = leftover - normal * leftover.dot(normal).min(0.);
-            tank.vel -= normal * tank.vel.dot(normal).min(0.);
+            let normal_speed = tank.vel.dot(normal).min(0.);
+            let response = if normal_speed < -105. {
+                1. + bounce
+            } else {
+                1.
+            };
+            remaining = leftover - normal * leftover.dot(normal).min(0.) * response;
+            tank.vel -= normal * normal_speed * response;
         } else {
             tank.pos = end;
             break;
@@ -421,6 +477,7 @@ pub fn predict_tank(
     }
     tank.boost = (tank.boost - dt).max(0.0);
     tank.knockback = (tank.knockback - dt).max(0.);
+    tank.recoil_time = (tank.recoil_time - dt).max(0.);
     tank.stasis = (tank.stasis - dt).max(0.);
     crate::rifts::tick_armed(tank, dt);
     let was_pocket = tank.pocket > 0.;
@@ -536,10 +593,10 @@ pub fn predict_tank(
         if !firing || tank.cooldowns[index] > 0.0 {
             continue;
         }
+        let mut count = usize::from(barrel.count.max(1));
         if let Some(slot) = crate::weapons::defense_slot(barrel.projectile) {
             let room = [24_u8, 24, 8, 6][slot].saturating_sub(tank.deployed_defenses[slot]);
-            let count = usize::from(barrel.count.max(1))
-                .min(usize::from(room).div_ceil(ready_defenses[slot].max(1)));
+            count = count.min(usize::from(room).div_ceil(ready_defenses[slot].max(1)));
             ready_defenses[slot] = ready_defenses[slot].saturating_sub(1);
             if count == 0 {
                 tank.cooldowns[index] = 0.2;
@@ -554,7 +611,8 @@ pub fn predict_tank(
             } else {
                 0.0
             };
-        tank.vel -= V2::from_angle(angle) * barrel.recoil;
+        let charge = crate::weapons::shot_charge(tank, barrel);
+        crate::weapons::kick(tank, class, barrel, angle, count, charge);
         tank.barrel_shots[index] = tank.barrel_shots[index].wrapping_add(1);
         tank.barrel_aims[index] = angle;
         tank.cooldowns[index] =

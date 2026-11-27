@@ -7250,7 +7250,8 @@
         "orbit"
       ],
       "upgrades": [
-        "afterburner"
+        "afterburner",
+        "bankshot"
       ],
       "multipliers": [
         1.0,
@@ -7337,6 +7338,63 @@
       "strengths": "Rear recoil helps movement while firing.",
       "weaknesses": "Only one cannon points forward.",
       "ai_range": 300
+    },
+    {
+      "id": "bankshot",
+      "name": "Bankshot",
+      "description": "A spring-mounted cannon throws the hull backward. Fire near cover to bank off it and change direction.",
+      "tier": 3,
+      "min_level": 45,
+      "parents": [
+        "tri_angle"
+      ],
+      "upgrades": [
+        "fusillade"
+      ],
+      "body_scale": 0.94,
+      "recoil_bounce": 0.74,
+      "multipliers": [
+        0.92,
+        1,
+        0.85,
+        1,
+        1,
+        1,
+        1,
+        0.9
+      ],
+      "hull_sides": 8,
+      "barrels": [
+        {
+          "profile": "trapezoid",
+          "offset": [
+            0,
+            0
+          ],
+          "angle": 0,
+          "length": 49,
+          "width": 20,
+          "cooldown": 0.9,
+          "delay": 0,
+          "recoil": 234,
+          "pattern": "Normal",
+          "projectile": "Shell",
+          "speed": 475,
+          "damage": 31,
+          "radius": 8.5,
+          "lifetime": 1.85,
+          "penetration": 2.2,
+          "count": 1,
+          "spread": 0,
+          "ricochets": 0
+        }
+      ],
+      "ability": "None",
+      "ability_cooldown": 8,
+      "passive_regen": 0,
+      "strengths": "Banks off walls and arena edges while coasting from a shot. Recoil upgrades add to the kick.",
+      "weaknesses": "A light hull and one slow cannon. Poor positioning can send it right into crossfire.",
+      "ai_range": 390
     },
     {
       "id": "auto_three",
@@ -9453,6 +9511,7 @@
         "triplet",
         "streamliner",
         "afterburner",
+        "bankshot",
         "crossfire",
         "helix",
         "echo",

@@ -2170,8 +2170,12 @@ mod tests {
         let remaining = tank.points;
         session.upgrade_stat(3, true);
         assert_eq!(session.display.as_ref().unwrap().tanks[0].points, remaining);
-        session.upgrade_stat(8, true);
+        session.upgrade_stat(tankyard_core::STAT_COUNT, true);
         assert_eq!(session.display.as_ref().unwrap().tanks[0].points, remaining);
+        session.upgrade_stat(tankyard_core::RECOIL_STAT, true);
+        let tank = &session.display.as_ref().unwrap().tanks[0];
+        assert_eq!(tank.stats[tankyard_core::RECOIL_STAT], 7);
+        assert_eq!(tank.points, remaining - 7);
         if let Engine::Offline(local) = &mut session.engine {
             local.world.tanks[0].points = 2;
         }

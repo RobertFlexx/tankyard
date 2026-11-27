@@ -340,11 +340,11 @@ Positions are world units, with (0, 0) at the arena's top-left corner and y poin
 | `pocket` | seconds remaining in the pocket dimension, from 0 to 10; positive means the tank is absent from arena combat and objectives |
 | `health`, `max_health`, `shield`, `protection` | health, and the seconds left of shield and spawn protection |
 | `level`, `xp`, `score`, `kills`, `deaths`, `points` | progress; `points` are unspent skill points |
-| `stats` | the eight skill levels, in the order of `tankyard.stats` |
+| `stats` | the nine skill levels, in the order of `tankyard.stats` |
 | `speed_scale`, `reload_scale`, `damage_scale` | multipliers set by packs (1 is normal) |
 | `alive`, `bot`, `in_base` | flags |
 
-`tankyard.stats` is `{ "health", "regen", "body", "speed", "penetration", "damage", "reload", "movement" }`.
+`tankyard.stats` is `{ "health", "regen", "body", "speed", "penetration", "damage", "reload", "movement", "recoil" }`.
 
 ### Changing the match
 
@@ -359,7 +359,7 @@ All commands need a tank ID where they act on a tank. Values outside the bounds 
 | `set_team_score(team, score)` | team 1–4, up to 1,000,000 |
 | `set_class(id, class)` | any loaded class ID |
 | `set_level(id, level)` | 1 to 55; skill points follow the normal budget |
-| `raise_stat(id, stat)` | `stat` is 1–8 or a name from `tankyard.stats`; free, up to the usual maximum |
+| `raise_stat(id, stat)` | `stat` is 1–9 or a name from `tankyard.stats`; free, up to seven points |
 | `set_team(id, team)` | 0 to 4 |
 | `set_scales(id, { speed =, reload =, damage = })` | movement and reload 0.25–6, outgoing damage 0.25–8 |
 | `set_armor(id, multiplier)` | incoming damage multiplier, 0 to 10 (1 restores normal) |
@@ -506,7 +506,7 @@ A menu shown to one player closes when they pick; one shown to everyone stays un
 
 Widget IDs use lowercase letters, digits and `_`. A pack may show 16 widgets to everyone and 16 to each player, and a player receives at most 64 from all packs. Bots have no screen, so widgets for bots are dropped. Widgets end with the round, with their player, or when the pack is disabled.
 
-The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. A pinned widget follows its tank or group on each player's screen by itself, so it needs no updates as the tank moves. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, styles, icons and choices in 1.4, pins, choice layouts and glow in 1.5, shapes, borders, fills, lettering, title colors, bar looks and button looks in 1.6, and boards in 1.7. Tank Yard 2.1.7 uses protocol 35, the same as 2.1.0 (2.0 used 34); players and servers must use matching protocols.
+The server decides what each player sees and sends it at most ten times a second, only when it changes, so setting the same widget every tick costs nothing on the network. A pinned widget follows its tank or group on each player's screen by itself, so it needs no updates as the tank moves. Clients draw exactly what they receive. HUD widgets were introduced in 0.12, styles, icons and choices in 1.4, pins, choice layouts and glow in 1.5, shapes, borders, fills, lettering, title colors, bar looks and button looks in 1.6, and boards in 1.7. Players and servers must use matching protocols. Tank Yard 2.2.0 uses protocol 36. Releases 2.1.0–2.1.8 use 35.
 
 #### Boards
 
@@ -881,6 +881,7 @@ Tank definitions use the same schema as [`assets/content/classes.json`](../asset
 | `hull_sides` | 0 for a circle, 3–16 for a polygon |
 | `body_style` | `auto`, `circle`, `smasher`, `landmine` or `spike` |
 | `body_scale` | scales the model and collision size (default 1) |
+| `recoil_bounce` | fraction of normal speed retained when the hull banks off solid cover or the arena edge within 0.55 seconds of firing. Defaults to 0 and accepts values through 0.9 |
 | `body_texture` | a texture ID |
 | `barrels` | the guns (below) |
 | `drone_limit` | drones and minions alive at once (default 8) |
@@ -897,7 +898,7 @@ Barrels use tank-local coordinates (x forward, y to the side). Angles are radian
 | --- | --- |
 | `offset`, `angle` | mount position and direction |
 | `length`, `width`, `profile` | the drawn barrel: `auto`, `rectangle`, `trapezoid`, `trap` or `rocket` |
-| `cooldown`, `delay`, `recoil` | seconds between shots, initial delay, push-back |
+| `cooldown`, `delay`, `recoil` | seconds between shots, initial delay, and the push-back from a full volley on a standard hull. Hull mass, spread, charge and Recoil skill affect the actual kick |
 | `pattern` | `Normal`, `Alternating`, `Burst`, `Charge`, `Auto` or `Spin` |
 | `projectile` | `Bullet`, `Shell`, `Piercing`, `Scatter`, `Drone`, `Trap`, `Mine`, `Explosive`, `Fragment`, `Homing`, `Barrier`, `Turret` or `Minion` |
 | `speed`, `damage`, `radius`, `lifetime`, `penetration` | the projectile; trap launch distance uses `speed` |

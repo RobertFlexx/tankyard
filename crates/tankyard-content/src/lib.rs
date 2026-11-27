@@ -16,6 +16,10 @@ pub use tween::*;
 
 pub const MAX_LEVEL: u8 = 55;
 pub const UPGRADE_LEVELS: [u8; 5] = [1, 15, 30, 45, 55];
+/// Skill slots are shared by the simulation, scripts and the wire protocol.
+pub const STAT_COUNT: usize = 9;
+pub const RECOIL_STAT: usize = 8;
+pub const MAX_STAT_LEVEL: u8 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectileKind {
@@ -169,6 +173,9 @@ pub struct ClassDef {
     pub body_scale: f32,
     #[serde(default)]
     pub body_texture: Option<String>,
+    /// Fraction of normal velocity retained when banking off a wall after firing.
+    #[serde(default)]
+    pub recoil_bounce: f32,
     pub id: String,
     pub name: String,
     pub description: String,
@@ -177,7 +184,7 @@ pub struct ClassDef {
     pub parents: Vec<String>,
     pub upgrades: Vec<String>,
     /// Health, regeneration, body damage, shot speed, penetration, shot damage,
-    /// reload speed and movement speed, in the same order as the upgrade HUD.
+    /// reload speed and movement speed. Barrel recoil is tuned per mount.
     pub multipliers: [f32; 8],
     /// Zero denotes a circular hull; three through sixteen denote polygons.
     pub hull_sides: u8,
@@ -227,7 +234,7 @@ impl ClassDef {
             .collect::<Vec<_>>();
         mounts.sort_unstable();
         format!(
-            "{:?}:{}:{}:{}:{}",
+            "{:?}:{}:{}:{}:{}:{}",
             self.ability,
             u8::from(self.passive_regen > 0.),
             u8::from(self.multipliers[2] >= 2.),
@@ -236,6 +243,7 @@ impl ClassDef {
             } else {
                 0
             },
+            u8::from(self.recoil_bounce > 0.),
             mounts.join("|")
         )
     }
@@ -374,6 +382,11 @@ impl Content {
                     "{}: invalid body scale or texture identifier",
                     class.id
                 ));
+            }
+            if !in_range(class.recoil_bounce, 0., 0.9)
+                || (class.recoil_bounce > 0. && class.barrels.iter().all(|b| b.recoil == 0.))
+            {
+                return Err(format!("{}: invalid recoil bounce", class.id));
             }
             if !in_range(class.ability_cooldown, 0.5, 120.)
                 || !in_range(class.passive_regen, 0., 10.)
@@ -611,7 +624,7 @@ mod tests {
                     .contains(&id.to_owned())
             );
         }
-        assert_eq!(content.classes.len(), 113);
+        assert_eq!(content.classes.len(), 114);
         content.validate().unwrap();
     }
 

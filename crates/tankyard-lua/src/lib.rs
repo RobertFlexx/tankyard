@@ -32,7 +32,7 @@ pub const TICK_INSTRUCTIONS: u64 = 1_000_000;
 /// Steps for loading a pack's scripts.
 pub const LOAD_INSTRUCTIONS: u64 = 20_000_000;
 const MAX_QUERY_RESULTS: usize = 256;
-const STAT_NAMES: [&str; 8] = [
+const STAT_NAMES: [&str; tankyard_core::STAT_COUNT] = [
     "health",
     "regen",
     "body",
@@ -41,6 +41,7 @@ const STAT_NAMES: [&str; 8] = [
     "damage",
     "reload",
     "movement",
+    "recoil",
 ];
 const PRELUDE: &str = include_str!("prelude.lua");
 
@@ -514,9 +515,9 @@ fn emit(lua: &Lua, world: &World, op: &str, args: &[Value]) -> mlua::Result<(Ent
                         .ok_or_else(|| rt(format!("unknown stat {name:?}")))?
                 }
                 value => {
-                    let index = count(value, "stat", 8.)? as usize;
+                    let index = count(value, "stat", STAT_NAMES.len() as f64)? as usize;
                     if index == 0 {
-                        return Err(rt("stats are numbered 1 to 8"));
+                        return Err(rt("stats are numbered 1 to 9"));
                     }
                     index - 1
                 }
@@ -1224,7 +1225,7 @@ fn hud(args: &[Value]) -> mlua::Result<Effect> {
 }
 
 fn tank_table(lua: &Lua, world: &World, make: &Function, tank: &Tank) -> mlua::Result<Table> {
-    let mut args = Vec::with_capacity(35);
+    let mut args = Vec::with_capacity(27 + tankyard_core::STAT_COUNT);
     args.extend([
         Value::Number(lua_id(tank.id)),
         Value::String(lua.create_string(&tank.name)?),
