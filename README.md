@@ -6,7 +6,7 @@
 
 A tank arena by RobertFlexx, inspired by Diep.io and Arras.io. Play online, host a game, or practice offline.
 
-My [fork](github.com/RobertFlexx/quadnext) of [miniquad](https://github.com/not-fl3/miniquad) developed for tankyard.
+My [fork](https://github.com/RobertFlexx/quadnext) of [miniquad](https://github.com/not-fl3/miniquad) developed for tankyard.
 
 **[Download](https://github.com/RobertFlexx/tankyard/releases/latest)** · [Installation](docs/installing.md) · [How to play](docs/playing.md) · [Hosting](docs/hosting.md) · [Modding](docs/modding.md)
 
