@@ -379,8 +379,8 @@ fn slug(light: &mut Emission, round: &Round, path: &Path, clock: f32, level: f32
     } = *round;
     let d = heading.try_normalize().unwrap_or(vec2(1., 0.));
     let o = opacity * level.min(1.);
-    let pale = light.pale_floor();
-    let paint = |t: f32| steel(if pale { t.max(0.3) } else { t });
+    let daylight = light.daylight();
+    let paint = |t: f32| steel(t + (0.3 - t).max(0.) * daylight);
     let rim = (1.8 * z).max(1.);
     // The solid body, so it shows on any floor and at any setting.
     polygon(p, 0, r + rim, 0., alpha(mix(color, OUTLINE, 0.8), opacity));
@@ -426,7 +426,7 @@ fn slug(light: &mut Emission, round: &Round, path: &Path, clock: f32, level: f32
             side: 0.,
         }
     });
-    let shock = heated(paint(0.2), 0.4, pale);
+    let shock = heated(paint(0.2), 0.4, daylight);
     let thin = (r * 0.06).max(0.9);
     for side in [-1., 1.] {
         line.band(light, Layer::Core, |_, at| {
@@ -447,14 +447,14 @@ fn slug(light: &mut Emission, round: &Round, path: &Path, clock: f32, level: f32
             path,
             (reach, r),
             clock,
-            alpha(heated(paint(0.1), 0.5, pale), o),
+            alpha(heated(paint(0.1), 0.5, daylight), o),
         );
     }
     light.spot(
         Layer::Core,
         p + d * r * 0.35,
         r * 0.62,
-        alpha(heated(paint(0.05), 1., pale), o),
+        alpha(heated(paint(0.05), 1., daylight), o),
     );
 }
 
@@ -499,8 +499,8 @@ fn fireball(light: &mut Emission, round: &Round, path: &Path, clock: f32, level:
         ..
     } = *round;
     let o = opacity * level.min(1.);
-    let pale = light.pale_floor();
-    let heat = |t: f32| ramp(if pale { t.max(0.22) } else { t });
+    let daylight = light.daylight();
+    let heat = |t: f32| ramp(t + (0.22 - t).max(0.) * daylight);
     let rim = (1.8 * z).max(1.);
     // The solid body, so it shows on any floor and at any setting.
     polygon(p, 0, r + rim, 0., alpha(mix(color, OUTLINE, 0.8), opacity));
@@ -776,7 +776,7 @@ pub(super) fn band_from_trail(
         let c = trail.color;
         (c, Color::new(c.r * 0.52, c.g * 0.52, c.b * 0.52, 1.))
     };
-    let pale = light.pale_floor();
+    let daylight = light.daylight();
     let rich = light.rich();
     let sections = if rich { FINE } else { PLAIN };
     let clock = trail.clock + trail.seed;
@@ -805,7 +805,7 @@ pub(super) fn band_from_trail(
         Section {
             half: r * (0.52 * body + 0.05) * (0.42 + 0.58 * open),
             color: alpha(
-                heated(mix(color, deep, t), 0.5 * body, pale),
+                heated(mix(color, deep, t), 0.5 * body, daylight),
                 0.85 * open * body.powf(1.5) * strength * dense(at),
             ),
             // The bright thread wanders a little inside its glow.

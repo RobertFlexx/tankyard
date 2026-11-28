@@ -2,6 +2,7 @@
 use super::{Hud, bar_status, boss_banner_layout, grouped};
 use crate::{
     accessibility,
+    boss_fx::BossFx,
     emission::{Emission, Layer, Stop},
     lighting, render,
     ui::*,
@@ -9,10 +10,10 @@ use crate::{
 };
 use macroquad::prelude::*;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
-use tankyard_core::{Boss, BossKind, EntityId};
+use tankyard_core::{BossKind, EntityId, Snapshot};
 
 /// The actual health and the damage trail already followed by `BossFx`.
-pub(crate) struct Bar<'a> {
+struct Bar<'a> {
     pub id: EntityId,
     /// Axiom is a tank rather than a `Boss`, so it has no kind.
     pub kind: Option<BossKind>,
@@ -24,6 +25,91 @@ pub(crate) struct Bar<'a> {
     pub marks: &'a [f32],
     pub status: Option<(&'a str, u8)>,
     pub marked: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Layout {
+    area: Rect,
+    count: usize,
+    columns: usize,
+    scale: f32,
+    pitch: f32,
+    compact: bool,
+}
+
+impl Layout {
+    pub(crate) fn for_snapshot(snapshot: Option<&Snapshot>, scale: f32) -> Self {
+        let count = snapshot.map_or(0, |snapshot| {
+            snapshot
+                .bosses
+                .iter()
+                .filter(|boss| boss.health > 0.)
+                .count()
+                + snapshot
+                    .tanks
+                    .iter()
+                    .filter(|tank| tank.creator_boss && tank.alive)
+                    .count()
+        });
+        Self::new(screen_width(), screen_height(), scale, count)
+    }
+
+    fn new(width: f32, height: f32, scale: f32, count: usize) -> Self {
+        let area = boss_banner_layout(width, scale);
+        let top = 106. * scale;
+        let columns = match count {
+            0..=1 => 1,
+            3 if area.w >= 580. * scale => 3,
+            2..=4 => 2,
+            5..=12 => 3,
+            _ => 4,
+        };
+        let compact = count > 4;
+        let row_height = if compact { 40. } else { 61. };
+        let rows = count.div_ceil(columns).max(1) as f32;
+        let min_column = if compact { 132. } else { 188. };
+        let scale = scale
+            .min(area.w / (columns as f32 * (min_column + 10.)))
+            .min(height * 0.29 / (rows * row_height));
+        Self {
+            area: Rect::new(area.x, top, area.w, rows * row_height * scale),
+            count,
+            columns,
+            scale,
+            pitch: row_height * scale,
+            compact,
+        }
+    }
+
+    pub(crate) fn height(self) -> f32 {
+        self.count.div_ceil(self.columns) as f32 * self.pitch
+    }
+
+    fn cell(self, index: usize) -> Rect {
+        let row = index / self.columns;
+        let column = index % self.columns;
+        let in_row = self.columns.min(self.count - row * self.columns);
+        let gap = 14. * self.scale;
+        let width = (self.area.w - gap * (self.columns - 1) as f32) / self.columns as f32;
+        let span = width * in_row as f32 + gap * (in_row - 1) as f32;
+        Rect::new(
+            self.area.center().x - span * 0.5 + column as f32 * (width + gap),
+            self.area.y + row as f32 * self.pitch,
+            width,
+            self.pitch,
+        )
+    }
+
+    fn track(self, index: usize) -> Rect {
+        let r = self.cell(index);
+        let (y, h) = if self.compact { (17., 12.) } else { (23., 16.) };
+        Rect::new(
+            r.x + 3. * self.scale,
+            r.y + y * self.scale,
+            r.w - 6. * self.scale,
+            h * self.scale,
+        )
+    }
 }
 
 #[derive(Default)]
@@ -94,32 +180,18 @@ impl Animation {
 }
 
 impl Hud {
-    /// Axiom and the headline boss animate independently, even shown together.
-    pub(crate) fn boss_bar(&mut self, bar: &Bar<'_>, x: f32, top: f32, w: f32, s: f32) {
-        let now = get_time();
-        let calm = accessibility::reduced_motion();
-        let shown = self.boss_bars[usize::from(bar.kind.is_some())].sample(bar, now, calm);
-        let beat = if calm {
-            0.65
-        } else {
-            // A slow breath, never a flashing on/off warning.
-            0.5 - 0.5 * (now as f32 * TAU * 1.1).cos()
-        };
-        draw(bar, shown, beat, x, top, w, s);
-    }
-
-    pub(crate) fn headline_boss_bar(
+    pub(crate) fn draw_bosses(
         &mut self,
-        boss: &Boss,
-        trail: f32,
-        marked: bool,
-        top: f32,
-        s: f32,
+        snapshot: &Snapshot,
+        local: EntityId,
+        fx: &BossFx,
+        layout: Layout,
         colorblind: bool,
     ) {
-        let layout = boss_banner_layout(screen_width(), s);
-        self.boss_bar(
-            &Bar {
+        let mut bars = Vec::with_capacity(layout.count);
+        for boss in snapshot.bosses.iter().filter(|boss| boss.health > 0.) {
+            let marked = boss.target != 0 && boss.target == local;
+            bars.push(Bar {
                 id: boss.id,
                 kind: Some(boss.kind),
                 name: if boss.mothership {
@@ -130,7 +202,7 @@ impl Hud {
                 },
                 health: boss.health,
                 max_health: boss.max_health,
-                lost: trail,
+                lost: fx.health_trail(boss),
                 tint: render::boss_tint(boss, colorblind),
                 marks: match boss.worm_part() {
                     Some(tankyard_core::WormPart::Whole) => &tankyard_core::sunderworm::WORM_MARKS,
@@ -139,74 +211,136 @@ impl Hud {
                 },
                 status: bar_status(boss, marked),
                 marked,
-            },
-            layout.x,
-            top,
-            layout.w,
-            s,
-        );
+            });
+        }
+        for tank in snapshot
+            .tanks
+            .iter()
+            .filter(|tank| tank.creator_boss && tank.alive)
+        {
+            let health = (tank.health / tank.max_health.max(1.)).clamp(0., 1.);
+            bars.push(Bar {
+                id: tank.id,
+                kind: None,
+                name: tankyard_core::creator_boss::NAME,
+                health: tank.health,
+                max_health: tank.max_health,
+                lost: fx.axiom_trail(tank.id, health),
+                tint: accessibility::palette(tankyard_client::boss_model::AXIOM_GOLD),
+                marks: &tankyard_core::BOSS_PHASES,
+                status: None,
+                marked: false,
+            });
+        }
+        // Keep a bar's position when its target changes.
+        bars.sort_unstable_by_key(|bar| bar.id);
+        let now = get_time();
+        let calm = accessibility::reduced_motion();
+        let beat = if calm {
+            0.65
+        } else {
+            0.5 - 0.5 * (now as f32 * TAU * 1.1).cos()
+        };
+        if !bars.is_empty() {
+            let daylight = if is_dark() { 0. } else { 0.72 };
+            let mut light = Emission::begin(daylight, 1);
+            for (index, bar) in bars.iter().enumerate() {
+                let shown = self
+                    .boss_bars
+                    .entry(bar.id)
+                    .or_default()
+                    .sample(bar, now, calm);
+                draw_track(
+                    layout.track(index),
+                    shown,
+                    bar.tint,
+                    beat,
+                    layout.scale,
+                    &mut light,
+                );
+            }
+            light.flush(None);
+            let _text = text_after_shapes();
+            for (index, bar) in bars.iter().enumerate() {
+                draw_marks(layout.track(index), bar.marks, layout.scale);
+                draw_labels(bar, layout, index, beat);
+            }
+        }
+        self.boss_bars.retain(|_, animation| animation.at == now);
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn draw(bar: &Bar<'_>, shown: Shown, beat: f32, x: f32, top: f32, w: f32, s: f32) {
-    let center = x + w * 0.5;
-    let size = 20. * s;
-    let name = fitted_label(bar.name, size, (w - 60. * s).max(40. * s));
-    // Numbers stay exact while the colored fill eases between snapshots.
+fn draw_labels(bar: &Bar<'_>, layout: Layout, index: usize, beat: f32) {
+    let r = layout.cell(index);
+    let track = layout.track(index);
+    let s = layout.scale;
+    let center = r.center().x;
+    let size = if layout.compact { 14. * s } else { 20. * s };
+    let padding = if layout.compact { 8. * s } else { 60. * s };
+    let name = fitted_label(bar.name, size, r.w - padding);
     let numbers = format!(
         "{} / {}",
         grouped(bar.health.max(0.) as u64),
         grouped(bar.max_health as u64)
     );
-    let status = bar
-        .status
-        .map(|(text, urgency)| (fitted_label(text, 13. * s, w), urgency));
-    // Growing the font atlas after drawing can erase already queued labels.
-    prepare_label(&name, size);
-    prepare_label(&numbers, 12. * s);
-    if let Some((text, _)) = &status {
-        prepare_label(text, 13. * s);
+    if !layout.compact {
+        let icon = vec2(
+            center - label_width(&name, size) * 0.5 - 24. * s,
+            r.y + 9. * s,
+        );
+        match bar.kind {
+            Some(kind) => tankyard_client::boss_model::boss_model_geometry(
+                kind,
+                icon,
+                7. * s,
+                tankyard_client::boss_model::Pose {
+                    phase: 1,
+                    ..Default::default()
+                },
+                None,
+                &mut render::draw_model_primitive,
+            ),
+            None => tankyard_client::boss_model::axiom_geometry(
+                icon,
+                7. * s,
+                0.,
+                0.,
+                &mut render::draw_model_primitive,
+            ),
+        }
     }
-    arcade_center(&name, center, top + 15. * s, size);
-    let icon = vec2(
-        center - label_width(&name, size) * 0.5 - 27. * s,
-        top + 9. * s,
+    arcade_center(
+        &name,
+        center,
+        r.y + if layout.compact { 12. * s } else { 15. * s },
+        size,
     );
-    match bar.kind {
-        Some(kind) => tankyard_client::boss_model::boss_model_geometry(
-            kind,
-            icon,
-            8. * s,
-            tankyard_client::boss_model::Pose {
-                phase: 1,
-                ..Default::default()
-            },
-            None,
-            &mut render::draw_model_primitive,
-        ),
-        None => tankyard_client::boss_model::axiom_geometry(
-            icon,
-            8. * s,
-            0.,
-            0.,
-            &mut render::draw_model_primitive,
-        ),
-    }
-    let track = Rect::new(x + 3. * s, top + 23. * s, w - 6. * s, 16. * s);
-    draw_track(track, shown, bar.tint, bar.marks, beat, s);
-    arcade_center(&numbers, center, track.y + track.h * 0.5 + 4.4 * s, 12. * s);
-    if let Some((text, urgency)) = status {
+    let number_size = if layout.compact { 10. * s } else { 12. * s };
+    let numbers = fitted_label(&numbers, number_size, track.w - 4. * s);
+    arcade_center(
+        &numbers,
+        center,
+        track.center().y + number_size * 0.36,
+        number_size,
+    );
+    if let Some((text, urgency)) = bar.status {
+        let (size, baseline) = if layout.compact {
+            (9., 38.)
+        } else {
+            (13., 55.)
+        };
+        let size = size * s;
+        let text = fitted_label(text, size, r.w - 6. * s);
         let color = match urgency {
             0 => Color::new(0.74, 0.77, 0.82, 1.),
             1 => AMBER,
             _ => alpha(Color::new(1., 0.42, 0.38, 1.), 0.8 + 0.2 * beat),
         };
-        arcade_center_in(&text, center, top + 55. * s, 13. * s, color);
+        arcade_center_in(&text, center, r.y + baseline * s, size, color);
     }
 }
 
-fn draw_track(rect: Rect, shown: Shown, tint: Color, marks: &[f32], beat: f32, s: f32) {
+fn draw_track(rect: Rect, shown: Shown, tint: Color, beat: f32, s: f32, light: &mut Emission) {
     if rect.w <= 0. || rect.h <= 0. {
         return;
     }
@@ -228,7 +362,6 @@ fn draw_track(rect: Rect, shown: Shown, tint: Color, marks: &[f32], beat: f32, s
     gradient(Rect::new(rect.x, rect.y, lost, rect.h), tint, boundary);
 
     if shown.alarm > 0.001 || damage > 0.25 * s {
-        let mut light = Emission::begin(false, 1);
         if shown.alarm > 0.001 {
             // A soft outer halo and a tighter lit rim, not stacked flat outlines.
             let strength = shown.alarm * (0.55 + 0.45 * beat);
@@ -261,14 +394,17 @@ fn draw_track(rect: Rect, shown: Shown, tint: Color, marks: &[f32], beat: f32, s
                 alpha(WHITE, strength * 0.8),
             );
         }
-        light.flush(None);
     }
+}
 
+fn draw_marks(rect: Rect, marks: &[f32], s: f32) {
+    let ink = Color::new(0.15, 0.15, 0.16, 1.);
+    let rim = (2.8 * s).max(1.5);
     // Phase marks and labels sit above the light and remain crisp.
     let nick = 4.5 * s;
     for &mark in marks {
         let at = rect.x + rect.w * mark;
-        let (high, low) = (outer.y, outer.bottom());
+        let (high, low) = (rect.y - rim, rect.bottom() + rim);
         draw_triangle(
             vec2(at - nick, high),
             vec2(at + nick, high),
@@ -412,6 +548,32 @@ fn shade(tint: Color, y: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_boss_gets_a_cell_inside_the_hud_at_common_window_sizes() {
+        for (w, h, preference) in [(640., 400., 1.4), (1280., 800., 1.), (2560., 1080., 0.8)] {
+            let scale = ui_layout::scale(w, h, preference);
+            for count in 0..=17 {
+                let layout = Layout::new(w, h, scale, count);
+                let mut cells = Vec::<Rect>::new();
+                for index in 0..count {
+                    let cell = layout.cell(index);
+                    assert!(cell.x >= 0. && cell.right() <= w + 0.01);
+                    assert!(
+                        cell.y >= layout.area.y
+                            && cell.bottom() <= layout.area.y + layout.height() + 0.01
+                    );
+                    assert!(layout.track(index).w > 0.);
+                    assert!(cells.iter().all(|other| {
+                        cell.intersect(*other)
+                            .is_none_or(|shared| shared.w * shared.h < 0.02)
+                    }));
+                    cells.push(cell);
+                }
+                assert!(layout.height() <= h * 0.29 + 0.01);
+            }
+        }
+    }
 
     fn bar() -> Bar<'static> {
         Bar {

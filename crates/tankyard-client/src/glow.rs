@@ -4,8 +4,11 @@
 //! blend needs one shader; when shaders are unavailable `begin` returns
 //! false and callers draw flat shapes instead.
 use crate::graphics::draw_circle;
-use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation};
+use macroquad::miniquad::{
+    BlendFactor, BlendState, BlendValue, Equation, UniformDesc, UniformType,
+};
 use macroquad::prelude::*;
+use std::cell::Cell;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Blend {
@@ -27,6 +30,58 @@ pub enum Blend {
     CoveredGlow,
     /// Solid white whatever the shape's color: what the cover map is made of.
     Solid,
+}
+
+impl Blend {
+    fn emits(self) -> bool {
+        matches!(
+            self,
+            Self::Glow | Self::CoveredGlow | Self::Add | Self::Light
+        )
+    }
+}
+
+thread_local! {
+    static DAYLIGHT: Cell<f32> = const { Cell::new(0.) };
+}
+
+/// Set the light response for one scene or pass, restoring the caller's
+/// response on return. Illumination maps use zero to accumulate raw light.
+#[must_use]
+pub struct Daylight(f32);
+
+pub fn daylight(amount: f32) -> Daylight {
+    Daylight(DAYLIGHT.with(|slot| slot.replace(amount.clamp(0., 1.))))
+}
+
+impl Drop for Daylight {
+    fn drop(&mut self) {
+        DAYLIGHT.with(|slot| slot.set(self.0));
+    }
+}
+
+// Premultiplied color lets one blend preserve additive light at night and
+// reveal a colored falloff across a pale floor. The hotter center can still
+// be brighter than its surroundings. Neutral light keeps a quiet cool edge.
+const EMIT_LIGHT: &str = r#"
+VEC4 emit_light(VEC3 rgb, float intensity, float daylight) {
+    if (daylight <= 0.001) {
+        return VEC4(rgb * intensity, 0.0);
+    }
+    float peak = max(rgb.r, max(rgb.g, rgb.b));
+    float chroma = peak - min(rgb.r, min(rgb.g, rgb.b));
+    float neutral = 1.0 - smoothstep(0.06, 0.48, chroma);
+    float core = smoothstep(0.09, 0.48, intensity);
+    VEC3 fringe = mix(rgb * 0.76, VEC3(0.35, 0.46, 0.60), neutral * 0.3);
+    VEC3 color = mix(fringe, mix(rgb, VEC3(1.0), 0.65), core);
+    float coverage = clamp(intensity, 0.0, 1.0) * daylight * mix(0.64, 0.41, core);
+    float radiance = mix(1.0, mix(0.24, 0.51, core), daylight);
+    return VEC4(rgb * intensity * radiance + color * coverage, coverage);
+}
+"#;
+
+fn emitter_source(vec3: &str, vec4: &str) -> String {
+    EMIT_LIGHT.replace("VEC3", vec3).replace("VEC4", vec4)
 }
 
 const VERTEX: &str = r#"#version 100
@@ -91,61 +146,121 @@ macro_rules! falloff {
     };
 }
 
-fn soft_glsl(covered: bool) -> String {
+fn soft_glsl(covered: bool, emits: bool) -> String {
     let body = falloff!("uv", "gl_FragCoord.xy")
         .replace("VEC", "vec2")
         .replace("TINT", "tint");
-    if covered {
-        format!(
-            "#version 100
-precision mediump float;
-varying lowp vec4 tint;
-varying mediump vec2 uv;
-varying mediump vec2 cover;
-uniform sampler2D Texture;
-void main() {{
-    {body}
-    gl_FragColor = vec4(tint.rgb, light * (1.0 - texture2D(Texture, cover).r));
-}}"
+    let cover = if covered {
+        "varying mediump vec2 cover;
+uniform sampler2D Texture;"
+    } else {
+        ""
+    };
+    let mask = if covered {
+        "light *= 1.0 - texture2D(Texture, cover).r;"
+    } else {
+        ""
+    };
+    let (emitter, color) = if emits {
+        (
+            format!(
+                "uniform float Daylight;
+{}",
+                emitter_source("vec3", "vec4")
+            ),
+            "emit_light(tint.rgb, light, Daylight)",
         )
     } else {
-        format!(
-            "#version 100
+        (String::new(), "vec4(tint.rgb, light)")
+    };
+    format!(
+        "#version 100
 precision mediump float;
 varying lowp vec4 tint;
 varying mediump vec2 uv;
+{cover}
+{emitter}
 void main() {{
     {body}
-    gl_FragColor = vec4(tint.rgb, light);
+    {mask}
+    gl_FragColor = {color};
 }}"
-        )
-    }
+    )
 }
 
-fn soft_msl(covered: bool) -> String {
+fn soft_msl(covered: bool, emits: bool) -> String {
     let body = falloff!("in.uv", "in.position.xy")
         .replace("VEC", "float2")
         .replace("TINT", "in.tint");
-    if covered {
-        format!(
-            "
-fragment float4 fragmentShader(CoveredVaryings in [[stage_in]],
-                               texture2d<float> Texture [[texture(0)]], sampler smp [[sampler(0)]]) {{
-    {body}
-    return float4(in.tint.rgb, light * (1.0 - Texture.sample(smp, in.cover).r));
-}}
-"
+    let (input, mask) = if covered {
+        (
+            "CoveredVaryings in [[stage_in]], texture2d<float> Texture [[texture(0)]], sampler smp [[sampler(0)]]",
+            "light *= 1.0 - Texture.sample(smp, in.cover).r;",
         )
     } else {
-        format!(
-            "
-fragment float4 fragmentShader(Varyings in [[stage_in]]) {{
-    {body}
-    return float4(in.tint.rgb, light);
-}}
-"
+        ("Varyings in [[stage_in]]", "")
+    };
+    let (emitter, uniform, color) = if emits {
+        (
+            emitter_source("float3", "float4"),
+            ", constant Uniforms& u [[buffer(0)]]",
+            "emit_light(in.tint.rgb, light, u.Daylight)",
         )
-    }
+    } else {
+        (String::new(), "", "float4(in.tint.rgb, light)")
+    };
+    format!(
+        "
+{emitter}
+fragment float4 fragmentShader({input}{uniform}) {{
+    {body}
+    {mask}
+    return {color};
+}}"
+    )
+}
+
+fn lit_glsl(textured: bool) -> String {
+    let emitter = emitter_source("vec3", "vec4");
+    let (texture, color) = if textured {
+        (
+            "uniform sampler2D Texture;",
+            "texture2D(Texture, uv * 0.5 + 0.5) * tint",
+        )
+    } else {
+        ("", "tint")
+    };
+    format!(
+        "#version 100
+precision mediump float;
+varying lowp vec4 tint;
+varying mediump vec2 uv;
+uniform float Daylight;
+{texture}
+{emitter}
+void main() {{
+    vec4 color = {color};
+    gl_FragColor = emit_light(color.rgb, color.a, Daylight);
+}}"
+    )
+}
+
+fn lit_msl(textured: bool) -> String {
+    let emitter = emitter_source("float3", "float4");
+    let (texture, color) = if textured {
+        (
+            ", texture2d<float> Texture [[texture(0)]], sampler smp [[sampler(0)]]",
+            "Texture.sample(smp, in.uv * 0.5 + 0.5) * in.tint",
+        )
+    } else {
+        ("", "in.tint")
+    };
+    format!("
+{emitter}
+fragment float4 fragmentShader(Varyings in [[stage_in]], constant Uniforms& u [[buffer(0)]]{texture}) {{
+    float4 color = {color};
+    return emit_light(color.rgb, color.a, u.Daylight);
+}}")
 }
 
 const SOLID: &str = r#"#version 100
@@ -154,14 +269,6 @@ varying lowp vec4 tint;
 varying mediump vec2 uv;
 void main() {
     gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
-}"#;
-
-const FLAT: &str = r#"#version 100
-precision mediump float;
-varying lowp vec4 tint;
-varying mediump vec2 uv;
-void main() {
-    gl_FragColor = tint;
 }"#;
 
 const TEXTURED: &str = r#"#version 100
@@ -179,6 +286,7 @@ struct Uniforms {
     float4x4 Projection;
     float4x4 Model;
     float4 _Time;
+    float Daylight;
 };
 struct Vertex {
     float3 position [[attribute(0)]];
@@ -206,6 +314,7 @@ struct Uniforms {
     float4x4 Projection;
     float4x4 Model;
     float4 _Time;
+    float Daylight;
 };
 struct CoveredVertex {
     float3 position [[attribute(0)]];
@@ -232,12 +341,6 @@ vertex CoveredVaryings vertexShader(CoveredVertex v [[stage_in]], constant Unifo
 const SOLID_MSL: &str = r#"
 fragment float4 fragmentShader(Varyings in [[stage_in]]) {
     return float4(1.0);
-}
-"#;
-
-const FLAT_MSL: &str = r#"
-fragment float4 fragmentShader(Varyings in [[stage_in]]) {
-    return in.tint;
 }
 "#;
 
@@ -299,14 +402,11 @@ fn shader(
     if blend == Blend::Solid {
         pipeline_params.color_blend = None;
     }
-    if matches!(
-        blend,
-        Blend::Glow | Blend::CoveredGlow | Blend::Add | Blend::Light
-    ) {
+    if blend.emits() {
         pipeline_params.color_blend = Some(BlendState::new(
             Equation::Add,
-            BlendFactor::Value(BlendValue::SourceAlpha),
             BlendFactor::One,
+            BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
         ));
         // Light brightens color; it never makes the frame more opaque.
         pipeline_params.alpha_blend = Some(BlendState::new(
@@ -323,6 +423,11 @@ fn shader(
         },
         MaterialParams {
             pipeline_params,
+            uniforms: if blend.emits() {
+                vec![UniformDesc::new("Daylight", UniformType::Float1)]
+            } else {
+                Vec::new()
+            },
             ..Default::default()
         },
     )
@@ -332,22 +437,22 @@ fn shader(
 thread_local! {
     static MATERIALS: Option<Materials> = (|| {
         Ok::<_, String>(Materials {
-            soft: material(&soft_glsl(false), &soft_msl(false), Blend::Soft)?,
-            glow: material(&soft_glsl(false), &soft_msl(false), Blend::Glow)?,
-            add: material(FLAT, FLAT_MSL, Blend::Add)?,
-            light: material(TEXTURED, TEXTURED_MSL, Blend::Light)?,
+            soft: material(&soft_glsl(false, false), &soft_msl(false, false), Blend::Soft)?,
+            glow: material(&soft_glsl(false, true), &soft_msl(false, true), Blend::Glow)?,
+            add: material(&lit_glsl(false), &lit_msl(false), Blend::Add)?,
+            light: material(&lit_glsl(true), &lit_msl(true), Blend::Light)?,
             multiply: material(TEXTURED, TEXTURED_MSL, Blend::Multiply)?,
         })
     })()
     .map_err(|error| log::warn!("Soft lighting unavailable: {error}"))
     .ok();
     static COVERING: Option<Covering> = (|| {
-        let covered = |blend| {
+        let covered = |blend: Blend| {
             shader(
                 COVERED_VERTEX,
                 COVERED_MSL,
-                &soft_glsl(true),
-                &soft_msl(true),
+                &soft_glsl(true, blend.emits()),
+                &soft_msl(true, blend.emits()),
                 blend,
             )
         };
@@ -382,11 +487,14 @@ pub fn begin(blend: Blend) -> bool {
             let Some(covering) = covering else {
                 return false;
             };
-            gl_use_material(match blend {
-                Blend::CoveredSoft => &covering.soft,
-                Blend::CoveredGlow => &covering.glow,
-                _ => &covering.solid,
-            });
+            apply(
+                match blend {
+                    Blend::CoveredSoft => &covering.soft,
+                    Blend::CoveredGlow => &covering.glow,
+                    _ => &covering.solid,
+                },
+                blend,
+            );
             true
         });
     }
@@ -394,15 +502,25 @@ pub fn begin(blend: Blend) -> bool {
         let Some(materials) = materials else {
             return false;
         };
-        gl_use_material(match blend {
-            Blend::Soft => &materials.soft,
-            Blend::Glow => &materials.glow,
-            Blend::Add => &materials.add,
-            Blend::Light => &materials.light,
-            _ => &materials.multiply,
-        });
+        apply(
+            match blend {
+                Blend::Soft => &materials.soft,
+                Blend::Glow => &materials.glow,
+                Blend::Add => &materials.add,
+                Blend::Light => &materials.light,
+                _ => &materials.multiply,
+            },
+            blend,
+        );
         true
     })
+}
+
+fn apply(material: &Material, blend: Blend) {
+    if blend.emits() {
+        material.set_uniform("Daylight", DAYLIGHT.with(Cell::get));
+    }
+    gl_use_material(material);
 }
 
 pub fn end() {

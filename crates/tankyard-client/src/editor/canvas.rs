@@ -1089,6 +1089,14 @@ impl Editor {
             focus: self.preview.probe(),
             fades: self.layer_fades(),
         };
+        // Lift the darkness while placing objects. Play Logic previews the
+        // map's full lighting, including how its glow responds to the floor.
+        let mut lighting = shown.poses.lighting(&map.ambient);
+        if !self.preview.running {
+            lighting[3] *= 0.5;
+        }
+        let _daylight =
+            crate::glow::daylight(crate::lighting::daylight(settings.dark_arena, lighting));
         profile::phase("editor decor", || {
             scenery::floor(map, config, &shown, &self.view, self.time);
             scenery::decorations(map, config, &shown, &self.view, self.time, false, settings);
@@ -1194,7 +1202,6 @@ impl Editor {
         profile::phase("editor decor above", || {
             scenery::decorations(map, config, &shown, &self.view, self.time, true, settings)
         });
-        let lighting = shown.poses.lighting(&map.ambient);
         if lighting[3] > 0.004 {
             profile::phase("editor darkness", || {
                 let mut lights = Vec::new();
@@ -1215,15 +1222,7 @@ impl Editor {
                         color: alpha(WHITE, 0.95),
                     });
                 }
-                // While editing, the dark is lifted halfway so everything stays
-                // easy to place; the running preview shows it in full.
-                let [r, g, b, dark] = lighting;
-                let dark = if self.preview.running {
-                    dark
-                } else {
-                    dark * 0.5
-                };
-                crate::lighting::darken([r, g, b, dark], &lights, arena.intersect(canvas));
+                crate::lighting::darken(lighting, &lights, arena.intersect(canvas));
             });
         }
         profile::phase("editor marks", || {

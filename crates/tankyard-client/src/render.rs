@@ -596,10 +596,12 @@ pub fn world(
             .map(|tank| placed(tank.id, tank.pos)),
         fades: Default::default(),
     };
-    // Light is queued as the world is drawn and laid over it at the end. A
-    // pale floor takes it as tint, since adding light there only clips white.
-    let night = map.map_or(0., |map| shown.poses.lighting(&map.ambient)[3]);
-    let mut light = crate::emission::Emission::begin(!dark && night < 0.35, settings.shape_quality);
+    let lighting = map.map_or([1., 1., 1., 0.], |map| {
+        crate::lighting::steady(shown.poses.lighting(&map.ambient), settings.reduced_motion)
+    });
+    let daylight = crate::lighting::daylight(dark, lighting);
+    let _daylight = crate::glow::daylight(daylight);
+    let mut light = crate::emission::Emission::begin(daylight, settings.shape_quality);
     if let Some(map) = map {
         crate::profile::phase("pads", || {
             crate::scenery::floor(map, &snapshot.config, &shown, view, animation_time)
@@ -1625,8 +1627,6 @@ pub fn world(
                 settings,
             )
         });
-        let lighting =
-            crate::lighting::steady(shown.poses.lighting(&map.ambient), settings.reduced_motion);
         if lighting[3] > 0.004 {
             let mut lights = Vec::new();
             crate::scenery::lights(

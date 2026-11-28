@@ -90,7 +90,7 @@ Trapper reloads in one second and its traps deal about 28 damage with 5.49 penet
 
 When another tank destroys you, a card shows who it was and their score, then the camera moves over to watch them until you respawn. Left / Right switches who you watch. In team modes you watch a teammate instead. When a boss falls, the banner at the top names the player who did the most damage to it.
 
-A boss's health bar appears in public arenas and other modes whenever a boss is active. If several are present, the bar gives priority to one pursuing you. Notches mark its next phases, and the white trail shows recent damage. Off-screen arrows point toward up to four nearby bosses. Break line of sight to interrupt their aim, then keep moving. A boss checks where it last saw you and searches nearby exits.
+Each active boss has a health bar, including bosses in public arenas, Axiom, and both Sunderworm halves. Large encounters use smaller bars to leave room for the fight. Notches mark the next phases, and the white trail shows recent damage. A pulsing rim identifies a boss pursuing you. Off-screen arrows point toward up to four nearby bosses. Break line of sight to interrupt their aim, then keep moving. A boss checks where it last saw you and searches nearby exits.
 
 ## Modes
 
@@ -210,7 +210,7 @@ The party roster includes **I'm ready** and a ready count. Readiness is shared w
 
 Siege Engine, Skirmisher and Trapper add three boss encounters, each with a practice trial. Special attacks lock their aim during the warning. Heavy siege shots, a straight skirmisher charge and side-pocket mines each leave a different escape route. Boss models use distinct mechanical silhouettes rather than a shared stack of rotating armor.
 
-Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, follow the [domain hosting guide](hosting-domain.md). Tank Yard 2.2.0 uses protocol **36**. Update the game and host together when coming from 2.1.0–2.1.8, which use protocol 35.
+Authorized community hosts can use **Server → Rules** for live changes without resetting players. To make your own public endpoint, follow the [domain hosting guide](hosting-domain.md). Tank Yard 2.2.0 and 2.2.1 use protocol **36**. Update the game and host together when coming from 2.1.0–2.1.8, which use protocol 35.
 
 ## Fighting the Jester and Carillon
 

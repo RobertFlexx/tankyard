@@ -7,9 +7,8 @@
 //!
 //! Pieces are built from the falloff in [`crate::glow`]: a spot is a round
 //! falloff, and a band is that same falloff taken across a ribbon, so trails,
-//! beams, rings and arcs all share one soft edge and one shader. On a pale
-//! floor adding light only clips to white, so there the same pieces are laid
-//! down as tinted light instead, which keeps their color.
+//! beams, rings and arcs all share one soft edge and one shader. The light
+//! response follows the arena's brightness, keeping color on pale floors.
 use crate::glow::{self, Blend};
 use macroquad::models::Vertex;
 use macroquad::prelude::*;
@@ -311,7 +310,7 @@ pub struct Emission {
     core: Vec<Piece>,
     stops: Vec<Stop>,
     mesh: Mesh,
-    pale_floor: bool,
+    daylight: f32,
     detail: u8,
     /// How many pieces of each layer went in before the tanks: smoke, wash
     /// and core. Those lie under the tanks, and a tank on top hides them.
@@ -324,12 +323,11 @@ thread_local! {
 }
 
 impl Emission {
-    /// A clear queue for this frame. `pale_floor` is true where adding light
-    /// would only wash out; `detail` is the shape quality, 0 to 2.
-    pub fn begin(pale_floor: bool, detail: u8) -> Self {
+    /// A clear queue with the scene's daylight response and shape quality.
+    pub fn begin(daylight: f32, detail: u8) -> Self {
         let mut emission = SPARE.with(|spare| std::mem::take(&mut *spare.borrow_mut()));
         emission.clear();
-        emission.pale_floor = pale_floor;
+        emission.daylight = daylight;
         emission.detail = detail;
         emission
     }
@@ -377,14 +375,14 @@ impl Emission {
     pub fn rich(&self) -> bool {
         self.detail >= 2
     }
-    /// Whether light here is laid down as tint rather than added.
-    pub fn pale_floor(&self) -> bool {
-        self.pale_floor
+    /// How much the floor needs a tinted glow to show its edges.
+    pub fn daylight(&self) -> f32 {
+        self.daylight
     }
     /// `color` heated by `amount`, 0 to 1. White-hot on a dark floor; on a
     /// pale one, where white wouldn't show, it stays well inside the color.
     pub fn hot(&self, color: Color, amount: f32) -> Color {
-        heated(color, amount, self.pale_floor)
+        heated(color, amount, self.daylight)
     }
     fn push(&mut self, layer: Layer, piece: Piece) {
         let list = match layer {
@@ -607,6 +605,7 @@ impl Emission {
     /// was queued before the tanks is held back where a tank stands on it.
     pub fn flush(mut self, cover: Option<Texture2D>) {
         let (w, h) = (screen_width(), screen_height());
+        let _daylight = glow::daylight(self.daylight);
         if glow::available() {
             let mut from = [0; 3];
             if let Some(cover) = cover {
@@ -617,13 +616,7 @@ impl Emission {
                     glow::end();
                     from[0] = smoke;
                 }
-                if (wash > 0 || core > 0)
-                    && glow::begin(if self.pale_floor {
-                        Blend::CoveredSoft
-                    } else {
-                        Blend::CoveredGlow
-                    })
-                {
+                if (wash > 0 || core > 0) && glow::begin(Blend::CoveredGlow) {
                     self.draw(Layer::Wash, 0..wash, w, h);
                     self.draw(Layer::Core, 0..core, w, h);
                     glow::end();
@@ -637,13 +630,7 @@ impl Emission {
                 self.draw(Layer::Smoke, smoke..self.smoke.len(), w, h);
                 glow::end();
             }
-            if (self.wash.len() > wash || self.core.len() > core)
-                && glow::begin(if self.pale_floor {
-                    Blend::Soft
-                } else {
-                    Blend::Glow
-                })
-            {
+            if (self.wash.len() > wash || self.core.len() > core) && glow::begin(Blend::Glow) {
                 self.draw(Layer::Wash, wash..self.wash.len(), w, h);
                 self.draw(Layer::Core, core..self.core.len(), w, h);
                 glow::end();
@@ -755,8 +742,8 @@ impl Emission {
 
 /// `color` heated by `amount`, 0 to 1; see [`Emission::hot`]. For code that
 /// holds the queue mutably while it works out its colors.
-pub fn heated(color: Color, amount: f32, pale_floor: bool) -> Color {
-    let amount = amount.clamp(0., 1.) * if pale_floor { 0.34 } else { 1. };
+pub fn heated(color: Color, amount: f32, daylight: f32) -> Color {
+    let amount = amount.clamp(0., 1.) * (1. - 0.66 * daylight);
     Color::new(
         color.r + (1. - color.r) * amount,
         color.g + (1. - color.g) * amount,
@@ -1018,7 +1005,7 @@ mod tests {
         let dark = queue();
         assert_eq!(dark.hot(color, 1.), Color::new(1., 1., 1., 1.));
         let pale = Emission {
-            pale_floor: true,
+            daylight: 1.,
             ..queue()
         };
         let tinted = pale.hot(color, 1.);

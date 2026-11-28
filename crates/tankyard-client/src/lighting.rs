@@ -107,6 +107,17 @@ pub fn ambient(lighting: [f32; 4]) -> Color {
     )
 }
 
+/// Fade the tinting response as the arena darkens, even during a map trigger.
+pub fn daylight(dark_arena: bool, lighting: [f32; 4]) -> f32 {
+    if dark_arena {
+        return 0.;
+    }
+    let light = ambient(lighting);
+    let luminance = light.r * 0.2126 + light.g * 0.7152 + light.b * 0.0722;
+    let amount = ((luminance - 0.46) / 0.40).clamp(0., 1.);
+    amount * amount * (3. - 2. * amount)
+}
+
 /// Darken what has been drawn so far inside `area` (the whole window when
 /// None) by `lighting`, letting `lights` through. Nothing happens when the
 /// arena isn't dark. Call it with no clip set: the light map is drawn
@@ -160,6 +171,7 @@ pub fn darken(lighting: [f32; 4], lights: &[Light], area: Option<Rect>) {
         (w * 0.5).clamp(1., 2048.) as u32,
         (h * 0.5).clamp(1., 2048.) as u32,
     );
+    let _daylight = glow::daylight(0.);
     LIGHT_MAP.with(|cell| {
         let mut slot = cell.borrow_mut();
         if slot.as_ref().is_none_or(|(made, _)| *made != size) {
@@ -777,6 +789,16 @@ pub fn glint(at: Vec2, length: f32, turn: f32, color: Color) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glow_grade_tracks_ambient_brightness_and_leaves_dark_arenas_additive() {
+        let at = |darkness| daylight(false, [0.12, 0.15, 0.22, darkness]);
+        assert_eq!(at(0.), 1.);
+        assert_eq!(at(1.), 0.);
+        assert!(at(0.2) > at(0.4) && at(0.4) > at(0.6));
+        assert!((at(0.35) - at(0.351)).abs() < 0.005);
+        assert_eq!(daylight(true, [1., 1., 1., 0.]), 0.);
+    }
 
     #[test]
     fn cones_fade_steadily_from_the_lamp_to_nothing() {

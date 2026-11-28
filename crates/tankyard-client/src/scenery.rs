@@ -1048,19 +1048,16 @@ fn light(item: &MapDecor, p: Vec2, radius: f32, c: Color, time: f32) {
         glow::begin(Blend::Glow);
         glow::spot(p, radius * 0.9, alpha(c, strength * 0.8));
         glow::spot(p, radius * 0.3, alpha(hot, strength));
+        glow::spot(p, (radius * 0.1).max(2.), alpha(WHITE, strength * 0.9));
         glow::end();
-        // A glint on the bulb, the way a lens catches it, and a white-hot
-        // core added on top so the bulb never reads darker than its glow.
-        if glow::begin(Blend::Add) {
-            if radius > 10. {
-                crate::lighting::glint(
-                    p,
-                    (radius * 0.32).min(90.),
-                    std::f32::consts::FRAC_PI_4,
-                    alpha(hot, strength * 0.5),
-                );
-            }
-            glow::spot(p, (radius * 0.08).max(2.), alpha(WHITE, strength * 0.9));
+        // A glint on the bulb, the way a lens catches it.
+        if radius > 10. && glow::begin(Blend::Add) {
+            crate::lighting::glint(
+                p,
+                (radius * 0.32).min(90.),
+                std::f32::consts::FRAC_PI_4,
+                alpha(hot, strength * 0.5),
+            );
             glow::end();
         }
     } else {

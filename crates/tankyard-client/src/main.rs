@@ -1339,8 +1339,17 @@ impl App {
             return true;
         }
         self.voice.captures_pointer(s)
-            || (self.effects.boss_banner() && contains(hud::boss_banner_layout(screen_width(), s)))
             || self.session.as_ref().is_some_and(|session| {
+                let boss_height =
+                    hud::BossLayout::for_snapshot(session.display.as_ref(), s).height();
+                let boss_banner = self.effects.boss_banner();
+                if boss_banner {
+                    let mut banner = hud::boss_banner_layout(screen_width(), s);
+                    banner.y += boss_height;
+                    if contains(banner) {
+                        return true;
+                    }
+                }
                 let community = match &session.engine {
                     session::Engine::Online { client, .. } => {
                         self.community.captures_pointer(
@@ -1352,11 +1361,7 @@ impl App {
                             contains(notifications::server_notice_rect(
                                 notice,
                                 s,
-                                if self.effects.boss_banner() {
-                                    188.
-                                } else {
-                                    110.
-                                } * s,
+                                (if boss_banner { 188. } else { 110. }) * s + boss_height,
                             ))
                         })
                     }
@@ -2353,20 +2358,13 @@ impl App {
         let server_height = server_notice.map_or(0., |notice| {
             notifications::server_notice_rect(notice, s, 0.).h + 8. * s
         });
-        let axiom = self
-            .session
-            .as_ref()
-            .and_then(|session| session.display.as_ref())
-            .and_then(|snapshot| snapshot.tanks.iter().find(|t| t.creator_boss && t.alive));
-        let axiom_height = if axiom.is_some() { 61. * s } else { 0. };
-        // Every mode receives the arena's boss list, including off-camera
-        // enemies. Give the current threat a headline in public matches too.
-        let headline_boss = self
-            .session
-            .as_ref()
-            .and_then(|session| hud::headline_boss(session.display.as_ref()?, session.player));
-        let headline_top = 106. * s + axiom_height;
-        let boss_height = axiom_height + headline_boss.map_or(0., |_| hud::RAIL_BAR_HEIGHT * s);
+        let boss_layout = hud::BossLayout::for_snapshot(
+            self.session
+                .as_ref()
+                .and_then(|session| session.display.as_ref()),
+            s,
+        );
+        let boss_height = boss_layout.height();
         let mut overlays = notifications::top_overlays(
             screen_height(),
             s,
@@ -2518,40 +2516,13 @@ impl App {
                 widget_pick =
                     hud_widgets::draw(&widgets, s, &place, hud_widgets::Layer::Screen, pointing)
                         .or(arena_pick);
-                if let Some(axiom) = axiom {
-                    let r = hud::boss_banner_layout(screen_width(), s);
-                    let share = (axiom.health / axiom.max_health.max(1.)).clamp(0., 1.);
-                    self.hud.boss_bar(
-                        &hud::BossBar {
-                            id: axiom.id,
-                            kind: None,
-                            name: tankyard_core::creator_boss::NAME,
-                            health: axiom.health,
-                            max_health: axiom.max_health,
-                            lost: self.effects.boss_fx.axiom_trail(axiom.id, share),
-                            tint: crate::accessibility::palette(
-                                tankyard_client::boss_model::AXIOM_GOLD,
-                            ),
-                            marks: &tankyard_core::BOSS_PHASES,
-                            status: None,
-                            marked: false,
-                        },
-                        r.x,
-                        106. * s,
-                        r.w,
-                        s,
-                    );
-                }
-                if let Some(boss) = headline_boss {
-                    self.hud.headline_boss_bar(
-                        boss,
-                        self.effects.boss_fx.health_trail(boss),
-                        boss.target != 0 && boss.target == session.player,
-                        headline_top,
-                        s,
-                        self.settings.colorblind,
-                    );
-                }
+                self.hud.draw_bosses(
+                    snapshot,
+                    session.player,
+                    &self.effects.boss_fx,
+                    boss_layout,
+                    self.settings.colorblind,
+                );
                 if let Some((boss, killer, life)) = &self.effects.boss_defeat {
                     let opacity = (life / 0.4).min(1.);
                     let mut rect = hud::boss_banner_layout(screen_width(), s);

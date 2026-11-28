@@ -149,7 +149,7 @@ impl BossFx {
 
     pub(super) fn draw_flames(&self, light: &mut Emission, view: &View, level: f32) {
         // White wouldn't show on a pale floor, so flame starts at yellow there.
-        let start: f32 = if light.pale_floor() { 0.2 } else { 0. };
+        let start = 0.2 * light.daylight();
         let level = level.min(1.);
         let z = view.zoom;
         for puff in &self.flames {

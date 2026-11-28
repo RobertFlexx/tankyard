@@ -1,7 +1,7 @@
 mod boss_bar;
 mod sandbox;
 
-pub(crate) use boss_bar::Bar as BossBar;
+pub(crate) use boss_bar::Layout as BossLayout;
 
 use crate::graphics::{draw_circle, draw_poly};
 use crate::ui::RED;
@@ -631,8 +631,8 @@ pub struct Hud {
     /// How many of its lines the board drew last frame.
     board_shown: usize,
     board_tab_glow: f32,
-    /// Axiom and the headline boss keep separate health and targeting fades.
-    boss_bars: [boss_bar::Animation; 2],
+    /// Each encounter keeps its own health and targeting fades.
+    boss_bars: std::collections::HashMap<EntityId, boss_bar::Animation>,
 }
 impl Hud {
     /// A fresh HUD for new content mid-game, which still remembers the
@@ -1143,9 +1143,9 @@ impl Hud {
             actions.push(HudAction::ToggleBoard);
         }
         self.minimap(snapshot, local, settings, s, view);
+        let xp_width = (w * 0.36).min(430.0 * s);
+        let xp_x = (w - xp_width) * 0.5;
         if tank.alive && !self.sandbox {
-            let xp_width = (w * 0.36).min(430.0 * s);
-            let xp_x = (w - xp_width) * 0.5;
             let next = xp_for_level((tank.level + 1).min(tankyard_core::MAX_LEVEL));
             let prev = xp_for_level(tank.level);
             let fraction = if tank.level >= tankyard_core::MAX_LEVEL {
@@ -1326,6 +1326,10 @@ impl Hud {
                 );
             }
         }
+        // Give the footer two columns beside the progress bars.
+        let footer_width = xp_x - 2. * m;
+        let footer_size = 11. * s;
+        let footer_y = h - 5. * s;
         if settings.show_fps || map_remaining.is_some() {
             let footer = match map_remaining {
                 Some(seconds) => format!(
@@ -1341,31 +1345,28 @@ impl Hud {
                 ),
                 None => format!("{} FPS  ·  tick {} / 60 Hz", get_fps(), snapshot.tick),
             };
-            label(&footer, m, h - 5.0 * s, 11.0 * s, muted_color());
+            let footer = fitted_label(&footer, footer_size, footer_width);
+            label(&footer, m, footer_y, footer_size, muted_color());
         }
-        if settings.show_fps {
-            if let Some((ping, loss, sent, received)) = diagnostics {
-                label(
-                    &format!(
-                        "{ping:.0}ms  ·  loss {:.1}%  ·  ↑{:.1} ↓{:.1} KiB/s",
-                        loss * 100.0,
-                        sent / 1024.0,
-                        received / 1024.0
-                    ),
-                    m,
-                    h - 319.0 * s,
-                    12.0 * s,
-                    accent(),
+        if let Some((ping, loss, sent, received)) = diagnostics {
+            if settings.show_fps {
+                let network = format!(
+                    "{ping:.0} ms  ·  loss {:.1}%  ·  ↑{:.1} ↓{:.1} KiB/s",
+                    loss * 100.0,
+                    sent / 1024.0,
+                    received / 1024.0,
+                );
+                let network = fitted_label(&network, footer_size, footer_width);
+                right_label(&network, w - m, footer_y, footer_size, muted_color());
+            } else {
+                right_label(
+                    &format!("{ping:.0} ms"),
+                    w - m,
+                    h - 66.0 * s,
+                    10.0 * s,
+                    muted_color(),
                 );
             }
-        } else if let Some((ping, _, _, _)) = diagnostics {
-            right_label(
-                &format!("{ping:.0} ms"),
-                w - m,
-                h - 66.0 * s,
-                10.0 * s,
-                muted_color(),
-            );
         }
         if self.evolution && tank.alive && !snapshot.match_state.finished && !self.sandbox {
             self.evolution_overlay(tank, content, &mut actions, s);
@@ -2309,9 +2310,6 @@ pub(crate) fn boss_arrows(snapshot: &Snapshot, view: &render::View, s: f32, colo
         );
     }
 }
-/// How much room a big boss bar takes at the top of the screen.
-pub(crate) const RAIL_BAR_HEIGHT: f32 = 61.;
-
 /// What the Railgunner is up to, for the line under its bar, and how urgent
 /// that is: 0 for routine, 1 for get moving, 2 for now. Nothing when there's
 /// nothing to say.
@@ -2418,20 +2416,6 @@ pub(crate) fn boss_banner_layout(width: f32, s: f32) -> Rect {
     Rect::new((left + right - w) * 0.5, 112. * s, w, 62. * s)
 }
 
-pub(crate) fn headline_boss(snapshot: &Snapshot, local: EntityId) -> Option<&tankyard_core::Boss> {
-    snapshot
-        .bosses
-        .iter()
-        .filter(|boss| boss.health > 0.)
-        .min_by_key(|boss| {
-            let priority = match boss.kind {
-                BossKind::Sunderworm => 0,
-                BossKind::Railgunner => 1,
-                _ => 2,
-            };
-            (boss.target == 0 || boss.target != local, priority, boss.id)
-        })
-}
 fn sandbox_layout(width: f32, height: f32, scale: f32) -> (Rect, f32) {
     let s = scale
         .min((width - 40.).max(1.) / 920.)
